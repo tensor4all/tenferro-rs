@@ -6,7 +6,103 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-09
+
+0.10.0 stopped identifying one body of content: the crates on crates.io were
+built from `fd5fc73de6`, and `main` kept the `0.10.0` version string for the 48
+commits that followed. This release renumbers that tree and collects what it
+changes. The version number moves one minor, because no compatibility promise
+exists yet; a Rust caller should still read it as a breaking release.
+
+### Breaking changes
+
+What is gone, and what moved:
+
+- **`TypedTensor::set_placement` is fallible and only on the `Dynamic`
+  representation** (#2484, merged as #2497 and #2507). It returns
+  `crate::Result<()>` instead of `()`, and it and `TypedTensor::set_cpu_affinity`
+  left `impl<T, R, D: Representation> TypedTensor<T, R, D>`, so a `Host`- or
+  `Gpu`-typed owner can no longer be relabelled. `is_host_memory()` is the one
+  host/device predicate the rest of the crate now asks.
+- **`TensorRead::tensor_view`, `TensorValue::tensor_view` and
+  `TensorValue::tensor_read` return `Option`** (#2486, merged as #2490). They
+  answer `None` for a `Tensor::external` payload instead of aborting.
+- **`tenferro_runtime::dim_expr_to_sym_dim_public` is removed** (#2443, merged
+  as #2473). A program input position has no meaning as a `SymDim`.
+- **`SvdDriver::{Gesvdj, Gesvd, Xgesvdp}` became
+  `SvdDriver::{Jacobi, QrBased, Polar}`, and `EighDriver::{Syevd, Syevj}` became
+  `EighDriver::{DivideAndConquer, Jacobi}`** (#2516, merged as #2517), naming an
+  algorithm family rather than a cuSOLVER routine.
+- **The `rocm` placeholder feature is gone** from `tenferro-gpu` and the five
+  crates that forwarded it (#2310, merged as #2470).
+- **`TensorView<'a>` and `TensorViewMut<'a>` gained a defaulted representation
+  parameter** (`D: Representation = Dynamic`), so the old spelling still names
+  the same type: this one is source-compatible.
+- **Every CPU-stack dependency type changed generation** (see [Dependency
+  moves](#dependency-moves)). An `Exec`, a `Par` or a `TeamExec` from one
+  generation does not compile against another's, and two copies in one graph are
+  `E0308`.
+
+Nothing was removed from the linalg factorization surface itself (#2483, merged
+as #2481, #2506 and #2508): that change is additive. It adds
+`tenferro_tensor::capability_entry`, makes `tenferro_linalg::error::map_error`
+public, and adds the six borrowed-`Exec` `*_with_exec` entries while the engine
+entries keep their signatures and now run the same typed bodies.
+
+### Dependency moves
+
+#2494 moved the workspace onto the `threadteam` 0.5 line; #2521 moved it onto the
+`t4a-faer` 0.33 chain, which is one release train because `tcontract-exec`,
+`cpueinsum` and `tlinalg` all pin `t4a-faer` themselves.
+
+| dependency | 0.10.0 | 0.11.0 |
+|---|---|---|
+| `threadteam` | 0.4.0 | 0.5.1 |
+| `strided-basic`, `-perm`, `-kernel`, `-fused`, `-nn` | 0.11.0 | 0.12.0 |
+| `strided-view` | 0.7.0 | 0.7.1 |
+| `t4a-faer` | 0.30.0 | 0.33.0 |
+| `tcontract-exec` | 0.10.0 | 0.12.0 |
+| `tlinalg` | 0.9.0 | 0.11.0 |
+| `cpueinsum`, `cpueinsum-blas` | 0.10.0 | 0.12.0 |
+| `t4a-cuda-kernels` | `=0.1.1` (rev `b429d41`) | `=0.1.2` (rev `ab7395c`) |
+
+`strided-traits` (0.7.0), `tlinalg-blas` (0.5.1) and `t4a-cuda-runtime` (0.1.0)
+are unchanged. `scripts/check-single-versions.sh` is the check that keeps one
+identity per crate in the resolved graph.
+
+### Results that can differ in the final bit
+
+Two of these changes pick a different algorithm, so the same call can return
+different last bits than it did on 0.10.0. Neither is pinned by a bit-equality
+test.
+
+- **A serial `native` c64 contraction takes faer on every host class again**
+  (#2524, merged as #2526). 0.10.0 had narrowed 0.9.0's rule to
+  `(X86_64Avx2, 1)`, which left every other `HostClass` on `tcontract`'s packed
+  driver at a thread budget of one above `m*n*k = 1 << 17`, with no measurement
+  behind the exception. A budget of one now lifts the c64 bound on all six
+  classes, and the test reaches the list through an exhaustive `match`. The two
+  drivers do not accumulate in the same order; the test asserts which driver is
+  selected and the performance note beside it cites a normwise bound, not bit
+  equality.
+- **`t4a-cuda-kernels` 0.1.2 changes reduction numerics** (#2534). Split pass 1
+  now assigns lanes by group (`V = 16 / element size`, four groups at a time)
+  instead of per lane, so `sum` and `sum_squares` over a contiguous axis
+  accumulate `f32`/`f64` partials in a different order and the result can
+  differ in the final bit from 0.1.1. The NaN-propagating extrema are rewritten
+  as selects, a near-overflow fold (`x0=x1=A`, `x32=x33=-A`, `A = 2^127`) that
+  returned 0 now returns NaN, and the kernel ABI revision moves from 12 to 13
+  (no symbol, signature, struct or launch-geometry change).
+
 ### Added
+
+- **`TraceContextLinalgExt` and `TraceContextFftExt`** (#2525, merged as #2531).
+  The linalg and fft families now have the `TraceContext` entry point the other
+  families already had: the context method takes the context's `TraceValue`
+  inputs with a `&self` receiver, and the existing `TracedTensorLinalgExt` /
+  `TracedTensorFftExt` methods delegate to it in one line, so both spellings
+  record the same operations. Both traits are re-exported from their crate
+  preludes. This is additive.
 
 - **`tenferro_tensor::capability_entry`** (#2483). It is the one lookup rule
   behind `TensorBackendCapability::capability` and `::require_capability`: the
@@ -192,21 +288,6 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a fresh `Vec`; the recorded steady-state ceiling of a complex SVD or `eigh`
   drops from 5 to the 1 allocation now measured. The `blas` route keeps the spectrum real instead of widening it to the
   complex scalar and narrowing it again.
-- **Breaking (minor): traced values are owned by a `TraceContext`.** This is a
-  minor release, not a patch: `TracedTensor` no longer carries its own graph, so
-  context-free constructors, `TracedTensor::graph()` and the public
-  `id`/`rank`/`dtype`/`val` fields are gone. See
-  [`docs/design/traced-over-trace-context.md`](docs/design/traced-over-trace-context.md)
-  §3.9 for the complete list and
-  [`docs/guides/custom-operations.md`](docs/guides/custom-operations.md#migrating-a-context-free-constructor)
-  for the one-line shape of the migration.
-  - Extension authors: `TracedTensor::input_concrete_shape(dtype, shape)` becomes
-    `<ctx>.input_concrete_shape(dtype, shape)`, and a traced value can only be
-    combined with values from the same context.
-  - `GraphCompiler::compile_many` requires at least one output; a zero-output
-    program is built with `SemanticProgramBuilder::finish(&[])`.
-  - AD seeds of an externally defined scalar must carry that scalar's canonical
-    identity, which the context constructors now supply.
 - **CUDA reductions cost about 20 µs less per standalone call.** `tenferro-gpu`
   reductions now wait once per call instead of once per pass plus once more for
   the result squeeze. They write the squeezed result directly and no longer
@@ -259,3 +340,26 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   contract now says what it covers, and `tests/cpu_linalg_allocation.rs` carries
   a rank-8 row (no allocations) beside a rank-9 row (some), so the wording and
   the measured counts can only move together.
+
+## [0.10.0] - 2026-11-06
+
+This section carries the one entry that was already true of the published
+0.10.0 tree (built from `fd5fc73de6`); every entry above it describes a change
+made after that commit.
+
+### Changed
+
+- **Traced values are owned by a `TraceContext`.** `TracedTensor` no longer
+  carries its own graph, so context-free constructors, `TracedTensor::graph()`
+  and the public `id`/`rank`/`dtype`/`val` fields are gone. See
+  [`docs/design/traced-over-trace-context.md`](docs/design/traced-over-trace-context.md)
+  §3.9 for the complete list and
+  [`docs/guides/custom-operations.md`](docs/guides/custom-operations.md#migrating-a-context-free-constructor)
+  for the one-line shape of the migration.
+  - Extension authors: `TracedTensor::input_concrete_shape(dtype, shape)` becomes
+    `<ctx>.input_concrete_shape(dtype, shape)`, and a traced value can only be
+    combined with values from the same context.
+  - `GraphCompiler::compile_many` requires at least one output; a zero-output
+    program is built with `SemanticProgramBuilder::finish(&[])`.
+  - AD seeds of an externally defined scalar must carry that scalar's canonical
+    identity, which the context constructors now supply.
