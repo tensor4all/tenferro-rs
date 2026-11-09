@@ -43,7 +43,11 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   the shared bytes; the raw-scope path that also derives a config from a plan
   uses the same function. A CPU test pins a real tiled plan's `[1, 1, 7]` grid,
   its `block.y` and a non-zero shared-memory request against the mapping, and
-  fails on the truncating form, so the defect class is caught without a device.
+  fails on the truncating form, so the defect class is caught without a device;
+  a second one takes the same `[5, 3, 7]` view the device test materializes
+  through the selector and the planner and pins its seven batches, its tile
+  rows and the 2176-byte shared tile, so a mis-wired derivation cannot reach
+  the planner unnoticed either.
 - The derivation is pinned by CPU tests: an asymmetric 3-D pair swap and a
   rank-two view at a nonzero offset address exactly the elements the view names
   (reproducing the kernel's own `dst[b*M*N + i + j*M] = src[o + b*M*N + i*N + j]`

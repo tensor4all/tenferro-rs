@@ -987,6 +987,7 @@ gpu	tenferro-gpu	cuda::structural::tests::scale_tensor_write_refuses_a_host_view
 gpu	tenferro-gpu	cuda::structural::tests::scatter_read_refuses_a_bad_update_axis_before_allocating_or_staging
 gpu	tenferro-gpu	cuda::structural::tests::triangular_reads_mask_borrowed_regions
 host	tenferro-gpu	cuda::structural::tests::the_element_count_checks_both_extremes
+host	tenferro-gpu	cuda::structural::tests::a_batched_pair_swap_plans_one_grid_axis_per_batch
 host	tenferro-gpu	cuda::structural::tests::the_tiled_geometry_addresses_every_element_the_view_names
 host	tenferro-gpu	cuda::structural::tests::tiled_transpose_geometry_selects_only_a_compact_pair_swap
 host	tenferro-gpu	cuda::device::tests::discovery_reports_an_unloadable_driver_as_a_typed_error
