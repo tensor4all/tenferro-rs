@@ -478,11 +478,11 @@ its width, its buffer pool, and (for faer) its selected faer parallelism. Direct
 external calls deliberately sit outside that context:
 
 - A direct faer call with `Par::Seq` runs inline on the calling thread.
-- A direct faer call that does not use the engine's token (`Par::rayon(n)`, for
-  example) uses rayon's **global** thread pool. That is not the team the engine
+- A direct faer call that does not use the engine's token builds its own
+  team (for example `faer::team::with_team`). That is not the team the engine
   computes on: the engine uses only the pool the caller passed to
-  `CpuEngine::new`. Use the engine's token (`Par::Team`, above) to run on the
-  engine's team and within its budget.
+  `CpuEngine::new`. Use the engine's token (`Par::Team`, above) to run on
+  the engine's team and within its budget.
 - A direct BLAS/LAPACK call runs on the provider's own threads as described
   above.
 
