@@ -66,21 +66,25 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   host reference. They skip on a host without a usable device and fail under
   `TENFERRO_REQUIRE_GPU=1`. The pair-swap fixture is the multi-tile
   `17 x 19 x 7` view (`[19, 17, 7]` contiguous storage, strides
-  `[19, 1, 323]`, offset zero), whose plan is grid `[2, 2, 7]`; a third one is the
+  `[19, 1, 323]`, offset zero), whose plan is grid `[2, 2, 7]`; the third is the
   same view at offset one over a `2262`-element allocation with a dummy leading
-  element, so a launch that passed `src_offset` as zero reads every element one
-  place off. Both pair-swap comparisons cover the whole destination. All three
-  ran green on this branch's local A100 lane (`scripts/ci/local_gpu_gate.py run`
-  on `primerose`, published as the `CI GPU gate` evidence comment on PR #2551,
-  which records the tested SHA). Two mutations were executed there: forcing
-  `grid.1` to one in `cuda/dispatch.rs::launch_config` fails the multi-tile test
-  with the second tile row unwritten (357 of 2261 elements), and replacing the
-  launch's `Arg::U64(geometry.src_offset as u64)` with `Arg::U64(0)` fails the
-  offset test on all 2261 elements while leaving the offset-zero test green.
-  Reverting either mutation makes the test pass again. The earlier RunPod run
-  `42629754236` executed the previous single-tile `5 x 3 x 7` fixture of these
-  tests, so it does not establish multi-tile or nonzero-offset device coverage;
-  that evidence is the local run above.
+  element, so a launch that carried `src_offset` as zero reads every element one
+  place off. Both pair-swap comparisons cover the whole destination.
+- Device results are bound to the head they were run at and are never inherited
+  by a later one: `scripts/ci/local_gpu_gate.py run` names its SHA in the
+  `CI GPU gate` evidence comment for that head on PR #2551, and a head that
+  changes needs its own run. At the head that contains this file the lane
+  reports 361 device tests passed, both pair-swap tests among them, and two
+  source mutations were executed there and reverted: forcing `grid.1` to one in
+  `cuda/dispatch.rs::launch_config` fails the multi-tile test with the second
+  tile row unwritten (357 of 2261 elements), and replacing the launch's
+  `Arg::U64(geometry.src_offset as u64)` with `Arg::U64(0)` fails the offset test
+  on all 2261 elements while leaving the offset-zero test green.
+- Earlier heads do not cover what came after them. `5e547ffe` passed this lane
+  with 360 device tests and only the offset-zero fixtures, so it does not cover
+  the offset test, and the RunPod run `42629754236` executed the single-tile
+  `5 x 3 x 7` fixture of these tests, so it establishes neither multi-tile nor
+  nonzero-offset device coverage.
 - The seven added tests are classified in `scripts/ci/cuda_test_partition.tsv`
   (four `host`, three `gpu`), which the lane inventory check requires before it
   executes anything.
