@@ -9,7 +9,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.11.0] - 2026-11-09
 
 0.10.0 stopped identifying one body of content: the crates on crates.io were
-built from `fd5fc73de6`, and `main` kept the `0.10.0` version string for the 48
+built from `fd5fc73de6`, and `main` kept the `0.10.0` version string for the 49
 commits that followed. This release renumbers that tree and collects what it
 changes. The version number moves one minor, because no compatibility promise
 exists yet; a Rust caller should still read it as a breaking release.
