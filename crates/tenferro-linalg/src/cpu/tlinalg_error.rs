@@ -59,9 +59,9 @@ macro_rules! map_provider_error {
 /// This is the translation tenferro's own linalg entries apply to every `tlinalg` failure. A
 /// caller that runs `tlinalg` factorizations itself, for example on the bundle
 /// `tenferro_cpu::CpuEngine::with_exec` lends, calls it to report
-/// exactly the error tenferro would have reported for the same failure. The types are the
-/// `tlinalg` build this crate links (0.9); a caller names them through a `tlinalg` dependency of
-/// the same semver-compatible version.
+/// exactly the error tenferro would have reported for the same failure. The types are those of the
+/// `tlinalg` build this crate links, so a caller names them through a `tlinalg` dependency of the
+/// same semver-compatible version.
 ///
 /// # Contract
 ///
@@ -90,8 +90,8 @@ macro_rules! map_provider_error {
 /// `#[non_exhaustive]`, so a later `tlinalg` may add a variant this crate does not know. The
 /// mapping does not guess a kind for it: it returns the generic `Internal` variant with the
 /// provider error's `Debug` text, so the failure stays visible and is never misclassified as a
-/// numerical or caller error. Against `tlinalg` 0.9 every variant has its own row and the last row
-/// is unreachable.
+/// numerical or caller error. Against the `tlinalg` this crate links, every variant has its own
+/// row and the last row is unreachable.
 ///
 /// # Examples
 ///
