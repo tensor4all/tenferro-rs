@@ -54,14 +54,13 @@ if token.carries_team() {
 tenferro hands out no `faer::Par`, so no faer value crosses a tenferro boundary
 and a separately pinned `faer` cannot meet a confusing type mismatch (#1939).
 Spell the types with `tenferro_cpu::faer`, the re-exported build, to keep one
-faer in the binary. A direct dependency on another version is safe for
-**slice-only** interop — matrices in, matrices out — because only plain
-column-major slices cross the boundary. The engine-token route above is not
-slice-only: it lends faer a `threadteam` token, so it needs the same
-`threadteam` build on both sides (see
-[Dependency contract](#dependency-contract)). A serial engine has no team and
-takes `Par::Seq` directly. This route is CPU/faer-specific and does not claim
-affinity for external BLAS/OpenMP workers.
+faer in the binary. That guarantee is for the slice-only route: a direct
+dependency at another faer version is safe while only plain column-major slices
+cross, and it does not cover the engine token above, where a
+`threadteam::TeamExec` from the engine's own team enters faer's `Par::Team` and
+the `threadteam` line has to match (see the dependency contract below). A
+serial engine has no team and takes `Par::Seq` directly. This route is
+CPU/faer-specific and does not claim affinity for external BLAS/OpenMP workers.
 
 ## When to use this
 
@@ -95,21 +94,23 @@ were not involved. `faer` is re-exported for convenience rather than required:
 tenferro hands out no faer value, so a direct dependency at another compatible
 version only costs a second faer build, not a type mismatch (#1939).
 
-The exception is the `threadteam` type, which is part of both crates' public
-API: `tenferro-cpu` re-exports `threadteam::Pool` as `tenferro_cpu::Pool`
-(`crates/tenferro-cpu/src/lib.rs:204`), `CpuEngine::new` takes it
-(`crates/tenferro-cpu/src/engine.rs:119`), and faer's `Par::Team` carries a
-`threadteam::TeamExec` (`t4a-faer 0.33.0/src/lib.rs:1078`). Compatibility
-follows the **resolved `threadteam`**, not the `faer` release line: a direct
-`faer` whose requirement resolves to this workspace's `0.5.1` reuses the one
-`Pool`/`TeamExec` type. `t4a-faer` 0.32 and 0.33 both require
-`threadteam ^0.5.1`, so on 0.32 `faer::Par::Team(team)` accepts this engine's
-token just as 0.33's does. What stays separate is the `faer::Par` enum itself,
-a type of the build that defines it: pass a `Par` to that build's functions,
-never across two faer builds. `t4a-faer` 0.30 requires `threadteam ^0.4.0`
-instead, so building `Par::Team` from this engine's 0.5 token is two `TeamExec`
-types and `cargo check` fails with `E0308`. Depend on the tested `t4a-faer`
-version above when a `Par`, a team, or the engine's pool crosses the boundary.
+The exception is the `threadteam` line, which is `0.5.1` here and appears in
+both crates' public types: `tenferro-cpu` re-exports `threadteam::Pool` as
+`tenferro_cpu::Pool` (`crates/tenferro-cpu/src/lib.rs:204`), `CpuEngine::new`
+takes it (`crates/tenferro-cpu/src/engine.rs:119`), and faer's `Par::Team`
+carries a `threadteam::TeamExec` (`t4a-faer 0.33.0/src/lib.rs:1078`). What
+matters is the `threadteam` version the two resolve to, not which `t4a-faer`
+line they come from. `t4a-faer` 0.32.0 and 0.33.0 both require
+`threadteam ^0.5.1`, so Cargo unifies them onto one `threadteam`: the `Pool` and
+`TeamExec` are one type, and a `Par::Team` built from a team of that pool is
+valid for either faer build. Only the `faer` types stay apart, so a `Par` from
+one line cannot be passed where the other's `Par` is expected (`E0308`, two
+`faer::Par` types). A line that needs another `threadteam` splits it instead —
+`t4a-faer` 0.30 needs `threadteam ^0.4` — and then no team is shared at all:
+the 0.4 and 0.5 `TeamExec` are different types, and neither a team nor a
+`Par::Team` crosses (`E0308`, two `threadteam` versions in one graph). Depend on
+the tested `t4a-faer` version above when a `Par`, a team, or the engine's pool
+crosses the boundary.
 
 ### Provider features
 
