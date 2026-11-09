@@ -172,10 +172,7 @@ impl Dispatcher {
         }
         // SAFETY: every caller below builds the argument list in the documented ABI order
         // after the kernel crate's planner accepted the invocation.
-        unsafe {
-            self.modules
-                .launch(entry, LaunchConfig::new(plan.grid[0], plan.block[0]), args)
-        }
+        unsafe { self.modules.launch(entry, launch_config(&plan), args) }
     }
 
     /// Enqueue one launch whose compact index operand may name a rebased span.
@@ -232,11 +229,7 @@ impl Dispatcher {
                             })?;
                         arguments[pointer_argument] = Arg::U64(address);
                         scope
-                            .launch(
-                                function,
-                                LaunchConfig::new(plan.grid[0], plan.block[0]),
-                                arguments,
-                            )
+                            .launch(function, launch_config(&plan), arguments)
                             .map_err(|error| {
                                 crate::Error::runtime_state_source("cuda launch", error)
                             })
@@ -1122,6 +1115,20 @@ impl Dispatcher {
                 Arg::U64(len as u64),
             ],
         )
+    }
+}
+
+/// The runtime launch geometry of one catalogue plan.
+///
+/// Every dimension the planner chose reaches the driver: the tiled transpose plans its tile
+/// columns on `x`, its tile rows on `y`, its batches on `z`, and asks for dynamic shared memory
+/// for the tile itself, while a one-dimensional plan carries `1` in the axes it does not use.
+/// Truncating any of them launches a kernel that covers part of its destination.
+fn launch_config(plan: &t4a_cuda_kernels::Launch) -> LaunchConfig {
+    LaunchConfig {
+        grid: (plan.grid[0], plan.grid[1], plan.grid[2]),
+        block: (plan.block[0], plan.block[1], plan.block[2]),
+        shared_bytes: plan.shared_bytes,
     }
 }
 

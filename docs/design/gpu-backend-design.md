@@ -188,6 +188,16 @@ geometry; neither operand needs tensor-sized staging. Compact copies retain the
 layout-free exact-copy path. Source and destination allocations must not alias.
 Other write entries retain their documented by-value layout rank limit.
 
+A materialized view whose fastest destination axis reads the source at the
+second axis' extent, whose second axis is the source's fastest at stride one,
+and whose remaining axes are one compact run in the source goes through the
+catalogue's `TiledTranspose` entry instead of the generic strided decoder: the
+source's two fastest axes have swapped, which is a batched two-dimensional
+transpose the tiled kernel can serve from shared memory. The derivation lives in
+`cuda/structural.rs::tiled_transpose_geometry`, and it is a selection, not a
+fallback tier: a view the entry does not address, or a launch its planner
+refuses, takes the generic materialization the operation already had.
+
 Catalogue planners receive validated dtype/layout/operation metadata and
 produce the launch geometry. `cuda/dispatch.rs` calls the catalogue's `plan_*`
 functions, then marshals runtime arguments in the entry's ABI order.

@@ -1323,3 +1323,197 @@ fn a_permuted_batched_dot_stages_the_permuted_operand() {
     let expected = host_batched_product(&a, &logical_b, batches, m, n, k);
     assert_eq!(read(&engine, &product), expected);
 }
+
+/// The compact copy of one host view, in the view's logical order: the reference the generic and
+/// the tiled materialization must both reproduce.
+fn host_compact(data: &[f64], extents: &[usize], strides: &[isize], offset: isize) -> Vec<f64> {
+    let count: usize = extents.iter().product();
+    let mut out = Vec::with_capacity(count);
+    let mut coords = vec![0usize; extents.len()];
+    for _ in 0..count {
+        let index: isize = offset
+            + coords
+                .iter()
+                .zip(strides)
+                .map(|(&coord, &stride)| coord as isize * stride)
+                .sum::<isize>();
+        out.push(data[index as usize]);
+        for axis in 0..extents.len() {
+            coords[axis] += 1;
+            if coords[axis] < extents[axis] {
+                break;
+            }
+            coords[axis] = 0;
+        }
+    }
+    out
+}
+
+/// The tiled entry is selected for exactly the views whose destination it addresses.
+#[test]
+fn tiled_transpose_geometry_selects_only_a_compact_pair_swap() {
+    let geometry = |extents: &[i64], strides: &[i64], offset: i64| {
+        super::tiled_transpose_geometry(extents, strides, offset)
+    };
+
+    // A rank-two transpose and the 3-D `[1, 0, 2]` swap of an asymmetric shape: the source's two
+    // fastest axes swap and the remaining axes keep one compact run.
+    let tiled = geometry(&[4, 3], &[3, 1], 0).expect("rank-two transpose");
+    assert_eq!(
+        (tiled.dst_fast_extent, tiled.src_fast_extent, tiled.batches),
+        (4, 3, 1)
+    );
+    let tiled = geometry(&[5, 3, 7], &[3, 1, 15], 0).expect("3-D pair swap");
+    assert_eq!(
+        (tiled.dst_fast_extent, tiled.src_fast_extent, tiled.batches),
+        (5, 3, 7)
+    );
+    assert_eq!(tiled.batch_stride(), 15);
+
+    // The `[2, 0, 1]` rotation of `transpose_3d_1024_1024_512_201` moves the source's slowest
+    // axis to the front, so the source's fastest axis is not the destination's second one.
+    assert_eq!(geometry(&[512, 1024, 1024], &[1048576, 1, 1024], 0), None);
+    // A batch axis that is not the next stride of the source's run.
+    assert_eq!(geometry(&[4, 3, 2], &[3, 1, 8], 0), None);
+    // Reversed, broadcast and rank-one views, and a negative base offset.
+    assert_eq!(geometry(&[4, 3], &[3, -1], 0), None);
+    assert_eq!(geometry(&[4, 3], &[3, 0], 0), None);
+    assert_eq!(geometry(&[4], &[1], 0), None);
+    assert_eq!(geometry(&[4, 3], &[3, 1], -1), None);
+    // An empty extent leaves the generic path, which already writes nothing.
+    assert_eq!(geometry(&[0, 3], &[3, 1], 0), None);
+}
+
+/// The geometry the selector derives addresses the same elements as the view it came from.
+#[test]
+fn the_tiled_geometry_addresses_every_element_the_view_names() {
+    // An asymmetric 3-D pair swap, and a rank-two transpose whose view starts at an offset.
+    let cases: [(Vec<usize>, Vec<isize>, isize); 2] = [
+        (vec![5, 3, 7], vec![3, 1, 15], 0),
+        (vec![4, 3], vec![3, 1], 2),
+    ];
+    for (extents, strides, offset) in cases {
+        let count: usize = extents.iter().product();
+        let reach = count + offset as usize;
+        let data: Vec<f64> = (0..reach).map(|index| index as f64).collect();
+        let extents_i64: Vec<i64> = extents.iter().map(|&extent| extent as i64).collect();
+        let strides_i64: Vec<i64> = strides.iter().map(|&stride| stride as i64).collect();
+        let geometry = super::tiled_transpose_geometry(&extents_i64, &strides_i64, offset as i64)
+            .expect("the tiled geometry");
+
+        // The catalogue's own walk: `dst[b*M*N + i + j*M] = src[o + b*M*N + i*N + j]`.
+        let (m, n, batches) = (
+            geometry.dst_fast_extent,
+            geometry.src_fast_extent,
+            geometry.batches,
+        );
+        let matrix = m * n;
+        let mut tiled = vec![f64::NAN; count];
+        for batch in 0..batches {
+            for i in 0..m {
+                for j in 0..n {
+                    tiled[(batch * matrix + i + j * m) as usize] =
+                        data[(geometry.src_offset + batch * matrix + i * n + j) as usize];
+                }
+            }
+        }
+        assert_eq!(
+            tiled,
+            host_compact(&data, &extents, &strides, offset),
+            "tiled geometry {geometry:?}"
+        );
+    }
+}
+
+/// An adjacent pair swap reads through the tiled entry; the values are the view's own.
+#[test]
+#[ignore = "requires CUDA"]
+fn an_adjacent_pair_swap_reads_through_the_tiled_transpose() {
+    let Some(mut engine) = engine() else { return };
+    // A multi-tile view: `17 x 19` at the default 16-wide tile needs two tile columns on x and
+    // two tile rows on y, so a launch that drops `grid.y` leaves the second tile row unwritten
+    // and the full comparison below fails.
+    let data: Vec<f64> = (0..2261).map(|index| index as f64).collect();
+    let source = device(&engine, vec![19, 17, 7], data.clone());
+
+    let before = engine.tiled_transposes();
+    let copy = engine
+        .to_contiguous_read(region(&source, vec![17, 19, 7], vec![19, 1, 323], 0))
+        .expect("materialize the pair swap");
+    assert_eq!(
+        engine.tiled_transposes(),
+        before + 1,
+        "an adjacent pair swap takes the tiled transpose"
+    );
+    assert_eq!(
+        read(&engine, &copy),
+        host_compact(&data, &[17, 19, 7], &[19, 1, 323], 0)
+    );
+}
+
+/// A pair swap whose view starts at a nonzero offset reads from the view's base.
+#[test]
+#[ignore = "requires CUDA"]
+fn an_offset_pair_swap_reads_the_view_through_the_tiled_transpose() {
+    let Some(mut engine) = engine() else { return };
+    // One dummy element ahead of the payload, so the view's base and the allocation's start
+    // differ: the launch's `src_offset` argument is what selects the payload, and a launch that
+    // passed zero reads every element one place off.
+    let data: Vec<f64> = (0..2262).map(|index| index as f64).collect();
+    let source = device(&engine, vec![2262], data.clone());
+
+    let before = engine.tiled_transposes();
+    let copy = engine
+        .to_contiguous_read(region(&source, vec![17, 19, 7], vec![19, 1, 323], 1))
+        .expect("materialize the offset pair swap");
+    assert_eq!(
+        engine.tiled_transposes(),
+        before + 1,
+        "a pair swap at a nonzero offset takes the tiled transpose"
+    );
+    assert_eq!(
+        read(&engine, &copy),
+        host_compact(&data, &[17, 19, 7], &[19, 1, 323], 1)
+    );
+}
+
+/// A view the tiled entry does not address keeps the generic materialization, with its values.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_three_axis_rotation_stays_on_the_generic_materialization() {
+    let Some(mut engine) = engine() else { return };
+    let data: Vec<f64> = (0..24).map(|index| index as f64).collect();
+    let source = device(&engine, vec![2, 3, 4], data.clone());
+
+    let before = engine.tiled_transposes();
+    let copy = engine
+        .to_contiguous_read(region(&source, vec![4, 2, 3], vec![6, 1, 2], 0))
+        .expect("materialize the rotation");
+    assert_eq!(
+        engine.tiled_transposes(),
+        before,
+        "a three-axis rotation keeps the generic path"
+    );
+    assert_eq!(
+        read(&engine, &copy),
+        host_compact(&data, &[4, 2, 3], &[6, 1, 2], 0)
+    );
+}
+
+/// The batched view the device test materializes plans one grid axis per batch, not one batch.
+#[test]
+fn a_batched_pair_swap_plans_one_grid_axis_per_batch() {
+    // The `17 x 19 x 7` view `an_adjacent_pair_swap_reads_through_the_tiled_transpose` materializes:
+    // seven independent `17 x 19` transposes, two tiles wide on each of x and y.
+    let geometry = super::tiled_transpose_geometry(&[17, 19, 7], &[19, 1, 323], 0)
+        .expect("the tiled geometry");
+    let plan = super::tiled_transpose_plan(t4a_cuda_kernels::DType::F64, geometry, 2261, 2261)
+        .expect("the catalogue plans the launch");
+
+    // Every batch is its own grid block on z; the tile rows are block.y, and the tile itself is
+    // the launch's dynamic shared memory. A launch keeping `grid[0]` alone would carry
+    // `[2, 1, 1]` here and cover one batch of one tile row from a zero-length shared tile.
+    assert_eq!(plan.grid, [2, 2, 7], "tile columns, tile rows, batches");
+    assert_eq!(plan.block, [16, 8, 1], "tile lanes, tile row groups");
+    assert_eq!(plan.shared_bytes, 16 * 17 * 8, "a 16 x 16 f64 tile, padded");
+}
