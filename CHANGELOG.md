@@ -22,7 +22,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
-- **The seven unused U02 internal `pub` items are gone** (#2546). `ShapeGuardContext`
+- **Eight unused internal `pub` items are gone** (#2546): the seven in the U02
+  table, plus the `transpose_primal_outputs` getter, which the table did not list
+  and which with its setter gone could only return `None`. `ShapeGuardContext`
   no longer has `refresh_global_metadata`, `with_extension_ad_dispatcher`,
   `set_transpose_primal_outputs`, `transpose_primal_outputs`,
   `transpose_primal_outputs_were_used`, `take_deferred_shape_error` or
