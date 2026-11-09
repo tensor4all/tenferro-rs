@@ -18,7 +18,8 @@ struct Case {
     check: fn(&TensorError) -> bool,
 }
 
-/// Every `tlinalg::Error` variant 0.9 defines, one row each, in the order of the documented table.
+/// Every `tlinalg::Error` variant the linked provider defines, one row each, in the order of the
+/// documented table.
 ///
 /// `tlinalg::Error` is `#[non_exhaustive]`, so the compiler cannot tell this list that a variant
 /// was added; a row per known variant instead fails when an arm is removed, reordered into the
