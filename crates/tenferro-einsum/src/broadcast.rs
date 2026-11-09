@@ -32,7 +32,8 @@ pub(crate) enum ExtentPair {
     LhsConstant,
     /// Mirror of [`ExtentPair::LhsConstant`]: the broadcast extent is `rhs`.
     RhsConstant,
-    /// Two different symbolic extents: the broadcast extent is their maximum.
+    /// Two different symbolic extents: the broadcast extent is
+    /// [`symbolic_broadcast_extent`] of the two.
     BothSymbolic,
     /// Two known extents that differ and are both not `1`.
     Conflict,
@@ -82,6 +83,19 @@ pub(crate) enum ExtentMerge {
     RequireEqual,
 }
 
+/// The singleton-broadcast extent of two symbolic extents, as an expression
+/// that agrees with [`classify_sizes`] at every valid binding.
+///
+/// A valid binding is `(a, a)`, `(1, b)` or `(a, 1)`, and the broadcast extent
+/// is the extent that is not the broadcast `1`. `max(a, b)` gets that right
+/// except for an empty axis: `(0, 1)` broadcasts to `0`, not `1`. Multiplying
+/// by `min(min(a, b), 1)`, which is `0` exactly when either extent is `0` and
+/// `1` otherwise, fixes that case and leaves every other one at `max(a, b)`.
+pub(crate) fn symbolic_broadcast_extent(lhs: &SymDim, rhs: &SymDim) -> SymDim {
+    let nonempty = lhs.clone().min(rhs.clone()).min(1usize);
+    lhs.clone().max(rhs.clone()) * nonempty
+}
+
 /// Fold `next` into `existing` for one label shared between operands.
 ///
 /// Without broadcasting every shared extent must be equal. With broadcasting
@@ -100,7 +114,7 @@ pub(crate) fn merge_broadcast_extent(
             ExtentMerge::Merged(existing.clone())
         }
         ExtentPair::LhsSingleton | ExtentPair::RhsConstant => ExtentMerge::Merged(next.clone()),
-        ExtentPair::BothSymbolic => ExtentMerge::Merged(existing.clone().max(next.clone())),
+        ExtentPair::BothSymbolic => ExtentMerge::Merged(symbolic_broadcast_extent(existing, next)),
         ExtentPair::Conflict => ExtentMerge::RequireEqual,
     }
 }

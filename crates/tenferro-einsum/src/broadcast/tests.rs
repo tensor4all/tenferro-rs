@@ -74,15 +74,31 @@ fn merge_of_symbolic_and_constant_extents_takes_the_constant() {
 }
 
 #[test]
-fn merge_of_two_symbolic_extents_is_their_maximum() {
+fn merge_of_two_symbolic_extents_is_the_zero_aware_broadcast_extent() {
     assert_eq!(
         merge_broadcast_extent(&symbolic(0), &symbolic(1), true),
-        ExtentMerge::Merged(symbolic(0).max(symbolic(1)))
+        ExtentMerge::Merged(symbolic_broadcast_extent(&symbolic(0), &symbolic(1)))
     );
     assert_eq!(
         merge_broadcast_extent(&symbolic(0), &symbolic(0), true),
         ExtentMerge::Merged(symbolic(0))
     );
+}
+
+/// The symbolic expression, evaluated at a binding, must agree with the
+/// concrete classification at every valid binding, including empty axes, in
+/// both fold orders.
+#[test]
+fn symbolic_broadcast_extent_matches_concrete_broadcast_at_every_valid_binding() {
+    for (a, b) in [(0, 0), (0, 1), (1, 0), (1, 1), (1, 4), (4, 1), (4, 4)] {
+        let concrete = match classify_sizes(a, b) {
+            ExtentPair::Equal | ExtentPair::RhsSingleton => a,
+            ExtentPair::LhsSingleton => b,
+            other => panic!("({a}, {b}) is a valid binding, classified {other:?}"),
+        };
+        let expr = symbolic_broadcast_extent(&SymDim::from(a), &SymDim::from(b));
+        assert_eq!(expr.constant_value(), Some(concrete), "({a}, {b})");
+    }
 }
 
 #[test]

@@ -308,6 +308,61 @@ fn traced_einsum_merges_symbolic_extent_with_constant_under_unrelated_broadcast(
     assert_eq!(result.as_slice::<f64>().unwrap(), &[25.0, 35.0, 45.0]);
 }
 
+/// Two different symbolic extents of `i` under a broadcast turned on by the
+/// constant `j` (`1` vs `2`), with `i` bound to `0` and `1`. Singleton
+/// broadcasting of an empty axis yields an empty axis, so the merged extent is
+/// `0`, not `max(0, 1) = 1`. `zero_operand` picks which operand carries the
+/// empty axis, so both fold orders of the merge are exercised. The compiled
+/// output metadata (evaluated at the bound shapes) and the executed output
+/// must both be `[0]`.
+fn assert_empty_axis_broadcast_merges_to_zero(zero_operand: usize) {
+    let symbolic_i = |input_idx| {
+        ProgramInputSpec::new(
+            DType::F64,
+            [
+                DimExpr::InputDim { input_idx, axis: 0 },
+                DimExpr::Const(if input_idx == 0 { 1 } else { 2 }),
+            ],
+        )
+    };
+    let mut trace = TraceContext::new();
+    let lhs = trace.input(symbolic_i(0)).unwrap();
+    let rhs = trace.input(symbolic_i(1)).unwrap();
+    let output = trace.einsum(&[lhs, rhs], "ij,ij->i").unwrap();
+    let graph = trace.finish(&[output]).unwrap();
+    let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+
+    let (lhs_rows, rhs_rows) = if zero_operand == 0 { (0, 1) } else { (1, 0) };
+    let lhs_tensor =
+        Tensor::from_vec_col_major(vec![lhs_rows, 1], vec![2.0_f64; lhs_rows]).unwrap();
+    let rhs_tensor =
+        Tensor::from_vec_col_major(vec![rhs_rows, 2], vec![3.0_f64; rhs_rows * 2]).unwrap();
+    let bound: [&[usize]; 2] = [&[lhs_rows, 1], &[rhs_rows, 2]];
+
+    let output_extents: Vec<usize> = compiled
+        .program()
+        .value_metadata(compiled.program().outputs()[0])
+        .unwrap()
+        .shape()
+        .iter()
+        .map(|extent| extent.as_exact().unwrap().eval(&bound).unwrap())
+        .collect();
+    assert_eq!(output_extents, [0], "zero operand {zero_operand}");
+
+    let result = support::run_one(&compiled, &[&lhs_tensor, &rhs_tensor]).unwrap();
+    assert_eq!(result.shape(), &[0], "zero operand {zero_operand}");
+}
+
+#[test]
+fn traced_einsum_broadcasts_an_empty_symbolic_axis_in_the_first_operand_to_zero() {
+    assert_empty_axis_broadcast_merges_to_zero(0);
+}
+
+#[test]
+fn traced_einsum_broadcasts_an_empty_symbolic_axis_in_the_second_operand_to_zero() {
+    assert_empty_axis_broadcast_merges_to_zero(1);
+}
+
 #[test]
 fn traced_einsum_rejects_a_diagonal_mismatch_while_another_label_broadcasts() {
     let mut trace = TraceContext::new();
