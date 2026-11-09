@@ -47,28 +47,36 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   would not pass by accident — against the mapping, with the plan's `block.y`
   and its non-zero shared-memory request, and fails on the truncating form, so
   the defect class is caught without a device; a second one takes the same
-  `5 x 3 x 7` view the device test materializes through the selector and the
-  planner and pins its seven batches, its tile rows and the 2176-byte
-  shared tile, so a mis-wired derivation cannot reach the planner unnoticed
-  either.
+  `17 x 19 x 7` view the device test materializes through the selector and the
+  planner and pins its grid `[2, 2, 7]`, its `block` `[16, 8, 1]` and the
+  2176-byte shared tile. That second test pins the derivation-to-plan seam and
+  nothing more: it never names a launch argument, so a mis-wired `src_offset`
+  or a grid axis dropped at the launch call site is outside it. The mapping
+  test above is the one that sees the mapping.
 - The derivation is pinned by CPU tests: an asymmetric 3-D pair swap and a
   rank-two view at a nonzero offset address exactly the elements the view names
   (reproducing the kernel's own `dst[b*M*N + i + j*M] = src[o + b*M*N + i*N + j]`
   walk against a host reference), and a `[2, 0, 1]` rotation, a non-compact
   batch stride, reversed and broadcast strides, rank one and a negative offset
-  all stay on the generic path.
+  all stay on the generic path. Those tests reimplement the walk on the host:
+  the nonzero-offset addressing has not been compared through the dispatch and
+  kernel path, and no test asserts the derived `src_offset` that reaches the
+  launch.
 - Two device tests assert that an adjacent pair swap launches the tiled entry
   once, that a three-axis rotation launches it not at all, and that both outputs
   equal the host reference. They skip on a host without a usable device and fail
-  under `TENFERRO_REQUIRE_GPU=1`. Both ran green on the RunPod lane, run
-  `42629754236`: its log records `PASS tenferro-gpu
-  cuda::structural::tests::a_three_axis_rotation_stays_on_the_generic_materialization`
-  and `PASS ...::an_adjacent_pair_swap_reads_through_the_tiled_transpose`, and the
-  run's tested merge commit `fbbd8eb8` (tree `ff7a79f8`) merges this branch at
-  `72a4ac20`, whose tree is the same `ff7a79f8`. The device fixture stays the
-  `5 x 3 x 7` view those tests ran with; the multi-tile `17 x 19 x 7` coverage is
-  host-side (the launch-mapping test), because a test-only change cancels
-  `CI_gpu`.
+  under `TENFERRO_REQUIRE_GPU=1`. The pair-swap fixture is the multi-tile
+  `17 x 19 x 7` view (`[19, 17, 7]` contiguous storage, strides
+  `[19, 1, 323]`, offset zero), whose plan is grid `[2, 2, 7]`; the comparison
+  covers the whole destination, so a tile column or tile row that is never
+  written fails it. Both tests ran green on this branch's local A100 lane
+  (`scripts/ci/local_gpu_gate.py run` on `primerose`, published as the
+  `CI GPU gate` evidence comment on PR #2551, which records the tested SHA);
+  forcing `grid.1` to one in `cuda/dispatch.rs::launch_config` makes the
+  pair-swap test fail with the second tile row left at zero, and reverting the
+  mutation makes it pass again. The earlier RunPod run `42629754236` executed
+  the previous single-tile `5 x 3 x 7` fixture of these tests, so it does not
+  establish multi-tile device coverage; that evidence is the local run above.
 - The six added tests are classified in `scripts/ci/cuda_test_partition.tsv`
   (four `host`, two `gpu`), which the lane inventory check requires before it
   executes anything.
