@@ -602,10 +602,12 @@ fn region_is_flat(region: &Region<'_>) -> bool {
 
 /// Tiling the catalogue's tiled transpose runs with.
 ///
-/// The catalogue's own default. Its tile family was tuned where the kernel lives, and the
-/// `__launch_bounds__` cap the kernel carries is the one measured against this configuration, so
-/// a different member of the family is a measurement question for a GPU host - none has been
-/// made here.
+/// The catalogue's own default (`lib.rs`'s `TransposeConfig::DEFAULT`: tile 16, 8 block rows,
+/// padding 1, vector width 1). Its source states the reason to keep it rather than pick a tile
+/// here: the entry's `__launch_bounds__` cap exists because, without it, ptxas costs "the
+/// default 16x8 tile 8-12 % of bandwidth on the A100" (`cuda/src/movement.cu:565-570` at the
+/// pinned revision). No member of the family has been measured for the layouts this repository
+/// sends, so choosing another would be a guess.
 const TILED_TRANSPOSE_CONFIG: TransposeConfig = TransposeConfig::DEFAULT;
 
 /// The batched two-dimensional transpose the catalogue's tiled kernel serves.

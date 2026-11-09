@@ -22,16 +22,28 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   That is exactly "the source's two fastest axes swapped, batched" — the shape
   the kernel's shared-memory tile is built for. A general N-D permutation is out
   of scope, and the derivation says so rather than approximating one.
-- The tile configuration is the catalogue's `TransposeConfig::DEFAULT`. Its
-  `__launch_bounds__` cap was measured against that configuration there, and no
-  member of the family has been measured for the layouts this repository sends.
-  Choosing another member without that measurement would be a guess.
+- The tile configuration is the catalogue's `TransposeConfig::DEFAULT` (tile
+  16, 8 block rows, padding 1, vector width 1). The reason to keep it is stated
+  in the kernel's own source: its `__launch_bounds__` cap exists because, without
+  it, ptxas costs "the default 16x8 tile 8-12 % of bandwidth on the A100"
+  (`t4a-cuda-kernels` at the pinned revision, `cuda/src/movement.cu:565-570`).
+  No member of the family has been measured for the layouts this repository
+  sends, so choosing another would be a guess and no benchmark artifact here
+  supports one.
 - `CudaEngine::tiled_transposes` is a `#[cfg(test)]` counter, the same shape as
   the existing `staged_reads`, so the selection and its negative control are
   observable from a device test.
 
 ## Verification conclusions and constraints
 
+- A review of the first head found that the dispatcher built every launch from
+  `plan.grid[0]` and `plan.block[0]` alone, dropping the tiled entry's tile rows
+  (`y`), batches (`z`), its `block.y` and its dynamic shared memory. The mapping
+  now lives in `cuda/dispatch.rs::launch_config` and carries all three axes and
+  the shared bytes; the raw-scope path that also derives a config from a plan
+  uses the same function. A CPU test pins a real tiled plan's `[1, 1, 7]` grid,
+  its `block.y` and a non-zero shared-memory request against the mapping, and
+  fails on the truncating form, so the defect class is caught without a device.
 - The derivation is pinned by CPU tests: an asymmetric 3-D pair swap and a
   rank-two view at a nonzero offset address exactly the elements the view names
   (reproducing the kernel's own `dst[b*M*N + i + j*M] = src[o + b*M*N + i*N + j]`
@@ -42,7 +54,13 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   once, that a three-axis rotation launches it not at all, and that both outputs
   equal the host reference. They skip on a host without a usable device and fail
   under `TENFERRO_REQUIRE_GPU=1`; **they have not been executed** — this branch
-  was developed on a machine with no CUDA toolkit, GPU or driver.
+  was developed on a machine with no CUDA toolkit, GPU or driver. Behavioural
+  evidence that the selection is wired into `materialize_storage` therefore still
+  rests on those two runs, not on the host suite; the host suite covers the
+  derivation and the launch geometry it feeds.
+- The five added tests are classified in `scripts/ci/cuda_test_partition.tsv`
+  (three `host`, two `gpu`), which the lane's inventory check requires before it
+  executes anything.
 - No timing was taken, so stage 1 claims no speedup. Which rows it should move
   is a hypothesis for the GPU host: `transpose_3d_1024_1024_512_102` (`[1, 0, 2]`),
   `transpose_2d_32768_16384` and any batched two-dimensional transpose
