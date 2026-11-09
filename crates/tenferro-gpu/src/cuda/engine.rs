@@ -104,6 +104,12 @@ pub struct CudaEngine {
     /// or an entry that has no stride-consuming kernel yet). Measurement for the read-entry
     /// tests, not a public surface: [`CudaEngine::staged_reads`] is crate-private.
     staged_reads: std::cell::Cell<u64>,
+    /// How many materializations this engine took through the catalogue's tiled transpose.
+    ///
+    /// The tiled entry serves a subset of the geometries the generic strided materialization
+    /// does, so which one ran is the selection rule's only observable form. Measurement for the
+    /// transpose tests, not a public surface: [`CudaEngine::tiled_transposes`] is crate-private.
+    tiled_transposes: std::cell::Cell<u64>,
     // `!Sync` explicitly rather than by inheritance from the runtime's auto traits.
     _not_sync: PhantomData<std::cell::Cell<()>>,
 }
@@ -152,6 +158,7 @@ impl CudaEngine {
             broken: false,
             launch_completion_syncs: std::cell::Cell::new(0),
             staged_reads: std::cell::Cell::new(0),
+            tiled_transposes: std::cell::Cell::new(0),
             _not_sync: PhantomData,
         })
     }
@@ -276,6 +283,17 @@ impl CudaEngine {
     /// Record one operand materialization for [`CudaEngine::staged_reads`].
     pub(crate) fn note_staged_read(&self) {
         self.staged_reads.set(self.staged_reads.get() + 1);
+    }
+
+    /// How many materializations this engine took through the catalogue's tiled transpose.
+    #[cfg(test)]
+    pub(crate) fn tiled_transposes(&self) -> u64 {
+        self.tiled_transposes.get()
+    }
+
+    /// Record one tiled transpose for [`CudaEngine::tiled_transposes`].
+    pub(crate) fn note_tiled_transpose(&self) {
+        self.tiled_transposes.set(self.tiled_transposes.get() + 1);
     }
 
     /// Refuse numerical submission on an engine the runtime marked broken.

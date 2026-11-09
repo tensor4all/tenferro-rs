@@ -19,9 +19,9 @@ use t4a_cuda_kernels::{
     plan_lu_apply_pivots, plan_lu_extract_outputs, plan_lu_parity, plan_materialize_strided,
     plan_matrix_adjoint, plan_pad, plan_prefix_rank, plan_qr_apply_phase, plan_qr_phase,
     plan_reduction, plan_reflector, plan_scatter_add, plan_select_pivot, plan_slice,
-    plan_swap_columns, plan_tril, plan_tril_view, plan_triu, plan_triu_view,
-    plan_upper_trapezoidal_violation, CAxisValues, CLayout, Entry, GatherPlan, Layout, LayoutRef,
-    ReductionPlan, ScatterPlan,
+    plan_swap_columns, plan_tiled_transpose, plan_tril, plan_tril_view, plan_triu, plan_triu_view,
+    plan_upper_trapezoidal_violation, CAxisValues, CLayout, CTransposeConfig, Entry, GatherPlan,
+    Layout, LayoutRef, ReductionPlan, ScatterPlan, TransposeConfig,
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
@@ -598,6 +598,107 @@ fn region_has_compact_strides(region: &Region<'_>) -> bool {
 /// exactly what a by-value `len`-element copy addresses, so it needs no layout parameter.
 fn region_is_flat(region: &Region<'_>) -> bool {
     region.offset == 0 && region_has_compact_strides(region)
+}
+
+/// Tiling the catalogue's tiled transpose runs with.
+///
+/// The catalogue's own default. Its tile family was tuned where the kernel lives, and the
+/// `__launch_bounds__` cap the kernel carries is the one measured against this configuration, so
+/// a different member of the family is a measurement question for a GPU host - none has been
+/// made here.
+const TILED_TRANSPOSE_CONFIG: TransposeConfig = TransposeConfig::DEFAULT;
+
+/// The batched two-dimensional transpose the catalogue's tiled kernel serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct TiledTransposeGeometry {
+    /// The view's element offset into the source allocation.
+    src_offset: i64,
+    /// The destination's fastest extent, which the kernel tiles along x.
+    dst_fast_extent: i64,
+    /// The destination's second extent, the source's fastest one.
+    src_fast_extent: i64,
+    /// How many independent matrices the view holds.
+    batches: i64,
+}
+
+impl TiledTransposeGeometry {
+    /// The source and destination stride of one whole matrix, which both sides advance by.
+    fn batch_stride(self) -> i64 {
+        // Both factors are extents of one validated layout, so the product is within the count.
+        self.dst_fast_extent * self.src_fast_extent
+    }
+}
+
+/// The tiled-transpose geometry of a view materialized into a compact destination of `extents`
+/// in this logical order, or `None` when the tiled entry does not address the view.
+///
+/// The catalogue's `t4a_cuda_tiled_transpose` copies one batch at a time as
+/// `dst[b*M*N + i + j*M] = src[offset + b*M*N + i*N + j]`: the source is a row-major `M x N`
+/// matrix and the destination is a compact column-major one, both advancing by a whole matrix
+/// per batch. In this engine's logical order, where axis 0 is the fastest, that is a view whose
+/// fastest axis (`i`, extent `M`) has source stride `N`, whose second axis (`j`, extent `N`) is
+/// the source's fastest axis at stride one, and whose remaining axes are one compact run in the
+/// source, fastest batch axis first. Every other view - a wider permutation, a reversed or
+/// broadcast axis, a rank below two - keeps the generic materialization; so does every extent of
+/// zero, which has nothing to move.
+pub(super) fn tiled_transpose_geometry(
+    extents: &[i64],
+    strides: &[i64],
+    offset: i64,
+) -> Option<TiledTransposeGeometry> {
+    if extents.len() < 2 || extents.len() != strides.len() || offset < 0 {
+        return None;
+    }
+    if extents.iter().any(|&extent| extent <= 0) {
+        return None;
+    }
+    let (dst_fast_extent, src_fast_extent) = (extents[0], extents[1]);
+    // The kernel reads `j` at stride one and `i` at stride `N`; any other pairing is a different
+    // transpose than the one its shared-memory tile is built for.
+    if strides[1] != 1 || strides[0] != src_fast_extent {
+        return None;
+    }
+    let batch_stride = dst_fast_extent.checked_mul(src_fast_extent)?;
+    let mut batches = 1i64;
+    let mut expected = batch_stride;
+    for (&extent, &stride) in extents[2..].iter().zip(&strides[2..]) {
+        if stride != expected {
+            return None;
+        }
+        batches = batches.checked_mul(extent)?;
+        expected = expected.checked_mul(extent)?;
+    }
+    Some(TiledTransposeGeometry {
+        src_offset: offset,
+        dst_fast_extent,
+        src_fast_extent,
+        batches,
+    })
+}
+
+/// The catalogue's plan for `geometry`, or `None` when its planner refuses it.
+///
+/// A refusal falls back to the generic materialization instead of failing the call: the tiled
+/// entry serves a subset of the geometry (a grid, dtype or span limit refuses the rest) while the
+/// caller's operation is defined for all of it.
+fn tiled_transpose_plan(
+    kernel: t4a_cuda_kernels::DType,
+    geometry: TiledTransposeGeometry,
+    source_len: i64,
+    len: i64,
+) -> Option<t4a_cuda_kernels::Launch> {
+    plan_tiled_transpose(
+        kernel,
+        TILED_TRANSPOSE_CONFIG,
+        geometry.src_offset,
+        geometry.batch_stride(),
+        geometry.dst_fast_extent,
+        geometry.src_fast_extent,
+        geometry.batches,
+        source_len,
+        len,
+    )
+    .ok()
 }
 
 /// The real dtype that holds a magnitude or a norm for `dtype`.
@@ -1753,6 +1854,37 @@ impl CudaEngine {
         // The kernel writes one destination element per logical position; `source_len` bounds the
         // view's reachable span inside the whole allocation and is not that count.
         let len = count_i64(&shape, op)?;
+        // A view the catalogue's tiled transpose addresses is copied a tile at a time through
+        // shared memory instead of element by element through the generic decoder; every other
+        // view keeps the generic path below.
+        if let Some(geometry) = tiled_transpose_geometry(extents, strides, offset) {
+            if let Some(plan) = tiled_transpose_plan(kernel, geometry, source_len, len) {
+                let config = CTransposeConfig::from(TILED_TRANSPOSE_CONFIG);
+                let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, op))?;
+                let source = storage.allocation();
+                // The ABI's offsets are signed 64-bit and the runtime's parameter slot is the
+                // unsigned one of the same width; the derivation admitted only non-negative
+                // values.
+                self.note_tiled_transpose();
+                return self
+                    .launch_planned(
+                        Entry::TiledTranspose,
+                        plan,
+                        &[
+                            Arg::DevicePtr(destination),
+                            Arg::DevicePtr(source),
+                            Arg::U32(kernel.tag() as u32),
+                            Arg::U64(geometry.src_offset as u64),
+                            Arg::U64(geometry.batch_stride() as u64),
+                            Arg::U64(geometry.dst_fast_extent as u64),
+                            Arg::U64(geometry.src_fast_extent as u64),
+                            pod_arg(&config),
+                        ],
+                        op,
+                    )
+                    .map(|()| output);
+            }
+        }
         if extents.len() <= t4a_cuda_kernels::MAX_RANK {
             let view = Layout::new(extents, strides, offset)
                 .map_err(|error| crate::Error::runtime_state_source(op, error))?;
