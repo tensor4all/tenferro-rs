@@ -58,8 +58,9 @@ boundary. A separately pinned `faer` is safe for plain column-major slices; for 
 engine-token route above it must also resolve the same `threadteam` as the
 engine, or the `TeamExec` types do not meet (#1939).
 Spell the types with `tenferro_cpu::faer`, the re-exported build, to keep one
-faer in the binary; a direct dependency is safe only for plain
-column-major slices. A serial engine has no team and takes
+faer in the binary. A direct dependency works for plain column-major slices and
+can take a team that resolves the same `threadteam`, but no `Par` is
+interchangeable between the two builds. A serial engine has no team and takes
 `Par::Seq` directly. This route is CPU/faer-specific and does not claim affinity
 for external BLAS/OpenMP workers.
 
@@ -93,9 +94,9 @@ normal direct dependencies on purpose: your application then controls the
 version, the provider link, and the threading environment exactly as if tenferro
 were not involved. `faer` is re-exported for convenience rather than required:
 tenferro hands out no faer value, so a direct dependency at another version
-costs a second faer build; it meets a type mismatch only where a `Par` or a
-team crosses the boundary, and there only if it resolves a different
-`threadteam` (#1939).
+costs a second faer build. Teams and pools can cross only between builds that
+resolve the same `threadteam`; `Par` values never do, because each build has its
+own `Par` type (#1939).
 
 The exception is the `threadteam` line, which is `0.5.1` here and is part of
 both crates' public types: `tenferro-cpu` re-exports `threadteam::Pool` as
