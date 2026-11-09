@@ -23,6 +23,8 @@ use tenferro_ops::ext_op::{
 };
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
+#[cfg(feature = "autodiff")]
+use tenferro_ops::ShapeExtent;
 use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{
@@ -30,6 +32,9 @@ use tenferro_runtime::program::{
 };
 use tenferro_tensor::{DType, Engine, Error as TensorError, Tensor, TensorRead};
 
+#[cfg(feature = "autodiff")]
+use crate::broadcast::{broadcast_axis_reduce, classify_dim_exprs, UndecidedBroadcastAxis};
+use crate::broadcast::{merge_broadcast_extent, ExtentMerge};
 use crate::builder::build_einsum_graph;
 use crate::cache::{
     einsum_subscripts_retained_bytes, saturating_sum, vec_retained_bytes,
@@ -230,22 +235,22 @@ impl ExtensionOp for EinsumExtensionOp {
                     shape.len(),
                 ));
             }
+            let mut operand_dims: HashMap<u32, SymDim> = HashMap::new();
             for (&label, dim) in labels.iter().zip(shape.iter()) {
+                // INVARIANT: a label repeated inside one operand is a diagonal,
+                // never a broadcast, so its extents stay equal even when
+                // `allow_broadcast` admits a size-1 broadcast between operands.
+                if let Some(existing) = operand_dims.get(&label) {
+                    ctx.require_equal(existing.clone(), dim.clone())?;
+                    continue;
+                }
+                operand_dims.insert(label, dim.clone());
                 if let Some(existing) = label_dims.get_mut(&label) {
-                    if !self.allow_broadcast {
-                        ctx.require_equal(existing.clone(), dim.clone())?;
-                        continue;
-                    }
-                    match (existing.constant_value(), dim.constant_value()) {
-                        (Some(lhs), Some(rhs)) if lhs == rhs || lhs == 1 || rhs == 1 => {
-                            *existing = SymDim::from(if lhs == 1 { rhs } else { lhs });
-                        }
-                        (Some(_lhs), Some(_rhs)) => {
+                    match merge_broadcast_extent(existing, dim, self.allow_broadcast) {
+                        ExtentMerge::Merged(merged) => *existing = merged,
+                        ExtentMerge::RequireEqual => {
                             ctx.require_equal(existing.clone(), dim.clone())?;
                         }
-                        (Some(1), None) => *existing = dim.clone(),
-                        (None, Some(1)) => {}
-                        _ => {}
                     }
                 } else {
                     label_dims.insert(label, dim.clone());
@@ -503,10 +508,14 @@ fn semantic_einsum_vjp(
                 available_labels.extend(labels.iter().copied());
             }
         }
+        let summed_labels =
+            broadcast_summed_labels(builder, op, active_idx, primal_inputs, cotangent)?;
+        // Dropping a label from the VJP einsum's output sums the cotangent over
+        // it; the remap below broadcasts the axis back to the active extent.
         let vjp_output_labels: Vec<u32> = input_labels[active_idx]
             .iter()
             .copied()
-            .filter(|label| available_labels.contains(label))
+            .filter(|label| available_labels.contains(label) && !summed_labels.contains(label))
             .collect();
         let mut vjp_input_labels = vec![output_labels.clone()];
         let mut vjp_inputs = vec![cotangent];
@@ -549,6 +558,85 @@ fn semantic_einsum_vjp(
         result.push(AdValue::Value(input_cotangent));
     }
     Ok(result.into_boxed_slice())
+}
+
+/// Labels of the active operand that a singleton broadcast separates from the
+/// VJP einsum's output extent (see [`AxisCotangent`]): the VJP einsum sums
+/// them out and the result is broadcast back to the active operand's shape.
+///
+/// Extents are resolved against the shapes bound to the program inputs, so an
+/// eager graph (symbolic metadata, concrete bindings) decides from the bound
+/// lengths.
+#[cfg(feature = "autodiff")]
+fn broadcast_summed_labels(
+    builder: &SemanticProgramBuilder,
+    op: &EinsumExtensionOp,
+    active_idx: usize,
+    primal_inputs: &[ProgramValue],
+    cotangent: ProgramValue,
+) -> std::result::Result<HashSet<u32>, SemanticAdError> {
+    let mut summed = HashSet::new();
+    if !op.allow_broadcast() {
+        return Ok(summed);
+    }
+    let exact_extents = |value: ProgramValue| {
+        builder.resolved_extents(value).map(|extents| {
+            extents
+                .into_iter()
+                .map(|extent| match extent {
+                    ShapeExtent::Exact(expr) => Some(expr),
+                    ShapeExtent::UpperBound(_) | ShapeExtent::Unknown => None,
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let input_extents = primal_inputs
+        .iter()
+        .map(|&value| exact_extents(value))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let output_extents = exact_extents(cotangent)?;
+
+    let subscripts = &op.subscripts;
+    for (axis, (&label, active)) in subscripts.inputs[active_idx]
+        .iter()
+        .zip(&input_extents[active_idx])
+        .enumerate()
+    {
+        let peer_operands = subscripts
+            .inputs
+            .iter()
+            .zip(&input_extents)
+            .enumerate()
+            .filter(|&(input_idx, _)| input_idx != active_idx)
+            .map(|(_, (labels, extents))| (labels.as_slice(), extents.as_slice()))
+            .chain(std::iter::once((
+                subscripts.output.as_slice(),
+                output_extents.as_slice(),
+            )));
+        let peers = peer_operands.flat_map(|(labels, extents)| {
+            labels
+                .iter()
+                .zip(extents)
+                .filter(move |&(&peer_label, _)| peer_label == label)
+                .map(move |(_, extent)| classify_dim_exprs(active.as_ref(), extent.as_ref()))
+        });
+        match broadcast_axis_reduce(peers) {
+            Ok(decision) => {
+                if decision.sums_label_out() {
+                    summed.insert(label);
+                }
+            }
+            Err(UndecidedBroadcastAxis) => {
+                return Err(semantic_einsum_unsupported(format!(
+                    "einsum VJP cannot decide whether axis {axis} of input {active_idx} \
+                     (extent {active:?}) was singleton-broadcast: another extent of the same \
+                     label is not provably equal to it or 1, and the gradient must sum the \
+                     cotangent over the axis exactly when it was broadcast"
+                )));
+            }
+        }
+    }
+    Ok(summed)
 }
 
 #[cfg(feature = "autodiff")]

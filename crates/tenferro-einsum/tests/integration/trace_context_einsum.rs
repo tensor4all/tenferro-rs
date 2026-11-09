@@ -4,8 +4,8 @@ use tenferro_einsum::{
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef};
-use tenferro_runtime::{GraphCompiler, TraceContext};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_runtime::{CompiledGraph, Error as RuntimeError, GraphCompiler, TraceContext};
+use tenferro_tensor::{DType, Error as TensorError, ShapeMismatch, Tensor, ValidationError};
 
 use super::support;
 
@@ -176,4 +176,247 @@ fn traced_semantic_einsum_compiles_and_executes_with_ordered_inputs() {
     assert_eq!(extension.family_id(), EINSUM_EXTENSION_FAMILY_ID);
     assert_eq!(result.shape(), &[2, 2]);
     assert_eq!(result.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
+}
+
+#[test]
+fn traced_einsum_broadcasts_singleton_contracting_extent() {
+    let lhs_spec = || ProgramInputSpec::new(DType::F64, [DimExpr::Const(2), DimExpr::Const(1)]);
+    let rhs_spec = || {
+        ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(4), DimExpr::Const(2), DimExpr::Const(3)],
+        )
+    };
+    let parsed = parse_einsum_subscripts("ij,pqj->pqi").unwrap();
+    let lhs_tensor = Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64; 2]).unwrap();
+    let rhs_tensor = Tensor::from_vec_col_major(vec![4, 2, 3], vec![1.0_f64; 24]).unwrap();
+
+    for entry in 0..3 {
+        let mut trace = TraceContext::new();
+        let lhs = trace.input(lhs_spec()).unwrap();
+        let rhs = trace.input(rhs_spec()).unwrap();
+        let output = match entry {
+            0 => trace.einsum(&[lhs, rhs], "ij,pqj->pqi").unwrap(),
+            1 => trace.einsum_subscripts(&[lhs, rhs], &parsed).unwrap(),
+            _ => trace
+                .einsum_subscripts_with(&[lhs, rhs], &parsed, EinsumOptimize::Path(vec![(0, 1)]))
+                .unwrap(),
+        };
+        let graph = trace.finish(&[output]).unwrap();
+        assert_eq!(
+            graph
+                .program()
+                .value_metadata(graph.program().outputs()[0])
+                .unwrap()
+                .shape()
+                .iter()
+                .map(|extent| extent.as_exact())
+                .collect::<Vec<_>>(),
+            [
+                Some(&DimExpr::Const(4)),
+                Some(&DimExpr::Const(2)),
+                Some(&DimExpr::Const(2)),
+            ]
+        );
+        let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+        let result = support::run_one(&compiled, &[&lhs_tensor, &rhs_tensor]).unwrap();
+        assert_eq!(result.shape(), &[4, 2, 2]);
+        assert_eq!(result.as_slice::<f64>().unwrap(), &[6.0; 16]);
+    }
+}
+
+#[test]
+fn traced_einsum_broadcasts_singleton_extent_with_symbolic_axes() {
+    let mut trace = TraceContext::new();
+    let lhs = trace
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [
+                DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 0,
+                },
+                DimExpr::Const(1),
+            ],
+        ))
+        .unwrap();
+    let rhs = trace
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(4), DimExpr::Const(2), DimExpr::Const(3)],
+        ))
+        .unwrap();
+    let output = trace.einsum(&[lhs, rhs], "ij,pqj->pqi").unwrap();
+    let graph = trace.finish(&[output]).unwrap();
+    let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+    let lhs_tensor = Tensor::from_vec_col_major(vec![4, 1], vec![2.0_f64; 4]).unwrap();
+    let rhs_tensor = Tensor::from_vec_col_major(vec![4, 2, 3], vec![1.0_f64; 24]).unwrap();
+
+    let result = support::run_one(&compiled, &[&lhs_tensor, &rhs_tensor]).unwrap();
+
+    assert_eq!(result.shape(), &[4, 2, 4]);
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[6.0; 32]);
+}
+
+/// A symbolic extent shared with a constant non-1 extent must merge to that
+/// constant once an unrelated label turns broadcasting on: `j` is `1` vs `2`,
+/// so the op broadcasts, and the lhs `i` (bound to `1`) broadcasts against the
+/// rhs `i = 3`. Both the compiled output metadata and the executed output are
+/// `[3]`.
+#[test]
+fn traced_einsum_merges_symbolic_extent_with_constant_under_unrelated_broadcast() {
+    let mut trace = TraceContext::new();
+    let lhs = trace
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [
+                DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 0,
+                },
+                DimExpr::Const(1),
+            ],
+        ))
+        .unwrap();
+    let rhs = trace
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(3), DimExpr::Const(2)],
+        ))
+        .unwrap();
+    let output = trace.einsum(&[lhs, rhs], "ij,ij->i").unwrap();
+    let graph = trace.finish(&[output]).unwrap();
+    let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+
+    let output_extents: Vec<_> = compiled
+        .program()
+        .value_metadata(compiled.program().outputs()[0])
+        .unwrap()
+        .shape()
+        .iter()
+        .map(|extent| extent.as_exact().cloned())
+        .collect();
+    assert_eq!(output_extents, [Some(DimExpr::Const(3))]);
+
+    let lhs_tensor = Tensor::from_vec_col_major(vec![1, 1], vec![5.0_f64]).unwrap();
+    // rhs[i, j] column-major: rhs[:, 0] = [1, 2, 3], rhs[:, 1] = [4, 5, 6].
+    let rhs_tensor =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let result = support::run_one(&compiled, &[&lhs_tensor, &rhs_tensor]).unwrap();
+
+    assert_eq!(result.shape(), &[3]);
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[25.0, 35.0, 45.0]);
+}
+
+/// `"ij,ij->i"` with a separate symbolic `i` per operand and constant `j`
+/// (`1` vs `2`), so the known `j` mismatch turns broadcasting on.
+fn compile_ij_ij_to_i_with_separate_symbolic_i() -> CompiledGraph {
+    let symbolic_i = |input_idx| {
+        ProgramInputSpec::new(
+            DType::F64,
+            [
+                DimExpr::InputDim { input_idx, axis: 0 },
+                DimExpr::Const(if input_idx == 0 { 1 } else { 2 }),
+            ],
+        )
+    };
+    let mut trace = TraceContext::new();
+    let lhs = trace.input(symbolic_i(0)).unwrap();
+    let rhs = trace.input(symbolic_i(1)).unwrap();
+    let output = trace.einsum(&[lhs, rhs], "ij,ij->i").unwrap();
+    let graph = trace.finish(&[output]).unwrap();
+    GraphCompiler::new().compile_traced_graph(&graph).unwrap()
+}
+
+/// Two different symbolic extents of `i` under a broadcast turned on by the
+/// constant `j` (`1` vs `2`), with `i` bound to `0` and `1`. Singleton
+/// broadcasting of an empty axis yields an empty axis, so the merged extent is
+/// `0`, not `max(0, 1) = 1`. `zero_operand` picks which operand carries the
+/// empty axis, so both fold orders of the merge are exercised. The compiled
+/// output metadata (evaluated at the bound shapes) and the executed output
+/// must both be `[0]`.
+fn assert_empty_axis_broadcast_merges_to_zero(zero_operand: usize) {
+    let compiled = compile_ij_ij_to_i_with_separate_symbolic_i();
+
+    let (lhs_rows, rhs_rows) = if zero_operand == 0 { (0, 1) } else { (1, 0) };
+    let lhs_tensor =
+        Tensor::from_vec_col_major(vec![lhs_rows, 1], vec![2.0_f64; lhs_rows]).unwrap();
+    let rhs_tensor =
+        Tensor::from_vec_col_major(vec![rhs_rows, 2], vec![3.0_f64; rhs_rows * 2]).unwrap();
+    let bound: [&[usize]; 2] = [&[lhs_rows, 1], &[rhs_rows, 2]];
+
+    let output_extents: Vec<usize> = compiled
+        .program()
+        .value_metadata(compiled.program().outputs()[0])
+        .unwrap()
+        .shape()
+        .iter()
+        .map(|extent| extent.as_exact().unwrap().eval(&bound).unwrap())
+        .collect();
+    assert_eq!(output_extents, [0], "zero operand {zero_operand}");
+
+    let result = support::run_one(&compiled, &[&lhs_tensor, &rhs_tensor]).unwrap();
+    assert_eq!(result.shape(), &[0], "zero operand {zero_operand}");
+}
+
+#[test]
+fn traced_einsum_broadcasts_an_empty_symbolic_axis_in_the_first_operand_to_zero() {
+    assert_empty_axis_broadcast_merges_to_zero(0);
+}
+
+#[test]
+fn traced_einsum_broadcasts_an_empty_symbolic_axis_in_the_second_operand_to_zero() {
+    assert_empty_axis_broadcast_merges_to_zero(1);
+}
+
+/// The same graph as [`assert_empty_axis_broadcast_merges_to_zero`] bound to
+/// an invalid pair: `i` is `2` in one operand and `3` in the other, neither a
+/// broadcast singleton. The symbolic merge cannot see this at compile time, so
+/// execution with the bound shapes must reject it as an einsum shape mismatch
+/// instead of producing an output of extent `max(2, 3) = 3`. Both operand
+/// orders are checked.
+#[test]
+fn traced_einsum_rejects_an_invalid_symbolic_binding_as_a_shape_mismatch() {
+    for (lhs_rows, rhs_rows) in [(2, 3), (3, 2)] {
+        let compiled = compile_ij_ij_to_i_with_separate_symbolic_i();
+        let lhs_tensor =
+            Tensor::from_vec_col_major(vec![lhs_rows, 1], vec![2.0_f64; lhs_rows]).unwrap();
+        let rhs_tensor =
+            Tensor::from_vec_col_major(vec![rhs_rows, 2], vec![3.0_f64; rhs_rows * 2]).unwrap();
+
+        let error = support::run_one(&compiled, &[&lhs_tensor, &rhs_tensor])
+            .expect_err("i bound to 2 and 3 is not a singleton broadcast");
+
+        let RuntimeError::TensorRuntime(TensorError::Validation {
+            op: "einsum",
+            source: ValidationError::ShapeMismatch(mismatch),
+        }) = &error
+        else {
+            panic!("expected an einsum shape mismatch for ({lhs_rows}, {rhs_rows}), got {error:?}");
+        };
+        let ShapeMismatch::ExpectedActual { expected, actual } = mismatch.as_ref() else {
+            panic!("expected an expected/actual shape mismatch, got {mismatch:?}");
+        };
+        let mut extents = [expected[0], actual[0]];
+        extents.sort_unstable();
+        assert_eq!(extents, [2, 3], "({lhs_rows}, {rhs_rows}): {error}");
+    }
+}
+
+#[test]
+fn traced_einsum_rejects_a_diagonal_mismatch_while_another_label_broadcasts() {
+    let mut trace = TraceContext::new();
+    let diagonal = trace
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(1), DimExpr::Const(3)],
+        ))
+        .unwrap();
+    let vector = trace
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(1)]))
+        .unwrap();
+    let output = trace.einsum(&[diagonal, vector], "ii,i->i").unwrap();
+    let graph = trace.finish(&[output]).unwrap();
+
+    assert!(GraphCompiler::new().compile_traced_graph(&graph).is_err());
 }

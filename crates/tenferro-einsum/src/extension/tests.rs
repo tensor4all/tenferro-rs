@@ -63,6 +63,66 @@ fn semantic_rules_run_through_whole_program_jvp_and_vjp() {
     );
 }
 
+/// `"ij,ij->i"` with lhs `[n, 1]` (symbolic `n`) and rhs `[3, 2]`: the known
+/// `j` mismatch turns broadcasting on, and `n` is bound to 1 or 3. The lhs
+/// gradient must sum over `i` in the first case and not in the second, which
+/// the metadata cannot tell apart, so the VJP refuses instead of guessing.
+#[cfg(feature = "autodiff")]
+#[test]
+fn vjp_refuses_an_axis_whose_broadcast_is_undecided() {
+    use tenferro_ad::AdContext;
+    use tenferro_ops::dim_expr::DimExpr;
+    use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
+
+    let mut builder = SemanticProgramBuilder::new();
+    let lhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [
+                DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 0,
+                },
+                DimExpr::Const(1),
+            ],
+        ))
+        .unwrap();
+    let rhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(3), DimExpr::Const(2)],
+        ))
+        .unwrap();
+    let output = builder
+        .add_extension(
+            Arc::new(EinsumExtensionOp::with_plan_spec_and_broadcast(
+                EinsumSubscripts::new(&[&[0, 1], &[0, 1]], &[0]),
+                EinsumPlanSpec::LeftToRight,
+                true,
+            )),
+            &[lhs, rhs],
+        )
+        .unwrap()[0];
+    let source = builder.finish(&[output]).unwrap();
+    let ad = AdContext::builder()
+        .with_semantic_extension_rules(semantic_ad_rules().unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let error = ad
+        .vjp_program(&source, &[true, false], &[true])
+        .expect_err("a symbolic extent that may be a broadcast singleton has no exact VJP");
+    assert!(
+        error
+            .to_string()
+            .contains("cannot decide whether axis 0 of input 0"),
+        "{error}"
+    );
+    // The rhs gradient is decided: its `i = 3` meets the output's `i = 3`.
+    assert!(ad.vjp_program(&source, &[false, true], &[true]).is_ok());
+}
+
 #[test]
 fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]));

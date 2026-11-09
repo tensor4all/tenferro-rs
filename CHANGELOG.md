@@ -366,6 +366,17 @@ test.
   reported downstream workload). A budget of one now lifts the c64 bound on
   every `HostClass`, and the test enumerates every variant so a narrowing
   without a measurement fails there. Wider budgets keep the default.
+- **Traced einsum broadcasts a singleton contracting extent the way eager and
+  concrete einsum already do** (#2554). `allow_broadcast` was derived from the
+  presence of `...` alone, so `trace.einsum(&[lhs, rhs], "ij,pqj->pqi")` with
+  `[2, 1]` and `[4, 2, 3]` recorded `require_equal(1, 3)` and failed at graph
+  compile while the eager and concrete surfaces returned `[4, 2, 2]`. Every
+  eager and traced entry point now takes that decision from one shared
+  `util::requires_broadcast`, which compares each extent pair that is constant
+  at trace time and skips the symbolic ones instead of guessing. A label
+  repeated inside one operand stays an exact diagonal, which
+  `infer_output_meta` now enforces whether or not the flag admits a broadcast
+  between operands.
 - **A borrowed linalg entry refuses an empty operand with a negative stride**
   (#2505). The six `*_with_exec` factorizations validated the layout inside
   `raw_view`, which the zero-dimension shortcut returned before, so a `[3, 0]`

@@ -85,6 +85,7 @@
 )]
 
 mod binary_dot;
+mod broadcast;
 mod builder;
 mod cache;
 mod concrete;

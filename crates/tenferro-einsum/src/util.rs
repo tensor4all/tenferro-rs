@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::broadcast::{classify_sizes, ExtentPair};
 use crate::syntax::subscripts::Subscripts;
 use crate::{Error, Result};
 
@@ -35,10 +36,10 @@ pub(crate) fn build_size_dict(
                 }
             }
             if let Some(existing) = size_dict.get_mut(&label) {
-                if *existing == size || *existing == 1 {
-                    *existing = size;
-                } else if size != 1 {
-                    return Err(Error::shape_mismatch("einsum", [*existing], [size]));
+                match classify_sizes(*existing, size) {
+                    ExtentPair::LhsSingleton => *existing = size,
+                    ExtentPair::Equal | ExtentPair::RhsSingleton => {}
+                    _ => return Err(Error::shape_mismatch("einsum", [*existing], [size])),
                 }
             } else {
                 size_dict.insert(label, size);

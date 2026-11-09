@@ -251,34 +251,35 @@ fn einsum_notation(
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let subscripts = resolve_einsum_notation(notation, &shapes)?;
     let subscripts = EinsumSubscripts::from(subscripts);
-    let allow_broadcast = notation
+    let ellipsis = notation
         .inputs
         .iter()
         .chain(std::iter::once(&notation.output))
-        .any(|term| term.contains(&crate::EinsumAxis::Ellipsis))
-        || requires_broadcast(inputs, &subscripts);
-    einsum_subscripts_with_broadcast(session, inputs, &subscripts, allow_broadcast)
+        .any(|term| term.contains(&crate::EinsumAxis::Ellipsis));
+    einsum_subscripts_with_broadcast(session, inputs, &subscripts, ellipsis)
 }
 
 fn einsum_subscripts_with_broadcast(
     session: &mut EagerSession<'_>,
     inputs: &[&EagerTensor],
     subscripts: &EinsumSubscripts,
-    allow_broadcast: bool,
+    ellipsis: bool,
 ) -> Result<EagerTensor> {
     if let Some(result) = try_direct_binary_dot_general(session, inputs, subscripts) {
         return result;
     }
 
     let output_shape_hint = infer_eager_output_shape(subscripts, inputs)?;
-    if !requires_broadcast(inputs, subscripts) {
+    let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
+    let requires_broadcast = crate::broadcast::requires_broadcast(&shapes, &subscripts.inputs);
+    if !requires_broadcast {
         if let Some(result) = try_expand_eager_einsum(session, inputs, subscripts)? {
             return Ok(result);
         }
     }
 
     let plan_spec = EinsumPlanSpec::Auto(default_auto_options());
-    let op = Arc::new(if allow_broadcast {
+    let op = Arc::new(if ellipsis || requires_broadcast {
         EinsumExtensionOp::with_output_shape_hint_and_broadcast(
             subscripts.clone(),
             output_shape_hint,
@@ -333,20 +334,6 @@ fn try_direct_binary_dot_general(
         );
     }
     None
-}
-
-fn requires_broadcast(inputs: &[&EagerTensor], subscripts: &EinsumSubscripts) -> bool {
-    let mut sizes = std::collections::HashMap::<u32, usize>::new();
-    for (tensor, labels) in inputs.iter().zip(&subscripts.inputs) {
-        for (&label, &size) in labels.iter().zip(tensor.shape()) {
-            if let Some(previous) = sizes.insert(label, size) {
-                if previous != size && (previous == 1 || size == 1) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 fn exact_dot_shapes(

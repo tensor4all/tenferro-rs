@@ -570,3 +570,94 @@ fn eager_einsum_paths_follow_the_calling_threads_no_grad() {
         &[8.0; 6]
     );
 }
+
+/// The reverse derivative of a singleton broadcast: `"ij,pqj->pqi"` with lhs
+/// `[2, 1]` and rhs `[4, 2, 3]`, `out[p, q, i] = lhs[i, 0] * sum_j rhs[p, q, j]`.
+/// `d sum(out) / d lhs[i, 0] = sum_{p,q,j} rhs[p, q, j]` sums the cotangent
+/// over the broadcast `j` and keeps the primal shape `[2, 1]`;
+/// `d sum(out) / d rhs[p, q, j] = sum_i lhs[i, 0]` is constant along `j`.
+#[test]
+fn eager_tensor_einsum_backward_sums_cotangent_over_a_singleton_broadcast_axis() {
+    // The broadcast keeps the semantic einsum extension in the eager graph, so
+    // its AD rules must be installed.
+    let ad = tenferro_ad::AdContext::builder()
+        .with_semantic_extension_rules(tenferro_einsum::semantic_ad_rules().unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
+    let ctx = EagerRuntime::with_ad_context(&ad).unwrap();
+    let a = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let b = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![4, 2, 3], (1..=24).map(f64::from).collect()).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let subscripts = EinsumSubscripts::new(&[&[0, 1], &[2, 3, 1]], &[2, 3, 0]);
+
+    let c = einsum_subscripts(&[&a, &b], &subscripts).unwrap();
+    assert_eq!(c.shape(), &[4, 2, 2]);
+    // Column-major rhs[p, q, j] = 1 + p + 4q + 8j, so sum_j rhs = 27 + 3(p + 4q).
+    let row_sums: Vec<f64> = (0..8).map(|pq| 27.0 + 3.0 * f64::from(pq)).collect();
+    let expected: Vec<f64> = [1.0, 2.0]
+        .iter()
+        .flat_map(|lhs| row_sums.iter().map(move |sum| lhs * sum))
+        .collect();
+    assert_eq!(
+        f64_data(&c.to_tensor(&mut CpuEngine::serial()).unwrap()),
+        expected.as_slice()
+    );
+    let loss = ctx
+        .with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.reduce_sum(&c, Some(&[0, 1, 2]))
+        })
+        .unwrap();
+    let _ = loss.backward(&mut CpuEngine::serial()).unwrap();
+
+    let grad_a = a
+        .grad()
+        .unwrap()
+        .unwrap()
+        .to_tensor(&mut CpuEngine::serial())
+        .unwrap();
+    assert_eq!(grad_a.shape(), &[2, 1]);
+    // sum_{p,q,j} rhs = 1 + 2 + ... + 24 = 300.
+    assert_eq!(f64_data(&grad_a), &[300.0, 300.0]);
+
+    // d sum(out) / d rhs[p, q, j] = sum_i lhs[i, 0] = 3 for every element.
+    let grad_b = b
+        .grad()
+        .unwrap()
+        .unwrap()
+        .to_tensor(&mut CpuEngine::serial())
+        .unwrap();
+    assert_eq!(grad_b.shape(), &[4, 2, 3]);
+    assert_eq!(f64_data(&grad_b), &[3.0; 24]);
+}
+
+#[test]
+fn eager_tensor_einsum_subscripts_broadcasts_singleton_contracting_extent() {
+    let ctx = test_ctx();
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64; 2]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![4, 2, 3], vec![1.0_f64; 24]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let subscripts = EinsumSubscripts::new(&[&[0, 1], &[2, 3, 1]], &[2, 3, 0]);
+
+    let c = einsum_subscripts(&[&a, &b], &subscripts).unwrap();
+
+    assert_eq!(c.shape(), &[4, 2, 2]);
+    assert_eq!(
+        f64_data(&c.to_tensor(&mut CpuEngine::serial()).unwrap()),
+        &[6.0; 16]
+    );
+}
