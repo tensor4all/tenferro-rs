@@ -58,27 +58,31 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   (reproducing the kernel's own `dst[b*M*N + i + j*M] = src[o + b*M*N + i*N + j]`
   walk against a host reference), and a `[2, 0, 1]` rotation, a non-compact
   batch stride, reversed and broadcast strides, rank one and a negative offset
-  all stay on the generic path. Those tests reimplement the walk on the host:
-  the nonzero-offset addressing has not been compared through the dispatch and
-  kernel path, and no test asserts the derived `src_offset` that reaches the
-  launch.
-- Two device tests assert that an adjacent pair swap launches the tiled entry
-  once, that a three-axis rotation launches it not at all, and that both outputs
-  equal the host reference. They skip on a host without a usable device and fail
-  under `TENFERRO_REQUIRE_GPU=1`. The pair-swap fixture is the multi-tile
+  all stay on the generic path. Those tests reimplement the walk on the host;
+  the `src_offset` argument the launch actually carries is covered by a device
+  test instead (below).
+- Three device tests assert that a pair swap launches the tiled entry once, that
+  a three-axis rotation launches it not at all, and that every output equals the
+  host reference. They skip on a host without a usable device and fail under
+  `TENFERRO_REQUIRE_GPU=1`. The pair-swap fixture is the multi-tile
   `17 x 19 x 7` view (`[19, 17, 7]` contiguous storage, strides
-  `[19, 1, 323]`, offset zero), whose plan is grid `[2, 2, 7]`; the comparison
-  covers the whole destination, so a tile column or tile row that is never
-  written fails it. Both tests ran green on this branch's local A100 lane
-  (`scripts/ci/local_gpu_gate.py run` on `primerose`, published as the
-  `CI GPU gate` evidence comment on PR #2551, which records the tested SHA);
-  forcing `grid.1` to one in `cuda/dispatch.rs::launch_config` makes the
-  pair-swap test fail with the second tile row left at zero, and reverting the
-  mutation makes it pass again. The earlier RunPod run `42629754236` executed
-  the previous single-tile `5 x 3 x 7` fixture of these tests, so it does not
-  establish multi-tile device coverage; that evidence is the local run above.
-- The six added tests are classified in `scripts/ci/cuda_test_partition.tsv`
-  (four `host`, two `gpu`), which the lane inventory check requires before it
+  `[19, 1, 323]`, offset zero), whose plan is grid `[2, 2, 7]`; a third one is the
+  same view at offset one over a `2262`-element allocation with a dummy leading
+  element, so a launch that passed `src_offset` as zero reads every element one
+  place off. Both pair-swap comparisons cover the whole destination. All three
+  ran green on this branch's local A100 lane (`scripts/ci/local_gpu_gate.py run`
+  on `primerose`, published as the `CI GPU gate` evidence comment on PR #2551,
+  which records the tested SHA). Two mutations were executed there: forcing
+  `grid.1` to one in `cuda/dispatch.rs::launch_config` fails the multi-tile test
+  with the second tile row unwritten (357 of 2261 elements), and replacing the
+  launch's `Arg::U64(geometry.src_offset as u64)` with `Arg::U64(0)` fails the
+  offset test on all 2261 elements while leaving the offset-zero test green.
+  Reverting either mutation makes the test pass again. The earlier RunPod run
+  `42629754236` executed the previous single-tile `5 x 3 x 7` fixture of these
+  tests, so it does not establish multi-tile or nonzero-offset device coverage;
+  that evidence is the local run above.
+- The seven added tests are classified in `scripts/ci/cuda_test_partition.tsv`
+  (four `host`, three `gpu`), which the lane inventory check requires before it
   executes anything.
 - No timing was taken, so stage 1 claims no speedup. Which rows it should move
   is a hypothesis for the GPU host: `transpose_3d_1024_1024_512_102` (`[1, 0, 2]`),
