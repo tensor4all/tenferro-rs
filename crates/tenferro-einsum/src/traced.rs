@@ -204,12 +204,12 @@ fn trace_context_einsum_notation_with(
     notation: &EinsumNotation,
     optimize: EinsumOptimize,
 ) -> Result<TraceValue> {
-    let allow_broadcast = notation
+    let ellipsis = notation
         .inputs
         .iter()
         .chain(std::iter::once(&notation.output))
         .any(|term| term.contains(&EinsumAxis::Ellipsis));
-    let subscripts = if allow_broadcast {
+    let subscripts = if ellipsis {
         let shapes = trace_concrete_shapes(trace, inputs)?.ok_or_else(|| {
             Error::planning("ellipsis einsum requires concrete input dimensions during tracing")
         })?;
@@ -218,7 +218,7 @@ fn trace_context_einsum_notation_with(
     } else {
         notation_without_ellipsis(notation)?.into()
     };
-    trace_context_einsum_subscripts_with(trace, inputs, &subscripts, optimize, allow_broadcast)
+    trace_context_einsum_subscripts_with(trace, inputs, &subscripts, optimize, ellipsis)
 }
 
 fn trace_context_einsum_subscripts_with(
@@ -226,7 +226,7 @@ fn trace_context_einsum_subscripts_with(
     inputs: &[TraceValue],
     subscripts: &EinsumSubscripts,
     optimize: EinsumOptimize,
-    allow_broadcast: bool,
+    ellipsis: bool,
 ) -> Result<TraceValue> {
     if inputs.is_empty() {
         return Err(Error::invalid_argument(
@@ -248,6 +248,7 @@ fn trace_context_einsum_subscripts_with(
     }
 
     let subs = Subscripts::from(subscripts);
+    let allow_broadcast = ellipsis || trace_requires_broadcast(trace, inputs, subscripts)?;
     let op = match optimize {
         EinsumOptimize::Tree(tree) => {
             let shapes = trace_concrete_shapes(trace, inputs)?.ok_or_else(|| {
@@ -278,27 +279,51 @@ fn trace_context_einsum_subscripts_with(
     })
 }
 
+fn trace_requires_broadcast(
+    trace: &TraceContext,
+    inputs: &[TraceValue],
+    subscripts: &EinsumSubscripts,
+) -> Result<bool> {
+    // A symbolic extent is skipped rather than guessed, so a partially symbolic
+    // trace still decides every pair of extents it does know.
+    let shapes = trace_known_shapes(trace, inputs)?;
+    let shape_refs: Vec<&[Option<usize>]> = shapes.iter().map(Vec::as_slice).collect();
+    Ok(crate::util::requires_broadcast(
+        &shape_refs,
+        &subscripts.inputs,
+    ))
+}
+
+/// Per-axis input extents that are constant at trace time; `None` is symbolic.
+fn trace_known_shapes(
+    trace: &TraceContext,
+    inputs: &[TraceValue],
+) -> Result<Vec<Vec<Option<usize>>>> {
+    let mut shapes = Vec::with_capacity(inputs.len());
+    for &value in inputs {
+        let metadata = trace.value_metadata(value).map_err(semantic_trace_error)?;
+        shapes.push(
+            metadata
+                .shape()
+                .iter()
+                .map(|extent| match extent.as_exact() {
+                    Some(DimExpr::Const(value)) => Some(*value),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+    Ok(shapes)
+}
+
 fn trace_concrete_shapes(
     trace: &TraceContext,
     inputs: &[TraceValue],
 ) -> Result<Option<Vec<Vec<usize>>>> {
-    let mut shapes = Vec::with_capacity(inputs.len());
-    for &value in inputs {
-        let metadata = trace.value_metadata(value).map_err(semantic_trace_error)?;
-        let Some(shape) = metadata
-            .shape()
-            .iter()
-            .map(|extent| match extent.as_exact() {
-                Some(DimExpr::Const(value)) => Some(*value),
-                _ => None,
-            })
-            .collect::<Option<Vec<_>>>()
-        else {
-            return Ok(None);
-        };
-        shapes.push(shape);
-    }
-    Ok(Some(shapes))
+    Ok(trace_known_shapes(trace, inputs)?
+        .into_iter()
+        .map(|shape| shape.into_iter().collect::<Option<Vec<_>>>())
+        .collect())
 }
 
 fn semantic_trace_error(source: ProgramBuildError) -> Error {

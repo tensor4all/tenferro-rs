@@ -570,3 +570,27 @@ fn eager_einsum_paths_follow_the_calling_threads_no_grad() {
         &[8.0; 6]
     );
 }
+
+#[test]
+fn eager_tensor_einsum_subscripts_broadcasts_singleton_contracting_extent() {
+    let ctx = test_ctx();
+    let a = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 1], vec![2.0_f64; 2]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let b = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![4, 2, 3], vec![1.0_f64; 24]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let subscripts = EinsumSubscripts::new(&[&[0, 1], &[2, 3, 1]], &[2, 3, 0]);
+
+    let c = einsum_subscripts(&[&a, &b], &subscripts).unwrap();
+
+    assert_eq!(c.shape(), &[4, 2, 2]);
+    assert_eq!(
+        f64_data(&c.to_tensor(&mut CpuEngine::serial()).unwrap()),
+        &[6.0; 16]
+    );
+}

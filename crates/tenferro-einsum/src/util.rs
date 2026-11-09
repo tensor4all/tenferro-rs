@@ -86,6 +86,50 @@ pub(crate) fn intermediate_subs(
     output
 }
 
+/// One extent as the broadcast decision sees it: known, or still symbolic.
+pub(crate) trait Extent {
+    fn known(self) -> Option<usize>;
+}
+
+impl Extent for usize {
+    fn known(self) -> Option<usize> {
+        Some(self)
+    }
+}
+
+impl Extent for Option<usize> {
+    fn known(self) -> Option<usize> {
+        self
+    }
+}
+
+/// Whether a label shared between operands repeats with extents that differ
+/// only by a size-1 axis, i.e. whether the operands need singleton-dimension
+/// broadcasting.
+///
+/// This is the single broadcast decision both einsum surfaces call: eager
+/// passes fully concrete extents, tracing passes the ones it already knows and
+/// skips the rest, so a symbolic extent can only narrow the decision. A label
+/// repeated inside one operand is a diagonal, whose extents must match exactly,
+/// so each operand joins the size map only after it is read.
+pub(crate) fn requires_broadcast<E: Extent + Copy>(shapes: &[&[E]], labels: &[Vec<u32>]) -> bool {
+    let mut sizes = HashMap::<u32, usize>::new();
+    for (labels, shape) in labels.iter().zip(shapes) {
+        let mut operand_sizes = HashMap::<u32, usize>::new();
+        for (&label, &extent) in labels.iter().zip(shape.iter()) {
+            let Some(size) = extent.known() else { continue };
+            if let Some(&previous) = sizes.get(&label) {
+                if previous != size && (previous == 1 || size == 1) {
+                    return true;
+                }
+            }
+            operand_sizes.insert(label, size);
+        }
+        sizes.extend(operand_sizes);
+    }
+    false
+}
+
 /// Map each source label occurrence to a distinct matching target axis.
 ///
 /// Repeated labels are occurrence-sensitive: mapping `["i", "j", "i"]` into
@@ -110,7 +154,7 @@ pub(crate) fn map_label_occurrences(
 
 #[cfg(test)]
 mod tests {
-    use super::map_label_occurrences;
+    use super::{map_label_occurrences, requires_broadcast};
 
     #[test]
     fn label_occurrence_mapping_uses_each_target_axis_once() {
@@ -128,5 +172,29 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn broadcast_decision_only_counts_labels_shared_between_operands() {
+        assert!(requires_broadcast(
+            &[&[2, 1], &[4, 2, 3]],
+            &[vec![0, 1], vec![2, 3, 1]]
+        ));
+        assert!(!requires_broadcast(
+            &[&[2, 3], &[4, 2, 3]],
+            &[vec![0, 1], vec![2, 3, 1]]
+        ));
+        // A label repeated inside one operand is a diagonal, whose extents must
+        // match exactly; it is never a singleton broadcast.
+        assert!(!requires_broadcast(&[&[1, 3]], &[vec![0, 0]]));
+        // A symbolic extent is skipped, not guessed.
+        assert!(requires_broadcast(
+            &[&[None, Some(1)], &[Some(4), Some(2), Some(3)]],
+            &[vec![0, 1], vec![2, 3, 1]]
+        ));
+        assert!(!requires_broadcast(
+            &[&[None, Some(2)], &[Some(4), Some(2), Some(3)]],
+            &[vec![0, 1], vec![2, 3, 1]]
+        ));
     }
 }

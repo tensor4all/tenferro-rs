@@ -230,7 +230,16 @@ impl ExtensionOp for EinsumExtensionOp {
                     shape.len(),
                 ));
             }
+            let mut operand_dims: HashMap<u32, SymDim> = HashMap::new();
             for (&label, dim) in labels.iter().zip(shape.iter()) {
+                // INVARIANT: a label repeated inside one operand is a diagonal,
+                // never a broadcast, so its extents stay equal even when
+                // `allow_broadcast` admits a size-1 broadcast between operands.
+                if let Some(existing) = operand_dims.get(&label) {
+                    ctx.require_equal(existing.clone(), dim.clone())?;
+                    continue;
+                }
+                operand_dims.insert(label, dim.clone());
                 if let Some(existing) = label_dims.get_mut(&label) {
                     if !self.allow_broadcast {
                         ctx.require_equal(existing.clone(), dim.clone())?;
