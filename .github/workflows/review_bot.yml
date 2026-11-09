@@ -1,3 +1,8 @@
+# Touch: re-register this workflow with the Actions service (2026-11-09).
+# Every run since 2026-11-09T16:52Z ends in startup_failure with zero jobs, while every other
+# workflow in this repository runs. `actionlint` accepts this file, the local actions it uses
+# exist at this revision, and disabling/re-enabling the workflow through the REST API did not
+# clear it. Re-saving the file is how GitHub is made to re-read a stale workflow registration.
 name: review bot
 
 # Delta-scoped REPOSITORY_RULES and PERFORMANCE_TIPS review. This workflow runs from the trusted base
