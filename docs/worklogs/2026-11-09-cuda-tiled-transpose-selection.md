@@ -30,9 +30,10 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   No member of the family has been measured for the layouts this repository
   sends, so choosing another would be a guess and no benchmark artifact here
   supports one.
-- `CudaEngine::tiled_transposes` is a `#[cfg(test)]` counter, the same shape as
-  the existing `staged_reads`, so the selection and its negative control are
-  observable from a device test.
+- `CudaEngine::tiled_transposes` is a production field, incremented by
+  `note_tiled_transpose` on the materialization path (the same shape as
+  `staged_reads`); only its getter is `#[cfg(test)]`, so the selection and its
+  negative control are observable from a device test.
 
 ## Verification conclusions and constraints
 
@@ -41,13 +42,15 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   (`y`), batches (`z`), its `block.y` and its dynamic shared memory. The mapping
   now lives in `cuda/dispatch.rs::launch_config` and carries all three axes and
   the shared bytes; the raw-scope path that also derives a config from a plan
-  uses the same function. A CPU test pins a real tiled plan's `[1, 1, 7]` grid,
-  its `block.y` and a non-zero shared-memory request against the mapping, and
-  fails on the truncating form, so the defect class is caught without a device;
-  a second one takes the same `[5, 3, 7]` view the device test materializes
-  through the selector and the planner and pins its seven batches, its tile
-  rows and the 2176-byte shared tile, so a mis-wired derivation cannot reach
-  the planner unnoticed either.
+  uses the same function. A CPU test pins a real tiled plan of a `17 x 19 x 7`
+  pair swap — grid `[2, 2, 7]`, so a mapping that kept only `grid[0]` and `grid[2]`
+  would not pass by accident — against the mapping, with the plan's `block.y`
+  and its non-zero shared-memory request, and fails on the truncating form, so
+  the defect class is caught without a device; a second one takes the same
+  `17 x 19 x 7` view the device test materializes through the selector and the
+  planner and pins its two tile rows, its seven batches and the 2176-byte
+  shared tile, so a mis-wired derivation cannot reach the planner unnoticed
+  either.
 - The derivation is pinned by CPU tests: an asymmetric 3-D pair swap and a
   rank-two view at a nonzero offset address exactly the elements the view names
   (reproducing the kernel's own `dst[b*M*N + i + j*M] = src[o + b*M*N + i*N + j]`
@@ -57,13 +60,11 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
 - Two device tests assert that an adjacent pair swap launches the tiled entry
   once, that a three-axis rotation launches it not at all, and that both outputs
   equal the host reference. They skip on a host without a usable device and fail
-  under `TENFERRO_REQUIRE_GPU=1`; **they have not been executed** — this branch
-  was developed on a machine with no CUDA toolkit, GPU or driver. Behavioural
-  evidence that the selection is wired into `materialize_storage` therefore still
-  rests on those two runs, not on the host suite; the host suite covers the
-  derivation and the launch geometry it feeds.
-- The five added tests are classified in `scripts/ci/cuda_test_partition.tsv`
-  (three `host`, two `gpu`), which the lane's inventory check requires before it
+  under `TENFERRO_REQUIRE_GPU=1`. Both ran green on the RunPod lane (run
+  42629754236, whose tested tree is this head's tree); the pair swap is now the
+  `17 x 19 x 7` multi-tile fixture, so a lost tile axis is visible in the values.
+- The six added tests are classified in `scripts/ci/cuda_test_partition.tsv`
+  (four `host`, two `gpu`), which the lane inventory check requires before it
   executes anything.
 - No timing was taken, so stage 1 claims no speedup. Which rows it should move
   is a hypothesis for the GPU host: `transpose_3d_1024_1024_512_102` (`[1, 0, 2]`),

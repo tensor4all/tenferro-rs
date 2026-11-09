@@ -325,14 +325,24 @@ fn a_launch_keeps_every_grid_and_block_axis_the_planner_chose() {
     // The tiled transpose plans tile columns on x, tile rows on y and batches on z, and asks for
     // the tile's dynamic shared memory. Dropping y, z or the shared bytes launches a kernel that
     // writes part of the destination and reads a zero-length shared tile.
+
+    // The shape is chosen so that every grid axis is greater than one: 17 x 19 at a 16-wide
+    // tile needs two tiles on each of x and y, and seven batches on z. A fixture that fits in
+    // one tile would leave grid[1] at one, so a mapping returning (grid[0], 1, grid[2]) would
+    // still pass while the rows of the second tile row were never written.
     let config = t4a_cuda_kernels::TransposeConfig::DEFAULT;
-    let plan = t4a_cuda_kernels::plan_tiled_transpose(DType::F64, config, 0, 15, 5, 3, 7, 105, 105)
-        .expect("a batched 5 x 3 transpose is plannable");
-    assert_eq!(plan.grid, [1, 1, 7], "tile columns, tile rows, batches");
+    let plan =
+        t4a_cuda_kernels::plan_tiled_transpose(DType::F64, config, 0, 323, 17, 19, 7, 2261, 2261)
+            .expect("a batched 17 x 19 transpose is plannable");
+    assert_eq!(plan.grid, [2, 2, 7], "tile columns, tile rows, batches");
+    assert!(
+        plan.grid.iter().all(|&axis| axis > 1),
+        "no grid axis hides at one"
+    );
     assert!(plan.shared_bytes > 0, "the tile lives in shared memory");
 
     let launch = super::launch_config(&plan);
-    assert_eq!(launch.grid, (1, 1, 7));
+    assert_eq!(launch.grid, (2, 2, 7));
     assert_eq!(launch.block, (16, config.block_rows(), 1));
     assert_eq!(launch.shared_bytes, plan.shared_bytes);
 
