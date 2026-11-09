@@ -339,6 +339,7 @@ gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_concrete_ses
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_eager_values_and_gradients_match_cpu
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_traced_values_match_cpu
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_softmax_nan_and_infinity_policy_matches_cpu
+gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_softplus_is_one_fused_launch_matching_the_composite
 host	tenferro-ad::integration	graph_compile::graph_compiler_compile_many_returns_multi_output_program
 host	tenferro-ad::integration	graph_compile::graph_compiler_compiler_options_setter_updates_options
 host	tenferro-ad::integration	graph_compile::graph_compiler_compiles_without_backend
@@ -391,6 +392,7 @@ host	tenferro-ad::integration	nn_composites::take_along_axis_validates_shapes_an
 host	tenferro-ad::integration	nn_composites::traced_composites_reject_symbolic_shapes_at_graph_build
 host	tenferro-ad::integration	nn_composites::typed_session_composites_match_the_erased_surface
 host	tenferro-ad::integration	nn_composites::unmasked_all_neg_inf_slice_follows_the_all_masked_policy
+host	tenferro-ad::integration	nn_composites::fused_activations_refuse_a_tensor_from_another_runtime
 host	tenferro-ad::integration	numpy_api::eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons
 host	tenferro-ad::integration	numpy_api::eager_compare_returns_bool_and_where_select_accepts_bool_condition
 host	tenferro-ad::integration	numpy_api::eager_session_methods_cover_core_elementwise_surface
@@ -965,6 +967,7 @@ gpu	tenferro-gpu	cuda::dispatch::tests::compare_and_select_match_the_host_refere
 gpu	tenferro-gpu	cuda::dispatch::tests::gather_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::scatter_add_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::unary_matches_the_host_reference
+host	tenferro-gpu	cuda::structural::activation::tests::softplus_plan_is_one_input_one_output_region_the_emitter_accepts
 gpu	tenferro-gpu	cuda::structural::tests::a_compact_batched_dot_reads_both_operands_in_place
 gpu	tenferro-gpu	cuda::structural::tests::a_float_offset_index_view_is_validated_at_its_base
 gpu	tenferro-gpu	cuda::structural::tests::a_materialized_view_moves_the_staging_counter

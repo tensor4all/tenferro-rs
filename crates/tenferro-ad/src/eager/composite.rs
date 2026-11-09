@@ -145,6 +145,9 @@ impl<'a> EagerSession<'a> {
         if !crate::eager_ops::untracked_fast_path_allowed(&[input]) {
             return Ok(None);
         }
+        // The composite path refuses a tensor from another runtime; the fast path must too,
+        // before the backend runs and the result is bound to the input's runtime.
+        self.ensure_runtime(input)?;
         let read = input.tensor_read();
         let Some(output) = self.engine.fused_activation_read(op, read)? else {
             return Ok(None);

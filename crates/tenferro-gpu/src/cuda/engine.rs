@@ -89,6 +89,10 @@ pub struct CudaEngine {
     /// Dispatchers whose translation units are already prepared. Preparing one is a runtime
     /// round trip, so an operation reuses the set its predecessors built.
     pub(crate) prepared: std::cell::RefCell<super::dispatch::PreparedDispatchers>,
+    /// Fused activation regions already compiled and bound for this engine (#2530); see
+    /// `FusedActivationKernels` for the ownership and capacity contract.
+    pub(crate) fused_activations:
+        std::cell::RefCell<super::structural::activation::FusedActivationKernels>,
     /// Prepared-program runs whose device work may still be in flight; they are retired at the
     /// next synchronise, when the queue grows past [`MAX_PENDING_RUNS`], or at drop.
     pending_runs: Vec<Box<dyn tenferro_runtime::EventDomainRun>>,
@@ -148,6 +152,7 @@ impl CudaEngine {
             ),
             vendor_resource_inits: std::cell::Cell::new(0),
             prepared: std::cell::RefCell::new(super::dispatch::PreparedDispatchers::default()),
+            fused_activations: std::cell::RefCell::default(),
             pending_runs: Vec::new(),
             broken: false,
             launch_completion_syncs: std::cell::Cell::new(0),
