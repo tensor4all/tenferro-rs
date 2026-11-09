@@ -244,7 +244,7 @@ impl PrimitiveRuleBuilder for GraphBuilder<StdTensorOp> {
     }
 }
 
-/// Extension-rule callback contract stored by shape-guard contexts.
+/// Extension-rule callback contract.
 ///
 /// This vocabulary remains shared; core AD transforms are owned by `tenferro-ad`.
 #[doc(hidden)]

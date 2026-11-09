@@ -20,6 +20,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   multi-block ramp). A NaN input stays NaN, possibly with a different sign or
   payload.
 
+### Removed
+
+- **The seven unused U02 internal `pub` items are gone** (#2546). `ShapeGuardContext`
+  no longer has `refresh_global_metadata`, `with_extension_ad_dispatcher`,
+  `set_transpose_primal_outputs`, `transpose_primal_outputs`,
+  `transpose_primal_outputs_were_used`, `take_deferred_shape_error` or
+  `extend_metadata`, and `CudaEngine` no longer has `runtime_mut`. #2417 P2 landed
+  without using them and nothing else in the workspace referenced them, so the
+  state that only fed them went with them: the deferred shape-error side channel
+  on `ShapeGuardFailure`, the extension-dispatch slot and the transpose
+  primal-output keys.
+
 ## [0.11.0] - 2026-11-09
 
 0.10.0 stopped identifying one body of content: the crates on crates.io were
