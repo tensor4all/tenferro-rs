@@ -971,6 +971,7 @@ host	tenferro-gpu	cuda::dispatch::tests::a_launch_keeps_every_grid_and_block_axi
 host	tenferro-gpu	cuda::structural::activation::tests::softplus_plan_is_one_input_one_output_region_the_emitter_accepts
 gpu	tenferro-gpu	cuda::structural::tests::a_compact_batched_dot_reads_both_operands_in_place
 gpu	tenferro-gpu	cuda::structural::tests::an_adjacent_pair_swap_reads_through_the_tiled_transpose
+gpu	tenferro-gpu	cuda::structural::tests::an_offset_pair_swap_reads_the_view_through_the_tiled_transpose
 gpu	tenferro-gpu	cuda::structural::tests::a_float_offset_index_view_is_validated_at_its_base
 gpu	tenferro-gpu	cuda::structural::tests::a_materialized_view_moves_the_staging_counter
 gpu	tenferro-gpu	cuda::structural::tests::a_non_compact_index_view_keeps_one_staging_copy

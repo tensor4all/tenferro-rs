@@ -1451,6 +1451,32 @@ fn an_adjacent_pair_swap_reads_through_the_tiled_transpose() {
     );
 }
 
+/// A pair swap whose view starts at a nonzero offset reads from the view's base.
+#[test]
+#[ignore = "requires CUDA"]
+fn an_offset_pair_swap_reads_the_view_through_the_tiled_transpose() {
+    let Some(mut engine) = engine() else { return };
+    // One dummy element ahead of the payload, so the view's base and the allocation's start
+    // differ: the launch's `src_offset` argument is what selects the payload, and a launch that
+    // passed zero reads every element one place off.
+    let data: Vec<f64> = (0..2262).map(|index| index as f64).collect();
+    let source = device(&engine, vec![2262], data.clone());
+
+    let before = engine.tiled_transposes();
+    let copy = engine
+        .to_contiguous_read(region(&source, vec![17, 19, 7], vec![19, 1, 323], 1))
+        .expect("materialize the offset pair swap");
+    assert_eq!(
+        engine.tiled_transposes(),
+        before + 1,
+        "a pair swap at a nonzero offset takes the tiled transpose"
+    );
+    assert_eq!(
+        read(&engine, &copy),
+        host_compact(&data, &[17, 19, 7], &[19, 1, 323], 1)
+    );
+}
+
 /// A view the tiled entry does not address keeps the generic materialization, with its values.
 #[test]
 #[ignore = "requires CUDA"]
