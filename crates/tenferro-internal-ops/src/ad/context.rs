@@ -9,8 +9,6 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-#[cfg(feature = "autodiff")]
-use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 
 use computegraph::graph::Graph;
@@ -18,7 +16,7 @@ use computegraph::types::{ValueKey, ValueRef};
 use tenferro_tensor::DType;
 
 #[cfg(feature = "autodiff")]
-use crate::ad::{ADRuleError, ADRuleKind, ExtensionAdDispatcher};
+use crate::ad::{ADRuleError, ADRuleKind};
 use crate::dim_expr::{DimExpr, DimExprEvalError};
 use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
@@ -93,9 +91,8 @@ pub enum ShapeGuardError {
 
 /// Result type used by shape-guard metadata queries.
 ///
-/// The error side preserves a [`ShapeGuardFailure`] wrapper so an AD callback
-/// can retain the original [`ShapeGuardError`] even when a foreign callback
-/// protocol accepts only a rendered message.
+/// The error side preserves a [`ShapeGuardFailure`] wrapper so the original
+/// [`ShapeGuardError`] stays available through `typed_source()`.
 ///
 /// # Examples
 ///
@@ -110,7 +107,6 @@ pub type ShapeGuardResult<T> = Result<T, ShapeGuardFailure>;
 #[cfg(feature = "autodiff")]
 impl From<ShapeGuardFailure> for ADRuleError {
     fn from(err: ShapeGuardFailure) -> Self {
-        err.record_for_ad_boundary();
         ADRuleError::invalid_input(
             "tenferro.shape_guard",
             ADRuleKind::Jvp,
@@ -121,10 +117,7 @@ impl From<ShapeGuardFailure> for ADRuleError {
 
 /// Error returned by a shape-guard metadata query.
 ///
-/// The public [`ShapeGuardError`] remains the typed source. The private side
-/// channel is shared with the owning [`ShapeGuardContext`] so an external
-/// message-only AD callback can report the same typed source at the runtime
-/// boundary without changing the callback protocol.
+/// The public [`ShapeGuardError`] remains the typed source.
 ///
 /// # Examples
 ///
@@ -146,17 +139,9 @@ impl From<ShapeGuardFailure> for ADRuleError {
 #[derive(Clone, Debug)]
 pub struct ShapeGuardFailure {
     source: ShapeGuardError,
-    #[cfg(feature = "autodiff")]
-    deferred: Arc<Mutex<Option<ShapeGuardError>>>,
 }
 
 impl ShapeGuardFailure {
-    #[cfg(feature = "autodiff")]
-    fn new(source: ShapeGuardError, deferred: Arc<Mutex<Option<ShapeGuardError>>>) -> Self {
-        Self { source, deferred }
-    }
-
-    #[cfg(not(feature = "autodiff"))]
     fn new(source: ShapeGuardError) -> Self {
         Self { source }
     }
@@ -169,15 +154,6 @@ impl ShapeGuardFailure {
     /// Consume this boundary error and return its original typed failure.
     pub fn into_typed_source(self) -> ShapeGuardError {
         self.source
-    }
-
-    #[cfg(feature = "autodiff")]
-    fn record_for_ad_boundary(&self) {
-        if let Ok(mut deferred) = self.deferred.lock() {
-            if deferred.is_none() {
-                *deferred = Some(self.source.clone());
-            }
-        }
     }
 }
 
@@ -445,15 +421,7 @@ pub struct ShapeGuardContext {
     use_global_registry: bool,
     local_keys: Option<Vec<ValueKey<StdTensorOp>>>,
     #[cfg(feature = "autodiff")]
-    deferred_shape_error: Arc<Mutex<Option<ShapeGuardError>>>,
-    #[cfg(feature = "autodiff")]
-    extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
-    #[cfg(feature = "autodiff")]
     active_value_keys: Option<std::sync::Arc<std::collections::HashSet<ValueKey<StdTensorOp>>>>,
-    #[cfg(feature = "autodiff")]
-    transpose_primal_outputs: Option<Vec<ValueKey<StdTensorOp>>>,
-    #[cfg(feature = "autodiff")]
-    transpose_primal_outputs_used: bool,
 }
 
 impl ShapeGuardContext {
@@ -479,16 +447,6 @@ impl ShapeGuardContext {
     }
 
     #[doc(hidden)]
-    /// Keep global-registry lookup enabled after a pass boundary.
-    ///
-    /// This is intentionally a no-op for cached entries: global metadata is
-    /// already read lazily on cache misses, and clearing the local cache would
-    /// also discard metadata inserted directly into this context.
-    pub fn refresh_global_metadata(&mut self) {
-        self.use_global_registry = true;
-    }
-
-    #[doc(hidden)]
     pub fn insert_shape_source(&mut self, tensor_id: u64, key: ValueKey<StdTensorOp>) {
         self.shape_sources.entry(tensor_id).or_insert(key);
     }
@@ -496,16 +454,6 @@ impl ShapeGuardContext {
     #[doc(hidden)]
     pub fn shape_source(&self, tensor_id: u64) -> Option<&ValueKey<StdTensorOp>> {
         self.shape_sources.get(&tensor_id)
-    }
-
-    #[doc(hidden)]
-    #[cfg(feature = "autodiff")]
-    pub fn with_extension_ad_dispatcher(
-        mut self,
-        dispatcher: Arc<dyn ExtensionAdDispatcher>,
-    ) -> Self {
-        self.extension_ad_dispatcher = Some(dispatcher);
-        self
     }
 
     #[cfg(feature = "autodiff")]
@@ -526,30 +474,6 @@ impl ShapeGuardContext {
         self.active_value_keys
             .as_ref()
             .is_none_or(|set| set.contains(key))
-    }
-
-    /// Primal output keys for the operation currently being transposed.
-    ///
-    /// Primary-mode extension transpose rules such as `Eigh` use these to reuse
-    /// forward eigenvectors instead of recomputing a decomposition.
-    #[cfg(feature = "autodiff")]
-    pub fn set_transpose_primal_outputs(&mut self, keys: Option<Vec<ValueKey<StdTensorOp>>>) {
-        self.transpose_primal_outputs = keys;
-        self.transpose_primal_outputs_used = false;
-    }
-
-    /// Return the current primal outputs and mark them as consumed by this rule.
-    #[cfg(feature = "autodiff")]
-    pub fn transpose_primal_outputs(&mut self) -> Option<&[ValueKey<StdTensorOp>]> {
-        if self.transpose_primal_outputs.is_some() {
-            self.transpose_primal_outputs_used = true;
-        }
-        self.transpose_primal_outputs.as_deref()
-    }
-
-    #[cfg(feature = "autodiff")]
-    pub fn transpose_primal_outputs_were_used(&self) -> bool {
-        self.transpose_primal_outputs_used
     }
 
     /// Returns the guards recorded so far.
@@ -579,21 +503,6 @@ impl ShapeGuardContext {
     /// ```
     pub fn clear_guards(&mut self) {
         self.guards.clear();
-    }
-
-    /// Take the first typed shape-guard failure recorded while crossing an AD
-    /// callback boundary.
-    ///
-    /// AD callbacks expose only a message-bearing error. AD
-    /// frontends call this after the callback returns and attach the typed
-    /// value to their public runtime error.
-    #[doc(hidden)]
-    #[cfg(feature = "autodiff")]
-    pub fn take_deferred_shape_error(&mut self) -> Option<ShapeGuardError> {
-        self.deferred_shape_error
-            .lock()
-            .ok()
-            .and_then(|mut error| error.take())
     }
 
     /// Return the shape metadata for a value reference.
@@ -816,14 +725,6 @@ impl ShapeGuardContext {
         self.metadata.insert(key, meta);
     }
 
-    #[doc(hidden)]
-    pub fn extend_metadata<I>(&mut self, entries: I)
-    where
-        I: IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-    {
-        self.metadata.extend(entries);
-    }
-
     fn resolve_key_if_available<'a>(
         &'a self,
         val: &'a ValueRef<StdTensorOp>,
@@ -859,12 +760,6 @@ impl ShapeGuardContext {
         }
     }
 
-    #[cfg(feature = "autodiff")]
-    fn shape_guard_failure(&self, source: ShapeGuardError) -> ShapeGuardFailure {
-        ShapeGuardFailure::new(source, Arc::clone(&self.deferred_shape_error))
-    }
-
-    #[cfg(not(feature = "autodiff"))]
     fn shape_guard_failure(&self, source: ShapeGuardError) -> ShapeGuardFailure {
         ShapeGuardFailure::new(source)
     }

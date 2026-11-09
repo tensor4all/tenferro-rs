@@ -335,12 +335,6 @@ impl CudaEngine {
     pub fn runtime(&self) -> &CudaRuntime {
         &self.runtime
     }
-
-    /// The runtime this engine owns, mutably, for numerical submission.
-    #[doc(hidden)]
-    pub fn runtime_mut(&mut self) -> &mut CudaRuntime {
-        &mut self.runtime
-    }
 }
 
 impl std::fmt::Debug for CudaEngine {
