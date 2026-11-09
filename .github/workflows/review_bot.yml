@@ -1,3 +1,8 @@
+# Touch: re-register this workflow with the Actions service.
+# Measured on tensor4all-rs: the same file, same event, every run `startup_failure` with zero
+# jobs; re-saving it on the base branch restored the `repository rules review gate` within
+# minutes, and tensor4all-rs#1146 then reported `repository rules review gate  pass`.
+# Nothing below this header changes.
 name: review bot
 
 # Delta-scoped REPOSITORY_RULES and PERFORMANCE_TIPS review. This workflow runs from the trusted base
