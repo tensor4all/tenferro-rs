@@ -51,11 +51,14 @@ if token.carries_team() {
 }
 ```
 
-tenferro hands out no `faer::Par`, so no faer value crosses a tenferro boundary
-and a separately pinned `faer` cannot meet a confusing type mismatch (#1939).
+tenferro hands out no `faer::Par`, so a faer value never has to cross a tenferro
+boundary. A separately pinned `faer` is safe for plain column-major slices, but
+not for the engine-token route above: that faer build must be compiled against
+the same `threadteam` the engine hands out, or the `TeamExec` types do not meet
+(#1939).
 Spell the types with `tenferro_cpu::faer`, the re-exported build, to keep one
-faer in the binary; a direct dependency remains safe because only plain
-column-major slices cross the boundary. A serial engine has no team and takes
+faer in the binary; a direct dependency is safe only for plain
+column-major slices. A serial engine has no team and takes
 `Par::Seq` directly. This route is CPU/faer-specific and does not claim affinity
 for external BLAS/OpenMP workers.
 
@@ -95,10 +98,14 @@ The exception is the `threadteam` line, which is `0.5.1` here and is part of
 both crates' public types: `tenferro-cpu` re-exports `threadteam::Pool` as
 `tenferro_cpu::Pool` (`crates/tenferro-cpu/src/lib.rs:204`), `CpuEngine::new`
 takes it (`crates/tenferro-cpu/src/engine.rs:119`), and faer's `Par::Team`
-carries a `threadteam::TeamExec` (`t4a-faer 0.33.0/src/lib.rs:1078`). Each
-`t4a-faer` release line pins its own `threadteam` (0.30 needs `^0.4.0`, 0.33
-needs `^0.5.1`), so a direct `faer` dependency on another line yields a second
-`Pool`/`TeamExec`/`Par` type that cannot be passed to or built from this one.
+carries a `threadteam::TeamExec` (`t4a-faer 0.33.0/src/lib.rs:1078`). Whether a
+direct `faer` dependency can share the engine team depends on the
+`threadteam` each line resolves, not on the faer version alone: `t4a-faer` 0.30
+requires `threadteam ^0.4.0`, while 0.32 and 0.33 both require `^0.5.1`. A line
+that resolves a different `threadteam` yields a second `Pool`/`TeamExec` that
+cannot be passed across. Even when the `threadteam` matches, the `Par` type of
+each faer build is distinct, so a `Par` cannot be moved between builds, though
+one can be constructed from a compatible team.
 Depend on the tested `t4a-faer` version above when a `Par`, a team, or the
 engine's pool crosses the boundary.
 
