@@ -12,10 +12,12 @@ The contract is **direct dependencies** for BLAS/LAPACK: your application adds
 enables the matching CPU provider feature on the tenferro crates. For faer you
 have a choice. `tenferro-cpu` re-exports the build it links as
 `tenferro_cpu::faer` (behind `native`), so your code resolves the same `Par` and
-`Mat` types and one binary carries one faer. No faer value crosses a tenferro
-boundary, so a direct `faer` dependency is also safe; add one only when you want
-to control that build yourself, and then keep it on the version below. tenferro
-does not wrap these crates and does not add a hidden interop layer to learn.
+`Mat` types and one binary carries one faer. No faer value has to cross a
+tenferro boundary, so a direct `faer` dependency is also safe as long as only
+plain column-major data is shared, or as long as it resolves the same
+`threadteam` as this workspace; add one only when you want to control that build
+yourself, and then keep it on the version below. tenferro does not wrap
+these crates and does not add a hidden interop layer to learn.
 
 The examples below are compiled and run in CI from
 [`docs/tutorial-code`](https://github.com/tensor4all/tenferro-rs/tree/main/docs/tutorial-code)
@@ -52,10 +54,9 @@ if token.carries_team() {
 ```
 
 tenferro hands out no `faer::Par`, so a faer value never has to cross a tenferro
-boundary. A separately pinned `faer` is safe for plain column-major slices, but
-not for the engine-token route above: that faer build must be compiled against
-the same `threadteam` the engine hands out, or the `TeamExec` types do not meet
-(#1939).
+boundary. A separately pinned `faer` is safe for plain column-major slices; for the
+engine-token route above it must also resolve the same `threadteam` as the
+engine, or the `TeamExec` types do not meet (#1939).
 Spell the types with `tenferro_cpu::faer`, the re-exported build, to keep one
 faer in the binary; a direct dependency is safe only for plain
 column-major slices. A serial engine has no team and takes
@@ -91,8 +92,10 @@ expecting semver compatibility from `0.1` alone. `cblas-sys` and `lapack` stay
 normal direct dependencies on purpose: your application then controls the
 version, the provider link, and the threading environment exactly as if tenferro
 were not involved. `faer` is re-exported for convenience rather than required:
-tenferro hands out no faer value, so a direct dependency at another compatible
-version only costs a second faer build, not a type mismatch (#1939).
+tenferro hands out no faer value, so a direct dependency at another version
+costs a second faer build; it meets a type mismatch only where a `Par` or a
+team crosses the boundary, and there only if it resolves a different
+`threadteam` (#1939).
 
 The exception is the `threadteam` line, which is `0.5.1` here and is part of
 both crates' public types: `tenferro-cpu` re-exports `threadteam::Pool` as
