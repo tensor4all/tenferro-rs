@@ -60,9 +60,12 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
 - Two device tests assert that an adjacent pair swap launches the tiled entry
   once, that a three-axis rotation launches it not at all, and that both outputs
   equal the host reference. They skip on a host without a usable device and fail
-  under `TENFERRO_REQUIRE_GPU=1`. Both ran green on the RunPod lane (run
-  42629754236, whose tested tree is this head's tree); the pair swap is now the
-  `17 x 19 x 7` multi-tile fixture, so a lost tile axis is visible in the values.
+  under `TENFERRO_REQUIRE_GPU=1`; **they have not been executed on a device**,
+  because this branch was developed and corrected on a machine with no CUDA
+  toolkit, GPU or driver. The RunPod run `42629754236` is not evidence for them:
+  it is a `workflow_run` on `main` (`ad281831`) and its tree does not contain
+  this branch. The pair swap is now the `17 x 19 x 7` multi-tile fixture, so a
+  lost tile axis is visible in the values once the device run happens.
 - The six added tests are classified in `scripts/ci/cuda_test_partition.tsv`
   (four `host`, two `gpu`), which the lane inventory check requires before it
   executes anything.
