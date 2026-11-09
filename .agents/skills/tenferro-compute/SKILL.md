@@ -37,6 +37,19 @@ not when changing tenferro itself.
   rejected. Import row-major (C-order) buffers with `from_vec_row_major`.
 - **No facade crate.** `cargo add tenferro` fails by design; depend on the
   crates you need (`tenferro-runtime`, `tenferro-cpu`, and operation crates).
+- **Tensor linalg first; drop to the dense library only for what it lacks.**
+  `tenferro-linalg` is the tensor-level surface: same engine, batching, and
+  autodiff. A supported tensor operation stays there even when you do not want
+  AD (`TypedTensorLinalgExt::cholesky` takes no AD and runs on the caller's
+  engine, CUDA included); do not re-implement it. Call the dense library
+  `t4a-faer` (package `t4a-faer`, library `faer`) directly for a matrix routine
+  the tensor surface does not expose, on host column-major buffers (a
+  CUDA-resident buffer cannot be borrowed as host data — download first), with
+  your own scratch buffer and your own `Par`; read its [usage
+  skill](https://github.com/tensor4all/faer/blob/main/skills/faer-usage/SKILL.md)
+  before re-implementing a routine, and see [external linear algebra
+  interop](../../../docs/guides/external-linalg-interop.md) for the storage and
+  provider rules. The planned rename of the package to `colmat` is not in effect.
 - **Explicit execution owner.** Every operation takes the engine the caller
   holds, as `&mut dyn Engine`: `let mut engine = CpuEngine::serial();` then
   `a.matmul(&b, &mut engine)?`. An eager session borrows the same value

@@ -13,6 +13,17 @@
 - **Built-in NN composites.** `erf`, `sigmoid`, `silu`, `softplus`, `gelu` / `gelu_tanh`, `reduce_mean`, `softmax` / `log_softmax` (and `masked_` forms), `layer_norm`, `rms_norm` and `take_along_axis` exist with the same name on the eager, traced and concrete-session surfaces, in numerically stable forms with a specified edge-case policy (all-masked softmax slices are 0 / `-inf`, not `NaN`); use them instead of hand composition.
 - **No `Clone` on tensors.** `Tensor` and the dynamic `TypedTensor` do not implement `Clone`; `duplicate()` returns an independent copy and fails for device-only storage. Share one tensor with `Arc<Tensor>` or views instead of copying.
 
+## Dense matrix kernels
+
+`tenferro-linalg` is the tensor-level surface: it takes the caller's engine, batches, and
+differentiates, and a supported tensor operation stays there even without autodiff. When a task
+needs a matrix routine it does not expose, call the dense library `t4a-faer` (package `t4a-faer`,
+library `faer`) directly on host column-major buffers (a CUDA-resident buffer cannot be borrowed
+as host data, so download first) with your own scratch and `Par`, reading its
+[usage skill](https://github.com/tensor4all/faer/blob/main/skills/faer-usage/SKILL.md) first. The
+storage and provider rules for that drop-down are in
+[External Linear Algebra Interop](https://tensor4all.org/tenferro-rs/guides/external-linalg-interop.html).
+
 ## Recipes and references
 
 - [README](https://github.com/tensor4all/tenferro-rs/blob/main/README.md): The canonical router — every user-facing artifact (guides, recipes, rustdoc, and this index) is reachable from it.
