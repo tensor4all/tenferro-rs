@@ -79,7 +79,7 @@ Depend directly on the same major versions the tenferro workspace pins
 
 | Crate | Tested version | Purpose |
 |---|---|---|
-| `faer` (`tenferro_cpu::faer`) | `t4a-faer` `0.30.0` | Pure-Rust column-major linear algebra; the fork the pinned `tlinalg` resolves, re-exported by `tenferro-cpu` under `native` |
+| `faer` (`tenferro_cpu::faer`) | `t4a-faer` `0.33.0` | Pure-Rust column-major linear algebra; the fork the pinned `tlinalg` resolves, re-exported by `tenferro-cpu` under `native` |
 | `cblas-sys` | `0.1` | CBLAS entry points (`cblas_dgemm`, ...) |
 | `lapack` | `0.20` | Fortran LAPACK entry points (`dpotrf`, ...) |
 
@@ -90,6 +90,17 @@ version, the provider link, and the threading environment exactly as if tenferro
 were not involved. `faer` is re-exported for convenience rather than required:
 tenferro hands out no faer value, so a direct dependency at another compatible
 version only costs a second faer build, not a type mismatch (#1939).
+
+The exception is the `threadteam` line, which is `0.5.1` here and is part of
+both crates' public types: `tenferro-cpu` re-exports `threadteam::Pool` as
+`tenferro_cpu::Pool` (`crates/tenferro-cpu/src/lib.rs:204`), `CpuEngine::new`
+takes it (`crates/tenferro-cpu/src/engine.rs:119`), and faer's `Par::Team`
+carries a `threadteam::TeamExec` (`t4a-faer 0.33.0/src/lib.rs:1078`). Each
+`t4a-faer` release line pins its own `threadteam` (0.30 needs `^0.4.0`, 0.33
+needs `^0.5.1`), so a direct `faer` dependency on another line yields a second
+`Pool`/`TeamExec`/`Par` type that cannot be passed to or built from this one.
+Depend on the tested `t4a-faer` version above when a `Par`, a team, or the
+engine's pool crosses the boundary.
 
 ### Provider features
 
