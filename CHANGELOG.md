@@ -11,8 +11,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **CUDA softplus is one fused launch** (#2530). `CudaEngine` now implements
   `Engine::fused_activation_read` for `softplus` on `F32`/`F64`, so concrete
   `Tensor::softplus` / `TypedTensor::softplus` and untracked eager softplus no
-  longer run the multi-launch composite. Results equal the composite bit for bit
-  on every non-NaN input; a NaN input stays NaN, possibly with a different sign or
+  longer run the multi-launch composite. The region computes the same `-|x|`,
+  `exp`, `log1p` and `x + tail` through the same device helpers as the composite's
+  kernels, and its closing `max` picks the operand the composite's
+  compare-and-select picks, so a non-NaN input gives the composite's bits (checked
+  against the composite on signed zeros, finite extremes, the smallest normal and
+  subnormal magnitudes, inputs whose tail is a nonzero subnormal, `±inf` and a
+  multi-block ramp). A NaN input stays NaN, possibly with a different sign or
   payload.
 
 ## [0.11.0] - 2026-11-09

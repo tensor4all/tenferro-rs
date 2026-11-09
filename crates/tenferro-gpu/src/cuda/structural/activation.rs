@@ -4,9 +4,11 @@
 //! kernel is not handwritten here: the activation is a [`FusionPlan`] over the catalogue's
 //! element-wise vocabulary, which the kernel crate's fusion emitter turns into one CUDA
 //! entry (`t4a_fused_elementwise`) built from the same `abi.cuh` helpers the
-//! per-operation entries use, so its output equals the composite formulation's bit for
-//! bit on every non-NaN input; a NaN input gives NaN on both, possibly with a different
-//! sign or payload. See [`softplus_plan`] for why the different operations agree.
+//! per-operation entries use and compiled with the same NVRTC options, so an instruction
+//! is the same device code on the same bits either way. The fused output therefore equals
+//! the composite formulation's bit for bit for non-NaN inputs, and a NaN input gives NaN
+//! on both, possibly with a different sign or payload. See [`softplus_plan`] for why the
+//! different operations agree.
 //!
 //! Only `softplus` has a fused form here (#2530); every other [`ActivationOp`] and
 //! every non-`F32`/`F64` dtype declines with `Ok(None)` so the caller keeps the shared
@@ -65,8 +67,13 @@ impl FusedActivationKernels {
 /// ```
 ///
 /// The composite (`tenferro_runtime::composite::softplus`) uses compare and select, which
-/// the fusion vocabulary lacks; its outputs still agree with this region on every non-NaN
-/// input, although one intermediate differs:
+/// the fusion vocabulary lacks. Its output still equals this region's for non-NaN inputs,
+/// although one intermediate differs. That rests on the emitter rendering each
+/// instruction through the composite's own helper (`t4a_cuda_fabs`, `t4a_cuda_neg`,
+/// `t4a_cuda_exp`, `t4a_cuda_log1p`, `t4a_cuda_add`, `t4a_cuda_max`) and compiling the
+/// fused region with the same NVRTC options as the per-operation entries, so both paths
+/// evaluate each instruction on the same bits identically; and on the closing `max`
+/// making the composite's choice:
 ///
 /// - The composite's `neg_abs` is `x > -x ? -x : x`. That equals `-|x|` except at
 ///   `x = +0`, where the composite keeps `+0` and `v2` is `-0`. `exp(+-0) = 1`, so `exp`
@@ -74,7 +81,8 @@ impl FusedActivationKernels {
 /// - The composite then returns `x > 0 ? x + tail : tail`. The tail is never negative
 ///   and rounding is monotone, so `x > 0` gives `x + tail >= tail` and `x <= 0` gives
 ///   `x + tail <= tail`. Where the larger operand is not unique the two operands are the
-///   same value, so `max(v5, v4)` returns the composite's result. A tiny negative `x` can
+///   same value, so `max(v5, v4)`, being `fmax` over two non-NaN values and hence one of
+///   them, returns the composite's result. A tiny negative `x` can
 ///   round `x + tail` to `tail`, and that case falls under the same equality. A signed
 ///   zero cannot differ either: `x + tail` is a zero only when `x` is one, and then it
 ///   is `+0`, which is the tail.

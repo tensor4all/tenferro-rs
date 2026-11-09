@@ -51,6 +51,12 @@
   pairs) ran throughout, so the GPU was exclusive and the host CPU was not.
   Per-operation median (IQR), f64 n=1048576, rounds 1 | 2:
 
+  **Measured at `079caefc6`; the submitted head `49b33c8d` was not re-measured.**
+  Between the two, this path changes only in comments in `activation.rs` (the
+  emitted fusion source, hence the compiled kernel, is the same) and by one
+  host-side `Arc::ptr_eq` runtime check added to the eager fast path; the numbers
+  below are from `079caefc6` and were not re-run at `49b33c8d`.
+
   | arm | before `ad281831f` | after `079caefc6` |
   |---|---|---|
   | direct | 214.88 (2.31) / 223.22 (3.40) us | 40.38 (0.72) / 44.20 (4.04) us |
