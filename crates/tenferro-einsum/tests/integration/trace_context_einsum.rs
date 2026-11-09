@@ -4,8 +4,8 @@ use tenferro_einsum::{
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef};
-use tenferro_runtime::{GraphCompiler, TraceContext};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_runtime::{CompiledGraph, Error as RuntimeError, GraphCompiler, TraceContext};
+use tenferro_tensor::{DType, Error as TensorError, ShapeMismatch, Tensor, ValidationError};
 
 use super::support;
 
@@ -308,14 +308,9 @@ fn traced_einsum_merges_symbolic_extent_with_constant_under_unrelated_broadcast(
     assert_eq!(result.as_slice::<f64>().unwrap(), &[25.0, 35.0, 45.0]);
 }
 
-/// Two different symbolic extents of `i` under a broadcast turned on by the
-/// constant `j` (`1` vs `2`), with `i` bound to `0` and `1`. Singleton
-/// broadcasting of an empty axis yields an empty axis, so the merged extent is
-/// `0`, not `max(0, 1) = 1`. `zero_operand` picks which operand carries the
-/// empty axis, so both fold orders of the merge are exercised. The compiled
-/// output metadata (evaluated at the bound shapes) and the executed output
-/// must both be `[0]`.
-fn assert_empty_axis_broadcast_merges_to_zero(zero_operand: usize) {
+/// `"ij,ij->i"` with a separate symbolic `i` per operand and constant `j`
+/// (`1` vs `2`), so the known `j` mismatch turns broadcasting on.
+fn compile_ij_ij_to_i_with_separate_symbolic_i() -> CompiledGraph {
     let symbolic_i = |input_idx| {
         ProgramInputSpec::new(
             DType::F64,
@@ -330,7 +325,18 @@ fn assert_empty_axis_broadcast_merges_to_zero(zero_operand: usize) {
     let rhs = trace.input(symbolic_i(1)).unwrap();
     let output = trace.einsum(&[lhs, rhs], "ij,ij->i").unwrap();
     let graph = trace.finish(&[output]).unwrap();
-    let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+    GraphCompiler::new().compile_traced_graph(&graph).unwrap()
+}
+
+/// Two different symbolic extents of `i` under a broadcast turned on by the
+/// constant `j` (`1` vs `2`), with `i` bound to `0` and `1`. Singleton
+/// broadcasting of an empty axis yields an empty axis, so the merged extent is
+/// `0`, not `max(0, 1) = 1`. `zero_operand` picks which operand carries the
+/// empty axis, so both fold orders of the merge are exercised. The compiled
+/// output metadata (evaluated at the bound shapes) and the executed output
+/// must both be `[0]`.
+fn assert_empty_axis_broadcast_merges_to_zero(zero_operand: usize) {
+    let compiled = compile_ij_ij_to_i_with_separate_symbolic_i();
 
     let (lhs_rows, rhs_rows) = if zero_operand == 0 { (0, 1) } else { (1, 0) };
     let lhs_tensor =
@@ -361,6 +367,40 @@ fn traced_einsum_broadcasts_an_empty_symbolic_axis_in_the_first_operand_to_zero(
 #[test]
 fn traced_einsum_broadcasts_an_empty_symbolic_axis_in_the_second_operand_to_zero() {
     assert_empty_axis_broadcast_merges_to_zero(1);
+}
+
+/// The same graph as [`assert_empty_axis_broadcast_merges_to_zero`] bound to
+/// an invalid pair: `i` is `2` in one operand and `3` in the other, neither a
+/// broadcast singleton. The symbolic merge cannot see this at compile time, so
+/// execution with the bound shapes must reject it as an einsum shape mismatch
+/// instead of producing an output of extent `max(2, 3) = 3`. Both operand
+/// orders are checked.
+#[test]
+fn traced_einsum_rejects_an_invalid_symbolic_binding_as_a_shape_mismatch() {
+    for (lhs_rows, rhs_rows) in [(2, 3), (3, 2)] {
+        let compiled = compile_ij_ij_to_i_with_separate_symbolic_i();
+        let lhs_tensor =
+            Tensor::from_vec_col_major(vec![lhs_rows, 1], vec![2.0_f64; lhs_rows]).unwrap();
+        let rhs_tensor =
+            Tensor::from_vec_col_major(vec![rhs_rows, 2], vec![3.0_f64; rhs_rows * 2]).unwrap();
+
+        let error = support::run_one(&compiled, &[&lhs_tensor, &rhs_tensor])
+            .expect_err("i bound to 2 and 3 is not a singleton broadcast");
+
+        let RuntimeError::TensorRuntime(TensorError::Validation {
+            op: "einsum",
+            source: ValidationError::ShapeMismatch(mismatch),
+        }) = &error
+        else {
+            panic!("expected an einsum shape mismatch for ({lhs_rows}, {rhs_rows}), got {error:?}");
+        };
+        let ShapeMismatch::ExpectedActual { expected, actual } = mismatch.as_ref() else {
+            panic!("expected an expected/actual shape mismatch, got {mismatch:?}");
+        };
+        let mut extents = [expected[0], actual[0]];
+        extents.sort_unstable();
+        assert_eq!(extents, [2, 3], "({lhs_rows}, {rhs_rows}): {error}");
+    }
 }
 
 #[test]
