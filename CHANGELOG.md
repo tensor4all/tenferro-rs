@@ -134,8 +134,9 @@ test.
   (#2499). Each returns a host-marked mutable view (`TensorViewMut<'_, Host>` /
   `TypedTensorViewMut<'_, T, R, Host>`) with the read side's errors: a
   `RuntimeState` error naming `op` for backend storage and an `UnsupportedDType`
-  error naming `op` for a `Tensor::external` payload. A device or managed
-  placement label on host storage resolves to host memory as `try_host` does.
+  error naming `op` for a `Tensor::external` payload. A host-storage label is
+  preserved, not rewritten: construction and `set_placement` reject Device/Managed
+  on host storage.
   The host-marked mutable views widen back without copying (`into_dynamic`),
   and `TensorViewMut<'_, Host>` reports `dtype`, `shape` and `strides`.
   `TensorViewMut` gains a defaulted representation parameter
