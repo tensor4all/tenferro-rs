@@ -288,7 +288,7 @@ fn trace_requires_broadcast(
     // trace still decides every pair of extents it does know.
     let shapes = trace_known_shapes(trace, inputs)?;
     let shape_refs: Vec<&[Option<usize>]> = shapes.iter().map(Vec::as_slice).collect();
-    Ok(crate::util::requires_broadcast(
+    Ok(crate::broadcast::requires_broadcast(
         &shape_refs,
         &subscripts.inputs,
     ))

@@ -271,7 +271,7 @@ fn einsum_subscripts_with_broadcast(
 
     let output_shape_hint = infer_eager_output_shape(subscripts, inputs)?;
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    let requires_broadcast = crate::util::requires_broadcast(&shapes, &subscripts.inputs);
+    let requires_broadcast = crate::broadcast::requires_broadcast(&shapes, &subscripts.inputs);
     if !requires_broadcast {
         if let Some(result) = try_expand_eager_einsum(session, inputs, subscripts)? {
             return Ok(result);

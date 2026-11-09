@@ -258,6 +258,56 @@ fn traced_einsum_broadcasts_singleton_extent_with_symbolic_axes() {
     assert_eq!(result.as_slice::<f64>().unwrap(), &[6.0; 32]);
 }
 
+/// A symbolic extent shared with a constant non-1 extent must merge to that
+/// constant once an unrelated label turns broadcasting on: `j` is `1` vs `2`,
+/// so the op broadcasts, and the lhs `i` (bound to `1`) broadcasts against the
+/// rhs `i = 3`. Both the compiled output metadata and the executed output are
+/// `[3]`.
+#[test]
+fn traced_einsum_merges_symbolic_extent_with_constant_under_unrelated_broadcast() {
+    let mut trace = TraceContext::new();
+    let lhs = trace
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [
+                DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 0,
+                },
+                DimExpr::Const(1),
+            ],
+        ))
+        .unwrap();
+    let rhs = trace
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(3), DimExpr::Const(2)],
+        ))
+        .unwrap();
+    let output = trace.einsum(&[lhs, rhs], "ij,ij->i").unwrap();
+    let graph = trace.finish(&[output]).unwrap();
+    let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+
+    let output_extents: Vec<_> = compiled
+        .program()
+        .value_metadata(compiled.program().outputs()[0])
+        .unwrap()
+        .shape()
+        .iter()
+        .map(|extent| extent.as_exact().cloned())
+        .collect();
+    assert_eq!(output_extents, [Some(DimExpr::Const(3))]);
+
+    let lhs_tensor = Tensor::from_vec_col_major(vec![1, 1], vec![5.0_f64]).unwrap();
+    // rhs[i, j] column-major: rhs[:, 0] = [1, 2, 3], rhs[:, 1] = [4, 5, 6].
+    let rhs_tensor =
+        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let result = support::run_one(&compiled, &[&lhs_tensor, &rhs_tensor]).unwrap();
+
+    assert_eq!(result.shape(), &[3]);
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[25.0, 35.0, 45.0]);
+}
+
 #[test]
 fn traced_einsum_rejects_a_diagonal_mismatch_while_another_label_broadcasts() {
     let mut trace = TraceContext::new();
