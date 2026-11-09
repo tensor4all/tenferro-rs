@@ -1606,3 +1606,36 @@ fn typed_session_composites_match_the_erased_surface() {
         assert_close(&data64(erased), typed, 0.0, 0.0, &format!("case {index}"));
     }
 }
+
+/// An untracked tensor from another eager runtime is refused with
+/// `ContextMismatch` on the fused-activation fast path, as the composite path
+/// refuses it: taking the backend's fused kernel must not skip the runtime check.
+#[test]
+fn fused_activations_refuse_a_tensor_from_another_runtime() {
+    let owner = EagerRuntime::new().unwrap();
+    let other = EagerRuntime::new().unwrap();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    let x = owner
+        .with_eager_session(&mut engine, |s| {
+            s.constant_from_host(t64(&[3], vec![-1.0, 0.0, 1.0]))
+        })
+        .unwrap();
+    type Activation = fn(&mut EagerSession<'_>, &EagerTensor) -> tenferro_ad::Result<EagerTensor>;
+    let activations: [(&str, Activation); 5] = [
+        ("sigmoid", |s, x| s.sigmoid(x)),
+        ("silu", |s, x| s.silu(x)),
+        ("softplus", |s, x| s.softplus(x)),
+        ("gelu", |s, x| s.gelu(x)),
+        ("gelu_tanh", |s, x| s.gelu_tanh(x)),
+    ];
+    for (name, activation) in activations {
+        let err = other
+            .with_eager_session(&mut engine, |s| activation(s, &x))
+            .err()
+            .unwrap_or_else(|| panic!("{name}: a foreign-runtime tensor was accepted"));
+        assert!(
+            matches!(err, tenferro_ad::Error::ContextMismatch { .. }),
+            "{name}: {err:?}"
+        );
+    }
+}

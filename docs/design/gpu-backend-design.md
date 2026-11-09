@@ -48,6 +48,7 @@ crates/tenferro-gpu/src/cuda/
     dispatch.rs            typed catalogue planning and argument marshalling
     launch.rs              NVRTC artifacts, bound functions and launches
     structural.rs          engine structural/read/write operations
+                           (structural/activation.rs: fused activations)
     fusion.rs              fused elementwise catalogue integration
     cutensor.rs            cuTENSOR contraction integration
     vendor.rs              cuBLAS integration
@@ -73,6 +74,17 @@ engine dispatch and vendor-library integration. `cuda/launch.rs` composes the
 catalogue's source modules, prepares NVRTC artifacts through the runtime,
 binds functions and launches them. `cuda/fusion.rs` integrates the catalogue's
 fusion support. Do not restore a parallel CubeCL kernel path.
+
+A fused activation (`Engine::fused_activation_read`) is a `FusionPlan` over the
+catalogue's element-wise vocabulary, not a tenferro-local kernel source:
+`cuda/structural/activation.rs` describes the region and the catalogue's
+emitter produces the CUDA entry from the same `abi.cuh` helpers the
+per-operation entries use, compiled with the same NVRTC options, so an instruction
+is the same device code on the same bits either way; the fused result therefore
+matches the shared composite bit for bit for non-NaN inputs (a NaN input stays NaN,
+possibly with a different sign or payload). The engine prepares each region once and
+keeps it, one slot per (activation, real dtype). Only `softplus` has a region today;
+other activations decline and run the composite.
 
 ## Dependency Source
 

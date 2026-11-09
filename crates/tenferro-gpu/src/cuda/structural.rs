@@ -3311,6 +3311,9 @@ fn count_i64(shape: &[usize], op: &'static str) -> crate::Result<i64> {
         .map_err(|_| crate::Error::unsupported(op, "the element count exceeds i64"))
 }
 
+#[path = "structural/activation.rs"]
+pub(super) mod activation;
+
 #[cfg(test)]
 #[path = "structural/tests.rs"]
 mod tests;
@@ -6603,6 +6606,14 @@ impl tenferro_tensor::Engine for CudaEngine {
             return self.to_contiguous(&product);
         }
         self.reduce_axes(TensorRead::from_tensor(&product), &axes, ReduceOp::Sum, OP)
+    }
+
+    fn fused_activation_read(
+        &mut self,
+        op: tenferro_tensor::ActivationOp,
+        input: TensorRead<'_>,
+    ) -> crate::Result<Option<Tensor>> {
+        self.fused_activation(op, input)
     }
 
     fn norm_squared_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
