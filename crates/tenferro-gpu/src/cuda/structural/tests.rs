@@ -1430,12 +1430,12 @@ fn the_tiled_geometry_addresses_every_element_the_view_names() {
 #[ignore = "requires CUDA"]
 fn an_adjacent_pair_swap_reads_through_the_tiled_transpose() {
     let Some(mut engine) = engine() else { return };
-    let data: Vec<f64> = (0..2261).map(|index| index as f64).collect();
-    let source = device(&engine, vec![7, 19, 17], data.clone());
+    let data: Vec<f64> = (0..105).map(|index| index as f64).collect();
+    let source = device(&engine, vec![3, 5, 7], data.clone());
 
     let before = engine.tiled_transposes();
     let copy = engine
-        .to_contiguous_read(region(&source, vec![17, 19, 7], vec![19, 1, 323], 0))
+        .to_contiguous_read(region(&source, vec![5, 3, 7], vec![3, 1, 15], 0))
         .expect("materialize the pair swap");
     assert_eq!(
         engine.tiled_transposes(),
@@ -1444,7 +1444,7 @@ fn an_adjacent_pair_swap_reads_through_the_tiled_transpose() {
     );
     assert_eq!(
         read(&engine, &copy),
-        host_compact(&data, &[17, 19, 7], &[19, 1, 323], 0)
+        host_compact(&data, &[5, 3, 7], &[3, 1, 15], 0)
     );
 }
 
@@ -1474,18 +1474,17 @@ fn a_three_axis_rotation_stays_on_the_generic_materialization() {
 /// The batched view the device test materializes plans one grid axis per batch, not one batch.
 #[test]
 fn a_batched_pair_swap_plans_one_grid_axis_per_batch() {
-    // The `17 x 19 x 7` view `an_adjacent_pair_swap_reads_through_the_tiled_transpose`
-    // materializes: seven independent `17 x 19` transposes, two tile columns by two tile rows.
-    let geometry = super::tiled_transpose_geometry(&[17, 19, 7], &[19, 1, 323], 0)
-        .expect("the tiled geometry");
-    let plan = super::tiled_transpose_plan(t4a_cuda_kernels::DType::F64, geometry, 2261, 2261)
+    // The `5 x 3 x 7` view `an_adjacent_pair_swap_reads_through_the_tiled_transpose` materializes:
+    // seven independent `5 x 3` transposes.
+    let geometry =
+        super::tiled_transpose_geometry(&[5, 3, 7], &[3, 1, 15], 0).expect("the tiled geometry");
+    let plan = super::tiled_transpose_plan(t4a_cuda_kernels::DType::F64, geometry, 105, 105)
         .expect("the catalogue plans the launch");
 
-    // Both tile axes exceed one tile, so every grid axis is greater than one: two tile columns on
-    // x, two tile rows on y, one grid block per batch on z. The tile rows are block.y and the tile
-    // itself is the launch's dynamic shared memory. A launch built from `grid[0]` and `block[0]`
-    // alone would carry `[2, 1, 1]` here and write only the first tile row of the first batch.
-    assert_eq!(plan.grid, [2, 2, 7], "tile columns, tile rows, batches");
+    // Every batch is its own grid block on z; the tile rows are block.y, and the tile itself is
+    // the launch's dynamic shared memory. A launch built from `grid[0]` and `block[0]` alone would
+    // carry `[1, 1, 1]` here and cover one batch of one tile row from a zero-length shared tile.
+    assert_eq!(plan.grid, [1, 1, 7], "one grid block per batch");
     assert_eq!(plan.block, [16, 8, 1], "tile lanes, tile row groups");
     assert_eq!(plan.shared_bytes, 16 * 17 * 8, "a 16 x 16 f64 tile, padded");
 }

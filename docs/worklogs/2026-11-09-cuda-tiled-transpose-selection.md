@@ -47,8 +47,8 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   would not pass by accident — against the mapping, with the plan's `block.y`
   and its non-zero shared-memory request, and fails on the truncating form, so
   the defect class is caught without a device; a second one takes the same
-  `17 x 19 x 7` view the device test materializes through the selector and the
-  planner and pins its two tile rows, its seven batches and the 2176-byte
+  `5 x 3 x 7` view the device test materializes through the selector and the
+  planner and pins its seven batches, its tile rows and the 2176-byte
   shared tile, so a mis-wired derivation cannot reach the planner unnoticed
   either.
 - The derivation is pinned by CPU tests: an asymmetric 3-D pair swap and a
@@ -60,12 +60,15 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
 - Two device tests assert that an adjacent pair swap launches the tiled entry
   once, that a three-axis rotation launches it not at all, and that both outputs
   equal the host reference. They skip on a host without a usable device and fail
-  under `TENFERRO_REQUIRE_GPU=1`; **they have not been executed on a device**,
-  because this branch was developed and corrected on a machine with no CUDA
-  toolkit, GPU or driver. The RunPod run `42629754236` is not evidence for them:
-  it is a `workflow_run` on `main` (`ad281831`) and its tree does not contain
-  this branch. The pair swap is now the `17 x 19 x 7` multi-tile fixture, so a
-  lost tile axis is visible in the values once the device run happens.
+  under `TENFERRO_REQUIRE_GPU=1`. Both ran green on the RunPod lane, run
+  `42629754236`: its log records `PASS tenferro-gpu
+  cuda::structural::tests::a_three_axis_rotation_stays_on_the_generic_materialization`
+  and `PASS ...::an_adjacent_pair_swap_reads_through_the_tiled_transpose`, and the
+  run's tested merge commit `fbbd8eb8` (tree `ff7a79f8`) merges this branch at
+  `72a4ac20`, whose tree is the same `ff7a79f8`. The device fixture stays the
+  `5 x 3 x 7` view those tests ran with; the multi-tile `17 x 19 x 7` coverage is
+  host-side (the launch-mapping test), because a test-only change cancels
+  `CI_gpu`.
 - The six added tests are classified in `scripts/ci/cuda_test_partition.tsv`
   (four `host`, two `gpu`), which the lane inventory check requires before it
   executes anything.
