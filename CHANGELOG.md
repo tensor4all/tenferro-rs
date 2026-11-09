@@ -222,20 +222,22 @@ test.
   identity, and a result whose kept extent is itself zero stays empty.
   `max` and `min` keep the typed `InvalidArgument`: they have no finite
   identity, and reporting a sentinel would invent a value the input never held.
-  An empty *axis list* still returns the input unchanged.
+  An empty *axis list* still returns the input unchanged for `sum` and `prod`;
+  sum of squares returns the squared input instead.
 - **`rem` differentiates away from its discontinuities in the semantic AD
   transforms** (#2454). `rem(x, y) = x - trunc(x / y) * y` is linear in `x` with
   slope `1` and in `y` with slope `-trunc(x / y)`, so `linearize` emits
   `dx - trunc(x / y) * dy` and the reverse rule emits `1` and
   `-trunc(x / y)` times the cotangent. `trunc(x / y)` is built in the core
-  vocabulary as `q - rem(q, 1)`, so the emitted graph agrees with the primal's
-  own remainder instead of depending on a second rounding mode. The rule is
+  vocabulary as `q - rem(q, 1)`, without a separate primitive. The graph and
+  the primal can disagree when `x / y` rounds across an integer, because the
+  emitted quotient is the rounded one. The rule is
   inactive for integer and complex inputs, which have no such derivative, and
   `compare` remains explicitly inactive. This changes
   `tenferro_ops::ad::support`: `Rem` is `direct_support!`, not
-  `nondiff_support!`. The derivative is undefined at `y == 0` and at an exact
-  integer quotient; those single points are left out rather than given a
-  one-sided value.
+  `nondiff_support!`. The derivative is undefined at `y == 0` and at a nonzero
+  integer quotient; `x == 0` is differentiable (`rem(x, y) == x` near it). Those
+  single points are left out rather than given a one-sided value.
 - **The CPU linalg and reduction entries narrow each operand to `Host` once
   and no longer re-check placement below that point.** The
   `ensure_host_tensor` / `ensure_host_tensor_read` pre-checks (55 call sites in
@@ -259,11 +261,12 @@ test.
   no device, no CPU affinity, for all three). Migration: relabel through
   `into_dynamic()`, as in `let mut t = host.into_dynamic(); t.set_placement(p);`.
   Every in-repository caller already held a `Dynamic` tensor.
-- **`TypedTensor::into_host` resolves a device label instead of carrying it.**
-  `Host` is now evidence rather than a hint: the narrow keeps `PinnedHost` /
-  `UnpinnedHost` (and any `cpu_affinity`) and replaces `Device` / `Managed` /
-  `Other` with unpinned host memory. A value labelled device-resident that is
-  narrowed to host used to come out still claiming a device, which is why every
+- **`TypedTensor::into_host` makes `Host` evidence without rewriting the label.**
+  The narrow keeps `PinnedHost` / `UnpinnedHost` (and any `cpu_affinity`);
+  a plain host payload cannot carry `Device` or `Managed` (construction and
+  relabelling reject those), and `Other(label)` is kept. A value labelled
+  device-resident that is narrowed to host used to come out still claiming a
+  device, which is why every
   entry point had to re-check the label at run time (`ensure_host_tensor`, 72
   call sites). Those checks are removed in the following change; this one only
   establishes the invariant they were compensating for. Fabricating the
