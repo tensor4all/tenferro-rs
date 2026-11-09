@@ -392,6 +392,7 @@ host	tenferro-ad::integration	nn_composites::take_along_axis_validates_shapes_an
 host	tenferro-ad::integration	nn_composites::traced_composites_reject_symbolic_shapes_at_graph_build
 host	tenferro-ad::integration	nn_composites::typed_session_composites_match_the_erased_surface
 host	tenferro-ad::integration	nn_composites::unmasked_all_neg_inf_slice_follows_the_all_masked_policy
+host	tenferro-ad::integration	nn_composites::fused_activations_refuse_a_tensor_from_another_runtime
 host	tenferro-ad::integration	numpy_api::eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons
 host	tenferro-ad::integration	numpy_api::eager_compare_returns_bool_and_where_select_accepts_bool_condition
 host	tenferro-ad::integration	numpy_api::eager_session_methods_cover_core_elementwise_surface

@@ -80,7 +80,8 @@ catalogue's element-wise vocabulary, not a tenferro-local kernel source:
 `cuda/structural/activation.rs` describes the region and the catalogue's
 emitter produces the CUDA entry from the same `abi.cuh` helpers the
 per-operation entries use, so the fused result matches the shared composite
-bit for bit. The engine prepares each region once and keeps it, one slot per
+bit for bit on every non-NaN input (a NaN input stays NaN, possibly with a
+different sign or payload). The engine prepares each region once and keeps it, one slot per
 (activation, real dtype). Only `softplus` has a region today; other activations
 decline and run the composite.
 

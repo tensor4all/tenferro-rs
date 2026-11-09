@@ -546,38 +546,79 @@ fn test_gpu_composites_concrete_session_matches_cpu() {
     }
 }
 
-/// Softplus boundary values: both signs of zero, the overflow and underflow
-/// tails of `exp(-|x|)`, the finite extremes, subnormals and the non-finite
-/// classes, followed by a ramp long enough to span several launch blocks with a
-/// partial last one.
-fn softplus_boundary_values() -> Vec<f64> {
-    let mut values = vec![
-        -1000.0,
-        -745.5,
-        -40.0,
-        -1.5,
-        -1e-3,
-        -0.0,
-        0.0,
-        1e-3,
-        1.5,
-        40.0,
-        745.5,
-        1000.0,
-        f64::MAX,
-        -f64::MAX,
-        f64::MIN_POSITIVE,
-        -f64::MIN_POSITIVE,
-        5e-324,
-        -5e-324,
-        f64::INFINITY,
-        f64::NEG_INFINITY,
-        f64::NAN,
-        -f64::NAN,
-    ];
+/// Softplus boundary values in `dtype`'s own range: both signs of zero, the
+/// finite extremes, the smallest normal and subnormal magnitudes, inputs whose
+/// tail `log1p(exp(-|x|))` is a nonzero subnormal or underflows to zero, and the
+/// non-finite classes, followed by a ramp long enough to span several launch
+/// blocks with a partial last one.
+fn softplus_boundary_host(dtype: DType) -> Tensor {
     let ramp = 4096 + 17;
-    values.extend((0..ramp).map(|i| -60.0 + 120.0 * i as f64 / (ramp - 1) as f64));
-    values
+    let ramp = (0..ramp).map(|i| -60.0 + 120.0 * i as f64 / (ramp - 1) as f64);
+    match dtype {
+        DType::F64 => {
+            let mut values = vec![
+                -1000.0,
+                -745.5,
+                -744.0, // exp(-744) is subnormal: a nonzero subnormal tail
+                -708.0,
+                -40.0,
+                -1.5,
+                -1e-3,
+                -0.0,
+                0.0,
+                1e-3,
+                1.5,
+                40.0,
+                744.0,
+                745.5,
+                1000.0,
+                f64::MAX,
+                -f64::MAX,
+                f64::MIN_POSITIVE,
+                -f64::MIN_POSITIVE,
+                5e-324,
+                -5e-324,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                f64::NAN,
+                -f64::NAN,
+            ];
+            values.extend(ramp);
+            Tensor::from_vec_col_major(vec![values.len()], values).unwrap()
+        }
+        DType::F32 => {
+            let mut values = vec![
+                -1000.0_f32,
+                -104.0,
+                -100.0, // exp(-100) is subnormal in f32: a nonzero subnormal tail
+                -88.0,
+                -40.0,
+                -1.5,
+                -1e-3,
+                -0.0,
+                0.0,
+                1e-3,
+                1.5,
+                40.0,
+                88.0,
+                100.0,
+                1000.0,
+                f32::MAX,
+                -f32::MAX,
+                f32::MIN_POSITIVE,
+                -f32::MIN_POSITIVE,
+                1e-45,
+                -1e-45,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NAN,
+                -f32::NAN,
+            ];
+            values.extend(ramp.map(|v| v as f32));
+            Tensor::from_vec_col_major(vec![values.len()], values).unwrap()
+        }
+        other => panic!("unexpected dtype {other:?}"),
+    }
 }
 
 /// Bitwise equality, with every NaN treated as one class: the composite and a
@@ -631,16 +672,11 @@ fn test_gpu_softplus_is_one_fused_launch_matching_the_composite() {
     use tenferro_tensor::{ActivationOp, Engine as _};
     assert!(gpu_available(), "CUDA test requires an available device");
     let mut gpu = cuda_engine();
-    let values = softplus_boundary_values();
+    // Kernel launches the runtime admitted; the completion counter below counts waits,
+    // which several launches followed by one wait would also satisfy.
+    let launches = |gpu: &CudaEngine| gpu.runtime().stats().retirement.launches;
     for dtype in [DType::F64, DType::F32] {
-        let host = match dtype {
-            DType::F64 => Tensor::from_vec_col_major(vec![values.len()], values.clone()).unwrap(),
-            _ => Tensor::from_vec_col_major(
-                vec![values.len()],
-                values.iter().map(|&v| v as f32).collect::<Vec<_>>(),
-            )
-            .unwrap(),
-        };
+        let host = softplus_boundary_host(dtype);
         let x = upload_tensor(gpu.runtime(), &host).unwrap();
 
         // Composite reference: a tracked operand keeps the eager surface on the
@@ -667,40 +703,55 @@ fn test_gpu_softplus_is_one_fused_launch_matching_the_composite() {
         let fused = download_tensor(gpu.runtime(), &fused).unwrap();
         assert_same_bits(&fused, &composite, &format!("hook {dtype:?}"));
 
-        // Concrete surface: one standalone launch.
-        let before = gpu.launch_completion_syncs();
+        // Concrete surface: one kernel launch and one standalone completion.
+        let (before, syncs) = (launches(&gpu), gpu.launch_completion_syncs());
         let direct = {
             let s: &mut dyn tenferro_tensor::Engine = &mut gpu;
             x.softplus(s).unwrap()
         };
         assert_eq!(
-            gpu.launch_completion_syncs() - before,
+            launches(&gpu) - before,
             1,
-            "{dtype:?}: concrete softplus must be one launch"
+            "{dtype:?}: concrete softplus must be one kernel launch"
+        );
+        assert_eq!(
+            gpu.launch_completion_syncs() - syncs,
+            1,
+            "{dtype:?}: concrete softplus must wait once"
         );
         let direct = download_tensor(gpu.runtime(), &direct).unwrap();
         assert_same_bits(&direct, &composite, &format!("concrete {dtype:?}"));
 
         // Untracked eager surface: exactly what one eager unary op (`exp`) costs. The
-        // eager surface adds its own per-op completion on top of the kernel's, so the
-        // single-op count is measured rather than assumed.
+        // eager surface adds one launch and one completion of its own per op on top of
+        // the kernel's (a direct `exp` is one launch, an eager one two), so the single-op
+        // cost is measured rather than assumed; the kernel itself is pinned to one launch
+        // by the concrete surface above.
         let operand = upload_tensor(gpu.runtime(), &host).unwrap();
         let constant = ctx
             .with_eager_session(&mut gpu, |s| s.constant_from(operand))
             .unwrap();
-        let before = gpu.launch_completion_syncs();
+        let (before, syncs) = (launches(&gpu), gpu.launch_completion_syncs());
         let _single = ctx
             .with_eager_session(&mut gpu, |s| s.exp(&constant))
             .unwrap();
-        let single_op = gpu.launch_completion_syncs() - before;
-        let before = gpu.launch_completion_syncs();
+        let (single_launches, single_syncs) = (
+            launches(&gpu) - before,
+            gpu.launch_completion_syncs() - syncs,
+        );
+        let (before, syncs) = (launches(&gpu), gpu.launch_completion_syncs());
         let eager = ctx
             .with_eager_session(&mut gpu, |s| s.softplus(&constant))
             .unwrap();
         assert_eq!(
-            gpu.launch_completion_syncs() - before,
-            single_op,
-            "{dtype:?}: untracked eager softplus must cost one eager unary op"
+            launches(&gpu) - before,
+            single_launches,
+            "{dtype:?}: untracked eager softplus must launch like one eager unary op"
+        );
+        assert_eq!(
+            gpu.launch_completion_syncs() - syncs,
+            single_syncs,
+            "{dtype:?}: untracked eager softplus must wait like one eager unary op"
         );
         let eager = {
             let engine: &mut dyn ExecutionEngine = &mut gpu;

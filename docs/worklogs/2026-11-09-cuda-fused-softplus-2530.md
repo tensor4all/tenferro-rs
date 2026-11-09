@@ -25,12 +25,21 @@
 - Red first: the CUDA test
   `gpu_nn_composites::test_gpu_softplus_is_one_fused_launch_matching_the_composite`
   failed at `ad281831f` with "CUDA declined the fused softplus" and passes at
-  the candidate. It pins one launch on the concrete surface, the cost of one
-  eager unary op on the untracked eager surface, and bitwise equality with the
-  composite at +-0, +-1e-3, +-1.5, +-40, +-745.5, +-1000, +-f64::MAX,
-  +-MIN_POSITIVE, +-5e-324, +-inf, +-NaN and a multi-block ramp.
-- The eager surface already pays two standalone completions for a single
-  `exp`; that per-op eager cost is outside this change.
+  the candidate. It pins exactly one kernel launch on the concrete surface (the
+  runtime's admitted-launch counter, not the wait counter) and, on the untracked
+  eager surface, the launches and waits of one eager unary op, and bitwise equality with the composite on per-dtype boundary
+  values: +-0, finite extremes, smallest normal and subnormal magnitudes, inputs
+  with a nonzero subnormal tail (-744 in f64, -100 in f32), +-inf, +-NaN and a
+  multi-block ramp.
+- Independent review found that the eager fused-activation fast path skipped
+  the runtime check, so a tensor from another `EagerRuntime` was accepted
+  (pre-existing on CPU, newly reachable on CUDA). It now refuses it with
+  `ContextMismatch` like the composite path; the CPU test
+  `nn_composites::fused_activations_refuse_a_tensor_from_another_runtime`
+  failed before that fix and passes after it, for all five activations.
+- The eager surface already pays two kernel launches and two standalone
+  completions for a single `exp` (a direct `exp` pays one of each); that per-op
+  eager cost is outside this change.
 - Traced `TracedTensor::softplus` still lowers to the composite graph; the
   fused hook covers the concrete and untracked eager surfaces only (the two
   benchmark arms).
