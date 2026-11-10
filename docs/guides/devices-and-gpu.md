@@ -277,6 +277,14 @@ only, which is what a lane that wants a cold compile sets. A directory that cann
 be created falls back to the in-memory behaviour with one warning, so a read-only
 home degrades rather than failing an operation.
 
+The directory is bounded: it keeps at most 256 MiB of images, and
+`TENFERRO_CUDA_ARTIFACT_CACHE_MIB` sets another bound in MiB (`0` keeps reading
+what is there but stores nothing new). Storing an image past the bound removes the
+least recently used images first, and `CudaRuntime::artifact_dir_evictions` counts
+them. `CudaRuntime::artifact_dir_stats` reports the images and bytes the directory
+holds, and `CudaRuntime::clear_artifact_dir` empties it. Only files the cache named
+are ever counted or removed.
+
 On compute capability 7.0, select cuTENSOR 2.1.x with
 `TENFERRO_CUTENSOR_PATH`. tenferro rejects cuTENSOR 2.2 and newer because that
 combination has returned success with incorrect results.

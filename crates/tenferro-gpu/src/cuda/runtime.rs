@@ -175,9 +175,9 @@ pub(crate) struct Detached {
 
 /// The runtime configuration this build opens with.
 ///
-/// The artifact directory and the allocation pool's retention budget are read from the
-/// environment on every open: `TENFERRO_CUDA_ARTIFACT_CACHE` and
-/// `TENFERRO_CUDA_POOL_RELEASE_MIB`.
+/// The artifact directory, its bound and the allocation pool's retention budget are read from
+/// the environment on every open: `TENFERRO_CUDA_ARTIFACT_CACHE`,
+/// `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` and `TENFERRO_CUDA_POOL_RELEASE_MIB`.
 ///
 /// `TENFERRO_CUDA_ARTIFACT_CACHE` names the directory that persists compiled kernel images, so a
 /// later process reads them back instead of paying NVRTC again: a whole module is about 8 s per
@@ -187,6 +187,11 @@ pub(crate) struct Detached {
 /// (`%LOCALAPPDATA%\tenferro\t4a-cuda-artifacts` on Windows), and falls back to the in-memory
 /// cache when no absolute per-user root is set or the directory cannot be created. A newly created
 /// directory is mode 0700 on Unix.
+///
+/// The directory is bounded, never unlimited: at most [`artifact_cache_max_bytes`] of images,
+/// 256 MiB unless `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` says otherwise. Crossing the bound drops the
+/// least recently used images first; [`CudaRuntime::artifact_dir_evictions`] counts them, and
+/// [`CudaRuntime::artifact_dir_stats`] and [`CudaRuntime::clear_artifact_dir`] read and empty it.
 ///
 /// `TENFERRO_CUDA_POOL_RELEASE_MIB` overrides the allocation pool's retention budget, the idle
 /// device memory the pool keeps mapped instead of handing back to the driver. See
@@ -237,6 +242,21 @@ fn pool_release_threshold_from(override_mib: Option<u64>, total_memory_bytes: u6
     }
     let share = usize::try_from(total_memory_bytes / POOL_RELEASE_SHARE).unwrap_or(usize::MAX);
     share.clamp(MIN_POOL_RELEASE_BYTES, MAX_POOL_RELEASE_BYTES)
+}
+
+/// The bound on the persistent artifact directory, in bytes.
+///
+/// `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` (`value`) sets it in MiB; `0` keeps reading existing images
+/// and publishes no new ones. Unset, or a value that is not a whole number of MiB, keeps
+/// [`t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES`] (256 MiB, the in-memory artifact budget):
+/// there is no spelling of "unlimited".
+fn artifact_cache_max_bytes(value: Option<&std::ffi::OsStr>) -> u64 {
+    value
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map_or(t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES, |mib| {
+            mib.saturating_mul(1 << 20)
+        })
 }
 
 /// `tenferro`'s directory under the user's cache root, which holds compiled kernel images.
@@ -293,15 +313,29 @@ fn usable_artifact_cache_dir(dir: std::path::PathBuf) -> Option<std::path::PathB
         Ok(()) => Some(dir),
         Err(error) => {
             ARTIFACT_CACHE_WARNING.call_once(|| {
-                eprintln!(
-                    "tenferro-gpu: cannot create the artifact cache directory {}: {error}; \
-                     compiled kernels stay in memory for this process",
-                    dir.display()
+                write_best_effort_warning(
+                    &mut std::io::stderr(),
+                    format_args!(
+                        "tenferro-gpu: cannot create the artifact cache directory {}: {error}; \
+                         compiled kernels stay in memory for this process",
+                        dir.display()
+                    ),
                 );
             });
             None
         }
     }
+}
+
+/// Write one warning line to `sink`, dropping it if the write fails.
+///
+/// `eprintln!` panics when stderr is closed, and a diagnostic on a best-effort path must never
+/// turn into a panic in the library.
+pub(crate) fn write_best_effort_warning(
+    sink: &mut impl std::io::Write,
+    message: std::fmt::Arguments<'_>,
+) {
+    let _ = writeln!(sink, "{message}");
 }
 
 /// One warning per process, however many runtimes open against an unusable directory.
@@ -345,7 +379,13 @@ impl CudaRuntime {
             .find(|info| info.id() == device_id)
             .map(crate::cuda::CudaDeviceInfo::total_memory_bytes)
             .unwrap_or(0);
-        Self::with_config(device_id, default_config(total_memory))
+        let runtime = Self::with_config(device_id, default_config(total_memory))?;
+        runtime
+            .submit()
+            .set_artifact_dir_max_bytes(artifact_cache_max_bytes(
+                std::env::var_os("TENFERRO_CUDA_ARTIFACT_CACHE_MIB").as_deref(),
+            ));
+        Ok(runtime)
     }
 
     /// Open the CUDA runtime on `device_id` with an explicit configuration.
@@ -441,6 +481,37 @@ impl CudaRuntime {
     /// Artifact-cache hits this runtime served.
     pub fn artifact_cache_hits(&self) -> u64 {
         self.submit().artifact_cache_hits()
+    }
+
+    /// Images and bytes in the persistent artifact directory; empty for an in-memory cache.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error from listing a directory that exists but cannot be read.
+    pub fn artifact_dir_stats(&self) -> std::io::Result<t4a_cuda_runtime::ArtifactDirStats> {
+        self.submit().artifact_dir_stats()
+    }
+
+    /// The bound on the persistent artifact directory, in bytes.
+    pub fn artifact_dir_max_bytes(&self) -> u64 {
+        self.submit().artifact_dir_max_bytes()
+    }
+
+    /// Remove every compiled image from the persistent artifact directory and return what went.
+    ///
+    /// Images already loaded by this process stay usable; only later processes recompile.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error from listing the directory or removing an entry.
+    pub fn clear_artifact_dir(&self) -> std::io::Result<t4a_cuda_runtime::ArtifactDirStats> {
+        self.submit().clear_artifact_dir()
+    }
+
+    /// Images this runtime dropped from the persistent artifact directory to stay within its
+    /// bound, least recently used first.
+    pub fn artifact_dir_evictions(&self) -> u64 {
+        self.submit().artifact_dir_evictions()
     }
 
     /// Run `closure` inside a raw scope on this runtime's stream, under the submission
