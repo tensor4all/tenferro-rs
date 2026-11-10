@@ -1,5 +1,7 @@
 # TracedTensor as a typed operation layer over TraceContext
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 Status: **accepted** (maintainer review on #2418 at `38877fabe`). D1-D5 approved
 with the decisions recorded in §5, plus two accepted additions: public multi-`wrt`
 reverse mode in P2 (§3.6, §7) and an end-to-end `samples/kdv-pinn` check in §8.

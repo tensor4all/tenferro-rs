@@ -14,10 +14,12 @@ is nicer; it is which one is *enforced at runtime*. Placement is the model case:
 (`types.rs:1051/1089/1118`), a `Placement` value rides on every tensor (`types.rs:357`), and a runtime check runs ~63 times — and the
 runtime check is the one that holds. Collapse toward the enforced expression, then delete the others.
 
-**R2. One entry shape per operation; `_into` is the primitive, the allocating form is sugar.** Signature:
-`fn svd_into(exec, buffers, view, u, s, vh) -> Result<(), LinalgError>` with `fn svd(exec, buffers, view) -> Result<Svd<T>>` on top.
-Implementation primacy and ergonomic primacy are separate decisions: the primitive gets the `_into` shape because it is the one that
-makes allocation countable; the documented entry stays the allocating one because that is what a caller actually wants.
+**R2. One entry shape per operation; `_into` is declared per operation in the registry.** Every operation has the
+allocating spellings `op` / `op_with`; an `op_into(operands…, &opts, exec, dest)` with a `Dest` exists only where the
+operation's `api_ops!` registry entry declares `into: [..]` modes (#2552 decision 5), and an undeclared mode is
+`Unsupported` before any write. Implementation primacy and ergonomic primacy are separate decisions: a body may be
+written around its write-into kernel so allocating and `_into` spellings share it, but `_into` is not a public form
+every operation must offer. (Amended by #2552; the earlier rule made `_into` the public primitive of every operation.)
 
 **R3. Never change placement or dtype implicitly; adapt an input layout only where documented.**
 The surface accepts every layout the selected provider handles directly, and that direct strided path must be preserved. Where a provider

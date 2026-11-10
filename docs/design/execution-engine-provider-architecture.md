@@ -1,5 +1,7 @@
 # Accepted Architecture Design: Pluggable Execution Engines and Resource Domains
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 > Planning authority and current phase status live in the
 > [execution-engine umbrella issue](https://github.com/tensor4all/tenferro-rs/issues/1433).
 > This child document owns the detailed proposed architecture and rationale.

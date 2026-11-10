@@ -36,7 +36,7 @@ historical one-axis call.
 request into one single-axis spec per axis and calls the backend once per step,
 so the `FftBackend` SPI, the plan cache key, and every vendor call stay
 one-dimensional. That loop lives in exactly one place — `execute_fft_op` in
-`tenferro-fft/src/lib.rs` — and the eager `FftExecutor::fftn` family and traced
+`tenferro-fft/src/lib.rs` — and the direct `FftExecutor::fftn_with` family and traced
 execution both run through it. It performs no transform arithmetic: it chooses
 the axis order, derives the per-axis operation, and threads the intermediate
 tensor shapes.
@@ -233,9 +233,11 @@ The initial CubeK Metal adapter is deliberately narrower:
 and device-local WebGPU buffers return typed errors. They never trigger CPU
 fallback or an implicit transfer.
 
-`EagerSessionFftExt` installs the same FFT runtime against the borrowed
-`EagerSession` that wraps the caller's engine. Consuming CPU-host in-place FFT
-alone remains tensor-owned via `EagerTensorFftExt`. The adapter uses the
+`EagerFftOps` (`sess.fft(&x)`, `sess.fft_with(&x, &opts)`) installs the same
+FFT runtime against the borrowed `EagerSession` that wraps the caller's engine.
+Consuming CPU-host in-place FFT is the session method
+`sess.fft_in_place(x, &opts)` / `ifft_in_place` (exception E01 of
+`docs/spec/generated/api-ops.md`). The adapter uses the
 runtime owner's selected CPU, CUDA, or WebGPU capability;
 it does not inspect placement to choose a backend and does not download,
 upload, or select a CPU backend on behalf of a GPU operation. Traced CUDA use

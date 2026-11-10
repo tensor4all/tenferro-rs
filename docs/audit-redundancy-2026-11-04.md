@@ -1,5 +1,7 @@
 # 重複・冗長コード監査 (2026-11-04)
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 対象: `origin/main` @ `75eed022d`。P2 ブランチ `feat/2417-p2-context-core` は対象外。
 
 本ドキュメントは**判断材料**であり、リファクタは行っていない。コードは 1 行も変更していない。

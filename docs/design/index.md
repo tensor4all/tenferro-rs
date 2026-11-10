@@ -22,7 +22,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [tensor-prims.md](./tensor-prims.md) | Tensor backend protocol and execution surface |
 | [backend-capability.md](./backend-capability.md) | Backend capability descriptor: a declared op/dtype support table, not enforced at submission (#2477) |
 | [integer-semantics.md](./integer-semantics.md) | CPU/CUDA integer arithmetic semantics, wrapping behavior, and structured domain errors |
-| [output-modes.md](./output-modes.md) | Output-update vocabulary for `_read`, `_into`, `_add_to`, and dot `_into_accum` surfaces |
+| [output-modes.md](./output-modes.md) | Output-update vocabulary: `_into` with `Dest` modes, `_in_place`, and the provider `_read` / `_read_into_accum` hooks |
 | [algebra.md](./algebra.md) | Algebra boundary, external numeric extensions, tropical paths |
 | [einsum.md](./einsum.md) | Einsum public API, N-ary contraction tree, algebra dispatch |
 | [eager-extension-placement-dispatch.md](./eager-extension-placement-dispatch.md) | Runtime-targeted eager einsum/linalg extension registration with no backend fallback or transfer |

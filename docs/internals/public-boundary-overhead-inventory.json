@@ -67,7 +67,7 @@
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`CoreOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -168,7 +168,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route: `add_into` (overwrite) is the only declared `_into` form (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -224,7 +224,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`CoreOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         },
@@ -268,7 +268,7 @@
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`CoreOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -369,7 +369,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route: `add_into` (overwrite) is the only declared `_into` form (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -425,7 +425,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`CoreOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         },
@@ -470,7 +470,7 @@
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`CoreOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -571,7 +571,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route: `add_into` (overwrite) is the only declared `_into` form (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -627,7 +627,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`CoreOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         },
@@ -650,12 +650,12 @@
             {
               "component": "core",
               "id": "{family}.{operation}.ordinary.eager",
-              "phase": "execution",
-              "setup_boundary": "ordinary EagerTensor forward-call workflow",
-              "surface": "eager",
               "operations": [
                 "add"
               ],
+              "phase": "execution",
+              "setup_boundary": "ordinary EagerTensor forward-call workflow",
+              "surface": "eager",
               "tests": [
                 {
                   "path": "crates/tenferro-ad/tests/integration/numpy_api.rs",
@@ -701,7 +701,7 @@
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`CoreOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -802,7 +802,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route: `add_into` (overwrite) is the only declared `_into` form (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -858,7 +858,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`CoreOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         },
@@ -903,7 +903,7 @@
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`CoreOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -1004,7 +1004,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route: `add_into` (overwrite) is the only declared `_into` form (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -1060,7 +1060,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`CoreOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         },
@@ -1112,7 +1112,7 @@
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`CoreOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -1213,7 +1213,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route: `add_into` (overwrite) is the only declared `_into` form (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -1269,7 +1269,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`CoreOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         },
@@ -1317,7 +1317,7 @@
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`CoreOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -1418,7 +1418,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route: `add_into` (overwrite) is the only declared `_into` form (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -1474,7 +1474,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`CoreOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         },
@@ -1525,7 +1525,7 @@
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`CoreOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -1626,7 +1626,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route: `add_into` (overwrite) is the only declared `_into` form (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -1682,7 +1682,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`CoreOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         }
@@ -1730,7 +1730,6 @@
             },
             {
               "component": "einsum",
-              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping",
               "id": "{family}.{operation}.ordinary.eager",
               "phase": "execution",
               "setup_boundary": "ordinary public workflow",
@@ -1740,11 +1739,11 @@
                   "path": "crates/tenferro-einsum/tests/integration/eager_tensor.rs",
                   "symbol": "eager_tensor_einsum_matmul_primal_matches_expected_values"
                 }
-              ]
+              ],
+              "workflow": "validate -> metadata -> optional plan -> session/provider -> result/AD wrapping"
             },
             {
               "component": "einsum",
-              "workflow": "validate -> parse notation -> capture input specs -> plan contraction tree",
               "id": "{family}.{operation}.prepare.concrete",
               "phase": "setup",
               "setup_boundary": "concrete plan preparation",
@@ -1754,11 +1753,11 @@
                   "path": "crates/tenferro-einsum/src/concrete_tests.rs",
                   "symbol": "concrete_einsum_plan_executes_without_replanning_contract"
                 }
-              ]
+              ],
+              "workflow": "validate -> parse notation -> capture input specs -> plan contraction tree"
             },
             {
               "component": "einsum",
-              "workflow": "validate prepared input specs -> caller-owned backend session -> execute without replanning",
               "id": "{family}.{operation}.prepared.concrete",
               "phase": "execution",
               "setup_boundary": "prepared concrete workflow",
@@ -1772,7 +1771,8 @@
                   "path": "crates/tenferro-einsum/src/concrete_tests.rs",
                   "symbol": "concrete_einsum_plan_rejects_shape_and_dtype_mismatches"
                 }
-              ]
+              ],
+              "workflow": "validate prepared input specs -> caller-owned backend session -> execute without replanning"
             }
           ],
           "category": "extension",
@@ -1784,16 +1784,16 @@
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`EinsumOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete routes distinguish public plan preparation from prepared execution; execution validates specs and uses the caller-supplied backend session",
               "contracts": {
                 "allocation": "source-observed allocation/materialization is explicit and is not a measured count",
-                "allocation_source": "crates/tenferro-einsum/src/concrete.rs::execute",
+                "allocation_source": "crates/tenferro-einsum/src/concrete.rs::run_owned",
                 "metadata": "ConcreteEinsumPlan::prepare captures input specs; execute revalidates rank, shape, and dtype before dispatch",
                 "owner_lifetime": "concrete inputs remain valid through the caller-held engine borrow; output reuse requires exclusive write ownership",
-                "payload_boundary": "crates/tenferro-einsum/src/concrete.rs::execute -> crate::eager::eager_einsum_exec -> concrete Tensor return (no wrapping owner)",
+                "payload_boundary": "crates/tenferro-einsum/src/api/plan.rs::execute -> crates/tenferro-einsum/src/api/concrete.rs::plan_reads -> crates/tenferro-einsum/src/concrete.rs::run_owned (owned inputs) or run_reads (borrowed or typed inputs) -> crate::eager::eager_einsum_exec -> concrete Tensor, rewrapped as the receiver's representation (no wrapping owner)",
                 "placement": "concrete placement is explicit; transfers occur only at the existing backend boundary"
               },
               "disposition": "follow-up",
@@ -1804,8 +1804,20 @@
                 },
                 "execution": [
                   {
-                    "path": "crates/tenferro-einsum/src/concrete.rs",
+                    "path": "crates/tenferro-einsum/src/api/concrete.rs",
+                    "symbol": "einsum"
+                  },
+                  {
+                    "path": "crates/tenferro-einsum/src/api/plan.rs",
                     "symbol": "execute"
+                  },
+                  {
+                    "path": "crates/tenferro-einsum/src/concrete.rs",
+                    "symbol": "run_owned"
+                  },
+                  {
+                    "path": "crates/tenferro-einsum/src/concrete.rs",
+                    "symbol": "run_reads"
                   }
                 ],
                 "metadata": [
@@ -1895,7 +1907,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route: `einsum_into` and `ConcreteEinsumPlan::execute_into` take a `Dest` (overwrite, accumulate, scaled) (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -1941,7 +1953,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-einsum/src/traced.rs",
+                    "path": "crates/tenferro-einsum/src/api/traced.rs",
                     "symbol": "einsum"
                   }
                 ]
@@ -1951,7 +1963,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`EinsumOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         }
@@ -2006,8 +2018,8 @@
           "surfaces": {
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
-              "disposition": "unsupported",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "disposition": "follow-up",
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`FftOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -2028,6 +2040,10 @@
                   }
                 ],
                 "execution": [
+                  {
+                    "path": "crates/tenferro-fft/src/api/concrete.rs",
+                    "symbol": "one_axis"
+                  },
                   {
                     "path": "crates/tenferro-fft/src/lib.rs",
                     "symbol": "execute_concrete_fft_op"
@@ -2102,6 +2118,10 @@
                 ],
                 "wrapping": [
                   {
+                    "path": "crates/tenferro-fft/src/api/eager.rs",
+                    "symbol": "fft"
+                  },
+                  {
                     "path": "crates/tenferro-fft/src/eager_ext.rs",
                     "symbol": "apply_eager_fft_in_session"
                   }
@@ -2112,7 +2132,7 @@
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "unsupported",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "output_reuse route does not exist: no FFT operation declares an `_into` form (#2552)"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -2158,7 +2178,7 @@
                 ],
                 "wrapping": [
                   {
-                    "path": "crates/tenferro-fft/src/lib.rs",
+                    "path": "crates/tenferro-fft/src/api/traced.rs",
                     "symbol": "fft"
                   }
                 ]
@@ -2167,8 +2187,8 @@
             },
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
-              "disposition": "unsupported",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "disposition": "follow-up",
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`FftOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         }
@@ -2246,8 +2266,8 @@
           "surfaces": {
             "borrowed": {
               "contract": "borrowed route has no resolved owner in this inventory; disposition is explicit",
-              "disposition": "unsupported",
-              "reason": "borrowed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "disposition": "follow-up",
+              "reason": "since #2552 (0.12) the borrowed route is the concrete grammar entry (`LinalgOps`) called with a borrowed (`TensorRead` / strided view) receiver; no published timing evidence; benchmark #95 follow-up required"
             },
             "concrete": {
               "contract": "concrete route is explicitly classified; setup and execution boundaries remain separate",
@@ -2280,8 +2300,8 @@
                   }
                 ],
                 "planning": {
-                  "status": "not-applicable",
-                  "reason": "the concrete/eager extension owner performs no separate planning step"
+                  "reason": "the concrete/eager extension owner performs no separate planning step",
+                  "status": "not-applicable"
                 },
                 "validation": [
                   {
@@ -2327,8 +2347,8 @@
                   }
                 ],
                 "planning": {
-                  "status": "not-applicable",
-                  "reason": "the concrete/eager extension owner performs no separate planning step"
+                  "reason": "the concrete/eager extension owner performs no separate planning step",
+                  "status": "not-applicable"
                 },
                 "validation": [
                   {
@@ -2347,8 +2367,8 @@
             },
             "output_reuse": {
               "contract": "output_reuse route has no resolved owner in this inventory; disposition is explicit",
-              "disposition": "unsupported",
-              "reason": "output_reuse route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "disposition": "follow-up",
+              "reason": "output_reuse route: `solve_into` (overwrite) is the only declared `_into` form (#2552); no published timing evidence; benchmark #95 follow-up required"
             },
             "traced": {
               "contract": "traced route is explicitly classified; setup and execution boundaries remain separate",
@@ -2404,7 +2424,7 @@
             "typed": {
               "contract": "typed route has no resolved owner in this inventory; disposition is explicit",
               "disposition": "follow-up",
-              "reason": "typed route has no published timing evidence and its owner/setup contract remains unresolved; benchmark #95 follow-up required"
+              "reason": "since #2552 (0.12) the typed route is the concrete grammar entry (`LinalgOps`) called with a typed (`TypedTensor<T>` / `TypedTensorView<T>`) receiver; no published timing evidence; benchmark #95 follow-up required"
             }
           }
         }

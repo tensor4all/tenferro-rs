@@ -2,8 +2,163 @@
 
 This page is the first stop when an older tenferro-rs example fails with
 `cannot find module`, `cannot find function`, or a changed-signature error.
-The current public API favors explicit extension traits, fallible constructors,
-and caller-held engines. Historical worklogs are not API documentation.
+The current public API uses one call grammar per operation family (0.12),
+fallible constructors, and caller-held engines. Historical worklogs are not API documentation.
+
+## 0.12: one call grammar (#2552)
+
+Version 0.12 replaces the per-receiver extension traits with one call grammar
+for every operation family. The generated
+[operation registry](../spec/generated/api-ops.md) is the reference for every
+operation, its options type, `_into` modes, layout handling, errors, and
+omissions.
+
+```text
+recv.op(operands…, exec)                     // concrete, default options
+recv.op_with(operands…, &opts, exec)         // concrete, explicit XxxOptions
+recv.op_into(operands…, &opts, exec, dest)   // concrete, only where declared
+session.op(&x, operands…)                    // eager: the session is the receiver
+traced.op_with(operands…, &opts)             // traced: no exec; run with prepare → run
+```
+
+- The engine (`exec: &mut dyn Engine`) is always the last concrete argument.
+- A concrete receiver is any `AsView` value: `Tensor`, `TensorRead`,
+  `TypedTensor<T>`, `TypedTensorView<T>`, or a reference to one. The `_read`
+  spellings are gone; pass the view to the unsuffixed method. Typed receivers
+  return typed results.
+- The only suffixes are `_with` (explicit options) and `_into` (a caller
+  destination `Dest`); `_in_place` remains only for the consuming eager FFT.
+- Options types are `#[non_exhaustive]`: build them with
+  `XxxOptions::default()` and setters named after the fields.
+- Axis arguments are `isize`; a negative axis counts from the end.
+- Multi-output results are structs with named fields.
+
+### Traits
+
+| Removed | 0.12 |
+| --- | --- |
+| `TensorLinalgExt`, `TensorReadLinalgExt`, `TypedTensorLinalgExt` | `tenferro_linalg::LinalgOps` |
+| `TracedTensorLinalgExt`, `TraceContextLinalgExt` | `tenferro_linalg::TracedLinalgOps` on `TracedTensor` |
+| `EagerSessionLinalgExt`, `EagerTensorLinalgExt` | `tenferro_linalg::EagerLinalgOps` on `EagerSession` |
+| `TensorEinsumExt`, `TypedTensorEinsumExt`, `TensorReadEinsumExt`, `TypedTensorReadEinsumExt`, and their `*EinsumIntoExt` variants | `tenferro_einsum::EinsumOps` on a slice, array, or `Vec` of inputs |
+| `TensorTensordotExt`, `TypedTensorTensordotExt` | `tenferro_einsum::TensordotOps` |
+| `TraceContextEinsumExt` | `tenferro_einsum::TracedEinsumOps` on `TraceContext` (takes and returns `TracedTensor`) |
+| `TracedTensorEinsumExt` (`tensordot`) | `tenferro_einsum::TracedTensordotOps` on `TracedTensor` |
+| `EagerSessionEinsumExt` | `tenferro_einsum::EagerEinsumOps` on `EagerSession` |
+| `TensorFftExt`, `TensorReadFftExt` | `tenferro_fft::FftOps` |
+| `TracedTensorFftExt`, `TraceContextFftExt` | `tenferro_fft::TracedFftOps` on `TracedTensor` |
+| `EagerSessionFftExt`, `EagerTensorFftExt` | `tenferro_fft::EagerFftOps` on `EagerSession` |
+| `TensorSessionOpsExt`, `TypedTensorSessionOpsExt`, `TypedTensorMaskSessionOpsExt` | `tenferro_runtime::CoreOps` |
+
+Traced core operations stay inherent `TracedTensor` methods, and eager core
+operations stay inherent `EagerSession` methods; only their axis types and the
+conjugated `dot_general` spelling changed. Each family's `prelude` re-exports
+its new traits.
+
+### Linear algebra
+
+| Older spelling | 0.12 |
+| --- | --- |
+| `let (u, s, vh) = a.svd(exec)?` | `let Svd { u, s, vh } = a.svd(exec)?` |
+| `(q, r)`, `(p, l, u, parity)`, `(p, l, u, q, parity)`, `(values, vectors)`, `(sign, logabsdet)` | `Qr { q, r }`, `Lu { p, l, u, parity }`, `FullPivLu { p, l, u, q, parity }`, `Eig { values, vectors }` / `Eigh { values, vectors }`, `Slogdet { sign, log_abs_det }` |
+| `TypedSvd<T>`, `TypedLu<T>`, `TypedFullPivLu<T>`, `TypedEig<T>`, `TypedRankRevealingQrResult<T>` | The same structs with typed fields, for example `Svd<TypedTensor<T>, TypedTensor<T::Real>>`; `RankRevealingQrResult` and `HouseholderQr` keep their names |
+| `r.svd_read(exec)`, `r.qr_read(exec)`, any `op_read(..)` on a `TensorRead` | `r.svd(exec)`, `r.qr(exec)`: the same name without `_read` |
+| `a.svd_full(exec)` | `a.svd_with(&SvdOptions::default().shape(SvdShape::Full), exec)` |
+| `a.svd_with_options(opts, exec)`, `qr_with_options`, `eigh_with_options` | `a.svd_with(&opts, exec)`, `a.qr_with(&opts, exec)`, `a.eigh_with(&opts, exec)` |
+| `a.rank_revealing_qr(opts, exec)` | `a.rank_revealing_qr_with(&opts, exec)` |
+| `a.pinv_with_rtol(rtol, exec)` | `a.pinv_with(&PinvOptions::default().rtol(Some(rtol)), exec)` |
+| `a.triangular_solve(&b, left_side, lower, transpose_a, unit_diagonal, exec)` | `a.triangular_solve_with(&b, &TriangularSolveOptions::default().side(..).uplo(..).op(..).diag(..), exec)` with `Side::{Left, Right}`, `Uplo::{Lower, Upper}`, `MatOp::{None, Transpose}`, `Diag::{NonUnit, Unit}`; `a.triangular_solve(&b, exec)` is left, lower, no transpose, non-unit |
+| `a.norm(ord, dim, keepdim, exec)` | `a.norm(exec)` for the Frobenius default, otherwise `a.norm_with(&NormOptions::default().ord(NormOrd::..).axes(Some([0].into())).keep_dims(KeepDims::Yes), exec)`; `None → NormOrd::Frobenius`, `Some(0.0) → NormOrd::Zero`, `Some(±∞) → NormOrd::Inf` / `NegInf`, other `Some(p) → NormOrd::P(p)` |
+| `r.solve_read_into(b, out, exec)` | `r.solve_into(&b, &SolveOptions::default(), exec, Dest::overwrite(out))` (overwrite only) |
+| `ctx.svd(value)` (`TraceContextLinalgExt` on `TraceValue`) | `t.svd()` on a `TracedTensor` |
+| `t.svd_full()`, `t.norm(ord, dim, keepdim)`, `t.triangular_solve(&b, ..)` (traced) | `t.svd_with(&..)`, `t.norm_with(&NormOptions ..)`, `t.triangular_solve_with(&b, &TriangularSolveOptions ..)` |
+| `x.solve(engine, &b)` (`EagerTensorLinalgExt`) | `runtime.with_eager_session(&mut engine, \|s\| s.solve(&x, &b))` |
+| `session.svd_full(&x)`, `session.pinv_with_rtol(&x, r)`, `session.norm(&x, ord, dim, keepdim)` | `session.svd_with(&x, &..Full)`, `session.pinv_with(&x, &PinvOptions::default().rtol(Some(r)))`, `session.norm_with(&x, &NormOptions ..)` |
+
+### Lanes
+
+| Older spelling | 0.12 |
+| --- | --- |
+| `svd_with_exec`, `svd_values_with_exec`, `qr_with_exec`, `eigh_with_exec`, `eigh_values_with_exec`, `eig_values_with_exec` inside `engine.with_exec(\|exec\| ..)` | `engine.with_lanes(&shares, &mut pools, \|i, lane\| view.svd(lane))` returns `Result<Vec<R>>`; a full SVD is `view.svd_with(&SvdOptions::default().shape(SvdShape::Full), lane)` |
+| Lanes built by hand (`exec.token().fork_sized(..)`, `Exec::from_token`, `*_with_exec`) | `CpuEngine::with_lanes(&shares, &mut pools, \|i, lane\| ..)`: one caller-owned `BufferPool` per lane; only `svd`, `svdvals`, `qr`, `eigh`, `eigvalsh`, and `eigvals` run in a lane, every other operation returns `Unsupported` |
+
+### Einsum
+
+| Older spelling | 0.12 |
+| --- | --- |
+| `[&a, &b].einsum_notation(&n, exec)`, `einsum_subscripts(&s, exec)` | `[&a, &b].einsum(&n, exec)`, `[&a, &b].einsum(&s, exec)`: the spec argument accepts a string, an `EinsumNotation`, or `EinsumSubscripts` |
+| `[r1, r2].einsum_read(spec, exec)` and typed-read variants | `[r1, r2].einsum(spec, exec)` |
+| `[r1, r2].einsum_read_into("ij,jk->ik", exec, out)`, `einsum_into(spec, exec, out)` | `[r1, r2].einsum_into("ij,jk->ik", &EinsumOptions::default(), exec, Dest::overwrite(out))` |
+| `a.tensordot(&b, axes, exec)` (`TensorTensordotExt`) | the same call through `TensordotOps`; `tensordot_with(&b, axes, &TensordotOptions::default(), exec)` |
+| `ConcreteEinsumPlan::prepare(inputs, spec)`, `prepare_notation`, `prepare_subscripts`, `prepare_typed*`, `prepare_read*` | `ConcreteEinsumPlan::prepare(inputs, spec, &EinsumOptions::default())` |
+| `plan.execute_typed(..)`, `execute_read(..)`, `execute_typed_into(.., out)`, `execute_read_into(.., out)` | `plan.execute(inputs, exec)`, `plan.execute_into(inputs, exec, Dest::overwrite(out))` |
+| `plan.execute_read_into_accum(inputs, exec, acc, out)` | `plan.execute_into(inputs, exec, Dest::accumulate(out))` or `Dest::scaled(out, alpha, beta)`; per-operand conjugation is fixed when the plan is prepared, through `EinsumOptions::conj` |
+| `ctx.einsum(&[v1, v2], spec)` and the `_notation` / `_subscripts` variants (`&mut TraceContext`, `TraceValue`) | `trace.einsum(&[&t1, &t2], spec)` on `&TraceContext`, taking and returning `TracedTensor` |
+| `ctx.einsum_subscripts_with(&[v1, v2], s, optimize)` | `trace.einsum_with(&[&t1, &t2], &s, &EinsumOptions::default().optimize(optimize))` |
+| `session.einsum_notation(..)`, `session.einsum_subscripts(..)` (eager) | `session.einsum(&[&a, &b], &spec)` through `EagerEinsumOps` |
+
+Concrete einsum and plan errors are now `tenferro_tensor::Error` (an einsum
+domain error is reachable through `source()`), traced and eager einsum errors
+are `tenferro_runtime::Error`, and an invalid spec is
+`Validation(InvalidArgument)` on every layer.
+
+Code that built traced einsum through `TraceContextEinsumExt` and `TraceValue`
+(for example yao-rs, which pins tenferro `=0.4.0`) migrates to `TracedTensor`
+values: create inputs on a `TraceContext`, call `trace.einsum(&[&a, &b], spec)`,
+compile the outputs with `GraphCompiler`, then execute with
+`Runtime::prepare` → `Runtime::run` after installing
+`tenferro_einsum::extension_module` on the runtime. There is no public
+conversion from `TracedTensor` to `TraceValue`; the `TraceContext` IR builder
+(`input`, `add_op`, `add_extension`, `finish`) remains for code that emits IR
+directly.
+
+### FFT
+
+| Older spelling | 0.12 |
+| --- | --- |
+| `a.fft(None, -1, FftNorm::Backward, exec)` | `a.fft(exec)` |
+| `a.fft(n, axis, norm, exec)` (likewise `ifft`, `rfft`, `irfft`) | `a.fft_with(&FftOptions::default().n(n).axis(axis).norm(norm), exec)` |
+| `r.fft_read(n, axis, norm, exec)` | `r.fft_with(&opts, exec)` on the view |
+| `t.fft(n, axis, norm)` (traced), `session.fft(&x, n, axis, norm)` (eager) | `t.fft_with(&opts)`, `session.fft_with(&x, &opts)` |
+| `ctx.fft(value, ..)` (`TraceContextFftExt`) | `t.fft_with(&opts)` on a `TracedTensor` |
+| `x.fft_in_place(engine, axis, norm)`, `ifft_in_place` (`EagerTensorFftExt`) | `session.fft_in_place(x, &FftOptions::default().axis(axis).norm(norm))`; an `n: Some(..)` or a real input is `Rejected` with the input returned |
+| `executor.fft(&input, n, axis, norm, exec)` (`FftExecutor`, all eight transforms) | `executor.fft_with(&input, &opts, exec)` |
+| Multidimensional FFT only on the traced layer | `fftn`, `ifftn`, `rfftn`, `irfftn` (and `_with(&FftnOptions)`) on all three layers; empty `axes` selects every axis |
+
+Error labels follow the new names, for example `fft` instead of
+`TensorFftExt::fft` and `FftExecutor::fft_with` for the executor.
+
+### Core operations and signed axes
+
+| Older spelling | 0.12 |
+| --- | --- |
+| `x.exp(exec)`, `a.matmul(&b, exec)`, … via `TensorSessionOpsExt` / `TypedTensorSessionOpsExt` | the same calls via `CoreOps`, for owned tensors, views, and typed tensors alike |
+| `cond.where_select(&t, &f, exec)` via `TypedTensorMaskSessionOpsExt` | the same call via `CoreOps`; the receiver is the `bool` condition |
+| `Tensor::concatenate(&[&a, &b], axis, exec)`, `TypedTensor::<T>::concatenate(..)` | `CoreOps::concatenate(&[&a, &b], axis, exec)` with `axis: isize` |
+| `a.dot_general_with_conj(&b, cfg, true, false, exec)` | `a.dot_general_with(&b, cfg, &DotGeneralOptions::default().lhs(Conj::Yes), exec)` |
+| `session.dot_general_with_conj(&a, &b, cfg, lhs, rhs)` (eager) | `session.dot_general_with(&a, &b, cfg, &DotGeneralOptions ..)` |
+| `a.add_into(&rhs, &mut out, exec)` (typed) | `a.add_into(&rhs, &AddOptions::default(), exec, Dest::overwrite(&mut out))` (overwrite only) |
+| `a.reduce_sum(Some(&[0usize]), exec)` and every other `usize` / `&[usize]` axis argument | `a.reduce_sum(Some(&[0isize]), exec)`; `-1` names the last axis. This applies to `CoreOps`, `TracedTensor` (including `slice_axis`, `take_axis`, `concatenate`, `extract_diag`, `embed_diag`, `shape_of`, `sym_size`, `dynamic_truncate`, `pad_to_match`), and `EagerSession` |
+
+A repeated axis in a concrete reduction, `transpose`, or `reverse` is rejected
+with `DuplicateAxis`. `convert` and `cast` accept views and return a
+dtype-erased `Tensor`. Engine, backend, and provider hooks (`Engine`,
+`TensorDot`, `LinalgBackend`, `FftBackend`, and their `*_read` /
+`*_read_into_accum` methods) are provider contracts and keep their names.
+
+### Output destinations
+
+`Dest` (from `tenferro_tensor`) replaces the `_read_into`, `_add_to`, and
+`_into_accum` spellings: `Dest::overwrite(out)` never reads the destination,
+`Dest::accumulate(out)` adds the result to it, and
+`Dest::scaled(out, alpha, beta)` writes `alpha * result + beta * out`. Each
+`_into` operation declares which modes it supports (`solve_into` and
+`add_into` overwrite only; `einsum_into` and `plan.execute_into` support all
+three), and an unsupported mode is refused with `Unsupported` before any write.
+
+The sections below describe earlier migrations. They are kept as history: where
+their right-hand column names a trait or `_read` method that 0.12 removed, use
+the tables above.
 
 ## Removed modules and free functions
 
@@ -100,7 +255,9 @@ identity/no-axis behavior is what the program needs.
 ## Finding the current method
 
 1. Choose the value tier: direct concrete tensor, eager tensor, or traced tensor.
-2. Import the `*Ext` trait owned by the operation crate.
+2. Import the operation trait owned by the operation crate (`LinalgOps`,
+   `EinsumOps`, `FftOps`, `CoreOps`, or their `Traced*` / `Eager*` forms), or
+   the crate's `prelude`.
 3. Check the method's receiver and engine arity in the
    [API cheatsheet](https://tensor4all.org/tenferro-rs/skill-references/api-cheatsheet.md).
 4. Use the [linear algebra guide](../guides/linear-algebra.md),

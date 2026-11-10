@@ -27,12 +27,12 @@ Quick reference:
 ## Import Style
 
 Use direct imports when a small module should make its dependencies explicit:
-`use tenferro_runtime::{Tensor, TensorSessionOpsExt};` and
-`use tenferro_linalg::TensorLinalgExt;`. For tutorials or
+`use tenferro_runtime::{CoreOps, Tensor};` and
+`use tenferro_linalg::LinalgOps;`. For tutorials or
 modules using several operation traits, the equivalent crate-local preludes are
 `use tenferro_runtime::prelude::*;` and `use tenferro_linalg::prelude::*;`.
 There is no facade prelude: keep each operation family imported from its own
-crate. The prelude imports extension traits and common associated types; it
+crate. The prelude imports operation traits and common associated types; it
 does not change backend selection or execution semantics.
 
 ## Tensor Types
@@ -99,11 +99,11 @@ operations.
 
 | Need | Without autodiff | Eager path | Traced path |
 | --- | --- | --- | --- |
-| Everyday tensor ops | Receiver methods with the session last: `x.gather(&idx, cfg, session)` via `TensorSessionOpsExt` (all core ops) / `TypedTensorSessionOpsExt` (elementwise, reductions, dot, scaling; indexing and structural ops on `Tensor`) | `session.gather(&x, &idx, cfg)` on a borrowed `EagerSession` | `TracedTensor` methods / associated functions |
-| Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `session.einsum(&[&a, &b], ...)` via `EagerSessionEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `extension_module` |
-| FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `session.fft(&x, ...)` via `EagerSessionFftExt` with `autodiff` (`EagerTensorFftExt` only for consuming in-place FFT) | `x.fft(...)` via `TracedTensorFftExt` plus `extension_module` |
-| Tensordot sugar | Use `matmul` or `dot_general` directly | `session.tensordot(&a, &b, axes)` via `EagerSessionEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
-| Linear algebra | `TensorLinalgExt` methods on a caller-held `&mut dyn Engine` | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
+| Everyday tensor ops | Receiver methods with the engine last: `x.gather(&idx, cfg, exec)` via `CoreOps` on any `Tensor`, `TensorRead`, `TypedTensor<T>`, or `TypedTensorView<T>` | `session.gather(&x, &idx, cfg)` on a borrowed `EagerSession` | `TracedTensor` methods / associated functions |
+| Einsum | `[&a, &b].einsum(spec, exec)` via `EinsumOps` (owned, borrowed, and typed inputs); `einsum_into` for a preallocated `Dest`; `ConcreteEinsumPlan` for repeated fixed metadata | `session.einsum(&[&a, &b], spec)` via `EagerEinsumOps` | `trace.einsum(&[&a, &b], spec)` via `TracedEinsumOps` plus `extension_module` |
+| FFT | `x.fft(exec)` / `x.fft_with(&opts, exec)` via `FftOps` (owned, borrowed, and typed inputs) | `session.fft(&x)` via `EagerFftOps` with `autodiff` (`session.fft_in_place(x, &opts)` for consuming in-place FFT) | `x.fft()` via `TracedFftOps` plus `extension_module` |
+| Tensordot sugar | `a.tensordot(&b, axes, exec)` via `TensordotOps`, or `matmul` / `dot_general` directly | `session.tensordot(&a, &b, axes)` via `EagerEinsumOps` | `a.tensordot(&b, axes)` via `TracedTensordotOps` |
+| Linear algebra | `LinalgOps` methods with a caller-held `&mut dyn Engine` last | `EagerLinalgOps` methods on the session with `autodiff` | `TracedLinalgOps` methods |
 | Automatic differentiation | Not applicable | `backward()` plus `EagerRuntime` functional `grad`, `vjp`, `jvp`, HVP via composition | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |
 

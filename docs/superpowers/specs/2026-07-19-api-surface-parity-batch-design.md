@@ -1,5 +1,7 @@
 # API Surface Parity Batch Design
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 **Issues:** #1279, #1265, #1264, and #1266
 
 **Goal:** Establish one consistent reduction-axis contract, complete eager and

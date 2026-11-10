@@ -9,8 +9,8 @@ data; see [crate setup and full einsum examples](einsum.md) for dependencies.
 
 | Need | Supported recipe |
 |---|---|
-| Execute concrete tensors now, without AD | `TensorEinsumExt::einsum` on `[&lhs, &rhs]` with the caller's `&mut engine` |
-| Execute eager tensors with AD | Import `EagerSessionEinsumExt` (`autodiff` feature), then `ctx.with_eager_session(&mut engine, \|s\| s.einsum(&[&lhs, &rhs], "ij,jk->ik"))?`; core ops are `EagerSession` methods such as `s.dot_general(&lhs, &rhs, config)` |
+| Execute concrete tensors now, without AD | `EinsumOps::einsum` on `[&lhs, &rhs]` with the caller's `&mut engine` last |
+| Execute eager tensors with AD | Import `EagerEinsumOps` (`autodiff` feature), then `ctx.with_eager_session(&mut engine, \|s\| s.einsum(&[&lhs, &rhs], "ij,jk->ik"))?`; core ops are `EagerSession` methods such as `s.dot_general(&lhs, &rhs, config)` |
 | Repeat one compatible concrete contraction | Keep a `ConcreteEinsumPlan`; prepare once and execute with new inputs |
 | Repeat a traced computation | Compile once and reuse the program and configured runtime; see [traced execution](einsum.md#traced-matrix-multiply) |
 | Generate an equation in code | Use `EinsumSubscripts` integer labels; use `EinsumNotation` for unresolved ellipsis |
@@ -78,25 +78,27 @@ work, keep the compiled program, the prepared program and the configured runtime
 pass new concrete inputs to `Runtime::run`, and recompile if the program's input
 metadata contract changes; register its extension modules before preparation.
 
-Typed owned inputs use `TypedTensorEinsumExt` and `prepare_typed` /
-`execute_typed`. Borrowed views use the `*ReadEinsumExt` traits and
-`prepare_read` / `execute_read` (or typed-read variants). Preallocated output
-uses the matching `*IntoExt` or plan `execute_into` / `execute_read_into` with a
-validated write destination; these overwrite rather than accumulate. Choosing
-`_read` or `_into` describes input/output ownership, not whether planning is
-cached. See [tested view and output recipes](einsum.md#tensorread-and-prepared-plans).
+Typed inputs, borrowed views and owned tensors all use the same `einsum`,
+`ConcreteEinsumPlan::prepare(inputs, spec, &opts)` and `plan.execute(inputs,
+exec)`; the result is typed when the inputs are. Preallocated output uses
+`einsum_into` or `plan.execute_into(inputs, exec, dest)` with a `Dest`:
+`Dest::overwrite(out)` replaces the destination, `Dest::accumulate(out)` adds
+to it, and `Dest::scaled(out, alpha, beta)` computes `alpha * result + beta *
+out`. Choosing an input kind or `_into` describes input/output ownership, not
+whether planning is cached. See [tested view and output recipes](einsum.md#tensorread-and-prepared-plans).
 
 ### Representation is not reuse
 
-Integer labels avoid textual parsing; ordinary `einsum_subscripts` still plans.
-For repeated generated equations, prepare with `ConcreteEinsumPlan::prepare_subscripts`.
-For ellipsis, use `EinsumNotation` and `prepare_notation`. Strings are appropriate
+Integer labels avoid textual parsing; an ordinary `einsum(&subscripts, exec)`
+still plans. For repeated generated equations, pass the `EinsumSubscripts` to
+`ConcreteEinsumPlan::prepare`. For ellipsis, use `EinsumNotation`, which
+`prepare` accepts the same way. Strings are appropriate
 for one-time preparation; there is no general reason to ban them.
 
 **Do not flatten parenthesized contraction order into integer label arrays.**
 `EinsumSubscripts` expresses labels, not grouping. The flat ordinary/prepare
 recipes above do not accept parentheses. Preserve an intended order through the
-supported explicit path/tree controls on the traced route, described in
+supported explicit path/tree controls of `EinsumOptions::optimize`, described in
 [einsum optimization controls](einsum.md#optimization-controls), rather than
 silently discarding it. Parenthesized ellipsis is unsupported.
 

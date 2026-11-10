@@ -26,9 +26,12 @@ tenferro-linalg
 `tenferro-linalg` owns:
 
 - shape and option validation
-- `TensorLinalgExt`, `TensorReadLinalgExt`, and `TypedTensorLinalgExt` for
-  backend-explicit primal execution
-- fixed-arity result tuples and typed real/complex output mappings
+- the registry-generated `LinalgOps` (concrete, any `AsView` receiver),
+  `TracedLinalgOps` (on `TracedTensor`), and `EagerLinalgOps` (on
+  `EagerSession`) traits, spelled `op` / `op_with` (and `solve_into`), see
+  `docs/spec/generated/api-ops.md`
+- named result structs (`Svd`, `Qr`, `Lu`, `FullPivLu`, `Eig`, `Eigh`,
+  `Slogdet`) and typed real/complex output mappings
 - composite lowering
 - traced extension op payloads and runtime registration
 - optional eager helpers and linalg AD rules behind `autodiff`
@@ -104,16 +107,19 @@ host's own query sized the call.
 
 ## Concrete, Read, And Typed Boundary
 
-Owned dynamic tensors call the matching `LinalgBackend` owned hook. Borrowed
-tensor reads use the `_read` surface and preserve strided layouts until the
-selected provider performs documented same-placement canonicalization. Typed
-tensors erase only the borrowed input through `TensorScalar::tensor_read`, then
-validate each dynamic backend output while downcasting it to the fixed typed
-tuple.
+`LinalgOps` takes any `AsView` receiver; the receiver type, not a method
+suffix, selects the route. Owned dynamic tensors call the matching
+`LinalgBackend` owned hook. Borrowed tensor reads (`TensorRead`,
+`TypedTensorView<T>`) call the provider's `_read` backend hook and preserve
+strided layouts until the selected provider performs documented same-placement
+canonicalization. Typed tensors erase only the borrowed input through
+`TensorScalar::tensor_read`, then validate each dynamic backend output while
+downcasting it to the fixed typed result struct.
 
 ### The borrowed-read contract is backend-neutral
 
-A `_read` entry promises that a provider *may* consume the borrowed view
+A borrowed-read call (a `TensorRead` or view receiver, served by the
+provider's `_read` hook) promises that a provider *may* consume the borrowed view
 without copying it when its own layout rules allow, and otherwise materialises
 it once inside its own boundary. It never promises zero copy, never modifies
 the borrowed source, and returns a typed error rather than a narrowed result
@@ -159,8 +165,8 @@ surfaces such as factorization contracts with pivots or `info` metadata.
 
 ## QR Solver Status Reporting
 
-Ordinary QR (`LinalgBackend::qr` and `qr_with_options`, including the traced and
-eager surfaces) does not inspect the CUDA cuSOLVER `geqrf`/`orgqr` device status
+Ordinary QR (`LinalgBackend::qr` and the `qr_with_options` provider hook behind
+`qr` / `qr_with`, including the traced and eager surfaces) does not inspect the CUDA cuSOLVER `geqrf`/`orgqr` device status
 flags. Reading them is a blocking device-to-host copy that waits for the
 factorization kernels, and the flags report neither a reachable illegal-argument
 case nor a rank-deficient factor. Synchronous provider return codes are still

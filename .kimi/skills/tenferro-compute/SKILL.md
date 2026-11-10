@@ -15,8 +15,14 @@ not when changing tenferro itself.
 2. Add the direct crates for that tier. There is no root `tenferro` facade;
    import operation families such as `tenferro-einsum` and `tenferro-linalg`
    directly.
-3. Bring the operation's public `*Ext` trait into scope. An E0599 saying that
-   a method does not exist usually means the right extension trait is missing.
+3. Bring the family's operation trait into scope: `CoreOps` (from
+   `tenferro-runtime`), `LinalgOps`, `EinsumOps` / `TensordotOps`, `FftOps` on
+   concrete tensors; `TracedLinalgOps`, `TracedEinsumOps`, `TracedFftOps` on
+   traced values; `EagerLinalgOps`, `EagerEinsumOps`, `EagerFftOps` on an
+   `EagerSession`. An E0599 saying that a method does not exist usually means
+   the right operation trait is missing. Every family follows one grammar:
+   `x.op(…, exec)`, `x.op_with(…, &opts, exec)` and, where declared,
+   `x.op_into(…, &opts, exec, dest)`.
 4. If an older example mentions a removed module/free function or a
    constructor signature that no longer compiles, read the [API migration
    guide](../../../docs/getting-started/api-migration.md).
@@ -25,7 +31,7 @@ not when changing tenferro itself.
 | Need | Read |
 | --- | --- |
 | Crates, features, CPU providers, scratch crates | [crate selection](references/crate-selection.md) |
-| Tier arities and extension-trait imports | [API cheatsheet](references/api-cheatsheet.md) |
+| Call grammar, tier arities and operation-trait imports | [API cheatsheet](references/api-cheatsheet.md) |
 | Per-call dispatch cost, batching, engine reuse and compile-once/run-many | [performance idioms](references/performance-idioms.md) |
 | Column-major data, einsum syntax, registration, and setup traps | [pitfalls](references/pitfalls.md) |
 
@@ -40,8 +46,8 @@ not when changing tenferro itself.
 - **Tensor linalg first; drop to the dense library only for what it lacks.**
   `tenferro-linalg` is the tensor-level surface: same engine, batching, and
   autodiff. A supported tensor operation stays there even when you do not want
-  AD (`TypedTensorLinalgExt::cholesky` takes no AD and runs on the caller's
-  engine, CUDA included); do not re-implement it. Call the dense library
+  AD (`LinalgOps::cholesky` on a `TypedTensor` takes no AD and runs on the
+  caller's engine, CUDA included); do not re-implement it. Call the dense library
   `t4a-faer` (package `t4a-faer`, library `faer`) directly for a matrix routine
   the tensor surface does not expose, on host column-major buffers (a
   CUDA-resident buffer cannot be borrowed as host data — download first), with

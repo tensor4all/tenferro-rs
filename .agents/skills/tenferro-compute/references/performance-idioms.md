@@ -10,7 +10,7 @@ executions when their shape and registration contracts match.
 
 ## Ordinary versus prepared einsum
 
-Use ordinary `TensorEinsumExt::einsum` by default. Reuse a `ConcreteEinsumPlan`
+Use ordinary `EinsumOps::einsum` (`[&a, &b].einsum(spec, exec)`) by default. Reuse a `ConcreteEinsumPlan`
 when equation, operand order, input count, dtypes and shapes match; values may
 change. The plan retains metadata/tree, not inputs or the engine. Execution
 still validates and allocates; engine capabilities still apply.
@@ -53,7 +53,7 @@ assert_eq!(structured.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 <!-- end-snippet-source -->
 
 See [Ordinary calls and prepared execution](../../../../docs/guides/ordinary-and-prepared-execution.md)
-for typed/read/output variants and historical measurements with exact provenance.
+for typed, borrowed and `_into` variants and historical measurements with exact provenance.
 Do not interpret ten-op chain times as one-call costs or CPU measurements as GPU
 budgets. `1 ms = 1000 us`; measure the complete caller-visible workflow, including
 final result observation. For overhead diagnosis explicitly configure and verify

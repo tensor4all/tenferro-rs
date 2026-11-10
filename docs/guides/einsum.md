@@ -4,16 +4,25 @@ For choosing between ordinary calls, compatible plan reuse and programmatic
 labels, start with [Ordinary calls and prepared execution](ordinary-and-prepared-execution.md).
 
 `einsum` is a standard extension, not part of `tenferro` core. Add the
-`tenferro-einsum` crate and import its extension traits. Concrete tensor
-execution uses `TensorEinsumExt` and `TypedTensorEinsumExt` for owned inputs,
-and `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for borrowed inputs;
-preallocated-output execution uses the matching `*IntoExt` traits;
-repeated-shape concrete workloads can use `ConcreteEinsumPlan`. Traced graph
-construction uses `TraceContextEinsumExt`;
-autodiff eager execution uses `EagerSessionEinsumExt` on a borrowed
-`EagerSession`; traced `tensordot` contraction sugar uses
-`TracedTensorEinsumExt`. Compiled traced execution also requires explicit
-runtime registration for einsum extension ops.
+`tenferro-einsum` crate and import its operation traits. The spec is a string
+(`"ij,jk->ik"`), an `EinsumNotation`, or `EinsumSubscripts`, on every layer:
+
+- concrete: `EinsumOps` on a slice or array of inputs, for example
+  `[&a, &b].einsum("ij,jk->ik", exec)`, `einsum_with(spec, &EinsumOptions, exec)`,
+  and `einsum_into(spec, &opts, exec, Dest::…)` for a preallocated output. Inputs
+  are any `Tensor`, `TensorRead`, `TypedTensor<T>`, or `TypedTensorView<T>` of one
+  representation. `TensordotOps` provides `a.tensordot(&b, axes, exec)`.
+  Repeated-shape workloads can use `ConcreteEinsumPlan`.
+- traced: `TracedEinsumOps` on `TraceContext`
+  (`trace.einsum(&[&a, &b], "ij,jk->ik")`) and `TracedTensordotOps` on
+  `TracedTensor` (`a.tensordot(&b, axes)`).
+- eager (`autodiff`): `EagerEinsumOps` on a borrowed `EagerSession`
+  (`sess.einsum(&[&a, &b], spec)`, `sess.tensordot(&a, &b, axes)`).
+
+Compiled traced execution also requires explicit runtime registration for
+einsum extension ops. The generated
+[operation registry](../spec/generated/api-ops.md#einsum) states the layout,
+error, and omission contract of each entry.
 
 When working from a local checkout, use paths that match your project layout.
 For a scratch crate created directly inside the `tenferro-rs` checkout, include
@@ -54,7 +63,7 @@ num-complex = "0.4"
 
 Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-einsum`'s `autodiff` feature when using
-`EagerSessionEinsumExt` or einsum AD rules. The traced examples below are fragments;
+`EagerEinsumOps` or einsum AD rules. The traced examples below are fragments;
 copy them into `fn main() -> Result<(), Box<dyn std::error::Error>>` when
 turning them into a standalone `src/main.rs`.
 
@@ -62,8 +71,8 @@ turning them into a standalone `src/main.rs`.
 
 Use the concrete route when you have `Tensor` or `TypedTensor` values and want
 to run the contraction immediately on an explicit backend without autodiff.
-Arrays such as `[&lhs, &rhs]` implement the extension traits directly; their
-receiver type is the fixed-size array of borrowed tensor references.
+Arrays, slices, and vectors such as `[&lhs, &rhs]` implement `EinsumOps`
+directly; their receiver type is the list of borrowed tensor references.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_12 -->
 ```rust
@@ -159,17 +168,19 @@ assert_eq!(programmatic_result.as_slice::<f64>()?, &[3.0; 8]);
 
 ## TensorRead And Prepared Plans
 
-Use `TensorReadEinsumExt` for dtype-erased borrowed inputs and
-`TypedTensorReadEinsumExt` for typed borrowed views. The `_read` suffix is
-reserved for these read-oriented APIs; compact owned tensor inputs use the
-unsuffixed `einsum` method. Typed `_into` methods accept `TypedTensorWrite`, so
-the destination can be either an owned `TypedTensor` or a
-`TypedTensorViewMut`.
+Borrowed inputs use the same `einsum` method as owned tensors: pass a list of
+`TensorRead` values or `TypedTensorView<T>` values, or borrow every element of
+a mixed list (`[a.as_read(), b]`); borrowing copies no data. `einsum_into`
+writes into a caller-provided `Dest`: `Dest::overwrite(out)`,
+`Dest::accumulate(out)`, or `Dest::scaled(out, alpha, beta)`. A typed
+destination can be either an owned `TypedTensor` or a `TypedTensorViewMut`.
 
 Use `ConcreteEinsumPlan` when the same subscripts, dtypes, and shapes are
-executed repeatedly. Preparing the plan parses and optimizes the contraction
-tree once; each execution validates the input count, dtype, and shape before
-running the stored tree.
+executed repeatedly. `ConcreteEinsumPlan::prepare(inputs, spec, &EinsumOptions)` parses and
+optimizes the contraction tree once; `plan.execute(inputs, exec)` and
+`plan.execute_into(inputs, exec, dest)` validate the input count, dtype, and
+shape before running the stored tree. Per-operand conjugation is fixed when the
+plan is prepared, through `EinsumOptions::conj`.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_13 -->
 ```rust
@@ -253,7 +264,7 @@ assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 ## EagerTensor
 
 With the `autodiff` feature, `tenferro-einsum` also exposes immediate
-`EagerTensor` execution through `EagerSessionEinsumExt` on a borrowed
+`EagerTensor` execution through `EagerEinsumOps` on a borrowed
 `EagerSession`; `session.tensordot(&a, &b, axes)` is available there too.
 The `"i->ii"` form embeds a vector on a diagonal. This is a tenferro extension
 to the common NumPy/PyTorch einsum surface; NumPy rejects repeated output
@@ -352,7 +363,8 @@ assert_eq!(
 ## Optimization Controls
 
 The default policy chooses an N-ary contraction order automatically. Advanced
-users can pass an explicit strategy through `TraceContextEinsumExt::einsum_with`.
+users can pass an explicit strategy through `EinsumOptions::optimize` on any
+layer, for example `trace.einsum_with(&[&a, &b], spec, &opts)`.
 The public optimizer API is limited to the types needed to express that
 choice: `EinsumOptimize`, `ContractionTree`, `ContractionOptimizerOptions`,
 `Subscripts`, `NestedEinsum`, and `EinsumSubscripts`.

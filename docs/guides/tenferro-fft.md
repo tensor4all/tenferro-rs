@@ -2,17 +2,21 @@
 
 `tenferro-fft` is the FFT extension package for tenferro. It is an extension
 crate imported directly alongside `tenferro-runtime` or `tenferro-tensor`.
-Concrete non-AD execution uses `TensorFftExt` and `TensorReadFftExt`; eager
-execution uses `EagerSessionFftExt` inside `EagerRuntime::with_eager_session`
-behind `autodiff` (consuming in-place transforms use `EagerTensorFftExt`);
-traced graphs use `TracedTensorFftExt`.
+Every transform has the same name and options on three layers: concrete
+non-AD execution uses `FftOps` (`x.fft(exec)`, `x.fft_with(&opts, exec)`; the
+receiver is any `Tensor`, `TensorRead`, `TypedTensor<T>`, or
+`TypedTensorView<T>`); eager execution uses `EagerFftOps` on the session
+borrowed inside `EagerRuntime::with_eager_session` behind `autodiff`
+(`sess.fft(&x)`, plus the consuming `sess.fft_in_place(x, &opts)`); traced
+graphs use `TracedFftOps` on `TracedTensor` (`t.fft()`). The generated
+[operation registry](../spec/generated/api-ops.md#fft) states the dtypes,
+layout handling, errors, and omissions of each transform.
 
-The current implementation provides one-dimensional CPU transforms backed by
-RustFFT and an explicitly selected CUDA path backed by cuFFT. WebGPU, Metal, and
+The current implementation provides CPU transforms backed by RustFFT and an
+explicitly selected CUDA path backed by cuFFT. WebGPU, Metal, and
 the Apple shared CPU/Metal path are not provided today; see
-[Devices and GPU](devices-and-gpu.md). The public API is ordinary Rust
-extension-trait methods, so most users do not need to work with the lower-level
-extension machinery directly.
+[Devices and GPU](devices-and-gpu.md). The public API is ordinary Rust trait methods, so most users do not need to
+work with the lower-level extension machinery directly.
 
 ## Setup
 
@@ -74,17 +78,22 @@ an implicit transfer.
 
 ## Current API
 
-The initial API mirrors the common PyTorch and JAX one-dimensional FFT
-families:
+The API mirrors the common PyTorch and JAX FFT families:
 
 | Operation family | Purpose |
 | --- | --- |
-| `fft`, `ifft` | complex-to-complex transforms; real input may be promoted to complex output |
-| `rfft`, `irfft` | real-to-complex and complex-to-real one-dimensional transforms |
+| `fft`, `ifft` | one-axis complex-to-complex transforms; real input may be promoted to complex output |
+| `rfft`, `irfft` | one-axis real-to-complex and complex-to-real transforms |
+| `fftn`, `ifftn` | multidimensional complex transforms |
+| `rfftn`, `irfftn` | multidimensional real/half-spectrum transforms |
 
-Each function accepts an optional transform length `n`, an `axis`, and an
-`FftNorm` value. Negative axes are normalized relative to the input rank. The
-normalization modes are:
+The one-axis transforms take `FftOptions { n, axis, norm }`: an optional
+transform length `n`, a signed `axis` (default `-1`, the last axis), and an
+`FftNorm` value. The multidimensional transforms take
+`FftnOptions { shape, axes, norm }`; empty `axes` (the default) selects every
+axis, as in NumPy. Options are built with setters, for example
+`FftOptions::default().axis(0).norm(FftNorm::Ortho)`. Negative axes are
+normalized relative to the input rank. The normalization modes are:
 
 | Mode | Behavior |
 | --- | --- |
@@ -256,11 +265,11 @@ failures are returned as typed errors rather than producing a host result.
 
 ### Concrete Tensor And TensorRead
 
-Use `TensorFftExt` when you have an owned compact `Tensor` and want immediate
-non-AD execution on an explicit backend. Use `TensorReadFftExt` when the input
-is a borrowed view or other read-oriented value. The `_read` suffix is reserved
-for that `TensorRead` surface; compact `Tensor` inputs use unsuffixed method
-names.
+Use `FftOps` for immediate non-AD execution on an explicit backend. The same
+methods accept an owned `Tensor`, a borrowed `TensorRead` view (transposed,
+sliced, or negative-stride), and typed `TypedTensor<T>` / `TypedTensorView<T>`
+values. On the CPU provider a compact column-major operand is read in place and
+any other view is gathered once into a compact buffer on the same device.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#tenferro_fft_22 -->
 ```rust
@@ -287,15 +296,16 @@ assert_eq!(
 ```
 <!-- end-snippet-source -->
 
-`TypedTensor<T>` wrappers are not part of the current API. FFT operations can
-change dtype (`rfft` real to complex, `irfft` complex to real), so typed return
-contracts need a separate design.
+Typed inputs return typed results whose scalar type follows the transform:
+`fft` and `rfft` return the complex type of the input, and `irfft` of a
+`TypedTensor<Complex64>` returns a `TypedTensor<f64>`.
 
 ### Eager Tensors
 
-Use `EagerSessionFftExt` inside `EagerRuntime::with_eager_session` for
-immediate execution. The borrowed `fft`, `ifft`, `rfft`, and `irfft` methods
-register the FFT execution runtime on demand and record the existing extension
+Use `EagerFftOps` inside `EagerRuntime::with_eager_session` for
+immediate execution. The session methods (`sess.fft(&x)`,
+`sess.fft_with(&x, &opts)`, and the other seven transforms) register the FFT
+execution runtime on demand and record the existing extension
 operation when gradients are enabled.
 These methods do not modify their input.
 
@@ -308,21 +318,24 @@ premature reuse. If the pool has already been destroyed, the allocation is freed
 normally. This avoids repeated payload allocation; small metadata allocations
 can still occur.
 
-With `autodiff`, `fft_in_place(axis, norm)` and `ifft_in_place(axis, norm)` consume
-an eager, compact column-major CPU host `C32` or `C64` tensor and transform its
+With `autodiff`, `sess.fft_in_place(x, &opts)` and `sess.ifft_in_place(x, &opts)`
+consume an eager, compact column-major CPU host `C32` or `C64` tensor and transform its
 existing allocation. Noncontiguous views are rejected unchanged; use the
 borrowed FFT methods for those layouts.
-They preserve shape and do not accept a requested transform length. Real
+They preserve shape and do not accept a requested transform length: an
+`FftOptions` with `n: Some(..)` is rejected. Real
 transforms, device/managed storage, active capture, and gradient-tracked inputs
 are not supported by this consuming contract. `no_grad` does not make a tracked
 input eligible. Exclusive ownership must be obtainable without an implicit
 copy; release other owners or explicitly create an independent copy if needed.
 
 `EagerFftInPlaceError::Rejected` returns the unchanged input in a `Box`, along
-with its error source. `Execution` reports failure after ownership acquisition;
-the input is consumed and no rollback is promised. Keep using the borrowed
-methods when the original value must remain available or gradients are needed.
-The `EagerTensorFftExt` rustdoc includes executable consuming-FFT examples.
+with its error source; `match` on the result before using `?` when you want
+the input back, because `?` drops it. `Execution` reports failure after
+ownership acquisition; the input is consumed and no rollback is promised. Keep
+using the borrowed methods when the original value must remain available or
+gradients are needed. The `EagerFftOps::fft_in_place` rustdoc includes
+executable consuming-FFT examples.
 
 ### Traced Graphs
 
@@ -389,12 +402,11 @@ original lengths it silently returns one element too short, so pass
 
 ## Planned Extensions
 
-The remaining FFT families are planned but not part of the initial API:
+The two-dimensional convenience wrappers are planned but not part of the
+current API; use the `*n` transforms with two axes instead:
 
 | Operation family | Purpose |
 | --- | --- |
-| `fftn`, `ifftn` | multidimensional complex transforms |
-| `rfftn`, `irfftn` | multidimensional real/half-spectrum transforms |
 | `fft2`, `ifft2`, `rfft2`, `irfft2` | two-dimensional convenience wrappers |
 
 ## Compatibility Target
@@ -432,9 +444,10 @@ gradient.
 ## Status
 
 `tenferro-fft` currently lives in the top-level `tenferro-fft` crate. It
-supports one-dimensional `fft`, `ifft`, `rfft`, and `irfft` through CPU RustFFT
-on host tensors and CUDA cuFFT on exact CUDA residency; CUDA one-dimensional
-execution is implemented. Multidimensional FFT families remain future work.
+supports `fft`, `ifft`, `rfft`, `irfft` and the multidimensional `fftn`,
+`ifftn`, `rfftn`, `irfftn` through CPU RustFFT on host tensors and CUDA cuFFT
+on exact CUDA residency. A multidimensional transform runs one one-axis
+transform per axis, with the intermediate spectra kept on the device.
 
 For the general extension mechanism, see
 [Custom Tensor Operations](custom-operations.md).

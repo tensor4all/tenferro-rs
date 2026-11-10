@@ -249,7 +249,7 @@ the backend materializes the public `vt` output by copying V to V^H on the
 device. The singular-values-only path still passes scratch U/V buffers to
 `gesvdj` because cuSOLVER rejects null U/V pointers on that path.
 
-Ordinary CUDA QR (`qr`/`qr_with_options`) does not inspect the cuSOLVER
+Ordinary CUDA QR (the `qr`/`qr_with_options` provider hooks) does not inspect the cuSOLVER
 `geqrf`/`orgqr` device `info` flags, so forward QR issues no host barrier.
 Synchronous provider return codes still propagate, and the doc-hidden compact
 Householder hooks keep their own `geqrf` status read. The flags are not useful for QR: the illegal-argument
@@ -287,8 +287,10 @@ failure when the bound is not small relative to the largest singular value,
 instead of returning silently wrong factors. The check pairs each batch member
 with its own spectrum and names the failing batch. That check is what makes an
 explicit rank-deficient `F32`/`C32` request fail rather than return the perturbed
-values. The existing `svd_full` API has no driver option and uses `Auto`; full
-Xgesvdp factors are covered internally without extending that public API.
+values. A full SVD (`svd_with(&SvdOptions::default().shape(SvdShape::Full), ..)`,
+the `LinalgBackend::svd_full` hook) accepts no driver option yet and uses
+`Auto`; full Xgesvdp factors are covered internally without extending that
+public API.
 
 CUDA eigh routes by batch count, not by order. A real batch
 (`batch_total > 1`) takes a batched cuSOLVER routine whenever the loaded

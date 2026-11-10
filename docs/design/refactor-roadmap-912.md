@@ -1,5 +1,7 @@
 # Issue 912 Refactor Roadmap
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 Status: approved design.
 
 Issue #912 completes the workspace-wide cleanup tracked by issues #903 through

@@ -94,9 +94,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 project already knows it is working with `f64`, `f32`, complex values, or
 another supported scalar type.
 
-Einsum is provided by the `tenferro-einsum` standard extension. Traced code
-uses `TraceContextEinsumExt` and installs `tenferro_einsum::extension_module`
-on the runtime.
+Einsum is provided by the `tenferro-einsum` standard extension. Concrete code
+uses `EinsumOps` (`[&a, &b].einsum("ij,jk->ik", &mut engine)`); traced code
+uses `TracedEinsumOps` on the `TraceContext`
+(`trace.einsum(&[&a, &b], "ij,jk->ik")`) and installs
+`tenferro_einsum::extension_module` on the runtime.
 
 ## Eager Execution And Autodiff
 

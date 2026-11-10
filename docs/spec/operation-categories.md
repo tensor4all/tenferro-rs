@@ -31,15 +31,21 @@ runtime-bound `EagerSession` within `EagerRuntime::with_eager_session`:
 `session.exp(&x)`, `session.dynamic_slice(&x, &starts, &sizes)`, and
 `session.where_select(&condition, &on_true, &on_false)`; `EagerTensor` is the
 value/trace handle and does not implicitly enter the backend for each operation.
-Non-AD concrete operations use backend-explicit crate-root session extension
-traits (`TensorSessionOpsExt`,
-`TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) because
-`Tensor` and `TypedTensor` are owned by `tenferro-tensor`, not
-`tenferro-runtime`. Extension
-families likewise use crate-root extension traits because Rust does not let
-extension crates add inherent methods to external tensor types: linalg/FFT are
-tensor receiver methods, eager einsum is an input slice/array method, and
-traced einsum is a `GraphCompiler` method.
+Non-AD concrete core operations use the crate-root `CoreOps` trait of
+`tenferro-runtime` (`x.exp(exec)`, `x.matmul(&y, exec)`), implemented for every
+`AsView` receiver (`Tensor`, `TensorRead`, `TypedTensor<T>`,
+`TypedTensorView<T>`), because those types are owned by `tenferro-tensor`, not
+`tenferro-runtime`. Extension families likewise use crate-root operation traits
+because Rust does not let extension crates add inherent methods to external
+tensor types: `LinalgOps`, `FftOps` and `TensordotOps` are tensor receiver
+methods, concrete einsum (`EinsumOps`) is an input slice/array method, traced
+einsum (`TracedEinsumOps`) is a `TraceContext` method, and the eager forms
+(`EagerLinalgOps`, `EagerEinsumOps`, `EagerFftOps`) are `EagerSession`
+methods. Every family follows the call grammar of
+[API conventions](api-conventions.md): `op`, `op_with(&opts)` and, where the
+registry declares it, `op_into(.., dest)`, with the engine last on the
+concrete layer. The operation list per layer is generated in
+[`generated/api-ops.md`](generated/api-ops.md).
 
 **Parity rule (the core of the contract):** every operation in the Elementwise,
 Reductions, Shape/structural, and Indexing categories **must be exposed on both
@@ -166,19 +172,24 @@ identity.
 Provided by extension crates, operating on the same tensor types on both the eager
 and traced surfaces (subject to the same parity rule within each family):
 
-- **Linalg** (`tenferro-linalg`): `svd`, `qr`, `eig`, `eigh`, `solve`,
-  `triangular_solve`, `cholesky`, `lu`, `full_piv_lu` through
-  `TraceContextLinalgExt` / `TracedTensorLinalgExt` / `EagerTensorLinalgExt`.
-- **Einsum** (`tenferro-einsum`): `einsum` + contraction planning.
-  Concrete inputs use `TensorEinsumExt` and `TypedTensorEinsumExt` for owned
-  tensors, `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for borrowed
-  views, and `ConcreteEinsumPlan` for repeated execution; traced graph
-  construction uses `TraceContextEinsumExt`; autodiff eager einsum and
-  `tensordot` use `EagerSessionEinsumExt` on a borrowed `EagerSession`; traced
-  `tensordot` sugar uses `TracedTensorEinsumExt`.
-- **FFT** (`tenferro-fft`): `fft`, `ifft`, `rfft`, and `irfft`.
-  Concrete inputs use `TensorFftExt` and `TensorReadFftExt`; traced graph
-  construction uses `TraceContextFftExt` or `TracedTensorFftExt`.
+- **Linalg** (`tenferro-linalg`): `svd`, `svdvals`, `qr`, `householder_qr`,
+  `rank_revealing_qr`, `lu`, `full_piv_lu`, `full_piv_lu_solve`, `solve`,
+  `lstsq`, `triangular_solve`, `cholesky`, `eig`, `eigvals`, `eigh`,
+  `eigvalsh`, `slogdet`, `det`, `inv`, `pinv` and `norm` through `LinalgOps`
+  (concrete), `TracedLinalgOps` (on `TracedTensor`) and `EagerLinalgOps` (on
+  `EagerSession`). Multi-output results are structs (`Svd`, `Qr`, `Lu`,
+  `FullPivLu`, `Eig`, `Eigh`, `Slogdet`).
+- **Einsum** (`tenferro-einsum`): `einsum` + contraction planning, and
+  `tensordot`. Concrete inputs, owned, borrowed or typed, use `EinsumOps` on an
+  input slice or array (`[&a, &b].einsum(spec, exec)`, `einsum_into` with a
+  `Dest`) and `ConcreteEinsumPlan` for repeated execution; traced graph
+  construction uses `TracedEinsumOps` on `TraceContext`; eager einsum and
+  `tensordot` use `EagerEinsumOps` on an `EagerSession`; concrete and traced
+  `tensordot` use `TensordotOps` and `TracedTensordotOps`.
+- **FFT** (`tenferro-fft`): `fft`, `ifft`, `rfft`, `irfft`, `fftn`, `ifftn`,
+  `rfftn` and `irfftn` through `FftOps` (concrete), `TracedFftOps` (on
+  `TracedTensor`) and `EagerFftOps` (on `EagerSession`, which also has the
+  consuming `fft_in_place` / `ifft_in_place`).
 
 ## 9. AD transforms
 
@@ -227,14 +238,15 @@ Shape arguments accept owned or borrowed shape-like values: fixed-rank APIs use
 `impl Into<R::Shape>`, while dynamic-rank APIs use `impl IntoShapeVec`. Axis lists,
 dimension mappings, and similar collections use `impl AsRef<[T]>`.
 
-Axis sign is part of each operation's public contract, not a global coercion.
-Negative `isize` axes are currently accepted only by FFT (`fft`, `ifft`, `rfft`,
-`irfft`), `index_select`, `stack`, and explicit `TensorDotAxes::Axes`; each is
-normalized relative to the input rank and rejects an out-of-range result. Other
-axis-taking APIs, including reductions, `concatenate`, and `reverse`, accept
-non-negative `usize` axes only. New negative-axis support must be added
-deliberately and consistently across the relevant concrete, eager, and traced
-surfaces.
+Public axis arguments are signed `isize` on the concrete (`CoreOps`,
+`LinalgOps`, `FftOps`, `TensordotOps`), traced and eager surfaces: reductions,
+`transpose`, `reverse`, `concatenate`, `stack`, `index_select`, `softmax` and
+the other composites, `norm` axes, FFT axes and `TensorDotAxes::Axes`. A
+negative axis counts from the end (`-1` is the last axis); each axis is
+normalized relative to the input rank, and an out-of-range or repeated axis is
+a validation error. Configuration structs that mirror the IR
+(`DotGeneralConfig`, `GatherConfig` and the like) and the dimension map of
+`broadcast_in_dim` keep non-negative `usize` dimensions.
 
 Multi-input structural ops (`concatenate`, `stack`, `split`, …) must accept owned
 values, views, and `IntoIterator` ergonomically, and define behavior for an empty

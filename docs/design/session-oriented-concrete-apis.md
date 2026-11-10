@@ -1,9 +1,11 @@
 # Session-Oriented Concrete APIs (issue #1673)
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 Status: implemented and partly superseded; the sections below are the
 original design record.
 
-**Current state (2026-10, #1858).** The one-shot traits were deleted (#1680
+**State as of 2026-10 (#1858); #2552 later replaced these traits with the generated `CoreOps`.** The one-shot traits were deleted (#1680
 Phase 2) and the `_in` names became the plain names: the concrete surface is
 `TensorSessionOpsExt` / `TypedTensorSessionOpsExt` (plus
 `TypedTensorMaskSessionOpsExt` for bool-mask selection), every method takes

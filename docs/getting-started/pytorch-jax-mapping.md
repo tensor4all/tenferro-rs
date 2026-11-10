@@ -5,8 +5,8 @@ This page is a translation guide for readers who already know `torch` or `jax.nu
 ## Import styles
 
 A focused module can keep its dependencies explicit with direct imports such as
-`use tenferro_runtime::{Tensor, TensorSessionOpsExt};` and
-`use tenferro_linalg::TensorLinalgExt;`. A tutorial or a
+`use tenferro_runtime::{CoreOps, Tensor};` and
+`use tenferro_linalg::LinalgOps;`. A tutorial or a
 module that uses several operation families can use the equivalent crate-local
 preludes: `use tenferro_runtime::prelude::*;` and
 `use tenferro_linalg::prelude::*;`. These imports only affect name lookup;
@@ -25,7 +25,7 @@ backend and device choices remain explicit.
 | Transform AD | `torch.autograd.grad(...)`, `torch.func.jvp` | `jax.grad`, `jax.vjp`, `jax.jvp`, HVP via composition | `EagerRuntime::{grad,vjp,jvp}` or traced `.grad()?` / `.vjp()?` / `.jvp()?`; HVP via composition |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or runtime engine registrations |
 | CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro_gpu::cuda::upload_tensor(...)` and `download_tensor(...)` |
-| Matrix contraction | `torch.einsum` | `jnp.einsum` | `trace.einsum(...)` via `TraceContextEinsumExt` |
+| Matrix contraction | `torch.einsum` | `jnp.einsum` | `trace.einsum(&[&a, &b], spec)` via `TracedEinsumOps` |
 
 ## Function mapping
 
@@ -33,16 +33,16 @@ backend and device choices remain explicit.
 |---|---|---|---|---|
 | Create typed tensor | `torch.tensor(data, dtype=...)` | `jnp.array(data, dtype=...)` | `TypedTensor::<T>::from_vec_col_major(shape, data)` | — |
 | Create dynamic tensor | `torch.tensor(data)` | `jnp.array(data)` | `Tensor::from_vec_col_major(shape, data)` | `TracedTensor::from_vec_col_major(shape, data)` |
-| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `a.matmul(&b, &mut engine)?` via `TensorSessionOpsExt` | `a.matmul(&b)` |
-| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut engine)?` via `TensorSessionOpsExt` | `x.reshape(&shape)?` |
-| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut engine)?` via `TensorSessionOpsExt` | `x.transpose(&perm)` |
+| Matrix multiply | `torch.matmul(a, b)` | `jnp.matmul(a, b)` | `a.matmul(&b, &mut engine)?` via `CoreOps` | `a.matmul(&b)` |
+| Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut engine)?` via `CoreOps` | `x.reshape(&shape)?` |
+| Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut engine)?` via `CoreOps` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast_in_dim(&shape, &dims)` |
-| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(Some(&axes), &mut engine)?` via `TensorSessionOpsExt` | `x.reduce_sum(Some(&axes))` |
-| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `ctx.with_eager_session(&mut engine, \|s\| s.einsum(&[&a, &b], spec))` via `EagerSessionEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus extension module installation |
-| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `x.svd(&mut engine)?` via `TensorLinalgExt` | `x.svd()?` via `TracedTensorLinalgExt` |
-| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `x.qr(&mut engine)?` via `TensorLinalgExt` | `x.qr()?` via `TracedTensorLinalgExt` |
-| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `x.cholesky(&mut engine)?` via `TensorLinalgExt` | `x.cholesky()?` via `TracedTensorLinalgExt` |
-| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `a.solve(&b, &mut engine)?` via `TensorLinalgExt` | `a.solve(&b)?` via `TracedTensorLinalgExt` |
+| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(Some(&axes), &mut engine)?` via `CoreOps` | `x.reduce_sum(Some(&axes))` |
+| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `ctx.with_eager_session(&mut engine, \|s\| s.einsum(&[&a, &b], spec))` via `EagerEinsumOps` | `trace.einsum(&[&a, &b], spec)` via `TracedEinsumOps` plus extension module installation |
+| SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `let Svd { u, s, vh } = x.svd(&mut engine)?` via `LinalgOps` | `x.svd()?` via `TracedLinalgOps` |
+| QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `x.qr(&mut engine)?` via `LinalgOps` | `x.qr()?` via `TracedLinalgOps` |
+| Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `x.cholesky(&mut engine)?` via `LinalgOps` | `x.cholesky()?` via `TracedLinalgOps` |
+| Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `a.solve(&b, &mut engine)?` via `LinalgOps` | `a.solve(&b)?` via `TracedLinalgOps` |
 | Scalar-loss backward | `loss.backward()` | — | `loss.backward()` on `EagerTensor` | — |
 | Reverse-mode grad | `torch.autograd.grad(loss, x)` | `jax.grad(f)(x)` | `ctx.grad(&loss, &x)?` | `loss.grad(&x)` |
 | VJP | `torch.autograd.grad(..., grad_outputs=...)` | `jax.vjp` | `ctx.vjp(&y, &x, &cotangent)?` | `y.vjp(&x, &cotangent)?` |
@@ -64,6 +64,15 @@ then the columns are `[1, 2]`, `[3, 4]`, and `[5, 6]`.
 Use `from_vec_col_major` only with buffers already in tenferro's physical
 column-major order. Flat buffers copied from PyTorch, NumPy, or JAX row-major
 arrays must be reordered explicitly before tensor construction.
+
+### Axes and the engine argument
+
+Axis arguments are signed (`isize`) as in NumPy, PyTorch and JAX: `-1` is the
+last axis, so `x.reduce_sum(Some(&[-1]), &mut engine)?` sums over the last
+axis. Concrete calls take the engine as their last argument; options, when an
+operation has them, go through the `_with` form, for example
+`x.svd_with(&SvdOptions::default().shape(SvdShape::Full), &mut engine)?` for
+PyTorch's `full_matrices=True`.
 
 ### Explicit CUDA transfer
 

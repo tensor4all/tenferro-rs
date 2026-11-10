@@ -1,13 +1,16 @@
 # Linear Algebra
 
 tenferro exposes linear algebra through the `tenferro-linalg` operation crate.
-Use `TensorLinalgExt`, `TensorReadLinalgExt`, or `TypedTensorLinalgExt` for direct
-execution without autodiff, `EagerSessionLinalgExt` inside
-`EagerRuntime::with_eager_session` for eager `backward()` / functional transform
-workflows (with `EagerTensorLinalgExt::solve` as a calling-thread `no_grad`
-exception), and `TracedTensorLinalgExt` when the
-operation should be part of a graph, `grad`/`vjp`/`jvp`, or repeated compile/run
-workflow.
+Every operation has the same name and options on three layers: `LinalgOps`
+for direct execution without autodiff (`a.svd(exec)`,
+`a.svd_with(&opts, exec)`; the receiver is any `Tensor`, `TensorRead`,
+`TypedTensor<T>`, or `TypedTensorView<T>`), `EagerLinalgOps` on the
+`EagerSession` borrowed inside `EagerRuntime::with_eager_session` for eager
+`backward()` / functional transform workflows (`sess.svd(&x)`), and
+`TracedLinalgOps` on `TracedTensor` when the operation should be part of a
+graph, `grad`/`vjp`/`jvp`, or repeated compile/run workflow (`t.svd()`). The
+generated [operation registry](../spec/generated/api-ops.md#linalg) lists every
+operation with its options type, layout handling, errors, and omissions.
 
 ## Setup
 
@@ -42,8 +45,8 @@ tenferro-linalg = { version = "...", features = ["autodiff"] }
 Concrete graph/runtime users can omit `tenferro-ad` and the `autodiff` feature
 when they do not need eager linalg helpers or linalg AD rules. For
 inference-only code, call the operations on `Tensor`/`TypedTensor` inside a
-backend session (`TensorLinalgExt` / `TypedTensorLinalgExt`, for example
-`triangular_solve`, `solve`, `cholesky`); that route needs no `autodiff`. There
+backend session (`LinalgOps`, for example `triangular_solve`, `solve`,
+`cholesky`); that route needs no `autodiff`. There
 is no separate eager-without-AD feature: `EagerSession` lives in `tenferro-ad`,
 which is all that `autodiff` adds, so such a feature would save no dependency.
 The examples below are Rust fragments; copy them into `fn main() -> Result<(),
@@ -53,9 +56,9 @@ Box<dyn std::error::Error>>` for a standalone binary.
 
 | Layer | Linear algebra style |
 | --- | --- |
-| Concrete `Tensor` / `TensorRead` / `TypedTensor<T>` | crate-root linalg extension traits; methods take the caller's `&mut dyn Engine` |
-| `EagerTensor` | `EagerSessionLinalgExt` methods on a borrowed `EagerSession` behind `autodiff`, except tensor-owned `EagerTensorLinalgExt::solve`; tracked variables support `backward()` and functional transforms where AD rules support the operation |
-| `TracedTensor` | `TracedTensorLinalgExt` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
+| Concrete `Tensor` / `TensorRead` / `TypedTensor<T>` / `TypedTensorView<T>` | `LinalgOps` methods; the caller's `&mut dyn Engine` is the last argument |
+| `EagerTensor` | `EagerLinalgOps` methods on a borrowed `EagerSession` behind `autodiff` (`sess.solve(&a, &b)`); tracked variables support `backward()` and functional transforms where AD rules support the operation |
+| `TracedTensor` | `TracedLinalgOps` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
 
 CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 `TracedTensor` paths. It is not a separate linear algebra layer. See
@@ -63,39 +66,52 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 
 ## Operation Surface
 
-| Operation family | Concrete backend | Eager helper | Traced helper |
-| --- | --- | --- | --- |
-| Dense solve | `solve` | `solve` | `solve` |
-| Triangular solve | `triangular_solve` | `triangular_solve` | `triangular_solve` |
-| Cholesky | `cholesky` | `cholesky` | `cholesky` |
-| SVD | `svd`, `svdvals`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
-| QR | `qr`, `qr_with_options` | `qr`, `qr_with_options` | `qr`, `qr_with_options` |
-| Incremental compact QR | `householder_qr`, `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` | `EagerSessionLinalgExt::householder_qr` and state operations with `&mut EagerSession` | same state operations on `TracedTensor` |
-| Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` | `eigh`, `eigh_with_options`, `eigvalsh` |
-| General eigen | `eig` | `eig`, `eigvals` | `eig`, `eigvals` |
-| LU | `lu` | `lu` | `lu` |
-| Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` |
-| Pseudoinverse | `pinv` | `pinv`, `pinv_with_rtol` | `pinv`, `pinv_with_rtol` |
-| Determinants | `det`, `slogdet` | `det`, `slogdet` | `det`, `slogdet` |
-| Matrix inverse | `inv` | `inv` | `inv` |
-| Norms | `norm` | `norm` | `norm` |
+Each operation below exists on all three layers (`LinalgOps`,
+`EagerLinalgOps`, `TracedLinalgOps`) as `op` with default options and
+`op_with(&XxxOptions)` with explicit options. Multi-output operations return
+named structs: `Svd { u, s, vh }`, `Qr { q, r }`, `Lu { p, l, u, parity }`,
+`FullPivLu { p, l, u, q, parity }`, `Eig { values, vectors }`,
+`Eigh { values, vectors }`, and `Slogdet { sign, log_abs_det }`.
 
-Concrete, read, typed, eager-session, and traced tensor APIs are crate-root
-extension traits. Eager decompositions take `&mut EagerSession` from
-`EagerRuntime::with_eager_session`; do not call the tensor-owned `solve` entry
-inside an active borrowed session. Concrete methods take `&mut dyn Engine` obtained through
-the caller-held engine. `TensorReadLinalgExt::svdvals_read`
-and `eigvalsh_read` accept borrowed inputs. A provider may consume the borrowed
+| Operation family | Operations | Options |
+| --- | --- | --- |
+| Dense solve | `solve`, `solve_with`; concrete `solve_into` (overwrite) | `SolveOptions` |
+| Least squares | `lstsq`, `lstsq_with` | `LstsqOptions` |
+| Triangular solve | `triangular_solve`, `triangular_solve_with` | `TriangularSolveOptions` (`side`, `uplo`, `op`, `diag`) |
+| Cholesky | `cholesky`, `cholesky_with` | `CholeskyOptions` |
+| SVD | `svd`, `svd_with`, `svdvals`, `svdvals_with` | `SvdOptions` (`shape(SvdShape::Full)` for full factors, `gauge`, `derivative_eps`, `driver`), `SvdvalsOptions` |
+| QR | `qr`, `qr_with` | `QrOptions` |
+| Incremental compact QR | `householder_qr`, `householder_qr_with`; state methods `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` (eager: with `&mut EagerSession`; traced: on `TracedTensor` state) | `HouseholderQrOptions` |
+| Rank-revealing QR | `rank_revealing_qr`, `rank_revealing_qr_with` | `RankRevealingQrOptions` |
+| Hermitian eigen | `eigh`, `eigh_with`, `eigvalsh`, `eigvalsh_with` | `EighOptions`, `EigvalshOptions` |
+| General eigen | `eig`, `eigvals` (and `_with`) | `EigOptions`, `EigvalsOptions` |
+| LU | `lu`, `lu_with` | `LuOptions` |
+| Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` (and `_with`) | `FullPivLuOptions`, `FullPivLuSolveOptions` |
+| Pseudoinverse | `pinv`, `pinv_with` | `PinvOptions` (`rtol`) |
+| Determinants | `det`, `slogdet` (and `_with`) | `DetOptions`, `SlogdetOptions` |
+| Matrix inverse | `inv`, `inv_with` | `InvOptions` |
+| Norms | `norm`, `norm_with` | `NormOptions` (`ord: NormOrd`, `axes`, `keep_dims`) |
+
+Options types are `#[non_exhaustive]`; build them with
+`XxxOptions::default()` and the setters, for example
+`PinvOptions::default().rtol(Some(1e-12))`. Axis arguments such as
+`NormOptions::axes` are signed: `-1` is the last axis.
+
+Eager decompositions take the `&mut EagerSession` from
+`EagerRuntime::with_eager_session` as the receiver. Concrete methods take the
+caller-held `&mut dyn Engine` as the last argument. Borrowed inputs
+(`TensorRead`, `TypedTensorView<T>`, transposed or negative-stride views) use
+the same method names as owned tensors. A provider may consume the borrowed
 view without copying it when its own layout rules allow, and otherwise
 materializes it once inside its own boundary; no zero-copy guarantee is made,
 the borrowed source is never modified, and a provider that cannot read the view
-returns a typed error instead of a narrowed result. A values-only backend
-capability returns only the
-values tensor and does not allocate singular/eigenvectors; unsupported
-providers return a typed error rather than computing a full decomposition and
-discarding its factors. `LinalgBackend` is the SPI provider contract used by
-backend implementations and lower-level session tests, not by ordinary
-callers.
+returns a typed error instead of a narrowed result. The registry's `Layout`
+entry states the rule per operation. A values-only backend capability
+(`svdvals`, `eigvalsh`, `eigvals`) returns only the values tensor and does not
+allocate singular/eigenvectors; unsupported providers return a typed error
+rather than computing a full decomposition and discarding its factors.
+`LinalgBackend` is the SPI provider contract used by backend implementations
+and lower-level session tests, not by ordinary callers.
 
 ## Batch And Inner Parallelism
 
@@ -579,11 +595,11 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 3.0]);
 
 ## Complete-Pivot LU Solve
 
-`full_piv_lu` returns `(P, L, U, Q, parity)` with the reconstruction convention
+`full_piv_lu` returns `FullPivLu { p, l, u, q, parity }` with the reconstruction convention
 `A = P^T * L * U * Q`, equivalently `P * A * Q^T = L * U`. The `parity` output
-is a scalar real tensor containing `+1` or `-1`: `F32` for `F32`/`C32` inputs
-and `F64` for `F64`/`C64` inputs. The tensor extension
-`full_piv_lu_solve` solves `A * x = b`; the lower-level backend contract also
+is a scalar tensor containing `+1` or `-1`. On an owned `Tensor` it is real (`F32` for `F32`/`C32` inputs
+and `F64` for `F64`/`C64` inputs); the borrowed route returns it in the input dtype, and a typed complex call
+returns `Unsupported` until the two routes agree (#2552 Q21). `full_piv_lu_solve` solves `A * x = b`; the lower-level backend contract also
 exposes an explicit transpose flag.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_11 -->

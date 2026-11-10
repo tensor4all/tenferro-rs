@@ -137,8 +137,8 @@ that cache.
 A compiled program keys a plan by the instruction index of the `dot_general` it
 prepares: a program has exactly one such index per operation, so the same slot
 denotes the same geometry on every execution. **An eager call has no instruction
-index**, so the eager entries (`dot_general_read`, `dot_general_read_into_accum`,
-`dot_general_with_conj`) derive the slot from the request instead: a hash of the
+index**, so the eager entries (the `TensorDot` provider hooks `dot_general_read`,
+`dot_general_read_into_accum`, `dot_general_with_conj`) derive the slot from the request instead: a hash of the
 dtype, the two operand shapes, the four axis lists and the conjugation flags,
 reduced modulo the cache capacity.
 
