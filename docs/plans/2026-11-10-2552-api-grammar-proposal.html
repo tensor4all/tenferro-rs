@@ -120,7 +120,7 @@ th{font-size:12px;letter-spacing:.05em;color:var(--muted);font-weight:600}
 
 <div class="wrap">
 <header class="col">
-  <div class="eyebrow">tensor4all/tenferro-rs · issue #2552 への提案 · 2026-11-10 · API 一覧案 v0.2 まで反映</div>
+  <div class="eyebrow">tensor4all/tenferro-rs · issue #2552 への提案 · 2026-11-10 · v0.2 とプロトタイプの結果まで反映（実体化ポリシーは撤回）</div>
   <h1 style="margin-top:10px">tenferro API の文法</h1>
   <p class="lead">演算ごと・層ごとに名前を増やす今のやり方をやめて、全クレート共通の「呼び出しの文法」を1つ決めます。ルールは7つで、どれも文章ではなく生成・型・スナップショットのどれかで守ります。</p>
   <div class="stats">
@@ -177,8 +177,6 @@ th{font-size:12px;letter-spacing:.05em;color:var(--muted);font-weight:600}
       <span class="punct">,</span>
       <span class="slot s-exec"><span class="tok">exec</span><span class="cap">実行器</span></span>
       <span class="punct">,</span>
-      <span class="slot s-pol"><span class="tok">policy</span><span class="cap">実体化ポリシー</span></span>
-      <span class="punct">,</span>
       <span class="slot s-out"><span class="tok">out</span><span class="cap">_into のみ・Dest</span></span>
       <span class="punct">)</span>
     </div>
@@ -188,26 +186,26 @@ th{font-size:12px;letter-spacing:.05em;color:var(--muted);font-weight:600}
         <h3>concrete（即時計算）</h3>
         <p class="note">exec = <code>&amp;mut dyn Engine</code>。<code>Tensor</code>・<code>TensorRead</code>・<code>TypedTensor&lt;T&gt;</code>・ビューのどれでも同じメソッドが呼べる</p>
 <pre>a.svd(&amp;mut eng)?
-a.svd_with(&amp;opts, &amp;mut eng, Allow)?
-a.solve_into(&amp;b, &amp;opts, &amp;mut eng, Forbid, &amp;mut x)?</pre>
+a.svd_with(&amp;opts, &amp;mut eng)?
+a.solve_into(&amp;b, &amp;opts, &amp;mut eng, Dest::overwrite(&amp;mut x))?</pre>
       </div>
       <div class="layer" style="border-color:var(--slot-exec)">
         <h3>eager（自動微分つき即時）</h3>
         <p class="note">実行器 <code>EagerSession</code> が受け手の位置に来て、入力 <code>x</code> は第1引数に移る。それ以外の名前・引数順・結果型は concrete と同じ（決定 3）</p>
 <pre>sess.svd(&amp;x)?
-sess.svd_with(&amp;x, &amp;opts, Allow)?</pre>
+sess.svd_with(&amp;x, &amp;opts)?</pre>
       </div>
       <div class="layer" style="border-color:var(--slot-opt)">
         <h3>traced（グラフ構築）</h3>
-        <p class="note">演算の呼び出しには exec も policy も出てこない。policy は実行するときに渡し、プランは policy に依存しない（#2552 の裁定 9）</p>
+        <p class="note">演算の呼び出しに exec は出てこない。実行は <code>prepare</code> → <code>run</code> で、呼び出し側が持つエンジンに渡す</p>
 <pre>t.svd()?
 t.svd_with(&amp;opts)?
 trace.einsum_with(&amp;[a, b], spec, &amp;opts)?
-prepared.execute_with(inputs, &amp;mut eng, Forbid)?</pre>
+runtime.run(&amp;prepared, inputs)?</pre>
       </div>
     </div>
     <p class="note" style="margin-top:14px"><b>入力の個数が決まっていない演算</b>（einsum）は、所有者を受け手にします。eager では <code>sess.einsum(&amp;[x, y], spec)</code>、traced では <code>trace.einsum(&amp;[a, b], spec)</code> です。concrete にはそのような所有者がないので、入力のスライス <code>[&amp;a, &amp;b].einsum(spec, eng)</code> を受け手にします（決定 4）。</p>
-    <p class="note" style="margin-top:6px">短い形 <code>op(..., exec)</code> は「オプションも policy もすべて既定値（<code>Allow</code>）」の糖衣構文です。何か1つでも指定したいときは <code>op_with</code> を使います。</p>
+    <p class="note" style="margin-top:6px">短い形 <code>op(..., exec)</code> は「オプションをすべて既定値にする」糖衣構文です。何か1つでも指定したいときは <code>op_with</code> を使います。</p>
   </div>
 </section>
 
@@ -224,7 +222,7 @@ prepared.execute_with(inputs, &amp;mut eng, Forbid)?</pre>
         <div class="before"><div class="tag">いま</div><pre>a.svd_full_read(s)
 svd_values_with_exec(e, b, v)
 t.svdvals()   // 層で名前が違う</pre></div>
-        <div class="after"><div class="tag">ルール後</div><pre>a.svd_with(&amp;full, s, Allow)
+        <div class="after"><div class="tag">ルール後</div><pre>a.svd_with(&amp;full, s)
 v.svdvals(e)
 t.svdvals()   // どの層でも同じ</pre></div>
       </div>
@@ -261,7 +259,7 @@ plan::prepare_typed_notation(..)
 norm(dim: Option&lt;&amp;[usize]&gt;)  // fft は isize</pre></div>
         <div class="after"><div class="tag">ルール後</div><pre>a.triangular_solve_with(&amp;b,
   &amp;TriSolveOptions::default()
-     .side(Side::Left).uplo(Uplo::Lower), s, Allow)
+     .side(Side::Left).uplo(Uplo::Lower), s)
 EinsumPlan::prepare(inputs, spec /* &amp;str でも可 */)</pre></div>
       </div>
       <div class="held"><span class="chip c-type">型</span><span class="chip c-gen">生成</span></div>
@@ -269,19 +267,21 @@ EinsumPlan::prepare(inputs, spec /* &amp;str でも可 */)</pre></div>
     </div></article>
 
     <article class="rule"><div class="num">4</div><div class="body">
-      <h3>「誰が・どう実行するか」は呼び出しごとの引数</h3>
-      <p class="why">実行器（Engine / EagerSession）は引数で渡す。<code>MaterializationPolicy</code> は Options とも Engine の状態とも分けた、独立した <code>Copy</code> 引数にする（#2552 の裁定どおり）。<code>Allow</code> は同じデバイス・同じ dtype の入力レイアウト正規化だけを許可するもので、デバイス転送や dtype 変換は許可しない。traced でも policy は実行時に渡す。物理的なディスパッチは policy に依存させず、プランは正規化が要るかどうかを記録しておき、実行時に実際のレイアウトで再検査する（裁定 9）。</p>
+      <h3>実行器は呼び出しごとの引数。コピーは禁止せず、数える</h3>
+      <p class="why">実行器（Engine / EagerSession）は引数で渡し、Engine に呼び出しをまたぐ状態を持たせない。<b>実体化ポリシー（<code>Allow</code> / <code>Forbid</code>）は文法に入れない</b>（2026-11-10 に裁定を見直し）。プロトタイプでは、native CPU で <code>Forbid</code> が拒否するのは SVD read の負ストライドと rank 3 以上の非コンパクトなバッチだけで、einsum では何も拒否しなかった。拒否されても呼び出し側にできるのは明示的なコピー（同じコスト）か上流のレイアウト変更だけで、ポリシーは制御ではなく診断になる。代わりに、同じデバイス・同じ dtype での入力正規化は provider の中で行ってよいとし、そのつど <b>Engine の診断カウンタに記録する</b>（コピーが起きる経路でだけ加算するので、通常経路のコストは増えない）。性能を気にする利用者は、テストで 0 回であることを確かめる。デバイス転送と dtype 変換は今までどおり明示的に行う。</p>
       <div class="ba">
         <div class="before"><div class="tag">いま</div><pre>a.svd(session)            // 最後
 x.solve(engine, b)        // 2番目
 svd_with_exec(exec, ..)   // 最初
 einsum_into(s, sess, out) vs
 solve_read_into(b, out, sess)</pre></div>
-        <div class="after"><div class="tag">ルール後</div><pre>// どの演算も …, &amp;opts, exec, policy, out
-a.svd_with(&amp;o, e, Allow)
-sess.solve_with(&amp;x, &amp;b, &amp;o, Allow)
-a.einsum_into(spec, &amp;o, e, Allow,
-              Dest::accumulate(&amp;mut c))</pre></div>
+        <div class="after"><div class="tag">ルール後</div><pre>// どの演算も …, &amp;opts, exec, dest
+a.svd_with(&amp;o, e)
+sess.solve_with(&amp;x, &amp;b, &amp;o)
+a.einsum_into(spec, &amp;o, e,
+              Dest::accumulate(&amp;mut c))
+// コピーは数えて、テストで確かめる
+assert_eq!(e.input_normalization_stats().count, 0)</pre></div>
       </div>
       <div class="held"><span class="chip c-gen">生成</span><span class="chip c-type">型</span></div>
       <div class="kills">消えるもの：エンジン位置の3流派、公開シグネチャに出ている <code>tcontract_exec::Exec</code> / <code>BufferPool</code>（Exec を包む Engine 型のコンストラクタ1か所に寄せる。置き換えられることを試作で示してから削除する。例外 E08）</div>
@@ -348,14 +348,14 @@ CI: 差分あり かつ 未更新 → fail</pre></div>
   }
 }</pre></div>
   <div class="m"><h3><span class="k c-type">型</span>コンパイラ</h3>
-    <p><code>#[non_exhaustive]</code> の Options、<code>bool</code> の代わりの列挙型、<code>Svd&lt;V, R&gt;</code>、<code>AsView</code> アダプタ、<code>MaterializationPolicy</code>。違反するとコンパイルが通りません。</p>
+    <p><code>#[non_exhaustive]</code> の Options、<code>bool</code> の代わりの列挙型、<code>Svd&lt;V, R&gt;</code>、<code>AsView</code> アダプタ、<code>Dest</code>。違反するとコンパイルが通りません。</p>
 <pre>// 取り違えはコンパイルエラー
 Uplo::Lower, Side::Left
 // 構造体リテラルで固定できない
 SvdOptions::default()
     .full_matrices(true)</pre></div>
   <div class="m"><h3><span class="k c-freeze">凍結</span>公開 API スナップショット</h3>
-    <p><code>cargo public-api</code> の出力をクレートごとにコミットします。CI では既に <span class="mono">check-no-public-rayon.sh</span> がこのツールを使っています。公開面が変わる PR は差分として必ず目に入ります。ただし、スナップショットはレビューの証拠であって、意味が一貫していることの証明ではありません。policy の受け渡し、正規化の回数、エイリアス、所有権、数値結果といった振る舞いは、別途テストで確かめます（v0.2 D）。</p>
+    <p><code>cargo public-api</code> の出力をクレートごとにコミットします。CI では既に <span class="mono">check-no-public-rayon.sh</span> がこのツールを使っています。公開面が変わる PR は差分として必ず目に入ります。ただし、スナップショットはレビューの証拠であって、意味が一貫していることの証明ではありません。正規化の回数（診断カウンタ）、エイリアス、所有権、数値結果といった振る舞いは、別途テストで確かめます（v0.2 D）。</p>
 <pre>$ cargo public-api -p tenferro-linalg \
     &gt; api/tenferro-linalg.txt
 CI: git diff --exit-code api/</pre></div>
@@ -387,9 +387,9 @@ CI: git diff --exit-code api/</pre></div>
 </section>
 <div class="flow">
   <div class="step"><div class="sn">STEP 1</div><h3>現行を基準として記録</h3><p>全公開クレートの public-api スナップショットを、feature とツールチェーンを明示してコミットする。新設計の承認ではないので、プロトタイプを待たずに取れる。</p></div>
-  <div class="step"><div class="sn">STEP 2</div><h3>6つの縦断プロトタイプ</h3><p>複素 SVD、係数付き einsum、消費型 FFT、Allow→Forbid の再利用、エラー原因の保持、TraceContext 縮約木。新しい目標 API はこれが通ってから固定する。</p></div>
+  <div class="step"><div class="sn">STEP 2</div><h3>6つの縦断プロトタイプ</h3><p>複素 SVD、係数付き einsum、消費型 FFT、レイアウトを変えたときのプラン再利用、エラー原因の保持、TraceContext 縮約木。新しい目標 API はこれが通ってから固定する。</p></div>
   <div class="step"><div class="sn">STEP 3</div><h3>レジストリ生成と削除</h3><p>レジストリから 3 層を生成して旧 API を置き換え、削除する。スナップショットの差分がそのまま退役リストになる。</p></div>
-  <div class="step"><div class="sn">STEP 4</div><h3>policy と規約の同期</h3><p>統一された入口に <code>MaterializationPolicy</code> を付ける。agent-rules と生成文書を同じ PR 群で更新する。</p></div>
+  <div class="step"><div class="sn">STEP 4</div><h3>隠れたコピーの削減と規約の同期</h3><p>入力正規化の診断カウンタを入れ、eager einsum の毎回コピー、rank 3 SVD のギャザー、CUDA の転置ギャザーを減らす。agent-rules と生成文書は同じ PR 群で更新する。</p></div>
 </div>
 
 <section class="col">
