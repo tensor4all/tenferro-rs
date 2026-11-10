@@ -1,0 +1,193 @@
+pub mod tenferro_cpu
+pub use tenferro_cpu::AddOp
+pub use tenferro_cpu::BinaryScalarOp
+pub use tenferro_cpu::BufferPoolStats
+pub use tenferro_cpu::CpuBatchPolicy
+pub use tenferro_cpu::CpuBatchStrategy
+pub use tenferro_cpu::CpuBatchThresholds
+pub use tenferro_cpu::MulOp
+pub use tenferro_cpu::Pool
+pub use tenferro_cpu::PoolBuilder
+pub use tenferro_cpu::SubOp
+pub use tenferro_cpu::faer
+pub use tenferro_cpu::same_variant_pair
+pub use tenferro_cpu::same_variant_unary
+pub use tenferro_cpu::scalar_binary_into
+pub use tenferro_cpu::scalar_fold
+pub use tenferro_cpu::threadteam
+pub mod tenferro_cpu::backend
+#[non_exhaustive] pub enum tenferro_cpu::CpuEngineError
+pub tenferro_cpu::CpuEngineError::Broken
+impl core::clone::Clone for tenferro_cpu::CpuEngineError
+pub fn tenferro_cpu::CpuEngineError::clone(&self) -> tenferro_cpu::CpuEngineError
+impl core::cmp::Eq for tenferro_cpu::CpuEngineError
+impl core::cmp::PartialEq for tenferro_cpu::CpuEngineError
+pub fn tenferro_cpu::CpuEngineError::eq(&self, &tenferro_cpu::CpuEngineError) -> bool
+impl core::error::Error for tenferro_cpu::CpuEngineError
+impl core::fmt::Debug for tenferro_cpu::CpuEngineError
+pub fn tenferro_cpu::CpuEngineError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_cpu::CpuEngineError
+pub fn tenferro_cpu::CpuEngineError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_cpu::CpuEngineError
+impl core::marker::StructuralPartialEq for tenferro_cpu::CpuEngineError
+pub struct tenferro_cpu::CpuEngine
+impl tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::allocation_domain(&self) -> core::option::Option<tenferro_tensor::types::AllocationDomainId>
+pub fn tenferro_cpu::CpuEngine::batch_policy(&self) -> tcontract_exec::batch::BatchPolicy
+pub fn tenferro_cpu::CpuEngine::buffer_pool_cache_stats(&self) -> tenferro_tensor::cache::CacheStats
+pub fn tenferro_cpu::CpuEngine::buffer_pool_len(&self) -> usize
+pub fn tenferro_cpu::CpuEngine::buffer_pool_limit_bytes(&self) -> usize
+pub fn tenferro_cpu::CpuEngine::buffer_pool_stats(&self) -> tenferro_cpu_basic::buffer_pool::BufferPoolStats
+pub fn tenferro_cpu::CpuEngine::exec(&mut self) -> tenferro_tensor::error::Result<tcontract_exec::exec::Exec<'_>>
+pub fn tenferro_cpu::CpuEngine::has_team(&self) -> bool
+pub fn tenferro_cpu::CpuEngine::is_broken(&self) -> bool
+pub fn tenferro_cpu::CpuEngine::new(threadteam::pool::Pool) -> Self
+pub fn tenferro_cpu::CpuEngine::num_threads(&self) -> usize
+pub fn tenferro_cpu::CpuEngine::plan_cache(&self) -> &tenferro_cpu::CpuPlanCache
+pub fn tenferro_cpu::CpuEngine::reset_buffer_pool(&mut self)
+pub fn tenferro_cpu::CpuEngine::serial() -> Self
+pub fn tenferro_cpu::CpuEngine::set_batch_policy(&mut self, tcontract_exec::batch::BatchPolicy) -> tcontract_exec::batch::BatchPolicy
+pub fn tenferro_cpu::CpuEngine::set_buffer_pool_limit_bytes(&mut self, usize)
+pub fn tenferro_cpu::CpuEngine::shared_allocation_domain(&self) -> core::option::Option<&alloc::sync::Arc<dyn tenferro_tensor::types::SharedTensorAllocationDomain>>
+pub fn tenferro_cpu::CpuEngine::with_allocation_domain(self, alloc::sync::Arc<dyn tenferro_tensor::types::SharedTensorAllocationDomain>) -> Self
+pub fn tenferro_cpu::CpuEngine::with_batch_policy(self, tcontract_exec::batch::BatchPolicy) -> Self
+pub fn tenferro_cpu::CpuEngine::with_exec<R>(&mut self, impl core::ops::function::FnOnce(&mut tcontract_exec::exec::Exec<'_>) -> R) -> tenferro_tensor::error::Result<R>
+pub fn tenferro_cpu::CpuEngine::with_plan_cache(self, tenferro_cpu::CpuPlanCache) -> Self
+pub fn tenferro_cpu::CpuEngine::with_runtime_engine_id(self, tenferro_runtime::runtime::identity::EngineId) -> Self
+impl core::fmt::Debug for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl tenferro_runtime::runtime::engine::ExecutionEngine for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::as_any_mut(&mut self) -> &mut dyn core::any::Any
+pub fn tenferro_cpu::CpuEngine::mark_broken(&mut self)
+pub fn tenferro_cpu::CpuEngine::restore_extension_caches(&mut self, tenferro_runtime::extension_cache::ExtensionCacheStore)
+pub fn tenferro_cpu::CpuEngine::take_extension_caches(&mut self) -> tenferro_runtime::extension_cache::ExtensionCacheStore
+pub fn tenferro_cpu::CpuEngine::target(&self) -> tenferro_runtime::runtime::engine::EngineTarget
+impl tenferro_tensor::backend::Engine for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::axpby_read_into_accum(&mut self, tenferro_tensor::backend::ContractionScalar, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::backend::ContractionScalar, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_cpu::CpuEngine::fused_activation_read(&mut self, tenferro_tensor::backend::ActivationOp, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<core::option::Option<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::CpuEngine::gather_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, &tenferro_tensor::config::GatherConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::native_engine(&mut self) -> core::option::Option<tenferro_tensor::native_engine::NativeSessionRef<'_>>
+pub fn tenferro_cpu::CpuEngine::norm_squared_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::softmax_read(&mut self, tenferro_tensor::types::TensorRead<'_>, usize) -> tenferro_tensor::error::Result<core::option::Option<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::CpuEngine::vdot_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::SessionCachedDot for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::dot_general_read_into_accum_cached(&mut self, core::option::Option<usize>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, &tenferro_tensor::config::DotGeneralConfig, tenferro_tensor::backend::DotGeneralAccumulation, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+impl tenferro_tensor::backend::TensorAnalytic for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::cos_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::erf_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::exp_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::expm1_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::log1p_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::log_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::pow_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::rsqrt_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::sin_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::sqrt_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::tanh_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorBuffer for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::reclaim_buffer(&mut self, tenferro_tensor::types::Tensor)
+impl tenferro_tensor::backend::TensorDeviceTransfer for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::download_to_host(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::upload_host_tensor(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorDot for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::dot_general_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, &tenferro_tensor::config::DotGeneralConfig, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_cpu::CpuEngine::dot_general_read_into_accum(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, &tenferro_tensor::config::DotGeneralConfig, tenferro_tensor::backend::DotGeneralAccumulation, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+impl tenferro_tensor::backend::TensorElementwise for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::abs_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::add_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::clamp_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::compare_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, &tenferro_tensor::config::CompareDir) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::conj_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::div_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::elementwise_read_into(&mut self, tenferro_tensor::backend::ElementwiseReadOp, &[tenferro_tensor::types::TensorRead<'_>], tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_cpu::CpuEngine::maximum_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::minimum_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::mul_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::neg_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::rem(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::rem_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::select_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::sign_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::sub_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorFusion for tenferro_cpu::CpuEngine
+impl tenferro_tensor::backend::TensorIndexing for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::concatenate(&mut self, &[&tenferro_tensor::types::Tensor], usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::concatenate_read(&mut self, &[tenferro_tensor::types::TensorRead<'_>], usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::dynamic_slice(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::dynamic_slice_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::dynamic_update_slice(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::dynamic_update_slice_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::gather(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &tenferro_tensor::config::GatherConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::pad(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::config::PadConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::pad_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &tenferro_tensor::config::PadConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::reverse(&mut self, &tenferro_tensor::types::Tensor, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::reverse_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::scatter(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &tenferro_tensor::config::ScatterConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::scatter_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, &tenferro_tensor::config::ScatterConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::slice(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::config::SliceConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::slice_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &tenferro_tensor::config::SliceConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorReduction for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::reduce_max_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::reduce_min_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::reduce_prod_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::reduce_sum_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorStructural for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::broadcast_in_dim_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize], &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::cast(&mut self, &tenferro_tensor::types::Tensor, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::copy_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_cpu::CpuEngine::embed_diagonal(&mut self, &tenferro_tensor::types::Tensor, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::embed_diagonal_read(&mut self, tenferro_tensor::types::TensorRead<'_>, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::extract_diagonal(&mut self, &tenferro_tensor::types::Tensor, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::extract_diagonal_read(&mut self, tenferro_tensor::types::TensorRead<'_>, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::reshape_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::to_contiguous_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::transpose_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::tril(&mut self, &tenferro_tensor::types::Tensor, i64) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::tril_read(&mut self, tenferro_tensor::types::TensorRead<'_>, i64) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::triu(&mut self, &tenferro_tensor::types::Tensor, i64) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::triu_read(&mut self, tenferro_tensor::types::TensorRead<'_>, i64) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::capability::TensorBackendCapability for tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::backend_id(&self) -> tenferro_tensor::capability::BackendId
+pub fn tenferro_cpu::CpuEngine::capabilities(&self) -> &'static [tenferro_tensor::capability::OperationCapability]
+impl<T, R> tenferro_tensor::backend::TensorViewCanonicalization<T, R> for tenferro_cpu::CpuEngine where T: tenferro_tensor::types::TensorScalar + tenferro_cpu_basic::buffer_pool::PoolScalar, R: tenferro_tensor_core::rank::TensorRank, <R as tenferro_tensor_core::rank::TensorRank>::Shape: core::marker::Send + core::marker::Sync, <R as tenferro_tensor_core::rank::TensorRank>::Strides: core::marker::Send + core::marker::Sync
+pub fn tenferro_cpu::CpuEngine::copy_into(&mut self, &tenferro_tensor::types::TypedTensorView<'_, T, R>, &mut tenferro_tensor::types::TypedTensorViewMut<'_, T, R>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_cpu::CpuEngine::to_contiguous(&mut self, &tenferro_tensor::types::TypedTensorView<'_, T, R>) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensor<T, R>>
+pub struct tenferro_cpu::CpuPlanCache
+impl tenferro_cpu::CpuPlanCache
+pub fn tenferro_cpu::CpuPlanCache::clear(&self)
+pub fn tenferro_cpu::CpuPlanCache::clear_indexed(&self)
+pub fn tenferro_cpu::CpuPlanCache::contraction_capacity(&self) -> usize
+pub fn tenferro_cpu::CpuPlanCache::contraction_stats(&self) -> tenferro_tensor::cache::CacheStats
+pub fn tenferro_cpu::CpuPlanCache::indexed_limits(&self) -> tenferro_cpu::IndexedPlanCacheLimits
+pub fn tenferro_cpu::CpuPlanCache::indexed_stats(&self) -> tenferro_tensor::cache::CacheStats
+pub fn tenferro_cpu::CpuPlanCache::new() -> Self
+pub fn tenferro_cpu::CpuPlanCache::set_contraction_capacity(&self, usize)
+pub fn tenferro_cpu::CpuPlanCache::set_indexed_limits(&self, tenferro_cpu::IndexedPlanCacheLimits)
+pub fn tenferro_cpu::CpuPlanCache::shares_with(&self, &Self) -> bool
+pub fn tenferro_cpu::CpuPlanCache::stats(&self) -> tenferro_tensor::cache::CacheStats
+impl core::clone::Clone for tenferro_cpu::CpuPlanCache
+pub fn tenferro_cpu::CpuPlanCache::clone(&self) -> tenferro_cpu::CpuPlanCache
+impl core::default::Default for tenferro_cpu::CpuPlanCache
+pub fn tenferro_cpu::CpuPlanCache::default() -> Self
+impl core::fmt::Debug for tenferro_cpu::CpuPlanCache
+pub fn tenferro_cpu::CpuPlanCache::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_cpu::IndexedPlanCacheLimits
+impl tenferro_cpu::IndexedPlanCacheLimits
+pub const fn tenferro_cpu::IndexedPlanCacheLimits::max_entries(self) -> usize
+pub const fn tenferro_cpu::IndexedPlanCacheLimits::max_retained_bytes(self) -> usize
+pub const fn tenferro_cpu::IndexedPlanCacheLimits::new(usize, usize) -> Self
+impl core::clone::Clone for tenferro_cpu::IndexedPlanCacheLimits
+pub fn tenferro_cpu::IndexedPlanCacheLimits::clone(&self) -> tenferro_cpu::IndexedPlanCacheLimits
+impl core::cmp::Eq for tenferro_cpu::IndexedPlanCacheLimits
+impl core::cmp::PartialEq for tenferro_cpu::IndexedPlanCacheLimits
+pub fn tenferro_cpu::IndexedPlanCacheLimits::eq(&self, &tenferro_cpu::IndexedPlanCacheLimits) -> bool
+impl core::fmt::Debug for tenferro_cpu::IndexedPlanCacheLimits
+pub fn tenferro_cpu::IndexedPlanCacheLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_cpu::IndexedPlanCacheLimits
+impl core::marker::StructuralPartialEq for tenferro_cpu::IndexedPlanCacheLimits
+pub const fn tenferro_cpu::cpu_capabilities() -> &'static [tenferro_tensor::capability::OperationCapability]
+pub fn tenferro_cpu::runtime_engine_id() -> core::result::Result<tenferro_runtime::runtime::identity::EngineId, tenferro_runtime::runtime::error::RuntimeConfigError>
+pub fn tenferro_cpu::runtime_engine_registration(&tenferro_cpu::CpuEngine) -> core::result::Result<tenferro_runtime::runtime::engine_registration::EngineRegistration, tenferro_runtime::runtime::error::RuntimeConfigError>
+pub fn tenferro_cpu::runtime_engine_registration_with_id(&tenferro_cpu::CpuEngine, tenferro_runtime::runtime::identity::EngineId) -> core::result::Result<tenferro_runtime::runtime::engine_registration::EngineRegistration, tenferro_runtime::runtime::error::RuntimeConfigError>
+pub fn tenferro_cpu::runtime_hardware_class() -> core::result::Result<tenferro_runtime::runtime::identity::HardwareClassId, tenferro_runtime::runtime::error::RuntimeConfigError>
+pub fn tenferro_cpu::with_batch_policy<R>(&mut dyn tenferro_tensor::backend::Engine, tcontract_exec::batch::BatchPolicy, impl core::ops::function::FnOnce(&mut dyn tenferro_tensor::backend::Engine) -> R) -> tenferro_tensor::error::Result<R>

@@ -1,0 +1,131 @@
+pub mod tenferro_core_ops
+pub enum tenferro_core_ops::DTypePolicy
+pub tenferro_core_ops::DTypePolicy::AbsToReal
+pub tenferro_core_ops::DTypePolicy::BoolSelect
+pub tenferro_core_ops::DTypePolicy::CompareToBool
+pub tenferro_core_ops::DTypePolicy::Constant
+pub tenferro_core_ops::DTypePolicy::Convert
+pub tenferro_core_ops::DTypePolicy::SameAny
+pub tenferro_core_ops::DTypePolicy::SameFloat
+pub tenferro_core_ops::DTypePolicy::SameFloatOrComplex
+pub tenferro_core_ops::DTypePolicy::SameNumeric
+pub tenferro_core_ops::DTypePolicy::Shape
+impl core::clone::Clone for tenferro_core_ops::DTypePolicy
+pub fn tenferro_core_ops::DTypePolicy::clone(&self) -> tenferro_core_ops::DTypePolicy
+impl core::cmp::Eq for tenferro_core_ops::DTypePolicy
+impl core::cmp::PartialEq for tenferro_core_ops::DTypePolicy
+pub fn tenferro_core_ops::DTypePolicy::eq(&self, &tenferro_core_ops::DTypePolicy) -> bool
+impl core::fmt::Debug for tenferro_core_ops::DTypePolicy
+pub fn tenferro_core_ops::DTypePolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_core_ops::DTypePolicy
+pub fn tenferro_core_ops::DTypePolicy::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_core_ops::DTypePolicy
+impl core::marker::StructuralPartialEq for tenferro_core_ops::DTypePolicy
+pub enum tenferro_core_ops::OpCategory
+pub tenferro_core_ops::OpCategory::Analytic
+pub tenferro_core_ops::OpCategory::Contraction
+pub tenferro_core_ops::OpCategory::Dynamic
+pub tenferro_core_ops::OpCategory::Elementwise
+pub tenferro_core_ops::OpCategory::Host
+pub tenferro_core_ops::OpCategory::Indexing
+pub tenferro_core_ops::OpCategory::Reduction
+pub tenferro_core_ops::OpCategory::Structural
+impl core::clone::Clone for tenferro_core_ops::OpCategory
+pub fn tenferro_core_ops::OpCategory::clone(&self) -> tenferro_core_ops::OpCategory
+impl core::cmp::Eq for tenferro_core_ops::OpCategory
+impl core::cmp::PartialEq for tenferro_core_ops::OpCategory
+pub fn tenferro_core_ops::OpCategory::eq(&self, &tenferro_core_ops::OpCategory) -> bool
+impl core::fmt::Debug for tenferro_core_ops::OpCategory
+pub fn tenferro_core_ops::OpCategory::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_core_ops::OpCategory
+pub fn tenferro_core_ops::OpCategory::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_core_ops::OpCategory
+impl core::marker::StructuralPartialEq for tenferro_core_ops::OpCategory
+pub enum tenferro_core_ops::PrimitiveOpKind
+pub tenferro_core_ops::PrimitiveOpKind::Abs
+pub tenferro_core_ops::PrimitiveOpKind::Add
+pub tenferro_core_ops::PrimitiveOpKind::BroadcastInDim
+pub tenferro_core_ops::PrimitiveOpKind::Clamp
+pub tenferro_core_ops::PrimitiveOpKind::Compare
+pub tenferro_core_ops::PrimitiveOpKind::Concatenate
+pub tenferro_core_ops::PrimitiveOpKind::Conj
+pub tenferro_core_ops::PrimitiveOpKind::Constant
+pub tenferro_core_ops::PrimitiveOpKind::Convert
+pub tenferro_core_ops::PrimitiveOpKind::Cos
+pub tenferro_core_ops::PrimitiveOpKind::Div
+pub tenferro_core_ops::PrimitiveOpKind::DotGeneral
+pub tenferro_core_ops::PrimitiveOpKind::DynamicSlice
+pub tenferro_core_ops::PrimitiveOpKind::DynamicTruncate
+pub tenferro_core_ops::PrimitiveOpKind::DynamicUpdateSlice
+pub tenferro_core_ops::PrimitiveOpKind::EmbedDiag
+pub tenferro_core_ops::PrimitiveOpKind::Erf
+pub tenferro_core_ops::PrimitiveOpKind::Exp
+pub tenferro_core_ops::PrimitiveOpKind::Expm1
+pub tenferro_core_ops::PrimitiveOpKind::ExtractDiag
+pub tenferro_core_ops::PrimitiveOpKind::Gather
+pub tenferro_core_ops::PrimitiveOpKind::GatherDynamicSliceSizes
+pub tenferro_core_ops::PrimitiveOpKind::Log
+pub tenferro_core_ops::PrimitiveOpKind::Log1p
+pub tenferro_core_ops::PrimitiveOpKind::Maximum
+pub tenferro_core_ops::PrimitiveOpKind::Minimum
+pub tenferro_core_ops::PrimitiveOpKind::Mul
+pub tenferro_core_ops::PrimitiveOpKind::Neg
+pub tenferro_core_ops::PrimitiveOpKind::Pad
+pub tenferro_core_ops::PrimitiveOpKind::PadToMatch
+pub tenferro_core_ops::PrimitiveOpKind::Pow
+pub tenferro_core_ops::PrimitiveOpKind::ReduceMax
+pub tenferro_core_ops::PrimitiveOpKind::ReduceMin
+pub tenferro_core_ops::PrimitiveOpKind::ReduceProd
+pub tenferro_core_ops::PrimitiveOpKind::ReduceSum
+pub tenferro_core_ops::PrimitiveOpKind::ReduceSumSquares
+pub tenferro_core_ops::PrimitiveOpKind::Rem
+pub tenferro_core_ops::PrimitiveOpKind::Reshape
+pub tenferro_core_ops::PrimitiveOpKind::Reverse
+pub tenferro_core_ops::PrimitiveOpKind::Rsqrt
+pub tenferro_core_ops::PrimitiveOpKind::Scatter
+pub tenferro_core_ops::PrimitiveOpKind::Select
+pub tenferro_core_ops::PrimitiveOpKind::ShapeOf
+pub tenferro_core_ops::PrimitiveOpKind::Sign
+pub tenferro_core_ops::PrimitiveOpKind::Sin
+pub tenferro_core_ops::PrimitiveOpKind::Slice
+pub tenferro_core_ops::PrimitiveOpKind::Sqrt
+pub tenferro_core_ops::PrimitiveOpKind::Sub
+pub tenferro_core_ops::PrimitiveOpKind::Tanh
+pub tenferro_core_ops::PrimitiveOpKind::Transpose
+pub tenferro_core_ops::PrimitiveOpKind::Tril
+pub tenferro_core_ops::PrimitiveOpKind::Triu
+impl tenferro_core_ops::PrimitiveOpKind
+pub const tenferro_core_ops::PrimitiveOpKind::COUNT: usize
+pub const fn tenferro_core_ops::PrimitiveOpKind::as_index(self) -> usize
+impl core::clone::Clone for tenferro_core_ops::PrimitiveOpKind
+pub fn tenferro_core_ops::PrimitiveOpKind::clone(&self) -> tenferro_core_ops::PrimitiveOpKind
+impl core::cmp::Eq for tenferro_core_ops::PrimitiveOpKind
+impl core::cmp::PartialEq for tenferro_core_ops::PrimitiveOpKind
+pub fn tenferro_core_ops::PrimitiveOpKind::eq(&self, &tenferro_core_ops::PrimitiveOpKind) -> bool
+impl core::fmt::Debug for tenferro_core_ops::PrimitiveOpKind
+pub fn tenferro_core_ops::PrimitiveOpKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_core_ops::PrimitiveOpKind
+pub fn tenferro_core_ops::PrimitiveOpKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_core_ops::PrimitiveOpKind
+impl core::marker::StructuralPartialEq for tenferro_core_ops::PrimitiveOpKind
+pub struct tenferro_core_ops::PrimitiveOpDescriptor
+pub tenferro_core_ops::PrimitiveOpDescriptor::category: tenferro_core_ops::OpCategory
+pub tenferro_core_ops::PrimitiveOpDescriptor::dtype_policy: tenferro_core_ops::DTypePolicy
+pub tenferro_core_ops::PrimitiveOpDescriptor::host_only: bool
+pub tenferro_core_ops::PrimitiveOpDescriptor::kind: tenferro_core_ops::PrimitiveOpKind
+pub tenferro_core_ops::PrimitiveOpDescriptor::max_inputs: u8
+pub tenferro_core_ops::PrimitiveOpDescriptor::min_inputs: u8
+pub tenferro_core_ops::PrimitiveOpDescriptor::name: &'static str
+impl core::clone::Clone for tenferro_core_ops::PrimitiveOpDescriptor
+pub fn tenferro_core_ops::PrimitiveOpDescriptor::clone(&self) -> tenferro_core_ops::PrimitiveOpDescriptor
+impl core::cmp::Eq for tenferro_core_ops::PrimitiveOpDescriptor
+impl core::cmp::PartialEq for tenferro_core_ops::PrimitiveOpDescriptor
+pub fn tenferro_core_ops::PrimitiveOpDescriptor::eq(&self, &tenferro_core_ops::PrimitiveOpDescriptor) -> bool
+impl core::fmt::Debug for tenferro_core_ops::PrimitiveOpDescriptor
+pub fn tenferro_core_ops::PrimitiveOpDescriptor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_core_ops::PrimitiveOpDescriptor
+pub fn tenferro_core_ops::PrimitiveOpDescriptor::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_core_ops::PrimitiveOpDescriptor
+impl core::marker::StructuralPartialEq for tenferro_core_ops::PrimitiveOpDescriptor
+pub fn tenferro_core_ops::all_primitive_descriptors() -> &'static [tenferro_core_ops::PrimitiveOpDescriptor]
+pub fn tenferro_core_ops::descriptor(tenferro_core_ops::PrimitiveOpKind) -> &'static tenferro_core_ops::PrimitiveOpDescriptor

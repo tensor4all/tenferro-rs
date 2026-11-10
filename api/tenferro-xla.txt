@@ -1,0 +1,100 @@
+pub mod tenferro_xla
+pub enum tenferro_xla::Error
+pub tenferro_xla::Error::ExtensionLowering
+pub tenferro_xla::Error::ExtensionLowering::source: tenferro_ops::ext_op::ExtensionLoweringError
+pub tenferro_xla::Error::InvalidProgram
+pub tenferro_xla::Error::InvalidProgram::message: alloc::string::String
+pub tenferro_xla::Error::MissingEnv
+pub tenferro_xla::Error::MissingEnv::var: &'static str
+pub tenferro_xla::Error::NonStaticShape
+pub tenferro_xla::Error::NonStaticShape::axis: usize
+pub tenferro_xla::Error::NonStaticShape::kind: &'static str
+pub tenferro_xla::Error::NonStaticShape::op: &'static str
+pub tenferro_xla::Error::NonStaticShape::output_index: usize
+pub tenferro_xla::Error::PjrtCall
+pub tenferro_xla::Error::PjrtCall::call: &'static str
+pub tenferro_xla::Error::PjrtCall::message: alloc::string::String
+pub tenferro_xla::Error::PjrtFeatureDisabled
+pub tenferro_xla::Error::PjrtPluginNotLoaded
+pub tenferro_xla::Error::PluginLoad
+pub tenferro_xla::Error::PluginLoad::path: std::path::PathBuf
+pub tenferro_xla::Error::PluginLoad::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync + 'static)>
+pub tenferro_xla::Error::Tensor(tenferro_tensor::error::Error)
+pub tenferro_xla::Error::UnsupportedDType
+pub tenferro_xla::Error::UnsupportedDType::context: &'static str
+pub tenferro_xla::Error::UnsupportedDType::dtype: tenferro_tensor_core::DType
+pub tenferro_xla::Error::UnsupportedOp
+pub tenferro_xla::Error::UnsupportedOp::op: &'static str
+pub tenferro_xla::Error::UnsupportedOp::reason: &'static str
+impl tenferro_xla::Error
+pub fn tenferro_xla::Error::kind(&self) -> tenferro_tensor_core::error::ErrorKind
+impl core::convert::From<tenferro_tensor::error::Error> for tenferro_xla::Error
+pub fn tenferro_xla::Error::from(tenferro_tensor::error::Error) -> Self
+impl core::error::Error for tenferro_xla::Error
+pub fn tenferro_xla::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_xla::Error
+pub fn tenferro_xla::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_xla::Error
+pub fn tenferro_xla::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_xla::StableHloModule
+impl tenferro_xla::StableHloModule
+pub fn tenferro_xla::StableHloModule::as_str(&self) -> &str
+pub fn tenferro_xla::StableHloModule::fingerprint(&self) -> tenferro_xla::StableHloModuleFingerprint
+pub fn tenferro_xla::StableHloModule::new(alloc::string::String) -> Self
+impl core::clone::Clone for tenferro_xla::StableHloModule
+pub fn tenferro_xla::StableHloModule::clone(&self) -> tenferro_xla::StableHloModule
+impl core::cmp::Eq for tenferro_xla::StableHloModule
+impl core::cmp::PartialEq for tenferro_xla::StableHloModule
+pub fn tenferro_xla::StableHloModule::eq(&self, &tenferro_xla::StableHloModule) -> bool
+impl core::fmt::Debug for tenferro_xla::StableHloModule
+pub fn tenferro_xla::StableHloModule::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_xla::StableHloModule
+pub struct tenferro_xla::StableHloModuleFingerprint(_)
+impl tenferro_xla::StableHloModuleFingerprint
+pub fn tenferro_xla::StableHloModuleFingerprint::as_bytes(&self) -> &[u8; 32]
+pub fn tenferro_xla::StableHloModuleFingerprint::from_text(&str) -> Self
+pub fn tenferro_xla::StableHloModuleFingerprint::to_hex(&self) -> alloc::string::String
+impl core::clone::Clone for tenferro_xla::StableHloModuleFingerprint
+pub fn tenferro_xla::StableHloModuleFingerprint::clone(&self) -> tenferro_xla::StableHloModuleFingerprint
+impl core::cmp::Eq for tenferro_xla::StableHloModuleFingerprint
+impl core::cmp::PartialEq for tenferro_xla::StableHloModuleFingerprint
+pub fn tenferro_xla::StableHloModuleFingerprint::eq(&self, &tenferro_xla::StableHloModuleFingerprint) -> bool
+impl core::fmt::Debug for tenferro_xla::StableHloModuleFingerprint
+pub fn tenferro_xla::StableHloModuleFingerprint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_xla::StableHloModuleFingerprint
+pub fn tenferro_xla::StableHloModuleFingerprint::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_xla::StableHloModuleFingerprint
+impl core::marker::StructuralPartialEq for tenferro_xla::StableHloModuleFingerprint
+pub struct tenferro_xla::XlaExecutor
+impl tenferro_xla::XlaExecutor
+pub fn tenferro_xla::XlaExecutor::from_env() -> tenferro_xla::Result<Self>
+pub fn tenferro_xla::XlaExecutor::has_loaded_pjrt_plugin(&self) -> bool
+pub fn tenferro_xla::XlaExecutor::lower_compiled_to_stablehlo(&self, &tenferro_runtime::graph::program::CompiledGraph) -> tenferro_xla::Result<tenferro_xla::StableHloModule>
+pub fn tenferro_xla::XlaExecutor::lower_to_stablehlo(&self, &tenferro_runtime::program::semantic::SemanticProgram) -> tenferro_xla::Result<tenferro_xla::StableHloModule>
+pub fn tenferro_xla::XlaExecutor::new(tenferro_xla::XlaExecutorOptions) -> Self
+pub fn tenferro_xla::XlaExecutor::options(&self) -> tenferro_xla::XlaExecutorOptions
+pub fn tenferro_xla::XlaExecutor::run_compiled_many_with_inputs(&self, &tenferro_runtime::graph::program::CompiledGraph, &[&tenferro_tensor::types::Tensor]) -> tenferro_xla::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_xla::XlaExecutor::run_compiled_with_inputs(&self, &tenferro_runtime::graph::program::CompiledGraph, &[&tenferro_tensor::types::Tensor]) -> tenferro_xla::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_xla::XlaExecutor::run_many_with_inputs(&self, &tenferro_runtime::program::semantic::SemanticProgram, &[&tenferro_tensor::types::Tensor]) -> tenferro_xla::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_xla::XlaExecutor::run_with_inputs(&self, &tenferro_runtime::program::semantic::SemanticProgram, &[&tenferro_tensor::types::Tensor]) -> tenferro_xla::Result<tenferro_tensor::types::Tensor>
+impl core::default::Default for tenferro_xla::XlaExecutor
+pub fn tenferro_xla::XlaExecutor::default() -> Self
+impl core::fmt::Debug for tenferro_xla::XlaExecutor
+pub fn tenferro_xla::XlaExecutor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct tenferro_xla::XlaExecutorOptions
+impl core::clone::Clone for tenferro_xla::XlaExecutorOptions
+pub fn tenferro_xla::XlaExecutorOptions::clone(&self) -> tenferro_xla::XlaExecutorOptions
+impl core::cmp::Eq for tenferro_xla::XlaExecutorOptions
+impl core::cmp::PartialEq for tenferro_xla::XlaExecutorOptions
+pub fn tenferro_xla::XlaExecutorOptions::eq(&self, &tenferro_xla::XlaExecutorOptions) -> bool
+impl core::default::Default for tenferro_xla::XlaExecutorOptions
+pub fn tenferro_xla::XlaExecutorOptions::default() -> tenferro_xla::XlaExecutorOptions
+impl core::fmt::Debug for tenferro_xla::XlaExecutorOptions
+pub fn tenferro_xla::XlaExecutorOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_xla::XlaExecutorOptions
+impl core::marker::StructuralPartialEq for tenferro_xla::XlaExecutorOptions
+pub const tenferro_xla::TENFERRO_PJRT_GPU_PLUGIN_ENV: &str
+pub const tenferro_xla::TENFERRO_PJRT_PLUGIN_ENV: &str
+pub fn tenferro_xla::lower_compiled_to_stablehlo(&tenferro_runtime::graph::program::CompiledGraph) -> tenferro_xla::Result<tenferro_xla::StableHloModule>
+pub fn tenferro_xla::lower_to_stablehlo(&tenferro_runtime::program::semantic::SemanticProgram) -> tenferro_xla::Result<tenferro_xla::StableHloModule>
+pub type tenferro_xla::Result<T> = core::result::Result<T, tenferro_xla::Error>

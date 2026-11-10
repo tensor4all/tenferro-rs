@@ -1,0 +1,143 @@
+pub mod tenferro_gpu
+pub mod tenferro_gpu::cuda
+pub use tenferro_gpu::cuda::cudarc
+pub mod tenferro_gpu::cuda::gpu
+pub trait tenferro_gpu::cuda::gpu::Backend: core::marker::Send + 'static
+pub type tenferro_gpu::cuda::gpu::Backend::Allocation: core::marker::Send + 'static
+pub mod tenferro_gpu::cuda::raw
+pub struct tenferro_gpu::cuda::raw::CudaResourceGuard<'s, T>
+impl<T: core::fmt::Debug> core::fmt::Debug for tenferro_gpu::cuda::raw::CudaResourceGuard<'_, T>
+pub fn tenferro_gpu::cuda::raw::CudaResourceGuard<'_, T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T> core::ops::deref::Deref for tenferro_gpu::cuda::raw::CudaResourceGuard<'_, T>
+pub type tenferro_gpu::cuda::raw::CudaResourceGuard<'_, T>::Target = T
+pub fn tenferro_gpu::cuda::raw::CudaResourceGuard<'_, T>::deref(&self) -> &T
+impl<T> core::ops::deref::DerefMut for tenferro_gpu::cuda::raw::CudaResourceGuard<'_, T>
+pub fn tenferro_gpu::cuda::raw::CudaResourceGuard<'_, T>::deref_mut(&mut self) -> &mut T
+#[non_exhaustive] pub enum tenferro_gpu::cuda::CudaDeviceError
+pub tenferro_gpu::cuda::CudaDeviceError::Discovery
+pub tenferro_gpu::cuda::CudaDeviceError::Discovery::operation: &'static str
+pub tenferro_gpu::cuda::CudaDeviceError::Discovery::source: tenferro_tensor::error::BoxError
+pub tenferro_gpu::cuda::CudaDeviceError::Initialization
+pub tenferro_gpu::cuda::CudaDeviceError::Initialization::device: tenferro_gpu::cuda::CudaDeviceId
+pub tenferro_gpu::cuda::CudaDeviceError::Initialization::operation: &'static str
+pub tenferro_gpu::cuda::CudaDeviceError::Initialization::source: tenferro_tensor::error::BoxError
+pub tenferro_gpu::cuda::CudaDeviceError::Unavailable
+pub tenferro_gpu::cuda::CudaDeviceError::Unavailable::discovered: alloc::boxed::Box<[tenferro_gpu::cuda::CudaDeviceInfo]>
+pub tenferro_gpu::cuda::CudaDeviceError::Unavailable::requested: tenferro_gpu::cuda::CudaDeviceId
+impl tenferro_gpu::cuda::CudaDeviceError
+pub fn tenferro_gpu::cuda::CudaDeviceError::device(&self) -> core::option::Option<tenferro_gpu::cuda::CudaDeviceId>
+pub fn tenferro_gpu::cuda::CudaDeviceError::discovered(&self) -> core::option::Option<&[tenferro_gpu::cuda::CudaDeviceInfo]>
+pub fn tenferro_gpu::cuda::CudaDeviceError::operation(&self) -> core::option::Option<&'static str>
+pub fn tenferro_gpu::cuda::CudaDeviceError::requested(&self) -> core::option::Option<tenferro_gpu::cuda::CudaDeviceId>
+impl core::error::Error for tenferro_gpu::cuda::CudaDeviceError
+pub fn tenferro_gpu::cuda::CudaDeviceError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_gpu::cuda::CudaDeviceError
+pub fn tenferro_gpu::cuda::CudaDeviceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_gpu::cuda::CudaDeviceError
+pub fn tenferro_gpu::cuda::CudaDeviceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum tenferro_gpu::cuda::GpuExtensionCapability
+pub tenferro_gpu::cuda::GpuExtensionCapability::NativeModule
+pub tenferro_gpu::cuda::GpuExtensionCapability::PeerCopy
+pub tenferro_gpu::cuda::GpuExtensionCapability::RawStream
+pub tenferro_gpu::cuda::GpuExtensionCapability::RuntimeCompilation
+pub tenferro_gpu::cuda::GpuExtensionCapability::SameDeviceAsyncCopy
+impl core::clone::Clone for tenferro_gpu::cuda::GpuExtensionCapability
+pub fn tenferro_gpu::cuda::GpuExtensionCapability::clone(&self) -> tenferro_gpu::cuda::GpuExtensionCapability
+impl core::cmp::Eq for tenferro_gpu::cuda::GpuExtensionCapability
+impl core::cmp::PartialEq for tenferro_gpu::cuda::GpuExtensionCapability
+pub fn tenferro_gpu::cuda::GpuExtensionCapability::eq(&self, &tenferro_gpu::cuda::GpuExtensionCapability) -> bool
+impl core::fmt::Debug for tenferro_gpu::cuda::GpuExtensionCapability
+pub fn tenferro_gpu::cuda::GpuExtensionCapability::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_gpu::cuda::GpuExtensionCapability
+pub fn tenferro_gpu::cuda::GpuExtensionCapability::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_gpu::cuda::GpuExtensionCapability
+impl core::marker::StructuralPartialEq for tenferro_gpu::cuda::GpuExtensionCapability
+pub struct tenferro_gpu::cuda::CudaComputeCapability
+pub tenferro_gpu::cuda::CudaComputeCapability::major: u32
+pub tenferro_gpu::cuda::CudaComputeCapability::minor: u32
+impl core::clone::Clone for tenferro_gpu::cuda::CudaComputeCapability
+pub fn tenferro_gpu::cuda::CudaComputeCapability::clone(&self) -> tenferro_gpu::cuda::CudaComputeCapability
+impl core::cmp::Eq for tenferro_gpu::cuda::CudaComputeCapability
+impl core::cmp::PartialEq for tenferro_gpu::cuda::CudaComputeCapability
+pub fn tenferro_gpu::cuda::CudaComputeCapability::eq(&self, &tenferro_gpu::cuda::CudaComputeCapability) -> bool
+impl core::fmt::Debug for tenferro_gpu::cuda::CudaComputeCapability
+pub fn tenferro_gpu::cuda::CudaComputeCapability::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_gpu::cuda::CudaComputeCapability
+pub fn tenferro_gpu::cuda::CudaComputeCapability::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_gpu::cuda::CudaComputeCapability
+impl core::marker::StructuralPartialEq for tenferro_gpu::cuda::CudaComputeCapability
+pub struct tenferro_gpu::cuda::CudaDeviceId(_)
+impl tenferro_gpu::cuda::CudaDeviceId
+pub const fn tenferro_gpu::cuda::CudaDeviceId::from_ordinal(u32) -> Self
+pub const fn tenferro_gpu::cuda::CudaDeviceId::ordinal(self) -> u32
+impl core::clone::Clone for tenferro_gpu::cuda::CudaDeviceId
+pub fn tenferro_gpu::cuda::CudaDeviceId::clone(&self) -> tenferro_gpu::cuda::CudaDeviceId
+impl core::cmp::Eq for tenferro_gpu::cuda::CudaDeviceId
+impl core::cmp::Ord for tenferro_gpu::cuda::CudaDeviceId
+pub fn tenferro_gpu::cuda::CudaDeviceId::cmp(&self, &tenferro_gpu::cuda::CudaDeviceId) -> core::cmp::Ordering
+impl core::cmp::PartialEq for tenferro_gpu::cuda::CudaDeviceId
+pub fn tenferro_gpu::cuda::CudaDeviceId::eq(&self, &tenferro_gpu::cuda::CudaDeviceId) -> bool
+impl core::cmp::PartialOrd for tenferro_gpu::cuda::CudaDeviceId
+pub fn tenferro_gpu::cuda::CudaDeviceId::partial_cmp(&self, &tenferro_gpu::cuda::CudaDeviceId) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for tenferro_gpu::cuda::CudaDeviceId
+pub fn tenferro_gpu::cuda::CudaDeviceId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_gpu::cuda::CudaDeviceId
+pub fn tenferro_gpu::cuda::CudaDeviceId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_gpu::cuda::CudaDeviceId
+impl core::marker::StructuralPartialEq for tenferro_gpu::cuda::CudaDeviceId
+pub struct tenferro_gpu::cuda::CudaDeviceInfo
+impl tenferro_gpu::cuda::CudaDeviceInfo
+pub fn tenferro_gpu::cuda::CudaDeviceInfo::compute_capability(&self) -> tenferro_gpu::cuda::CudaComputeCapability
+pub fn tenferro_gpu::cuda::CudaDeviceInfo::id(&self) -> tenferro_gpu::cuda::CudaDeviceId
+pub fn tenferro_gpu::cuda::CudaDeviceInfo::name(&self) -> &str
+pub fn tenferro_gpu::cuda::CudaDeviceInfo::total_memory_bytes(&self) -> u64
+pub fn tenferro_gpu::cuda::CudaDeviceInfo::uuid(&self) -> tenferro_gpu::cuda::CudaDeviceUuid
+impl core::clone::Clone for tenferro_gpu::cuda::CudaDeviceInfo
+pub fn tenferro_gpu::cuda::CudaDeviceInfo::clone(&self) -> tenferro_gpu::cuda::CudaDeviceInfo
+impl core::cmp::Eq for tenferro_gpu::cuda::CudaDeviceInfo
+impl core::cmp::PartialEq for tenferro_gpu::cuda::CudaDeviceInfo
+pub fn tenferro_gpu::cuda::CudaDeviceInfo::eq(&self, &tenferro_gpu::cuda::CudaDeviceInfo) -> bool
+impl core::fmt::Debug for tenferro_gpu::cuda::CudaDeviceInfo
+pub fn tenferro_gpu::cuda::CudaDeviceInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_gpu::cuda::CudaDeviceInfo
+pub struct tenferro_gpu::cuda::CudaDeviceUuid(_)
+impl tenferro_gpu::cuda::CudaDeviceUuid
+pub const fn tenferro_gpu::cuda::CudaDeviceUuid::as_bytes(&self) -> &[u8; 16]
+pub const fn tenferro_gpu::cuda::CudaDeviceUuid::from_bytes([u8; 16]) -> Self
+pub const fn tenferro_gpu::cuda::CudaDeviceUuid::to_bytes(self) -> [u8; 16]
+impl core::clone::Clone for tenferro_gpu::cuda::CudaDeviceUuid
+pub fn tenferro_gpu::cuda::CudaDeviceUuid::clone(&self) -> tenferro_gpu::cuda::CudaDeviceUuid
+impl core::cmp::Eq for tenferro_gpu::cuda::CudaDeviceUuid
+impl core::cmp::Ord for tenferro_gpu::cuda::CudaDeviceUuid
+pub fn tenferro_gpu::cuda::CudaDeviceUuid::cmp(&self, &tenferro_gpu::cuda::CudaDeviceUuid) -> core::cmp::Ordering
+impl core::cmp::PartialEq for tenferro_gpu::cuda::CudaDeviceUuid
+pub fn tenferro_gpu::cuda::CudaDeviceUuid::eq(&self, &tenferro_gpu::cuda::CudaDeviceUuid) -> bool
+impl core::cmp::PartialOrd for tenferro_gpu::cuda::CudaDeviceUuid
+pub fn tenferro_gpu::cuda::CudaDeviceUuid::partial_cmp(&self, &tenferro_gpu::cuda::CudaDeviceUuid) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for tenferro_gpu::cuda::CudaDeviceUuid
+pub fn tenferro_gpu::cuda::CudaDeviceUuid::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_gpu::cuda::CudaDeviceUuid
+pub fn tenferro_gpu::cuda::CudaDeviceUuid::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_gpu::cuda::CudaDeviceUuid
+impl core::marker::StructuralPartialEq for tenferro_gpu::cuda::CudaDeviceUuid
+pub struct tenferro_gpu::cuda::PinnedStagingStats
+pub tenferro_gpu::cuda::PinnedStagingStats::allocations: u64
+pub tenferro_gpu::cuda::PinnedStagingStats::limit_bytes: usize
+pub tenferro_gpu::cuda::PinnedStagingStats::retained_bytes: usize
+impl core::clone::Clone for tenferro_gpu::cuda::PinnedStagingStats
+pub fn tenferro_gpu::cuda::PinnedStagingStats::clone(&self) -> tenferro_gpu::cuda::PinnedStagingStats
+impl core::cmp::Eq for tenferro_gpu::cuda::PinnedStagingStats
+impl core::cmp::PartialEq for tenferro_gpu::cuda::PinnedStagingStats
+pub fn tenferro_gpu::cuda::PinnedStagingStats::eq(&self, &tenferro_gpu::cuda::PinnedStagingStats) -> bool
+impl core::fmt::Debug for tenferro_gpu::cuda::PinnedStagingStats
+pub fn tenferro_gpu::cuda::PinnedStagingStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_gpu::cuda::PinnedStagingStats
+impl core::marker::StructuralPartialEq for tenferro_gpu::cuda::PinnedStagingStats
+pub const tenferro_gpu::cuda::DEFAULT_PINNED_STAGING_LIMIT_BYTES: usize
+pub const fn tenferro_gpu::cuda::cuda_capabilities() -> &'static [tenferro_tensor::capability::OperationCapability]
+pub fn tenferro_gpu::cuda::cuda_devices() -> core::result::Result<alloc::vec::Vec<tenferro_gpu::cuda::CudaDeviceInfo>, tenferro_gpu::cuda::CudaDeviceError>
+pub fn tenferro_gpu::cuda::cuda_runtime_engine_registration(&super::engine::CudaEngine) -> core::result::Result<tenferro_runtime::runtime::engine_registration::EngineRegistration, tenferro_runtime::runtime::error::RuntimeConfigError>
+pub fn tenferro_gpu::cuda::cuda_runtime_hardware_class() -> core::result::Result<tenferro_runtime::runtime::identity::HardwareClassId, tenferro_runtime::runtime::error::RuntimeConfigError>
+pub mod tenferro_gpu::gpu
+pub trait tenferro_gpu::gpu::Backend: core::marker::Send + 'static
+pub type tenferro_gpu::gpu::Backend::Allocation: core::marker::Send + 'static

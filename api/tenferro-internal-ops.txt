@@ -1,0 +1,887 @@
+pub mod tenferro_ops
+pub use tenferro_ops::ExtensionFamilyId
+pub use tenferro_ops::ExtensionShapeContext
+pub use tenferro_ops::ExtensionShapeError
+pub use tenferro_ops::ShapeRelation
+pub use tenferro_ops::config
+pub mod tenferro_ops::ad
+pub mod tenferro_ops::ad::context
+pub enum tenferro_ops::ad::context::MetadataRegistryError
+pub tenferro_ops::ad::context::MetadataRegistryError::LockPoisoned
+impl core::clone::Clone for tenferro_ops::ad::context::MetadataRegistryError
+pub fn tenferro_ops::ad::context::MetadataRegistryError::clone(&self) -> tenferro_ops::ad::context::MetadataRegistryError
+impl core::cmp::Eq for tenferro_ops::ad::context::MetadataRegistryError
+impl core::cmp::PartialEq for tenferro_ops::ad::context::MetadataRegistryError
+pub fn tenferro_ops::ad::context::MetadataRegistryError::eq(&self, &tenferro_ops::ad::context::MetadataRegistryError) -> bool
+impl core::error::Error for tenferro_ops::ad::context::MetadataRegistryError
+impl core::fmt::Debug for tenferro_ops::ad::context::MetadataRegistryError
+pub fn tenferro_ops::ad::context::MetadataRegistryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::ad::context::MetadataRegistryError
+pub fn tenferro_ops::ad::context::MetadataRegistryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::context::MetadataRegistryError
+pub enum tenferro_ops::ad::context::ShapeGuardError
+pub tenferro_ops::ad::context::ShapeGuardError::LocalOutOfBounds
+pub tenferro_ops::ad::context::ShapeGuardError::LocalOutOfBounds::local_id: usize
+pub tenferro_ops::ad::context::ShapeGuardError::LocalWithoutAttachedGraph
+pub tenferro_ops::ad::context::ShapeGuardError::LocalWithoutAttachedGraph::local_id: usize
+pub tenferro_ops::ad::context::ShapeGuardError::MissingMetadata
+pub tenferro_ops::ad::context::ShapeGuardError::MissingMetadata::key: computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>
+pub tenferro_ops::ad::context::ShapeGuardError::NonExactShape
+pub tenferro_ops::ad::context::ShapeGuardError::NonExactShape::key: computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>
+impl core::clone::Clone for tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardError::clone(&self) -> tenferro_ops::ad::context::ShapeGuardError
+impl core::cmp::Eq for tenferro_ops::ad::context::ShapeGuardError
+impl core::cmp::PartialEq for tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardError::eq(&self, &tenferro_ops::ad::context::ShapeGuardError) -> bool
+impl core::error::Error for tenferro_ops::ad::context::ShapeGuardError
+impl core::fmt::Debug for tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::context::ShapeGuardError
+pub struct tenferro_ops::ad::context::ShapeGuard
+pub tenferro_ops::ad::context::ShapeGuard::dim_a: usize
+pub tenferro_ops::ad::context::ShapeGuard::dim_b: usize
+pub tenferro_ops::ad::context::ShapeGuard::ordering: core::cmp::Ordering
+impl core::clone::Clone for tenferro_ops::ad::context::ShapeGuard
+pub fn tenferro_ops::ad::context::ShapeGuard::clone(&self) -> tenferro_ops::ad::context::ShapeGuard
+impl core::cmp::Eq for tenferro_ops::ad::context::ShapeGuard
+impl core::cmp::PartialEq for tenferro_ops::ad::context::ShapeGuard
+pub fn tenferro_ops::ad::context::ShapeGuard::eq(&self, &tenferro_ops::ad::context::ShapeGuard) -> bool
+impl core::fmt::Debug for tenferro_ops::ad::context::ShapeGuard
+pub fn tenferro_ops::ad::context::ShapeGuard::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::context::ShapeGuard
+pub struct tenferro_ops::ad::context::ShapeGuardContext
+impl tenferro_ops::ad::context::ShapeGuardContext
+pub fn tenferro_ops::ad::context::ShapeGuardContext::clear_guards(&mut self)
+pub fn tenferro_ops::ad::context::ShapeGuardContext::dtype_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<tenferro_tensor_core::DType>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::exact_shape_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<core::option::Option<alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>>>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::extents_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<&[tenferro_ops::shape_extent::ShapeExtent<tenferro_ops::sym_dim::SymDim>]>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::guards(&self) -> &[tenferro_ops::ad::context::ShapeGuard]
+pub fn tenferro_ops::ad::context::ShapeGuardContext::is_value_active_in_linearize(&self, &computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>) -> bool
+pub fn tenferro_ops::ad::context::ShapeGuardContext::metadata_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<&tenferro_ops::ad::context::TensorMeta>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::rank_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<usize>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::shape_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::with_global_metadata() -> Self
+pub fn tenferro_ops::ad::context::ShapeGuardContext::with_linearize_active_values(self, alloc::sync::Arc<std::collections::hash::set::HashSet<computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>>>) -> Self
+impl core::clone::Clone for tenferro_ops::ad::context::ShapeGuardContext
+pub fn tenferro_ops::ad::context::ShapeGuardContext::clone(&self) -> tenferro_ops::ad::context::ShapeGuardContext
+impl core::default::Default for tenferro_ops::ad::context::ShapeGuardContext
+pub fn tenferro_ops::ad::context::ShapeGuardContext::default() -> tenferro_ops::ad::context::ShapeGuardContext
+impl core::fmt::Debug for tenferro_ops::ad::context::ShapeGuardContext
+pub fn tenferro_ops::ad::context::ShapeGuardContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ops::ad::context::ShapeGuardFailure
+impl tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::into_typed_source(self) -> tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::typed_source(&self) -> &tenferro_ops::ad::context::ShapeGuardError
+impl core::clone::Clone for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::clone(&self) -> tenferro_ops::ad::context::ShapeGuardFailure
+impl core::cmp::Eq for tenferro_ops::ad::context::ShapeGuardFailure
+impl core::cmp::PartialEq for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::eq(&self, &Self) -> bool
+impl core::convert::From<tenferro_ops::ad::context::ShapeGuardFailure> for tenferro_ops::ad::ADRuleError
+pub fn tenferro_ops::ad::ADRuleError::from(tenferro_ops::ad::context::ShapeGuardFailure) -> Self
+impl core::error::Error for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ops::ad::context::TensorMeta
+pub tenferro_ops::ad::context::TensorMeta::dtype: tenferro_tensor_core::DType
+pub tenferro_ops::ad::context::TensorMeta::extents: alloc::vec::Vec<tenferro_ops::shape_extent::ShapeExtent<tenferro_ops::sym_dim::SymDim>>
+pub tenferro_ops::ad::context::TensorMeta::scalar_identity: core::option::Option<&'static str>
+impl tenferro_ops::ad::context::TensorMeta
+pub fn tenferro_ops::ad::context::TensorMeta::bound_shape(&self) -> core::option::Option<alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>>
+pub fn tenferro_ops::ad::context::TensorMeta::exact(tenferro_tensor_core::DType, alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>) -> Self
+pub fn tenferro_ops::ad::context::TensorMeta::exact_shape(&self) -> core::option::Option<alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>>
+pub fn tenferro_ops::ad::context::TensorMeta::extents(&self) -> &[tenferro_ops::shape_extent::ShapeExtent<tenferro_ops::sym_dim::SymDim>]
+pub fn tenferro_ops::ad::context::TensorMeta::rank(&self) -> usize
+pub const fn tenferro_ops::ad::context::TensorMeta::scalar_identity(&self) -> core::option::Option<&'static str>
+pub fn tenferro_ops::ad::context::TensorMeta::with_extents(tenferro_tensor_core::DType, alloc::vec::Vec<tenferro_ops::shape_extent::ShapeExtent<tenferro_ops::sym_dim::SymDim>>) -> Self
+pub fn tenferro_ops::ad::context::TensorMeta::with_scalar_identity(self, &'static str) -> Self
+impl core::clone::Clone for tenferro_ops::ad::context::TensorMeta
+pub fn tenferro_ops::ad::context::TensorMeta::clone(&self) -> tenferro_ops::ad::context::TensorMeta
+impl core::cmp::Eq for tenferro_ops::ad::context::TensorMeta
+impl core::cmp::PartialEq for tenferro_ops::ad::context::TensorMeta
+pub fn tenferro_ops::ad::context::TensorMeta::eq(&self, &tenferro_ops::ad::context::TensorMeta) -> bool
+impl core::fmt::Debug for tenferro_ops::ad::context::TensorMeta
+pub fn tenferro_ops::ad::context::TensorMeta::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::context::TensorMeta
+pub fn tenferro_ops::ad::context::lookup_global_metadata(&computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>) -> core::result::Result<core::option::Option<tenferro_ops::ad::context::TensorMeta>, tenferro_ops::ad::context::MetadataRegistryError>
+pub type tenferro_ops::ad::context::ShapeGuardResult<T> = core::result::Result<T, tenferro_ops::ad::context::ShapeGuardFailure>
+pub enum tenferro_ops::ad::ADRuleError
+pub tenferro_ops::ad::ADRuleError::InvalidInput
+pub tenferro_ops::ad::ADRuleError::InvalidInput::message: alloc::string::String
+pub tenferro_ops::ad::ADRuleError::InvalidInput::op: alloc::string::String
+pub tenferro_ops::ad::ADRuleError::InvalidInput::rule: tenferro_ops::ad::ADRuleKind
+pub tenferro_ops::ad::ADRuleError::Unsupported
+pub tenferro_ops::ad::ADRuleError::Unsupported::op: alloc::string::String
+pub tenferro_ops::ad::ADRuleError::Unsupported::rule: tenferro_ops::ad::ADRuleKind
+impl tenferro_ops::ad::ADRuleError
+pub fn tenferro_ops::ad::ADRuleError::invalid_input(impl core::convert::Into<alloc::string::String>, tenferro_ops::ad::ADRuleKind, impl core::convert::Into<alloc::string::String>) -> Self
+pub const fn tenferro_ops::ad::ADRuleError::rule(&self) -> tenferro_ops::ad::ADRuleKind
+pub fn tenferro_ops::ad::ADRuleError::unsupported(impl core::convert::Into<alloc::string::String>, tenferro_ops::ad::ADRuleKind) -> Self
+impl core::clone::Clone for tenferro_ops::ad::ADRuleError
+pub fn tenferro_ops::ad::ADRuleError::clone(&self) -> tenferro_ops::ad::ADRuleError
+impl core::cmp::Eq for tenferro_ops::ad::ADRuleError
+impl core::cmp::PartialEq for tenferro_ops::ad::ADRuleError
+pub fn tenferro_ops::ad::ADRuleError::eq(&self, &tenferro_ops::ad::ADRuleError) -> bool
+impl core::convert::From<tenferro_ops::ad::context::ShapeGuardFailure> for tenferro_ops::ad::ADRuleError
+pub fn tenferro_ops::ad::ADRuleError::from(tenferro_ops::ad::context::ShapeGuardFailure) -> Self
+impl core::error::Error for tenferro_ops::ad::ADRuleError
+impl core::fmt::Debug for tenferro_ops::ad::ADRuleError
+pub fn tenferro_ops::ad::ADRuleError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::ad::ADRuleError
+pub fn tenferro_ops::ad::ADRuleError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::ADRuleError
+pub enum tenferro_ops::ad::ADRuleKind
+pub tenferro_ops::ad::ADRuleKind::Jvp
+pub tenferro_ops::ad::ADRuleKind::Transpose
+impl core::clone::Clone for tenferro_ops::ad::ADRuleKind
+pub fn tenferro_ops::ad::ADRuleKind::clone(&self) -> tenferro_ops::ad::ADRuleKind
+impl core::cmp::Eq for tenferro_ops::ad::ADRuleKind
+impl core::cmp::PartialEq for tenferro_ops::ad::ADRuleKind
+pub fn tenferro_ops::ad::ADRuleKind::eq(&self, &tenferro_ops::ad::ADRuleKind) -> bool
+impl core::fmt::Debug for tenferro_ops::ad::ADRuleKind
+pub fn tenferro_ops::ad::ADRuleKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_ops::ad::ADRuleKind
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::ADRuleKind
+pub enum tenferro_ops::ad::PrimitiveTransposeInput<Op: computegraph::traits::GraphOperation>
+pub tenferro_ops::ad::PrimitiveTransposeInput::Linear
+pub tenferro_ops::ad::PrimitiveTransposeInput::Linear::key: computegraph::types::ValueKey<Op>
+pub tenferro_ops::ad::PrimitiveTransposeInput::Linear::primal: core::option::Option<computegraph::types::ValueKey<Op>>
+pub tenferro_ops::ad::PrimitiveTransposeInput::Residual(computegraph::types::ValueKey<Op>)
+impl<Op: computegraph::traits::GraphOperation> tenferro_ops::ad::PrimitiveTransposeInput<Op>
+pub fn tenferro_ops::ad::PrimitiveTransposeInput<Op>::key(&self) -> &computegraph::types::ValueKey<Op>
+impl<Op: core::clone::Clone + computegraph::traits::GraphOperation> core::clone::Clone for tenferro_ops::ad::PrimitiveTransposeInput<Op>
+pub fn tenferro_ops::ad::PrimitiveTransposeInput<Op>::clone(&self) -> tenferro_ops::ad::PrimitiveTransposeInput<Op>
+impl<Op: core::fmt::Debug + computegraph::traits::GraphOperation> core::fmt::Debug for tenferro_ops::ad::PrimitiveTransposeInput<Op>
+pub fn tenferro_ops::ad::PrimitiveTransposeInput<Op>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ops::ad::ResidualSpec
+impl tenferro_ops::ad::ResidualSpec
+pub const fn tenferro_ops::ad::ResidualSpec::all_inputs() -> Self
+pub const fn tenferro_ops::ad::ResidualSpec::all_outputs() -> Self
+pub const fn tenferro_ops::ad::ResidualSpec::declares_input(&self, usize) -> bool
+pub const fn tenferro_ops::ad::ResidualSpec::declares_output(&self, usize) -> bool
+pub const fn tenferro_ops::ad::ResidualSpec::input(usize) -> Self
+pub const fn tenferro_ops::ad::ResidualSpec::is_empty(&self) -> bool
+pub const fn tenferro_ops::ad::ResidualSpec::none() -> Self
+pub const fn tenferro_ops::ad::ResidualSpec::output(usize) -> Self
+pub const fn tenferro_ops::ad::ResidualSpec::with_all_inputs(self) -> Self
+pub const fn tenferro_ops::ad::ResidualSpec::with_all_outputs(self) -> Self
+pub const fn tenferro_ops::ad::ResidualSpec::with_input(self, usize) -> Self
+pub const fn tenferro_ops::ad::ResidualSpec::with_output(self, usize) -> Self
+impl core::clone::Clone for tenferro_ops::ad::ResidualSpec
+pub fn tenferro_ops::ad::ResidualSpec::clone(&self) -> tenferro_ops::ad::ResidualSpec
+impl core::cmp::Eq for tenferro_ops::ad::ResidualSpec
+impl core::cmp::PartialEq for tenferro_ops::ad::ResidualSpec
+pub fn tenferro_ops::ad::ResidualSpec::eq(&self, &tenferro_ops::ad::ResidualSpec) -> bool
+impl core::default::Default for tenferro_ops::ad::ResidualSpec
+pub fn tenferro_ops::ad::ResidualSpec::default() -> tenferro_ops::ad::ResidualSpec
+impl core::fmt::Debug for tenferro_ops::ad::ResidualSpec
+pub fn tenferro_ops::ad::ResidualSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_ops::ad::ResidualSpec
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::ResidualSpec
+pub trait tenferro_ops::ad::PrimitiveRuleBuilder
+pub fn tenferro_ops::ad::PrimitiveRuleBuilder::add_operation(&mut self, tenferro_ops::std_tensor_op::StdTensorOp, alloc::vec::Vec<computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>>, computegraph::types::OperationRole) -> alloc::vec::Vec<computegraph::types::LocalValueId>
+impl tenferro_ops::ad::PrimitiveRuleBuilder for computegraph::graph::GraphBuilder<tenferro_ops::std_tensor_op::StdTensorOp>
+pub fn computegraph::graph::GraphBuilder<tenferro_ops::std_tensor_op::StdTensorOp>::add_operation(&mut self, tenferro_ops::std_tensor_op::StdTensorOp, alloc::vec::Vec<computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>>, computegraph::types::OperationRole) -> alloc::vec::Vec<computegraph::types::LocalValueId>
+pub fn tenferro_ops::ad::primitive_residual_spec(&tenferro_ops::std_tensor_op::StdTensorOp) -> core::option::Option<tenferro_ops::ad::ResidualSpec>
+pub type tenferro_ops::ad::ADRuleResult<T> = core::result::Result<T, tenferro_ops::ad::ADRuleError>
+pub mod tenferro_ops::axis
+pub enum tenferro_ops::axis::AxisError
+pub tenferro_ops::axis::AxisError::Duplicate
+pub tenferro_ops::axis::AxisError::Duplicate::axis: usize
+pub tenferro_ops::axis::AxisError::OutOfBounds
+pub tenferro_ops::axis::AxisError::OutOfBounds::axis: isize
+pub tenferro_ops::axis::AxisError::OutOfBounds::rank: usize
+impl core::clone::Clone for tenferro_ops::axis::AxisError
+pub fn tenferro_ops::axis::AxisError::clone(&self) -> tenferro_ops::axis::AxisError
+impl core::cmp::Eq for tenferro_ops::axis::AxisError
+impl core::cmp::PartialEq for tenferro_ops::axis::AxisError
+pub fn tenferro_ops::axis::AxisError::eq(&self, &tenferro_ops::axis::AxisError) -> bool
+impl core::error::Error for tenferro_ops::axis::AxisError
+impl core::fmt::Debug for tenferro_ops::axis::AxisError
+pub fn tenferro_ops::axis::AxisError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::axis::AxisError
+pub fn tenferro_ops::axis::AxisError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::axis::AxisError
+pub fn tenferro_ops::axis::normalize_axes(&[isize], usize) -> core::result::Result<alloc::vec::Vec<usize>, tenferro_ops::axis::AxisError>
+pub fn tenferro_ops::axis::normalize_axis(isize, usize) -> core::result::Result<usize, tenferro_ops::axis::AxisError>
+pub mod tenferro_ops::broadcast
+pub enum tenferro_ops::broadcast::BroadcastError
+pub tenferro_ops::broadcast::BroadcastError::IncompatibleBinary
+pub tenferro_ops::broadcast::BroadcastError::IncompatibleBinary::lhs: alloc::vec::Vec<usize>
+pub tenferro_ops::broadcast::BroadcastError::IncompatibleBinary::rhs: alloc::vec::Vec<usize>
+pub tenferro_ops::broadcast::BroadcastError::IncompatibleInput
+pub tenferro_ops::broadcast::BroadcastError::IncompatibleInput::input: alloc::vec::Vec<usize>
+pub tenferro_ops::broadcast::BroadcastError::IncompatibleInput::output: alloc::vec::Vec<usize>
+pub tenferro_ops::broadcast::BroadcastError::RankTooLarge
+pub tenferro_ops::broadcast::BroadcastError::RankTooLarge::input: alloc::vec::Vec<usize>
+pub tenferro_ops::broadcast::BroadcastError::RankTooLarge::output: alloc::vec::Vec<usize>
+impl core::clone::Clone for tenferro_ops::broadcast::BroadcastError
+pub fn tenferro_ops::broadcast::BroadcastError::clone(&self) -> tenferro_ops::broadcast::BroadcastError
+impl core::cmp::Eq for tenferro_ops::broadcast::BroadcastError
+impl core::cmp::PartialEq for tenferro_ops::broadcast::BroadcastError
+pub fn tenferro_ops::broadcast::BroadcastError::eq(&self, &tenferro_ops::broadcast::BroadcastError) -> bool
+impl core::error::Error for tenferro_ops::broadcast::BroadcastError
+impl core::fmt::Debug for tenferro_ops::broadcast::BroadcastError
+pub fn tenferro_ops::broadcast::BroadcastError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::broadcast::BroadcastError
+pub fn tenferro_ops::broadcast::BroadcastError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::broadcast::BroadcastError
+pub struct tenferro_ops::broadcast::BroadcastInputPlan
+pub tenferro_ops::broadcast::BroadcastInputPlan::dims: alloc::vec::Vec<usize>
+pub tenferro_ops::broadcast::BroadcastInputPlan::source_shape: alloc::vec::Vec<usize>
+impl core::clone::Clone for tenferro_ops::broadcast::BroadcastInputPlan
+pub fn tenferro_ops::broadcast::BroadcastInputPlan::clone(&self) -> tenferro_ops::broadcast::BroadcastInputPlan
+impl core::cmp::Eq for tenferro_ops::broadcast::BroadcastInputPlan
+impl core::cmp::PartialEq for tenferro_ops::broadcast::BroadcastInputPlan
+pub fn tenferro_ops::broadcast::BroadcastInputPlan::eq(&self, &tenferro_ops::broadcast::BroadcastInputPlan) -> bool
+impl core::fmt::Debug for tenferro_ops::broadcast::BroadcastInputPlan
+pub fn tenferro_ops::broadcast::BroadcastInputPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::broadcast::BroadcastInputPlan
+pub fn tenferro_ops::broadcast::broadcast_error_to_validation(tenferro_ops::broadcast::BroadcastError) -> tenferro_tensor_core::error::ValidationError
+pub fn tenferro_ops::broadcast::broadcast_in_dim_extent_error(&[usize], &[usize], &[usize]) -> core::option::Option<tenferro_ops::broadcast::BroadcastError>
+pub fn tenferro_ops::broadcast::broadcast_input_plan(&[usize], &[usize]) -> core::result::Result<tenferro_ops::broadcast::BroadcastInputPlan, tenferro_ops::broadcast::BroadcastError>
+pub fn tenferro_ops::broadcast::broadcast_shape(&[usize], &[usize]) -> core::result::Result<tenferro_tensor_core::ShapeVec, tenferro_ops::broadcast::BroadcastError>
+pub fn tenferro_ops::broadcast::broadcast_shapes<'a>(impl core::iter::traits::collect::IntoIterator<Item = &'a [usize]>) -> core::result::Result<tenferro_tensor_core::ShapeVec, tenferro_ops::broadcast::BroadcastError>
+pub mod tenferro_ops::dim_expr
+pub enum tenferro_ops::dim_expr::DimExpr
+pub tenferro_ops::dim_expr::DimExpr::Add(alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>, alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>)
+pub tenferro_ops::dim_expr::DimExpr::Const(usize)
+pub tenferro_ops::dim_expr::DimExpr::FloorDiv(alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>, alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>)
+pub tenferro_ops::dim_expr::DimExpr::InputDim
+pub tenferro_ops::dim_expr::DimExpr::InputDim::axis: usize
+pub tenferro_ops::dim_expr::DimExpr::InputDim::input_idx: usize
+pub tenferro_ops::dim_expr::DimExpr::Max(alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>, alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>)
+pub tenferro_ops::dim_expr::DimExpr::Min(alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>, alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>)
+pub tenferro_ops::dim_expr::DimExpr::Mul(alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>, alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>)
+pub tenferro_ops::dim_expr::DimExpr::Sub(alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>, alloc::boxed::Box<tenferro_ops::dim_expr::DimExpr>)
+impl tenferro_ops::dim_expr::DimExpr
+pub fn tenferro_ops::dim_expr::DimExpr::add(Self, Self) -> Self
+pub fn tenferro_ops::dim_expr::DimExpr::constant(usize) -> Self
+pub fn tenferro_ops::dim_expr::DimExpr::eval(&self, &[&[usize]]) -> core::result::Result<usize, tenferro_ops::dim_expr::DimExprEvalError>
+pub fn tenferro_ops::dim_expr::DimExpr::eval_all(&[Self], &[&[usize]]) -> core::result::Result<alloc::vec::Vec<usize>, tenferro_ops::dim_expr::DimExprEvalError>
+pub fn tenferro_ops::dim_expr::DimExpr::floor_div(Self, Self) -> Self
+pub fn tenferro_ops::dim_expr::DimExpr::from_concrete(&[usize]) -> alloc::vec::Vec<Self>
+pub fn tenferro_ops::dim_expr::DimExpr::input_shape(usize, usize) -> alloc::vec::Vec<Self>
+pub fn tenferro_ops::dim_expr::DimExpr::is_const(&self) -> bool
+pub fn tenferro_ops::dim_expr::DimExpr::max(Self, Self) -> Self
+pub fn tenferro_ops::dim_expr::DimExpr::max_input_idx(&self) -> core::option::Option<usize>
+pub fn tenferro_ops::dim_expr::DimExpr::max_input_idx_all(&[Self]) -> core::option::Option<usize>
+pub fn tenferro_ops::dim_expr::DimExpr::min(Self, Self) -> Self
+pub fn tenferro_ops::dim_expr::DimExpr::mul(Self, Self) -> Self
+pub fn tenferro_ops::dim_expr::DimExpr::remap(&self, usize, usize) -> Self
+pub fn tenferro_ops::dim_expr::DimExpr::remap_all(&[Self], usize, usize) -> alloc::vec::Vec<Self>
+pub fn tenferro_ops::dim_expr::DimExpr::sub(Self, Self) -> Self
+impl core::clone::Clone for tenferro_ops::dim_expr::DimExpr
+pub fn tenferro_ops::dim_expr::DimExpr::clone(&self) -> tenferro_ops::dim_expr::DimExpr
+impl core::cmp::Eq for tenferro_ops::dim_expr::DimExpr
+impl core::cmp::PartialEq for tenferro_ops::dim_expr::DimExpr
+pub fn tenferro_ops::dim_expr::DimExpr::eq(&self, &tenferro_ops::dim_expr::DimExpr) -> bool
+impl core::convert::From<&tenferro_ops::dim_expr::DimExpr> for tenferro_ops::dim_expr::DimExpr
+pub fn tenferro_ops::dim_expr::DimExpr::from(&tenferro_ops::dim_expr::DimExpr) -> Self
+impl core::convert::From<usize> for tenferro_ops::dim_expr::DimExpr
+pub fn tenferro_ops::dim_expr::DimExpr::from(usize) -> Self
+impl core::fmt::Debug for tenferro_ops::dim_expr::DimExpr
+pub fn tenferro_ops::dim_expr::DimExpr::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_ops::dim_expr::DimExpr
+pub fn tenferro_ops::dim_expr::DimExpr::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_ops::dim_expr::DimExpr
+pub enum tenferro_ops::dim_expr::DimExprEvalError
+pub tenferro_ops::dim_expr::DimExprEvalError::AddOverflow
+pub tenferro_ops::dim_expr::DimExprEvalError::AddOverflow::lhs: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::AddOverflow::rhs: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::AxisOutOfBounds
+pub tenferro_ops::dim_expr::DimExprEvalError::AxisOutOfBounds::axis: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::AxisOutOfBounds::input_idx: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::AxisOutOfBounds::rank: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::FloorDivByZero
+pub tenferro_ops::dim_expr::DimExprEvalError::FloorDivByZero::lhs: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::FloorDivByZero::rhs: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::InputOutOfBounds
+pub tenferro_ops::dim_expr::DimExprEvalError::InputOutOfBounds::input_count: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::InputOutOfBounds::input_idx: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::MulOverflow
+pub tenferro_ops::dim_expr::DimExprEvalError::MulOverflow::lhs: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::MulOverflow::rhs: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::SubUnderflow
+pub tenferro_ops::dim_expr::DimExprEvalError::SubUnderflow::lhs: usize
+pub tenferro_ops::dim_expr::DimExprEvalError::SubUnderflow::rhs: usize
+impl core::clone::Clone for tenferro_ops::dim_expr::DimExprEvalError
+pub fn tenferro_ops::dim_expr::DimExprEvalError::clone(&self) -> tenferro_ops::dim_expr::DimExprEvalError
+impl core::cmp::Eq for tenferro_ops::dim_expr::DimExprEvalError
+impl core::cmp::PartialEq for tenferro_ops::dim_expr::DimExprEvalError
+pub fn tenferro_ops::dim_expr::DimExprEvalError::eq(&self, &tenferro_ops::dim_expr::DimExprEvalError) -> bool
+impl core::error::Error for tenferro_ops::dim_expr::DimExprEvalError
+impl core::fmt::Debug for tenferro_ops::dim_expr::DimExprEvalError
+pub fn tenferro_ops::dim_expr::DimExprEvalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::dim_expr::DimExprEvalError
+pub fn tenferro_ops::dim_expr::DimExprEvalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::dim_expr::DimExprEvalError
+pub mod tenferro_ops::ext_op
+pub enum tenferro_ops::ext_op::ExtensionAlias
+pub tenferro_ops::ext_op::ExtensionAlias::ExternalAlias
+pub tenferro_ops::ext_op::ExtensionAlias::ExternalAlias::family: &'static str
+pub tenferro_ops::ext_op::ExtensionAlias::ExternalAlias::key: u64
+pub tenferro_ops::ext_op::ExtensionAlias::ExternalAlias::output: usize
+pub tenferro_ops::ext_op::ExtensionAlias::Fresh
+pub tenferro_ops::ext_op::ExtensionAlias::Fresh::output: usize
+pub tenferro_ops::ext_op::ExtensionAlias::MustAlias
+pub tenferro_ops::ext_op::ExtensionAlias::MustAlias::input: usize
+pub tenferro_ops::ext_op::ExtensionAlias::MustAlias::output: usize
+pub tenferro_ops::ext_op::ExtensionAlias::ViewOf
+pub tenferro_ops::ext_op::ExtensionAlias::ViewOf::input: usize
+pub tenferro_ops::ext_op::ExtensionAlias::ViewOf::output: usize
+impl core::clone::Clone for tenferro_ops::ext_op::ExtensionAlias
+pub fn tenferro_ops::ext_op::ExtensionAlias::clone(&self) -> tenferro_ops::ext_op::ExtensionAlias
+impl core::cmp::Eq for tenferro_ops::ext_op::ExtensionAlias
+impl core::cmp::PartialEq for tenferro_ops::ext_op::ExtensionAlias
+pub fn tenferro_ops::ext_op::ExtensionAlias::eq(&self, &tenferro_ops::ext_op::ExtensionAlias) -> bool
+impl core::fmt::Debug for tenferro_ops::ext_op::ExtensionAlias
+pub fn tenferro_ops::ext_op::ExtensionAlias::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_ops::ext_op::ExtensionAlias
+pub fn tenferro_ops::ext_op::ExtensionAlias::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_ops::ext_op::ExtensionAlias
+impl core::marker::StructuralPartialEq for tenferro_ops::ext_op::ExtensionAlias
+pub enum tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>
+pub tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+pub tenferro_ops::ext_op::ExtensionAliasDeclaration::Declared(&'a [tenferro_ops::ext_op::ExtensionAlias])
+pub tenferro_ops::ext_op::ExtensionAliasDeclaration::Undeclared
+impl<'a> core::clone::Clone for tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>
+pub fn tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>::clone(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>
+impl<'a> core::cmp::Eq for tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>
+impl<'a> core::cmp::PartialEq for tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>
+pub fn tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>::eq(&self, &tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>) -> bool
+impl<'a> core::fmt::Debug for tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>
+pub fn tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>
+impl<'a> core::marker::StructuralPartialEq for tenferro_ops::ext_op::ExtensionAliasDeclaration<'a>
+pub enum tenferro_ops::ext_op::ExtensionEffectAccess
+pub tenferro_ops::ext_op::ExtensionEffectAccess::Read
+pub tenferro_ops::ext_op::ExtensionEffectAccess::Write
+impl core::clone::Clone for tenferro_ops::ext_op::ExtensionEffectAccess
+pub fn tenferro_ops::ext_op::ExtensionEffectAccess::clone(&self) -> tenferro_ops::ext_op::ExtensionEffectAccess
+impl core::cmp::Eq for tenferro_ops::ext_op::ExtensionEffectAccess
+impl core::cmp::PartialEq for tenferro_ops::ext_op::ExtensionEffectAccess
+pub fn tenferro_ops::ext_op::ExtensionEffectAccess::eq(&self, &tenferro_ops::ext_op::ExtensionEffectAccess) -> bool
+impl core::fmt::Debug for tenferro_ops::ext_op::ExtensionEffectAccess
+pub fn tenferro_ops::ext_op::ExtensionEffectAccess::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_ops::ext_op::ExtensionEffectAccess
+pub fn tenferro_ops::ext_op::ExtensionEffectAccess::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_ops::ext_op::ExtensionEffectAccess
+impl core::marker::StructuralPartialEq for tenferro_ops::ext_op::ExtensionEffectAccess
+pub enum tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>
+pub tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&'a [tenferro_ops::ext_op::ExtensionEffect])
+pub tenferro_ops::ext_op::ExtensionEffectDeclaration::Undeclared
+impl<'a> core::clone::Clone for tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>
+pub fn tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>::clone(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>
+impl<'a> core::cmp::Eq for tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>
+impl<'a> core::cmp::PartialEq for tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>
+pub fn tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>::eq(&self, &tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>) -> bool
+impl<'a> core::fmt::Debug for tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>
+pub fn tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>
+impl<'a> core::marker::StructuralPartialEq for tenferro_ops::ext_op::ExtensionEffectDeclaration<'a>
+pub enum tenferro_ops::ext_op::ExtensionLoweringError
+pub tenferro_ops::ext_op::ExtensionLoweringError::Message
+pub tenferro_ops::ext_op::ExtensionLoweringError::Message::kind: tenferro_tensor_core::error::ErrorKind
+pub tenferro_ops::ext_op::ExtensionLoweringError::Message::message: alloc::string::String
+pub tenferro_ops::ext_op::ExtensionLoweringError::Source
+pub tenferro_ops::ext_op::ExtensionLoweringError::Source::kind: tenferro_tensor_core::error::ErrorKind
+pub tenferro_ops::ext_op::ExtensionLoweringError::Source::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync + 'static)>
+impl tenferro_ops::ext_op::ExtensionLoweringError
+pub fn tenferro_ops::ext_op::ExtensionLoweringError::from_source<E>(E) -> Self where E: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+pub fn tenferro_ops::ext_op::ExtensionLoweringError::from_source_with_kind<E>(tenferro_tensor_core::error::ErrorKind, E) -> Self where E: core::error::Error + core::marker::Send + core::marker::Sync + 'static
+pub fn tenferro_ops::ext_op::ExtensionLoweringError::kind(&self) -> tenferro_tensor_core::error::ErrorKind
+pub fn tenferro_ops::ext_op::ExtensionLoweringError::new(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn tenferro_ops::ext_op::ExtensionLoweringError::new_with_kind(tenferro_tensor_core::error::ErrorKind, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::error::Error for tenferro_ops::ext_op::ExtensionLoweringError
+pub fn tenferro_ops::ext_op::ExtensionLoweringError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_ops::ext_op::ExtensionLoweringError
+pub fn tenferro_ops::ext_op::ExtensionLoweringError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::ext_op::ExtensionLoweringError
+pub fn tenferro_ops::ext_op::ExtensionLoweringError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_ops::ext_op::ExtensionStandardLowering
+pub tenferro_ops::ext_op::ExtensionStandardLowering::Lowered(alloc::vec::Vec<computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>>)
+pub tenferro_ops::ext_op::ExtensionStandardLowering::Unsupported
+impl core::clone::Clone for tenferro_ops::ext_op::ExtensionStandardLowering
+pub fn tenferro_ops::ext_op::ExtensionStandardLowering::clone(&self) -> tenferro_ops::ext_op::ExtensionStandardLowering
+impl core::cmp::Eq for tenferro_ops::ext_op::ExtensionStandardLowering
+impl core::cmp::PartialEq for tenferro_ops::ext_op::ExtensionStandardLowering
+pub fn tenferro_ops::ext_op::ExtensionStandardLowering::eq(&self, &tenferro_ops::ext_op::ExtensionStandardLowering) -> bool
+impl core::fmt::Debug for tenferro_ops::ext_op::ExtensionStandardLowering
+pub fn tenferro_ops::ext_op::ExtensionStandardLowering::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::ext_op::ExtensionStandardLowering
+pub struct tenferro_ops::ext_op::ExtensionEffect
+pub tenferro_ops::ext_op::ExtensionEffect::access: tenferro_ops::ext_op::ExtensionEffectAccess
+pub tenferro_ops::ext_op::ExtensionEffect::family: &'static str
+pub tenferro_ops::ext_op::ExtensionEffect::key: u64
+impl core::clone::Clone for tenferro_ops::ext_op::ExtensionEffect
+pub fn tenferro_ops::ext_op::ExtensionEffect::clone(&self) -> tenferro_ops::ext_op::ExtensionEffect
+impl core::cmp::Eq for tenferro_ops::ext_op::ExtensionEffect
+impl core::cmp::PartialEq for tenferro_ops::ext_op::ExtensionEffect
+pub fn tenferro_ops::ext_op::ExtensionEffect::eq(&self, &tenferro_ops::ext_op::ExtensionEffect) -> bool
+impl core::fmt::Debug for tenferro_ops::ext_op::ExtensionEffect
+pub fn tenferro_ops::ext_op::ExtensionEffect::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_ops::ext_op::ExtensionEffect
+pub fn tenferro_ops::ext_op::ExtensionEffect::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_ops::ext_op::ExtensionEffect
+impl core::marker::StructuralPartialEq for tenferro_ops::ext_op::ExtensionEffect
+pub trait tenferro_ops::ext_op::ExtensionOp: core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static
+pub fn tenferro_ops::ext_op::ExtensionOp::as_any(&self) -> &dyn core::any::Any
+pub fn tenferro_ops::ext_op::ExtensionOp::clone_arc(&self) -> alloc::sync::Arc<dyn tenferro_ops::ext_op::ExtensionOp>
+pub fn tenferro_ops::ext_op::ExtensionOp::family_id(&self) -> &'static str
+pub fn tenferro_ops::ext_op::ExtensionOp::infer_output_meta(&self, &mut ExtensionShapeContext<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<(tenferro_tensor_core::DType, alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>)>>
+pub fn tenferro_ops::ext_op::ExtensionOp::input_count(&self) -> usize
+pub fn tenferro_ops::ext_op::ExtensionOp::lower_to_standard_ops(&self, &mut computegraph::graph::GraphBuilder<tenferro_ops::std_tensor_op::StdTensorOp>, &[computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>], &[tenferro_tensor_core::DType], &[&[tenferro_ops::sym_dim::SymDim]]) -> tenferro_ops::ext_op::ExtensionLoweringResult
+pub fn tenferro_ops::ext_op::ExtensionOp::output_count(&self) -> usize
+pub fn tenferro_ops::ext_op::ExtensionOp::payload_eq(&self, &dyn tenferro_ops::ext_op::ExtensionOp) -> bool
+pub fn tenferro_ops::ext_op::ExtensionOp::payload_hash(&self, &mut dyn core::hash::Hasher)
+pub fn tenferro_ops::ext_op::ExtensionOp::prune_outputs(&self, &[bool]) -> core::option::Option<alloc::sync::Arc<dyn tenferro_ops::ext_op::ExtensionOp>>
+pub fn tenferro_ops::ext_op::ExtensionOp::scalar_identity(&self) -> core::option::Option<&'static str>
+pub fn tenferro_ops::ext_op::ExtensionOp::semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_>
+pub fn tenferro_ops::ext_op::ExtensionOp::semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_>
+pub type tenferro_ops::ext_op::ExtensionLoweringResult = core::result::Result<tenferro_ops::ext_op::ExtensionStandardLowering, tenferro_ops::ext_op::ExtensionLoweringError>
+pub mod tenferro_ops::input_key
+pub enum tenferro_ops::input_key::TensorInputKey
+pub tenferro_ops::input_key::TensorInputKey::Tangent
+pub tenferro_ops::input_key::TensorInputKey::Tangent::of: alloc::boxed::Box<tenferro_ops::input_key::TensorInputKey>
+pub tenferro_ops::input_key::TensorInputKey::Tangent::pass: u64
+pub tenferro_ops::input_key::TensorInputKey::User
+pub tenferro_ops::input_key::TensorInputKey::User::id: u64
+impl tenferro_ops::input_key::TensorInputKey
+pub fn tenferro_ops::input_key::TensorInputKey::is_tangent(&self) -> bool
+pub fn tenferro_ops::input_key::TensorInputKey::primal_root(&self) -> &Self
+pub fn tenferro_ops::input_key::TensorInputKey::tangent_of(&self, u64) -> Self
+impl core::clone::Clone for tenferro_ops::input_key::TensorInputKey
+pub fn tenferro_ops::input_key::TensorInputKey::clone(&self) -> tenferro_ops::input_key::TensorInputKey
+impl core::cmp::Eq for tenferro_ops::input_key::TensorInputKey
+impl core::cmp::PartialEq for tenferro_ops::input_key::TensorInputKey
+pub fn tenferro_ops::input_key::TensorInputKey::eq(&self, &tenferro_ops::input_key::TensorInputKey) -> bool
+impl core::fmt::Debug for tenferro_ops::input_key::TensorInputKey
+pub fn tenferro_ops::input_key::TensorInputKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_ops::input_key::TensorInputKey
+pub fn tenferro_ops::input_key::TensorInputKey::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_ops::input_key::TensorInputKey
+pub mod tenferro_ops::reduction
+pub enum tenferro_ops::reduction::ReductionShapeError
+pub tenferro_ops::reduction::ReductionShapeError::AxisOutOfBounds
+pub tenferro_ops::reduction::ReductionShapeError::AxisOutOfBounds::axis: usize
+pub tenferro_ops::reduction::ReductionShapeError::AxisOutOfBounds::rank: usize
+pub tenferro_ops::reduction::ReductionShapeError::DuplicateAxis
+pub tenferro_ops::reduction::ReductionShapeError::DuplicateAxis::axis: usize
+impl core::clone::Clone for tenferro_ops::reduction::ReductionShapeError
+pub fn tenferro_ops::reduction::ReductionShapeError::clone(&self) -> tenferro_ops::reduction::ReductionShapeError
+impl core::cmp::Eq for tenferro_ops::reduction::ReductionShapeError
+impl core::cmp::PartialEq for tenferro_ops::reduction::ReductionShapeError
+pub fn tenferro_ops::reduction::ReductionShapeError::eq(&self, &tenferro_ops::reduction::ReductionShapeError) -> bool
+impl core::error::Error for tenferro_ops::reduction::ReductionShapeError
+impl core::fmt::Debug for tenferro_ops::reduction::ReductionShapeError
+pub fn tenferro_ops::reduction::ReductionShapeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::reduction::ReductionShapeError
+pub fn tenferro_ops::reduction::ReductionShapeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::reduction::ReductionShapeError
+pub fn tenferro_ops::reduction::reduced_shape(&[usize], &[usize], bool) -> core::result::Result<alloc::vec::Vec<usize>, tenferro_ops::reduction::ReductionShapeError>
+pub mod tenferro_ops::shape_extent
+pub enum tenferro_ops::shape_extent::ShapeExtent<D>
+pub tenferro_ops::shape_extent::ShapeExtent::Exact(D)
+pub tenferro_ops::shape_extent::ShapeExtent::Unknown
+pub tenferro_ops::shape_extent::ShapeExtent::UpperBound(D)
+impl<D> tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::as_exact(&self) -> core::option::Option<&D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::bound_expr(&self) -> core::option::Option<&D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::exact(D) -> Self
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::is_exact(&self) -> bool
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::map<E>(self, impl core::ops::function::FnOnce(D) -> E) -> tenferro_ops::shape_extent::ShapeExtent<E>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::unknown() -> Self
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::upper_bound(D) -> Self
+impl<D: core::clone::Clone> core::clone::Clone for tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::clone(&self) -> tenferro_ops::shape_extent::ShapeExtent<D>
+impl<D: core::cmp::Eq> core::cmp::Eq for tenferro_ops::shape_extent::ShapeExtent<D>
+impl<D: core::cmp::PartialEq> core::cmp::PartialEq for tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::eq(&self, &tenferro_ops::shape_extent::ShapeExtent<D>) -> bool
+impl<D: core::cmp::PartialEq> core::marker::StructuralPartialEq for tenferro_ops::shape_extent::ShapeExtent<D>
+impl<D: core::fmt::Debug> core::fmt::Debug for tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<D: core::hash::Hash> core::hash::Hash for tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::hash<__H: core::hash::Hasher>(&self, &mut __H)
+pub mod tenferro_ops::std_tensor_op
+pub enum tenferro_ops::std_tensor_op::StdTensorOp
+pub tenferro_ops::std_tensor_op::StdTensorOp::Abs
+pub tenferro_ops::std_tensor_op::StdTensorOp::Add
+pub tenferro_ops::std_tensor_op::StdTensorOp::BroadcastInDim
+pub tenferro_ops::std_tensor_op::StdTensorOp::BroadcastInDim::dims: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::BroadcastInDim::shape: alloc::vec::Vec<tenferro_ops::dim_expr::DimExpr>
+pub tenferro_ops::std_tensor_op::StdTensorOp::Clamp
+pub tenferro_ops::std_tensor_op::StdTensorOp::Compare(tenferro_tensor::config::CompareDir)
+pub tenferro_ops::std_tensor_op::StdTensorOp::Concatenate
+pub tenferro_ops::std_tensor_op::StdTensorOp::Concatenate::axis: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::Concatenate::input_count: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::Conj
+pub tenferro_ops::std_tensor_op::StdTensorOp::Constant
+pub tenferro_ops::std_tensor_op::StdTensorOp::Constant::bytes: alloc::vec::Vec<u8>
+pub tenferro_ops::std_tensor_op::StdTensorOp::Constant::dtype: tenferro_tensor_core::DType
+pub tenferro_ops::std_tensor_op::StdTensorOp::Convert
+pub tenferro_ops::std_tensor_op::StdTensorOp::Convert::from: tenferro_tensor_core::DType
+pub tenferro_ops::std_tensor_op::StdTensorOp::Convert::to: tenferro_tensor_core::DType
+pub tenferro_ops::std_tensor_op::StdTensorOp::Cos
+pub tenferro_ops::std_tensor_op::StdTensorOp::Div
+pub tenferro_ops::std_tensor_op::StdTensorOp::DotGeneral
+pub tenferro_ops::std_tensor_op::StdTensorOp::DotGeneral::config: tenferro_tensor::config::DotGeneralConfig
+pub tenferro_ops::std_tensor_op::StdTensorOp::DynamicSlice
+pub tenferro_ops::std_tensor_op::StdTensorOp::DynamicSlice::slice_sizes: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::DynamicTruncate
+pub tenferro_ops::std_tensor_op::StdTensorOp::DynamicTruncate::axis: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::DynamicUpdateSlice
+pub tenferro_ops::std_tensor_op::StdTensorOp::EmbedDiag
+pub tenferro_ops::std_tensor_op::StdTensorOp::EmbedDiag::axis_a: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::EmbedDiag::axis_b: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::Erf
+pub tenferro_ops::std_tensor_op::StdTensorOp::Exp
+pub tenferro_ops::std_tensor_op::StdTensorOp::Expm1
+pub tenferro_ops::std_tensor_op::StdTensorOp::Extension(alloc::sync::Arc<dyn tenferro_ops::ext_op::ExtensionOp>)
+pub tenferro_ops::std_tensor_op::StdTensorOp::ExtractDiag
+pub tenferro_ops::std_tensor_op::StdTensorOp::ExtractDiag::axis_a: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::ExtractDiag::axis_b: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::Gather(tenferro_tensor::config::GatherConfig)
+pub tenferro_ops::std_tensor_op::StdTensorOp::GatherDynamicSliceSizes
+pub tenferro_ops::std_tensor_op::StdTensorOp::GatherDynamicSliceSizes::collapsed_slice_dims: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::GatherDynamicSliceSizes::index_vector_dim: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::GatherDynamicSliceSizes::offset_dims: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::GatherDynamicSliceSizes::slice_sizes: alloc::vec::Vec<tenferro_ops::dim_expr::DimExpr>
+pub tenferro_ops::std_tensor_op::StdTensorOp::GatherDynamicSliceSizes::start_index_map: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::Log
+pub tenferro_ops::std_tensor_op::StdTensorOp::Log1p
+pub tenferro_ops::std_tensor_op::StdTensorOp::Maximum
+pub tenferro_ops::std_tensor_op::StdTensorOp::Minimum
+pub tenferro_ops::std_tensor_op::StdTensorOp::Mul
+pub tenferro_ops::std_tensor_op::StdTensorOp::Neg
+pub tenferro_ops::std_tensor_op::StdTensorOp::Pad(tenferro_tensor::config::PadConfig)
+pub tenferro_ops::std_tensor_op::StdTensorOp::PadToMatch
+pub tenferro_ops::std_tensor_op::StdTensorOp::PadToMatch::axis: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::Pow
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceMax
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceMax::axes: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceMin
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceMin::axes: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceProd
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceProd::axes: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceSum
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceSum::axes: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceSumSquares
+pub tenferro_ops::std_tensor_op::StdTensorOp::ReduceSumSquares::axes: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::Rem
+pub tenferro_ops::std_tensor_op::StdTensorOp::Reshape
+pub tenferro_ops::std_tensor_op::StdTensorOp::Reshape::to_shape: alloc::vec::Vec<tenferro_ops::dim_expr::DimExpr>
+pub tenferro_ops::std_tensor_op::StdTensorOp::Reverse
+pub tenferro_ops::std_tensor_op::StdTensorOp::Reverse::axes: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::Rsqrt
+pub tenferro_ops::std_tensor_op::StdTensorOp::Scatter(tenferro_tensor::config::ScatterConfig)
+pub tenferro_ops::std_tensor_op::StdTensorOp::Select
+pub tenferro_ops::std_tensor_op::StdTensorOp::ShapeOf
+pub tenferro_ops::std_tensor_op::StdTensorOp::ShapeOf::axis: usize
+pub tenferro_ops::std_tensor_op::StdTensorOp::Sign
+pub tenferro_ops::std_tensor_op::StdTensorOp::Sin
+pub tenferro_ops::std_tensor_op::StdTensorOp::Slice(tenferro_tensor::config::SliceConfig)
+pub tenferro_ops::std_tensor_op::StdTensorOp::Sqrt
+pub tenferro_ops::std_tensor_op::StdTensorOp::Sub
+pub tenferro_ops::std_tensor_op::StdTensorOp::Tanh
+pub tenferro_ops::std_tensor_op::StdTensorOp::Transpose
+pub tenferro_ops::std_tensor_op::StdTensorOp::Transpose::perm: alloc::vec::Vec<usize>
+pub tenferro_ops::std_tensor_op::StdTensorOp::Tril
+pub tenferro_ops::std_tensor_op::StdTensorOp::Tril::k: i64
+pub tenferro_ops::std_tensor_op::StdTensorOp::Triu
+pub tenferro_ops::std_tensor_op::StdTensorOp::Triu::k: i64
+impl tenferro_ops::std_tensor_op::StdTensorOp
+pub fn tenferro_ops::std_tensor_op::StdTensorOp::constant<T: tenferro_ops::std_tensor_op::ConstantScalar>(T) -> Self
+impl tenferro_ops::std_tensor_op::StdTensorOp
+pub fn tenferro_ops::std_tensor_op::StdTensorOp::primitive_kind(&self) -> core::option::Option<tenferro_core_ops::catalog::PrimitiveOpKind>
+impl computegraph::traits::GraphOperation for tenferro_ops::std_tensor_op::StdTensorOp
+pub type tenferro_ops::std_tensor_op::StdTensorOp::Context = ()
+pub type tenferro_ops::std_tensor_op::StdTensorOp::InputKey = tenferro_ops::input_key::TensorInputKey
+pub type tenferro_ops::std_tensor_op::StdTensorOp::Operand = ()
+pub fn tenferro_ops::std_tensor_op::StdTensorOp::input_count(&self) -> usize
+pub fn tenferro_ops::std_tensor_op::StdTensorOp::output_count(&self) -> usize
+impl core::clone::Clone for tenferro_ops::std_tensor_op::StdTensorOp
+pub fn tenferro_ops::std_tensor_op::StdTensorOp::clone(&self) -> tenferro_ops::std_tensor_op::StdTensorOp
+impl core::cmp::Eq for tenferro_ops::std_tensor_op::StdTensorOp
+impl core::cmp::PartialEq for tenferro_ops::std_tensor_op::StdTensorOp
+pub fn tenferro_ops::std_tensor_op::StdTensorOp::eq(&self, &Self) -> bool
+impl core::fmt::Debug for tenferro_ops::std_tensor_op::StdTensorOp
+pub fn tenferro_ops::std_tensor_op::StdTensorOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_ops::std_tensor_op::StdTensorOp
+pub fn tenferro_ops::std_tensor_op::StdTensorOp::hash<H: core::hash::Hasher>(&self, &mut H)
+pub trait tenferro_ops::std_tensor_op::ConstantScalar: tenferro_tensor::types::TensorScalar + tenferro_ops::std_tensor_op::private::Sealed
+pub fn tenferro_ops::std_tensor_op::ConstantScalar::constant_bytes(self) -> alloc::vec::Vec<u8>
+impl tenferro_ops::std_tensor_op::ConstantScalar for bool
+pub fn bool::constant_bytes(self) -> alloc::vec::Vec<u8>
+impl tenferro_ops::std_tensor_op::ConstantScalar for f32
+pub fn f32::constant_bytes(self) -> alloc::vec::Vec<u8>
+impl tenferro_ops::std_tensor_op::ConstantScalar for f64
+pub fn f64::constant_bytes(self) -> alloc::vec::Vec<u8>
+impl tenferro_ops::std_tensor_op::ConstantScalar for i32
+pub fn i32::constant_bytes(self) -> alloc::vec::Vec<u8>
+impl tenferro_ops::std_tensor_op::ConstantScalar for i64
+pub fn i64::constant_bytes(self) -> alloc::vec::Vec<u8>
+impl tenferro_ops::std_tensor_op::ConstantScalar for num_complex::Complex32
+pub fn num_complex::Complex32::constant_bytes(self) -> alloc::vec::Vec<u8>
+impl tenferro_ops::std_tensor_op::ConstantScalar for num_complex::Complex64
+pub fn num_complex::Complex64::constant_bytes(self) -> alloc::vec::Vec<u8>
+pub mod tenferro_ops::sym_dim
+pub struct tenferro_ops::sym_dim::SymDim(_)
+impl tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::max(self, impl core::convert::Into<tenferro_ops::sym_dim::SymDim>) -> Self
+pub fn tenferro_ops::sym_dim::SymDim::min(self, impl core::convert::Into<tenferro_ops::sym_dim::SymDim>) -> Self
+pub fn tenferro_ops::sym_dim::SymDim::referenced_tensor_ids(&self) -> alloc::vec::Vec<u64>
+impl core::clone::Clone for tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::clone(&self) -> tenferro_ops::sym_dim::SymDim
+impl core::cmp::Eq for tenferro_ops::sym_dim::SymDim
+impl core::cmp::PartialEq for tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::eq(&self, &tenferro_ops::sym_dim::SymDim) -> bool
+impl core::convert::From<usize> for tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::from(usize) -> Self
+impl core::fmt::Debug for tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::sym_dim::SymDim
+impl core::ops::arith::Add for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::add(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Add<tenferro_ops::sym_dim::SymDim> for usize
+pub type usize::Output = tenferro_ops::sym_dim::SymDim
+pub fn usize::add(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Add<usize> for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::add(self, usize) -> Self::Output
+impl core::ops::arith::Div for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::div(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Div<tenferro_ops::sym_dim::SymDim> for usize
+pub type usize::Output = tenferro_ops::sym_dim::SymDim
+pub fn usize::div(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Div<usize> for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::div(self, usize) -> Self::Output
+impl core::ops::arith::Mul for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::mul(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Mul<tenferro_ops::sym_dim::SymDim> for usize
+pub type usize::Output = tenferro_ops::sym_dim::SymDim
+pub fn usize::mul(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Mul<usize> for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::mul(self, usize) -> Self::Output
+impl core::ops::arith::Sub for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::sub(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Sub<tenferro_ops::sym_dim::SymDim> for usize
+pub type usize::Output = tenferro_ops::sym_dim::SymDim
+pub fn usize::sub(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Sub<usize> for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::sub(self, usize) -> Self::Output
+pub struct tenferro_ops::sym_dim::SymDimConversionError
+pub tenferro_ops::sym_dim::SymDimConversionError::tensor_id: u64
+impl core::clone::Clone for tenferro_ops::sym_dim::SymDimConversionError
+pub fn tenferro_ops::sym_dim::SymDimConversionError::clone(&self) -> tenferro_ops::sym_dim::SymDimConversionError
+impl core::cmp::Eq for tenferro_ops::sym_dim::SymDimConversionError
+impl core::cmp::PartialEq for tenferro_ops::sym_dim::SymDimConversionError
+pub fn tenferro_ops::sym_dim::SymDimConversionError::eq(&self, &tenferro_ops::sym_dim::SymDimConversionError) -> bool
+impl core::error::Error for tenferro_ops::sym_dim::SymDimConversionError
+impl core::fmt::Debug for tenferro_ops::sym_dim::SymDimConversionError
+pub fn tenferro_ops::sym_dim::SymDimConversionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::sym_dim::SymDimConversionError
+pub fn tenferro_ops::sym_dim::SymDimConversionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::sym_dim::SymDimConversionError
+pub enum tenferro_ops::ShapeExtent<D>
+pub tenferro_ops::ShapeExtent::Exact(D)
+pub tenferro_ops::ShapeExtent::Unknown
+pub tenferro_ops::ShapeExtent::UpperBound(D)
+impl<D> tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::as_exact(&self) -> core::option::Option<&D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::bound_expr(&self) -> core::option::Option<&D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::exact(D) -> Self
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::is_exact(&self) -> bool
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::map<E>(self, impl core::ops::function::FnOnce(D) -> E) -> tenferro_ops::shape_extent::ShapeExtent<E>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::unknown() -> Self
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::upper_bound(D) -> Self
+impl<D: core::clone::Clone> core::clone::Clone for tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::clone(&self) -> tenferro_ops::shape_extent::ShapeExtent<D>
+impl<D: core::cmp::Eq> core::cmp::Eq for tenferro_ops::shape_extent::ShapeExtent<D>
+impl<D: core::cmp::PartialEq> core::cmp::PartialEq for tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::eq(&self, &tenferro_ops::shape_extent::ShapeExtent<D>) -> bool
+impl<D: core::cmp::PartialEq> core::marker::StructuralPartialEq for tenferro_ops::shape_extent::ShapeExtent<D>
+impl<D: core::fmt::Debug> core::fmt::Debug for tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<D: core::hash::Hash> core::hash::Hash for tenferro_ops::shape_extent::ShapeExtent<D>
+pub fn tenferro_ops::shape_extent::ShapeExtent<D>::hash<__H: core::hash::Hasher>(&self, &mut __H)
+pub enum tenferro_ops::ShapeGuardError
+pub tenferro_ops::ShapeGuardError::LocalOutOfBounds
+pub tenferro_ops::ShapeGuardError::LocalOutOfBounds::local_id: usize
+pub tenferro_ops::ShapeGuardError::LocalWithoutAttachedGraph
+pub tenferro_ops::ShapeGuardError::LocalWithoutAttachedGraph::local_id: usize
+pub tenferro_ops::ShapeGuardError::MissingMetadata
+pub tenferro_ops::ShapeGuardError::MissingMetadata::key: computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>
+pub tenferro_ops::ShapeGuardError::NonExactShape
+pub tenferro_ops::ShapeGuardError::NonExactShape::key: computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>
+impl core::clone::Clone for tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardError::clone(&self) -> tenferro_ops::ad::context::ShapeGuardError
+impl core::cmp::Eq for tenferro_ops::ad::context::ShapeGuardError
+impl core::cmp::PartialEq for tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardError::eq(&self, &tenferro_ops::ad::context::ShapeGuardError) -> bool
+impl core::error::Error for tenferro_ops::ad::context::ShapeGuardError
+impl core::fmt::Debug for tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::context::ShapeGuardError
+pub struct tenferro_ops::ShapeGuard
+pub tenferro_ops::ShapeGuard::dim_a: usize
+pub tenferro_ops::ShapeGuard::dim_b: usize
+pub tenferro_ops::ShapeGuard::ordering: core::cmp::Ordering
+impl core::clone::Clone for tenferro_ops::ad::context::ShapeGuard
+pub fn tenferro_ops::ad::context::ShapeGuard::clone(&self) -> tenferro_ops::ad::context::ShapeGuard
+impl core::cmp::Eq for tenferro_ops::ad::context::ShapeGuard
+impl core::cmp::PartialEq for tenferro_ops::ad::context::ShapeGuard
+pub fn tenferro_ops::ad::context::ShapeGuard::eq(&self, &tenferro_ops::ad::context::ShapeGuard) -> bool
+impl core::fmt::Debug for tenferro_ops::ad::context::ShapeGuard
+pub fn tenferro_ops::ad::context::ShapeGuard::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::context::ShapeGuard
+pub struct tenferro_ops::ShapeGuardContext
+impl tenferro_ops::ad::context::ShapeGuardContext
+pub fn tenferro_ops::ad::context::ShapeGuardContext::clear_guards(&mut self)
+pub fn tenferro_ops::ad::context::ShapeGuardContext::dtype_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<tenferro_tensor_core::DType>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::exact_shape_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<core::option::Option<alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>>>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::extents_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<&[tenferro_ops::shape_extent::ShapeExtent<tenferro_ops::sym_dim::SymDim>]>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::guards(&self) -> &[tenferro_ops::ad::context::ShapeGuard]
+pub fn tenferro_ops::ad::context::ShapeGuardContext::is_value_active_in_linearize(&self, &computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>) -> bool
+pub fn tenferro_ops::ad::context::ShapeGuardContext::metadata_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<&tenferro_ops::ad::context::TensorMeta>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::rank_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<usize>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::shape_of(&mut self, &computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_ops::ad::context::ShapeGuardResult<alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>>
+pub fn tenferro_ops::ad::context::ShapeGuardContext::with_global_metadata() -> Self
+pub fn tenferro_ops::ad::context::ShapeGuardContext::with_linearize_active_values(self, alloc::sync::Arc<std::collections::hash::set::HashSet<computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>>>) -> Self
+impl core::clone::Clone for tenferro_ops::ad::context::ShapeGuardContext
+pub fn tenferro_ops::ad::context::ShapeGuardContext::clone(&self) -> tenferro_ops::ad::context::ShapeGuardContext
+impl core::default::Default for tenferro_ops::ad::context::ShapeGuardContext
+pub fn tenferro_ops::ad::context::ShapeGuardContext::default() -> tenferro_ops::ad::context::ShapeGuardContext
+impl core::fmt::Debug for tenferro_ops::ad::context::ShapeGuardContext
+pub fn tenferro_ops::ad::context::ShapeGuardContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ops::ShapeGuardFailure
+impl tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::into_typed_source(self) -> tenferro_ops::ad::context::ShapeGuardError
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::typed_source(&self) -> &tenferro_ops::ad::context::ShapeGuardError
+impl core::clone::Clone for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::clone(&self) -> tenferro_ops::ad::context::ShapeGuardFailure
+impl core::cmp::Eq for tenferro_ops::ad::context::ShapeGuardFailure
+impl core::cmp::PartialEq for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::eq(&self, &Self) -> bool
+impl core::convert::From<tenferro_ops::ad::context::ShapeGuardFailure> for tenferro_ops::ad::ADRuleError
+pub fn tenferro_ops::ad::ADRuleError::from(tenferro_ops::ad::context::ShapeGuardFailure) -> Self
+impl core::error::Error for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::ad::context::ShapeGuardFailure
+pub fn tenferro_ops::ad::context::ShapeGuardFailure::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ops::SymDim(_)
+impl tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::max(self, impl core::convert::Into<tenferro_ops::sym_dim::SymDim>) -> Self
+pub fn tenferro_ops::sym_dim::SymDim::min(self, impl core::convert::Into<tenferro_ops::sym_dim::SymDim>) -> Self
+pub fn tenferro_ops::sym_dim::SymDim::referenced_tensor_ids(&self) -> alloc::vec::Vec<u64>
+impl core::clone::Clone for tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::clone(&self) -> tenferro_ops::sym_dim::SymDim
+impl core::cmp::Eq for tenferro_ops::sym_dim::SymDim
+impl core::cmp::PartialEq for tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::eq(&self, &tenferro_ops::sym_dim::SymDim) -> bool
+impl core::convert::From<usize> for tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::from(usize) -> Self
+impl core::fmt::Debug for tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::sym_dim::SymDim
+impl core::ops::arith::Add for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::add(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Add<tenferro_ops::sym_dim::SymDim> for usize
+pub type usize::Output = tenferro_ops::sym_dim::SymDim
+pub fn usize::add(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Add<usize> for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::add(self, usize) -> Self::Output
+impl core::ops::arith::Div for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::div(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Div<tenferro_ops::sym_dim::SymDim> for usize
+pub type usize::Output = tenferro_ops::sym_dim::SymDim
+pub fn usize::div(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Div<usize> for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::div(self, usize) -> Self::Output
+impl core::ops::arith::Mul for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::mul(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Mul<tenferro_ops::sym_dim::SymDim> for usize
+pub type usize::Output = tenferro_ops::sym_dim::SymDim
+pub fn usize::mul(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Mul<usize> for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::mul(self, usize) -> Self::Output
+impl core::ops::arith::Sub for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::sub(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Sub<tenferro_ops::sym_dim::SymDim> for usize
+pub type usize::Output = tenferro_ops::sym_dim::SymDim
+pub fn usize::sub(self, tenferro_ops::sym_dim::SymDim) -> Self::Output
+impl core::ops::arith::Sub<usize> for tenferro_ops::sym_dim::SymDim
+pub type tenferro_ops::sym_dim::SymDim::Output = tenferro_ops::sym_dim::SymDim
+pub fn tenferro_ops::sym_dim::SymDim::sub(self, usize) -> Self::Output
+pub struct tenferro_ops::SymDimConversionError
+pub tenferro_ops::SymDimConversionError::tensor_id: u64
+impl core::clone::Clone for tenferro_ops::sym_dim::SymDimConversionError
+pub fn tenferro_ops::sym_dim::SymDimConversionError::clone(&self) -> tenferro_ops::sym_dim::SymDimConversionError
+impl core::cmp::Eq for tenferro_ops::sym_dim::SymDimConversionError
+impl core::cmp::PartialEq for tenferro_ops::sym_dim::SymDimConversionError
+pub fn tenferro_ops::sym_dim::SymDimConversionError::eq(&self, &tenferro_ops::sym_dim::SymDimConversionError) -> bool
+impl core::error::Error for tenferro_ops::sym_dim::SymDimConversionError
+impl core::fmt::Debug for tenferro_ops::sym_dim::SymDimConversionError
+pub fn tenferro_ops::sym_dim::SymDimConversionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ops::sym_dim::SymDimConversionError
+pub fn tenferro_ops::sym_dim::SymDimConversionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::sym_dim::SymDimConversionError
+pub struct tenferro_ops::TensorMeta
+pub tenferro_ops::TensorMeta::dtype: tenferro_tensor_core::DType
+pub tenferro_ops::TensorMeta::extents: alloc::vec::Vec<tenferro_ops::shape_extent::ShapeExtent<tenferro_ops::sym_dim::SymDim>>
+pub tenferro_ops::TensorMeta::scalar_identity: core::option::Option<&'static str>
+impl tenferro_ops::ad::context::TensorMeta
+pub fn tenferro_ops::ad::context::TensorMeta::bound_shape(&self) -> core::option::Option<alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>>
+pub fn tenferro_ops::ad::context::TensorMeta::exact(tenferro_tensor_core::DType, alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>) -> Self
+pub fn tenferro_ops::ad::context::TensorMeta::exact_shape(&self) -> core::option::Option<alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>>
+pub fn tenferro_ops::ad::context::TensorMeta::extents(&self) -> &[tenferro_ops::shape_extent::ShapeExtent<tenferro_ops::sym_dim::SymDim>]
+pub fn tenferro_ops::ad::context::TensorMeta::rank(&self) -> usize
+pub const fn tenferro_ops::ad::context::TensorMeta::scalar_identity(&self) -> core::option::Option<&'static str>
+pub fn tenferro_ops::ad::context::TensorMeta::with_extents(tenferro_tensor_core::DType, alloc::vec::Vec<tenferro_ops::shape_extent::ShapeExtent<tenferro_ops::sym_dim::SymDim>>) -> Self
+pub fn tenferro_ops::ad::context::TensorMeta::with_scalar_identity(self, &'static str) -> Self
+impl core::clone::Clone for tenferro_ops::ad::context::TensorMeta
+pub fn tenferro_ops::ad::context::TensorMeta::clone(&self) -> tenferro_ops::ad::context::TensorMeta
+impl core::cmp::Eq for tenferro_ops::ad::context::TensorMeta
+impl core::cmp::PartialEq for tenferro_ops::ad::context::TensorMeta
+pub fn tenferro_ops::ad::context::TensorMeta::eq(&self, &tenferro_ops::ad::context::TensorMeta) -> bool
+impl core::fmt::Debug for tenferro_ops::ad::context::TensorMeta
+pub fn tenferro_ops::ad::context::TensorMeta::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ops::ad::context::TensorMeta
+pub trait tenferro_ops::ExtensionOp: core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static
+pub fn tenferro_ops::ExtensionOp::as_any(&self) -> &dyn core::any::Any
+pub fn tenferro_ops::ExtensionOp::clone_arc(&self) -> alloc::sync::Arc<dyn tenferro_ops::ext_op::ExtensionOp>
+pub fn tenferro_ops::ExtensionOp::family_id(&self) -> &'static str
+pub fn tenferro_ops::ExtensionOp::infer_output_meta(&self, &mut ExtensionShapeContext<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<(tenferro_tensor_core::DType, alloc::vec::Vec<tenferro_ops::sym_dim::SymDim>)>>
+pub fn tenferro_ops::ExtensionOp::input_count(&self) -> usize
+pub fn tenferro_ops::ExtensionOp::lower_to_standard_ops(&self, &mut computegraph::graph::GraphBuilder<tenferro_ops::std_tensor_op::StdTensorOp>, &[computegraph::types::ValueRef<tenferro_ops::std_tensor_op::StdTensorOp>], &[tenferro_tensor_core::DType], &[&[tenferro_ops::sym_dim::SymDim]]) -> tenferro_ops::ext_op::ExtensionLoweringResult
+pub fn tenferro_ops::ExtensionOp::output_count(&self) -> usize
+pub fn tenferro_ops::ExtensionOp::payload_eq(&self, &dyn tenferro_ops::ext_op::ExtensionOp) -> bool
+pub fn tenferro_ops::ExtensionOp::payload_hash(&self, &mut dyn core::hash::Hasher)
+pub fn tenferro_ops::ExtensionOp::prune_outputs(&self, &[bool]) -> core::option::Option<alloc::sync::Arc<dyn tenferro_ops::ext_op::ExtensionOp>>
+pub fn tenferro_ops::ExtensionOp::scalar_identity(&self) -> core::option::Option<&'static str>
+pub fn tenferro_ops::ExtensionOp::semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_>
+pub fn tenferro_ops::ExtensionOp::semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_>
+pub type tenferro_ops::ShapeGuardResult<T> = core::result::Result<T, tenferro_ops::ad::context::ShapeGuardFailure>
