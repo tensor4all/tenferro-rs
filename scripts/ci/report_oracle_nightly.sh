@@ -218,23 +218,35 @@ ensure_label() {
 }
 
 # Every `- Commit:` marker the tracker records, in arrival order: the issue body
-# holds the first report and each later one is a comment, fully paginated.
+# holds the first report and each later one is a comment, fully paginated. Either
+# read failing fails the whole function: a partial history can hide the newest
+# failure, and the caller must not then treat what it has as complete.
 tracker_failure_markers() {
-  local number="$1"
+  local number="$1" body comments
+  if ! body="$(gh api "repos/${GH_REPO}/issues/${number}" --jq '.body')"; then
+    printf 'could not read the body of issue #%s\n' "${number}" >&2
+    return 1
+  fi
+  if ! comments="$(gh api --paginate "repos/${GH_REPO}/issues/${number}/comments" --jq '.[].body')"; then
+    printf 'could not read the comments of issue #%s\n' "${number}" >&2
+    return 1
+  fi
   {
-    gh api "repos/${GH_REPO}/issues/${number}" --jq '.body'
-    gh api --paginate "repos/${GH_REPO}/issues/${number}/comments" --jq '.[].body'
-  } 2>/dev/null \
-    | sed -n 's/^- Commit: `\([0-9a-f]\{7,40\}\)`$/\1/p'
+    printf '%s\n' "${body}"
+    printf '%s\n' "${comments}"
+  } | sed -n 's/^- Commit: `\([0-9a-f]\{7,40\}\)`$/\1/p'
 }
 
 # The newest recorded failure, ordered by ancestry rather than by arrival: a
 # re-failure of an older commit is appended after a newer one, so "last comment
 # wins" would let a success on the older commit close an unresolved newer failure.
-# Fails when the markers cannot be ordered (unknown commit, unrelated history);
-# the caller then leaves the issue open.
+# Fails when the markers cannot be read or ordered (unknown commit, unrelated
+# history); the caller then leaves the issue open.
 tracker_failure_sha() {
-  local number="$1" best="" candidate
+  local number="$1" markers best="" candidate
+  if ! markers="$(tracker_failure_markers "${number}")"; then
+    return 1
+  fi
   while IFS= read -r candidate; do
     [ -n "${candidate}" ] || continue
     git cat-file -e "${candidate}^{commit}" 2>/dev/null || return 1
@@ -245,7 +257,7 @@ tracker_failure_sha() {
     elif ! git merge-base --is-ancestor "${candidate}" "${best}" 2>/dev/null; then
       return 1
     fi
-  done < <(tracker_failure_markers "${number}")
+  done <<< "${markers}"
   [ -n "${best}" ] || return 1
   printf '%s\n' "${best}"
 }

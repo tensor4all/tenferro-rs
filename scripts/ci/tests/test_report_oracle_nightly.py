@@ -92,6 +92,11 @@ record()
 if args[:1] == ["api"]:
     path = next(arg for arg in args if arg.startswith("repos/"))
     number = re.search(r"/issues/(\\d+)(/comments)?$", path)
+    if number.group(2) and os.environ.get("GH_FAIL_COMMENTS") == "1":
+        # A 502 on the comment stream must not leave the body looking like the whole
+        # failure history.
+        sys.stderr.write("HTTP 502: Bad Gateway\\n")
+        sys.exit(1)
     issue = find_issue(int(number.group(1)))
     if number.group(2):
         for comment in issue["comments"]:
@@ -214,6 +219,7 @@ class OracleNightlyReporterTests(unittest.TestCase):
         tracker_sha: str | None = None,
         tracker_first_sha: str | None = None,
         gh_fail_lookup: bool = False,
+        gh_fail_comments: bool = False,
         search_overflow: bool = False,
     ) -> dict[str, str]:
         fixture = RUNS[run]
@@ -230,6 +236,7 @@ class OracleNightlyReporterTests(unittest.TestCase):
             "ISSUES_FIXTURE": str(FIXTURES / issues),
             "LABELS_STATE": str(self.labels_state),
             "GH_FAIL_LOOKUP": "1" if gh_fail_lookup else "0",
+            "GH_FAIL_COMMENTS": "1" if gh_fail_comments else "0",
             "SEARCH_OVERFLOW": "1" if search_overflow else "0",
             "TRACKER_SHA": head if tracker_sha is None else tracker_sha,
             "TRACKER_FIRST_SHA": self.older if tracker_first_sha is None else tracker_first_sha,
@@ -532,6 +539,24 @@ class OracleNightlyReporterTests(unittest.TestCase):
         body = self.body_of("issue", "comment", "17")
         self.assertIn("Recovery evidence is older than the tracked failure", body)
         self.assertIn(f"- Tracked failure commit: `{self.head}`", body)
+
+    def test_a_failed_comment_read_does_not_close_the_issue(self) -> None:
+        # The newest failure lives in a comment; a 502 on the comment stream must not
+        # let the body's older marker stand in for the whole history, which would let
+        # this successful replay close a newer, unresolved failure.
+        self.run_nightly(
+            "successful_replay",
+            "issues-labeled-history.json",
+            head_sha=self.head,
+            tracker_sha=self.head,
+            tracker_first_sha=self.older,
+            gh_fail_comments=True,
+        )
+
+        self.assertFalse(self.calls_starting_with("issue", "close"), self.calls())
+        self.assertIn(
+            "cannot be related to the tracked failure", self.body_of("issue", "comment", "17")
+        )
 
     def test_markers_that_cannot_be_ordered_do_not_close_the_issue(self) -> None:
         # An unknown commit makes "the newest failure" undecidable; guessing would
