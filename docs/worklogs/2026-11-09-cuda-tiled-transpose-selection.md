@@ -1,6 +1,6 @@
 # CUDA tiled-transpose selection for materialized views
 
-Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
+Issue: tensor4all/tenferro-rs#2528. Stage 1 is #2551; stage 2 is the section at the end.
 
 ## Decisions
 
@@ -98,3 +98,57 @@ Issue: tensor4all/tenferro-rs#2528, stage 1 of two.
   the benchmark's destination-reuse arm: its destination is a strided region,
   while the tiled entry writes a compact destination. Covering that arm needs a
   kernel that tiles a strided destination as well.
+
+## Stage 2: merged axes, reordered destinations, no zero fill
+
+### Decisions
+
+- Stage 2 was decided from an `nsys` profile of `020d6911c` (stage 1 merged) on
+  the A100, not from the issue's hypothesis. The 2-D transpose arm was already
+  on the tiled kernel (5.58 ms), but each call first zero-filled its 4 GiB
+  destination (a 2.4 ms `cuMemsetD8Async`). `[2, 0, 1]` and `cyclic_18d_3` ran
+  the generic `materialize_strided`, and every destination-reuse arm ran
+  `strided_to_strided`.
+- Axis merging, not a new kernel. Once the axes the source continues through
+  are merged, `[2, 0, 1]` of a compact source is the pair swap stage 1 already
+  serves (`512 x 2^20`), and so is the cyclic shift (`3^17 x 3`). The stage-1
+  comment's options A (a two-tiled-axis catalogue kernel) and A' (two passes)
+  are therefore not needed for these rows.
+- The merged `[2, 0, 1]` run has `2^20 / 16 = 65536` tiles on `grid.y`, one
+  more than the hardware allows, so the planner refuses the default tile. The
+  catalogue's own `32 x 8` member is tried only after that refusal. Every
+  geometry stage 1 served keeps `TransposeConfig::DEFAULT`, so the reasoning
+  above for that default still holds.
+- `copy_read_into`: a destination that is a permuted compact span at offset 0
+  is written in its own order. That turns the copy into the same materialization
+  instead of needing a kernel that tiles a strided destination (the constraint
+  stage 1 recorded). Offset destinations keep `StridedToStrided`. The catalogue's
+  entries take no destination offset, and rebasing through a raw scope is not
+  needed by any measured row.
+- cuTENSOR (`cutensorPermute`) was not chosen. `cuda/cutensor.rs` binds
+  contraction only, so this route would need new FFI, a plan cache and the typed
+  vendor-absent error policy. It would also make permutation depend on a vendor
+  library being loadable. After the merged-axis route reached the cuTENSOR
+  figure on the issue's headline row, nothing measured justified that cost.
+
+### Verification conclusions and constraints
+
+- Paired A100 experiment, baseline `020d6911c` against candidate `09089d0ec`:
+  every Rust arm of every `gpu/permutation` pattern, five interleaved processes
+  each, and every cell verified. The full table, all samples and the protocol
+  are in the PR description.
+  - `transpose_3d_1024_1024_512_201`: 29.77 to 5.21 ms (transpose) and 84.98 to
+    5.18 ms (destination reuse), against cuTENSOR at 5.33 ms.
+  - No cell regressed.
+- Not reached: `reverse_18d_3` and `reverse_23d_128x2` are unchanged (about
+  30, 42, 61 and 85 ms against cuTENSOR at about 5 ms). No axes merge, the views
+  stay above the by-value rank, and the wide path keeps both its generic kernel
+  and its zero fill. Two more rows remain above cuTENSOR:
+  - `cyclic_18d_3` is about 2.1x cuTENSOR, because a 3-wide source run fills
+    3 of the 16 tile lanes.
+  - `rotation_6d` is about 1.35x cuTENSOR, on the generic kernel.
+  Closing these needs an N-D tiled kernel in `t4a-cuda-kernels`.
+- A device test for each new route fails on `020d6911c`, because the tiled
+  counter stays at 0, and passes here. The offset-destination control passes on
+  both. The `[2, 0, 1]` negative control of stage 1 now selects the tiled entry
+  by design, so it was replaced by a `[2, 1, 0]` reversal.

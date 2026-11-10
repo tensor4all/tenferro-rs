@@ -198,6 +198,28 @@ transpose the tiled kernel can serve from shared memory. The derivation lives in
 fallback tier: a view the entry does not address, or a launch its planner
 refuses, takes the generic materialization the operation already had.
 
+Before that selection, `coalesce_compact_view` merges every pair of adjacent
+destination axes the source continues through (`s[k + 1] == s[k] * e[k]`) and
+drops extent-one axes. The merged view names the same elements in the same
+destination order, so both by-value entries read it in place of the original:
+`[2, 0, 1]` of a compact source becomes one pair swap, and a high-rank view
+whose fast axes are one run can fit the by-value layout. The default tile is
+tried first; the catalogue's `32 x 8` member is tried only when the planner
+refuses the default, which happens when the source run exceeds the
+`grid.y` limit at a 16-wide tile.
+
+`copy_read_into` into a destination that is a permuted view of one compact span
+at its allocation's base (`dense_destination_order`) is the same
+materialization: the source is read in the destination's stride order, and the
+copy writes the span's first `len` elements through the by-value entries above.
+A destination at a nonzero offset, with a gap, overlap, broadcast or negative
+stride, or one still above the by-value rank after merging, keeps
+`StridedToStrided`.
+
+The by-value materialization allocates its destination uninitialised: both
+entries write every destination element, so a zero fill would be a full extra
+pass. The wide (device-geometry) path still allocates zeroed.
+
 Catalogue planners receive validated dtype/layout/operation metadata and
 produce the launch geometry. `cuda/dispatch.rs` calls the catalogue's `plan_*`
 functions, then marshals runtime arguments in the entry's ABI order.
