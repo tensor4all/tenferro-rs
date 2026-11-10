@@ -165,9 +165,10 @@ only that GEMM portion stays in `tenferro-tensor`.
 
 `tenferro-linalg` exposes:
 
-- eager tensor APIs through `tenferro_linalg::EagerTensorLinalgExt`
+- eager tensor APIs through `tenferro_linalg::EagerSessionLinalgExt` (the first
+  design named `EagerTensorLinalgExt`; it was replaced by the session trait)
 - traced tensor APIs through `tenferro_linalg::TracedTensorLinalgExt`
-- direct tensor helpers if needed, owned by the linalg crate
+- direct tensor helpers through `tenferro_linalg::TensorLinalgExt`, owned by the linalg crate
 
 `tenferro-linalg/cuda` enables `tenferro-gpu/cuda`; GPU linalg implementation
 lives under `crates/tenferro-linalg/src/gpu/`. `tenferro-gpu` remains the backend,
@@ -209,7 +210,7 @@ Update README, rustdoc, and guide examples so direct tensor execution only
 shows core tensor operations. Linalg examples move to the standard operation
 crate sections:
 
-- eager linalg uses `tenferro_linalg::EagerTensorLinalgExt`
+- eager linalg uses `tenferro_linalg::EagerSessionLinalgExt`
 - traced linalg uses `tenferro_linalg::TracedTensorLinalgExt` and `?`
 - examples of removed direct tensor linalg methods are deleted
 

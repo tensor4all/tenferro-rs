@@ -154,7 +154,7 @@ materialized only when the caller requests the full range.
 ## Gauge and rank deficiency
 
 Raw state follows provider QR gauge. `QrGauge::PositiveDiagonal` applies the
-same phase/sign convention as existing `qr_with_options` at output time. The
+same phase/sign convention as existing `qr_with` (`QrOptions`) at output time. The
 phase is computed from the matching diagonal of `R` and applied consistently
 to requested Q columns and R rows.
 
@@ -235,7 +235,7 @@ There is no full-Q, one-shot-QR, payload host transfer, or CPU fallback.
 `QrGauge::PositiveDiagonal` is also provider-owned on CUDA: a linalg-owned
 same-device kernel computes diagonal phases and scales requested Q columns and
 R rows consistently. Phase 4 shares that kernel with existing CUDA
-`qr_with_options`, replacing its currently inapplicable host-only default gauge
+`qr_with`, replacing its currently inapplicable host-only default gauge
 path. The kernel launches over the output domains and does not download scalar
 phases.
 
@@ -255,8 +255,10 @@ positions. It never forms `Q * R` for a full QR.
 
 The backend contract includes a narrow `qr_with_options_read` hook. Its default
 preserves the CPU `qr_read` plus host-gauge path; CUDA overrides both owned and
-read hooks with the shared device gauge kernel. Concrete owned, `TensorRead`,
-and typed QR-with-options surfaces dispatch through these hooks and never apply
+read hooks with the shared device gauge kernel. The concrete `a.qr_with(&options, &mut engine)`
+entry (one implementation on the borrowed `TensorRead` view, reached through
+`LinalgInput` from `Tensor`, `TensorRead`, `TypedTensor` and `TypedTensorView`)
+dispatches through these hooks and never applies
 the host gauge to backend-resident outputs.
 
 All CUDA work runs inside the scoped `CudaExecSession::with_raw` or typed

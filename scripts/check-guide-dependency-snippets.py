@@ -102,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![2, 2],
         vec![0.0_f64, 2.0, 1.0, 3.0],
     )?;
-    let (p, l, u, q, parity) = a.full_piv_lu(&mut engine)?;
+    let tenferro_linalg::FullPivLu { p, l, u, q, parity } = a.full_piv_lu(&mut engine)?;
 
     let pt = p.transpose(&[1, 0], &mut engine)?;
     let pt_l = pt.matmul(&l, &mut engine)?;

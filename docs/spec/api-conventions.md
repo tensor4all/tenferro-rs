@@ -36,9 +36,27 @@ The default stratum is internal.
 1. There is no root `tenferro` facade crate. User-facing docs and examples must
    import direct crates such as `tenferro_runtime`, `tenferro_ad`,
    `tenferro_gpu`, `tenferro_einsum`, `tenferro_linalg`, and `tenferro_fft`.
-2. Tensor operation names use unsuffixed names for owned compact tensor inputs.
-3. `_read` is reserved for APIs that explicitly accept borrowed read-oriented
-   inputs such as `TensorRead`.
+2. A name says only what is computed (#2552). The same operation has the same
+   name on every layer (concrete, traced, eager), and the only suffixes are
+   `_with` and `_into`:
+
+   ```text
+   recv.op(operands…, exec)
+   recv.op_with(operands…, &options, exec)
+   recv.op_into(operands…, &options, exec, destination)
+   ```
+
+   The traced layer has no executor argument; on the eager layer the session is
+   the receiver and the input is the first operand. The short form runs the
+   operation with its options type's `Default`.
+3. The input kind is not part of the name. An operation is implemented once on
+   the borrowed view; `Tensor`, `TensorRead`, `TypedTensor<T>` and typed views
+   reach it through a metadata-only conversion whose associated output types
+   keep typed input typed (`tenferro_linalg::LinalgInput`). `_read`, `_typed`,
+   `_full`, `_values`, `_with_options`, `_with_rtol`, `_with_driver`,
+   `_with_exec` and `_into_accum` are not operation suffixes. `tenferro-linalg`
+   follows this rule; the einsum, FFT and runtime session surfaces keep their
+   `_read` names until their #2552 stage.
 4. `_view` is reserved for metadata-only layout operations. Operations that
    allocate, canonicalize, execute kernels, transfer data, or materialize data
    must not use `_view`.
@@ -64,17 +82,20 @@ The default stratum is internal.
 1. Unary single-output traced ops are methods on `TracedTensor`.
 2. Binary single-output ops use operator overloads when the operator is natural;
    otherwise they use methods.
-3. Multi-output linalg and decomposition ops are tensor extension-trait methods.
-4. Einsum is exposed through extension traits owned by `tenferro-einsum`:
-   `TensorEinsumExt` and `TypedTensorEinsumExt` for owned concrete input
-   slices/arrays, and `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for
-   borrowed-view inputs; `TensorEinsumIntoExt`, `TypedTensorEinsumIntoExt`,
-   `TensorReadEinsumIntoExt`, and `TypedTensorReadEinsumIntoExt` for
-   preallocated-output concrete execution; `ConcreteEinsumPlan` for repeated
-   concrete executions with fixed input metadata; `TraceContextEinsumExt` for
-   traced graph construction; and `EagerSessionEinsumExt` for autodiff eager
-   einsum and `tensordot` on a borrowed `EagerSession`. Typed preallocated outputs use `TypedTensorWrite` so both
-   owned typed tensors and mutable typed views are accepted.
+3. Multi-output linalg and decomposition ops are tensor extension-trait methods
+   that return named result structs generic over the tensor type
+   (`Svd<V, R> { u, s, vh }`, `Qr<V>`, `Lu<V, R>`, `Eigh<V, R>`, ...), never
+   positional tuples or `Vec<Tensor>`.
+4. An operation family has one extension trait per layer, not one per input
+   kind or output mode. Every operation has an `XxxOptions` type
+   (`#[non_exhaustive]`, `Default`, `with_*` setters); public signatures take
+   no `bool` (two-way choices are enums such as `Side`, `Uplo`, `KeepDims`) and
+   axes are `isize`. The executor is a per-call argument, not engine state:
+   `tcontract_exec::Exec` and buffer pools do not appear in operation
+   signatures. `tenferro-linalg` has `TensorLinalgExt` (concrete),
+   `TracedTensorLinalgExt` (traced) and `EagerSessionLinalgExt` (eager).
+   Einsum's entry traits are documented in the `tenferro-einsum` crate and are
+   consolidated under this rule in its #2552 stage.
 5. Standard operation families are first-class crates, not modules under a
    broad facade.
 
@@ -116,7 +137,7 @@ The default stratum is internal.
 | Check category | Spec rule |
 | --- | --- |
 | `traced_prefix` | Naming rule 6, limited to public function and method names. |
-| `read_suffix_without_read_input` | Naming rule 3. |
+| `read_suffix_without_read_input` | Naming rule 3 (surfaces not yet migrated by #2552 that still use `_read`). |
 | `per_dtype_constructor` | Naming rule 5. |
 | `public_gpu_feature` | Naming rule 8, limited to published crates. |
 | `public_try_prefix` | Naming rule 10; only explicitly allowlisted canonical Rust `try_*` APIs may use this prefix. |

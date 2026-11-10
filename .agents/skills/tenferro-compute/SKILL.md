@@ -40,7 +40,7 @@ not when changing tenferro itself.
 - **Tensor linalg first; drop to the dense library only for what it lacks.**
   `tenferro-linalg` is the tensor-level surface: same engine, batching, and
   autodiff. A supported tensor operation stays there even when you do not want
-  AD (`TypedTensorLinalgExt::cholesky` takes no AD and runs on the caller's
+  AD (`TensorLinalgExt::cholesky` takes no AD and runs on the caller's
   engine, CUDA included); do not re-implement it. Call the dense library
   `t4a-faer` (package `t4a-faer`, library `faer`) directly for a matrix routine
   the tensor surface does not expose, on host column-major buffers (a

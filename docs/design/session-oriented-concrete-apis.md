@@ -531,7 +531,7 @@ one session-explicit concrete API for the core op vocabulary and
 NOT migrated in this phase and are enumerated as follow-ups — the einsum
 top-level `einsum*`-trait methods (crates/tenferro-einsum/src/concrete.rs
 traits), `TensorFftExt`/`TensorReadFftExt` (tenferro-fft), the linalg
-concrete traits (tenferro-linalg/src/tensor_ext.rs), and
+concrete trait (tenferro-linalg/src/tensor_ext.rs; migrated in #2552, see §3 below), and
 `Tensor::index_select`/`Tensor::stack` (tenferro-tensor shape_packing).
 This phase covers the runtime core + plan-level einsum; the others migrate
 in follow-up PRs toward the same end state.
@@ -651,7 +651,12 @@ external downcasts in callers/tests/benches (backend_capability.rs:335-345,
 fft_plan_cache.rs:51-70) are removed. Plan cache stays executor-owned. Call
 sites: 5 files + the test/bench downcast sites.
 
-### 3. linalg concrete traits (TensorLinalgExt / TensorReadLinalgExt / TypedTensorLinalgExt — 64 methods)
+### 3. linalg concrete traits (planned: TensorLinalgExt / TensorReadLinalgExt / TypedTensorLinalgExt — 64 methods)
+
+As built (#2552 stage 1), the three traits are one `TensorLinalgExt` implemented once on the
+borrowed `TensorRead` view and reached from `Tensor`, `TensorRead`, `TypedTensor<T>` and
+`TypedTensorView` through `LinalgInput`; `solve_read_into` became `solve_into`. The text
+below records the original plan under its original names.
 
 Methods take `&mut dyn Engine`; internal dispatch downcasts once to
 the concrete exec session and runs the EXISTING generic composite bodies on

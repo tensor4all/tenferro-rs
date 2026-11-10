@@ -19,6 +19,28 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   subnormal magnitudes, inputs whose tail is a nonzero subnormal, `±inf` and a
   multi-block ramp). A NaN input stays NaN, possibly with a different sign or
   payload.
+- **tenferro-linalg has one call grammar** (#2552 stage 1, breaking). Every
+  operation has the same name on every layer and at most three forms: concrete
+  `a.op(&mut engine)`, `a.op_with(&options, &mut engine)`,
+  `a.op_into(.., &options, &mut engine, destination)` through `TensorLinalgExt`;
+  traced `t.op()` / `t.op_with(&options)` through `TracedTensorLinalgExt`; eager
+  `session.op(&x)` / `session.op_with(&x, &options)` through
+  `EagerSessionLinalgExt`. `LinalgInput` is the sealed, metadata-only conversion
+  that lets `Tensor`, `TensorRead`, `TypedTensor<T>` and `TypedTensorView` share
+  the one implementation on the borrowed view, keeping typed input typed. Every
+  operation has an `XxxOptions` type (`#[non_exhaustive]`, `Default` plus `with_*`
+  setters; `SvdShape`, `Side`, `Uplo`, `Transpose`, `Diagonal` and `KeepDims`
+  replace `bool` flags; axes are `isize`). Multi-output operations return named
+  structs (`Svd`, `Qr`, `Lu`, `FullPivLu`, `Eig`, `Eigh`, `Slogdet`,
+  `RankRevealingQrResult`) instead of tuples. Removed with no alias:
+  `TensorReadLinalgExt` and the `*_read` linalg methods, `TypedTensorLinalgExt`,
+  the `Typed*` tuple aliases, `TraceContextLinalgExt`, `EagerTensorLinalgExt`
+  (use `EagerSessionLinalgExt`), `svd_full` (use `svd_with` with
+  `SvdShape::Full`), the `*_with_options` methods, `pinv_with_rtol`,
+  `solve_read_into` (use `solve_into`), the `*_with_exec` free functions,
+  `tenferro_linalg::Result`, the four-bool `triangular_solve` and the
+  `norm(ord, dim, keepdim)` signature. The `LinalgBackend` provider methods are
+  unchanged.
 
 ### Removed
 

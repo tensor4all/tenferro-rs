@@ -72,7 +72,7 @@ assert_eq!(
 Common import recipes:
 
 - `tenferro_einsum::EagerSessionEinsumExt` for borrowed eager einsum and `tensordot` (`runtime.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?`).
-- `tenferro_linalg::EagerSessionLinalgExt` for borrowed eager linear algebra (`EagerTensorLinalgExt::solve` remains a calling-thread `no_grad` exception).
+- `tenferro_linalg::EagerSessionLinalgExt` for borrowed eager linear algebra (`session.svd(&x)`, `session.solve(&a, &b)`, and `session.op_with(&x, &options)` for non-default options).
 - `tenferro_ad::{EagerRuntime, Tensor}` for eager values and runtime AD.
 
 ## Activations, softmax and normalization
@@ -143,9 +143,8 @@ Import recipes:
 - `tenferro_einsum::TraceContextEinsumExt` for `TraceContext::einsum` graph
   construction; use `tenferro_einsum::TracedTensorEinsumExt` when the receiver
   is an already traced tensor.
-- `tenferro_linalg::TraceContextLinalgExt` for linear algebra on a
-  `TraceContext` value, or `tenferro_linalg::TracedTensorLinalgExt` when the
-  receiver is an already traced tensor.
+- `tenferro_linalg::TracedTensorLinalgExt` for linear algebra on a traced
+  tensor (`t.svd()`, `t.svd_with(&options)`, `t.solve(&b)`).
 - `tenferro_ad::TracedTensorAdExt` for `grad`, `vjp`, and `jvp` transforms.
 
 If a method is present in the guide but Rust reports E0599, check the owning
@@ -163,16 +162,20 @@ allocation-returning calls still allocate outputs (the `_into` forms do not).
 See the
 [engine and prepared-execution contract](../../../../docs/guides/ordinary-and-prepared-execution.md#one-engine-across-ordinary-eager-and-prepared-work).
 
-## Lane-local factorizations
+## Concrete linear algebra
 
-On the `native` provider, a caller that runs its own lanes calls
-`tenferro_linalg::{svd, svd_values, qr, eigh, eigh_values, eig_values}_with_exec(exec,
-&mut lane_pool, &view)` on the bundle from `engine.with_exec(|exec| ..)` and a
-lane-owned `tenferro_cpu::linalg_interop::BufferPool`. They read a `[m, n]` or
-`[m, n, b..]` view in place (a negative stride is `Unsupported`), take every
-output from that pool, and return typed tensors (spectra in
-`LinalgScalar::RealScalar`, general eigenvalues in `LinalgScalar::Complex`)
-bit-identical to the engine entries. The BLAS provider has no such entry.
+`use tenferro_linalg::TensorLinalgExt;` puts every operation on `Tensor`,
+`TensorRead`, `TypedTensor<T>` and `TypedTensorView`, with one name per
+operation and at most three forms: `a.svd(&mut engine)`,
+`a.svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut engine)`,
+and `a.solve_into(&b, &SolveOptions::default(), &mut engine,
+TensorWrite::from_tensor(&mut x))`. Every operation has an `XxxOptions` type
+built with `Default` and `with_*` setters (two-way choices are enums such as
+`Side`, `Uplo`, `KeepDims`; axes are `isize`). Multi-output operations return
+named structs: `let Svd { u, s, vh } = a.svd(&mut engine)?;` (also `Qr`, `Lu`,
+`FullPivLu`, `Eig`, `Eigh`, `Slogdet`, `RankRevealingQrResult`). The engine is
+the last argument before a destination and owns its buffer pool, so no `Exec`
+or pool appears in a signature.
 
 ## Borrowing external memory
 

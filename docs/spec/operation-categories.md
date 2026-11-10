@@ -168,7 +168,7 @@ and traced surfaces (subject to the same parity rule within each family):
 
 - **Linalg** (`tenferro-linalg`): `svd`, `qr`, `eig`, `eigh`, `solve`,
   `triangular_solve`, `cholesky`, `lu`, `full_piv_lu` through
-  `TraceContextLinalgExt` / `TracedTensorLinalgExt` / `EagerTensorLinalgExt`.
+  `TracedTensorLinalgExt` / `EagerSessionLinalgExt`.
 - **Einsum** (`tenferro-einsum`): `einsum` + contraction planning.
   Concrete inputs use `TensorEinsumExt` and `TypedTensorEinsumExt` for owned
   tensors, `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for borrowed

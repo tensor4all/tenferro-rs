@@ -93,6 +93,18 @@ OP_TRAITS = {
     "EagerTensorLinalgExt": "EagerSessionLinalgExt",
 }
 
+# Receiver types whose trait-method listings stand for an operation trait.
+FOREIGN_RECEIVERS = {
+    "EagerSession": "EagerSessionLinalgExt",
+    "EagerTensor": "EagerTensorLinalgExt",
+    "Tensor": "TensorLinalgExt",
+    "X": "TensorLinalgExt",
+    "TensorRead": "TensorReadLinalgExt",
+    "TypedTensor": "TypedTensorLinalgExt",
+    "TraceContext": "TraceContextLinalgExt",
+    "TracedTensor": "TracedTensorLinalgExt",
+}
+
 # Signature changes that keep the name (bool / usize-axis arguments become options).
 SIGNATURE_NOTES = {
     "triangular_solve": "four `bool` flags become `TriangularSolveOptions` "
@@ -116,24 +128,25 @@ def strip_generics(text: str) -> str:
 
 
 def symbol_of(line: str) -> str | None:
-    """Return the item path of one public-api line, without generics or signature."""
-    m = re.match(r"^pub (?:unsafe )?(?:const )?(?:fn|trait|struct|enum|type|mod|const|static|"
-                 r"use)\s+(.*)$", line)
+    """Return the item path of one public-api line, without generics or signature.
+
+    Methods and fields can share a path (`SvdOptions::gauge` was both); a field row is
+    keyed with a trailing ` (field)` so the two never collide.
+    """
+    line = re.sub(r"^(#\[[^\]]*\]\s*)+", "", line)  # `#[non_exhaustive] pub struct ...`
+    m = re.match(r"^pub (?:unsafe )?(?:const )?fn\s+(.*)$", line)
     if m:
-        rest = m.group(1)
-        if line.startswith("pub fn") or line.startswith("pub const fn"):
-            rest = rest.split("(", 1)[0]
-        else:
-            rest = re.split(r"[:=(]|\s", strip_generics(rest), maxsplit=1)[0]
-        return strip_generics(rest).strip()
+        return strip_generics(m.group(1).split("(", 1)[0]).strip()
+    m = re.match(r"^pub (?:trait|struct|enum|type|mod|const|static|use)\s+(.*)$", line)
+    if m:
+        head = re.split(r"[=(]|:\s|\s", strip_generics(m.group(1)), maxsplit=1)[0]
+        return head.strip().rstrip(":")
     m = re.match(r"^pub (.+?)::(\w+): ", line)  # struct fields
     if m:
-        return f"{strip_generics(m.group(1))}::{m.group(2)}"
+        return f"{strip_generics(m.group(1))}::{m.group(2)} (field)"
     m = re.match(r"^pub (.+)$", line)  # enum variants and other entries
     if m:
         return strip_generics(m.group(1)).split("(")[0].split(" ")[0]
-    if line.startswith("impl"):
-        return None
     return None
 
 
@@ -179,11 +192,10 @@ def target(sym: str) -> tuple[str, str, str]:
         return ("kept", s, "provider SPI; see OPEN-QUESTIONS-2552.md Q3")
 
     trait = owner
-    # Trait-method listings on foreign receivers (EagerSession, EagerTensor) map like the trait.
-    if owner.startswith("EagerSession"):
-        trait = "EagerSessionLinalgExt"
-    elif owner == "EagerTensor":
-        trait = "EagerTensorLinalgExt"
+    # cargo public-api also lists each trait method on the receiver type that implements it
+    # (`tenferro_tensor::types::Tensor::svd`); map those rows like the trait itself. After
+    # the change the blanket `impl<X: LinalgInput> TensorLinalgExt for X` is listed as `X::op`.
+    trait = FOREIGN_RECEIVERS.get(owner, trait)
     if trait in OP_TRAITS:
         new_trait = OP_TRAITS[trait]
         name = last
@@ -252,28 +264,37 @@ def load_lines(path: Path) -> list[str]:
     return [line for line in path.read_text().splitlines() if line.strip()]
 
 
+def canonical(sym: str) -> str:
+    """Fold receiver-type listings (`Tensor::svd`, the blanket `X::svd`) into their trait."""
+    s = local(sym)
+    parts = s.split("::")
+    if len(parts) >= 2 and parts[-2] in FOREIGN_RECEIVERS:
+        return f"{FOREIGN_RECEIVERS[parts[-2]]}::{parts[-1]}"
+    return s
+
+
 def cmd_migration(args: argparse.Namespace) -> int:
     before = load(Path(args.before))
     after = load(Path(args.after))
-    after_local = {local(s) for s in after}
-    after_syms = set(after)
+    after_names = {canonical(s) for s in after}
     removed, seen = [], set()
-    for s in before:
-        if s in after_syms or local(s) in seen:
+    for sym in before:
+        name = canonical(sym)
+        if name in after_names or name in seen:
             continue
-        seen.add(local(s))
-        removed.append(s)
-    print("| removed | replacement | note | replacement present |")
+        seen.add(name)
+        removed.append(sym)
+    print("| removed name | replacement | note | replacement present |")
     print("|---|---|---|---|")
     missing = 0
     for sym in removed:
-        status, new, note = target(sym)
-        present = "n/a" if new == "-" else ("yes" if new in after_local else "NO")
+        _status, new, note = target(canonical(sym))
+        present = "n/a" if new == "-" else ("yes" if new in after_names else "NO")
         if present == "NO":
             missing += 1
-        print(f"| `{local(sym)}` | `{new}` | {note} | {present} |")
+        print(f"| `{canonical(sym)}` | `{new}` | {note} | {present} |")
     print()
-    print(f"Removed symbols: {len(removed)}; replacements missing from AFTER: {missing}")
+    print(f"Removed names: {len(removed)}; replacements missing from AFTER: {missing}")
     return 1 if (missing and args.strict) else 0
 
 

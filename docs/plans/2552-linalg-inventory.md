@@ -28,11 +28,13 @@ New items that have no predecessor (`XxxOptions` for every operation, `Side`,
 `Lu`, `FullPivLu`, `Eig`, `Eigh`, `Slogdet`, and the `LinalgInput` conversion trait) are not
 rows of this table; they appear in the migration record.
 
-Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, renamed: 10
+Public symbols: 628 (1432 listing lines). changed: 18, kept: 403, removed: 197, renamed: 10
 
 | symbol | status | target | note |
 |---|---|---|---|
 | `tenferro_linalg` | kept | `tenferro_linalg` |  |
+| `backend` | kept | `backend` |  |
+| `backend::LinalgBackend` | kept | `backend::LinalgBackend` |  |
 | `backend::LinalgBackend::cholesky` | kept | `backend::LinalgBackend::cholesky` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
 | `backend::LinalgBackend::cholesky_read` | kept | `backend::LinalgBackend::cholesky_read` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
 | `backend::LinalgBackend::eig` | kept | `backend::LinalgBackend::eig` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
@@ -89,19 +91,34 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `tenferro_cpu::engine::CpuEngine::svd_with_options_read` | kept | `tenferro_cpu::engine::CpuEngine::svd_with_options_read` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
 | `tenferro_cpu::engine::CpuEngine::triangular_solve` | kept | `tenferro_cpu::engine::CpuEngine::triangular_solve` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
 | `tenferro_cpu::engine::CpuEngine::triangular_solve_read` | kept | `tenferro_cpu::engine::CpuEngine::triangular_solve_read` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
+| `error` | kept | `error` |  |
+| `error::Error` | kept | `error::Error` |  |
 | `error::Error::NonConvergence` | kept | `error::Error::NonConvergence` |  |
-| `error::Error::NonConvergence::op` | kept | `error::Error::NonConvergence::op` |  |
+| `error::Error::NonConvergence::op (field)` | kept | `error::Error::NonConvergence::op (field)` |  |
 | `error::Error::NonFinite` | kept | `error::Error::NonFinite` |  |
-| `error::Error::NonFinite::op` | kept | `error::Error::NonFinite::op` |  |
-| `error::Error::NonFinite::role` | kept | `error::Error::NonFinite::role` |  |
+| `error::Error::NonFinite::op (field)` | kept | `error::Error::NonFinite::op (field)` |  |
+| `error::Error::NonFinite::role (field)` | kept | `error::Error::NonFinite::role (field)` |  |
 | `error::Error::Singular` | kept | `error::Error::Singular` |  |
-| `error::Error::Singular::op` | kept | `error::Error::Singular::op` |  |
+| `error::Error::Singular::op (field)` | kept | `error::Error::Singular::op (field)` |  |
 | `error::Error::UnsupportedDType` | kept | `error::Error::UnsupportedDType` |  |
-| `error::Error::UnsupportedDType::dtype` | kept | `error::Error::UnsupportedDType::dtype` |  |
-| `error::Error::UnsupportedDType::op` | kept | `error::Error::UnsupportedDType::op` |  |
+| `error::Error::UnsupportedDType::dtype (field)` | kept | `error::Error::UnsupportedDType::dtype (field)` |  |
+| `error::Error::UnsupportedDType::op (field)` | kept | `error::Error::UnsupportedDType::op (field)` |  |
 | `error::Error::kind` | kept | `error::Error::kind` |  |
 | `error::Error::fmt` | kept | `error::Error::fmt` |  |
 | `error::map_error` | kept | `error::map_error` |  |
+| `error::Result` | removed | `-` | as `Result` |
+| `prelude` | kept | `prelude` |  |
+| `EagerRuntime` | kept | `EagerRuntime` |  |
+| `EagerSession` | kept | `EagerSession` |  |
+| `EagerTensor` | kept | `EagerTensor` |  |
+| `Tensor` | kept | `Tensor` |  |
+| `TensorRead` | kept | `TensorRead` |  |
+| `TracedTensor` | kept | `TracedTensor` |  |
+| `TypedTensor` | kept | `TypedTensor` |  |
+| `EighOptions` | kept | `EighOptions` |  |
+| `EighOptions::derivative_eps (field)` | kept | `EighOptions::derivative_eps (field)` |  |
+| `EighOptions::driver (field)` | kept | `EighOptions::driver (field)` |  |
+| `EighOptions::gauge (field)` | kept | `EighOptions::gauge (field)` |  |
 | `EighOptions::derivative_eps` | renamed | `EighOptions::with_derivative_eps` | rule 3: `with_*` setters |
 | `EighOptions::driver` | renamed | `EighOptions::with_driver` | rule 3: `with_*` setters |
 | `EighOptions::gauge` | renamed | `EighOptions::with_gauge` | rule 3: `with_*` setters |
@@ -109,11 +126,17 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `EighOptions::eq` | kept | `EighOptions::eq` |  |
 | `EighOptions::default` | kept | `EighOptions::default` |  |
 | `EighOptions::fmt` | kept | `EighOptions::fmt` |  |
+| `QrOptions` | kept | `QrOptions` |  |
+| `QrOptions::gauge (field)` | kept | `QrOptions::gauge (field)` |  |
 | `QrOptions::gauge` | renamed | `QrOptions::with_gauge` | rule 3: `with_*` setters |
 | `QrOptions::clone` | kept | `QrOptions::clone` |  |
 | `QrOptions::eq` | kept | `QrOptions::eq` |  |
 | `QrOptions::default` | kept | `QrOptions::default` |  |
 | `QrOptions::fmt` | kept | `QrOptions::fmt` |  |
+| `RankRevealingQrOptions` | kept | `RankRevealingQrOptions` |  |
+| `RankRevealingQrOptions::atol (field)` | kept | `RankRevealingQrOptions::atol (field)` |  |
+| `RankRevealingQrOptions::gauge (field)` | kept | `RankRevealingQrOptions::gauge (field)` |  |
+| `RankRevealingQrOptions::rtol (field)` | kept | `RankRevealingQrOptions::rtol (field)` |  |
 | `RankRevealingQrOptions::atol` | renamed | `RankRevealingQrOptions::with_atol` | rule 3: `with_*` setters |
 | `RankRevealingQrOptions::gauge` | renamed | `RankRevealingQrOptions::with_gauge` | rule 3: `with_*` setters |
 | `RankRevealingQrOptions::rtol` | renamed | `RankRevealingQrOptions::with_rtol` | rule 3: `with_*` setters |
@@ -121,12 +144,17 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `RankRevealingQrOptions::eq` | kept | `RankRevealingQrOptions::eq` |  |
 | `RankRevealingQrOptions::default` | kept | `RankRevealingQrOptions::default` |  |
 | `RankRevealingQrOptions::fmt` | kept | `RankRevealingQrOptions::fmt` |  |
-| `RankRevealingQrResult::column_permutation` | kept | `RankRevealingQrResult::column_permutation` |  |
-| `RankRevealingQrResult::q` | kept | `RankRevealingQrResult::q` |  |
-| `RankRevealingQrResult::r` | kept | `RankRevealingQrResult::r` |  |
-| `RankRevealingQrResult::rank` | kept | `RankRevealingQrResult::rank` |  |
+| `RankRevealingQrResult` | kept | `RankRevealingQrResult` |  |
+| `RankRevealingQrResult::column_permutation (field)` | kept | `RankRevealingQrResult::column_permutation (field)` |  |
+| `RankRevealingQrResult::q (field)` | kept | `RankRevealingQrResult::q (field)` |  |
+| `RankRevealingQrResult::r (field)` | kept | `RankRevealingQrResult::r (field)` |  |
+| `RankRevealingQrResult::rank (field)` | kept | `RankRevealingQrResult::rank (field)` |  |
 | `RankRevealingQrResult::clone` | kept | `RankRevealingQrResult::clone` |  |
 | `RankRevealingQrResult::fmt` | kept | `RankRevealingQrResult::fmt` |  |
+| `SvdOptions` | kept | `SvdOptions` |  |
+| `SvdOptions::derivative_eps (field)` | kept | `SvdOptions::derivative_eps (field)` |  |
+| `SvdOptions::driver (field)` | kept | `SvdOptions::driver (field)` |  |
+| `SvdOptions::gauge (field)` | kept | `SvdOptions::gauge (field)` |  |
 | `SvdOptions::derivative_eps` | renamed | `SvdOptions::with_derivative_eps` | rule 3: `with_*` setters |
 | `SvdOptions::driver` | renamed | `SvdOptions::with_driver` | rule 3: `with_*` setters |
 | `SvdOptions::gauge` | renamed | `SvdOptions::with_gauge` | rule 3: `with_*` setters |
@@ -134,6 +162,7 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `SvdOptions::eq` | kept | `SvdOptions::eq` |  |
 | `SvdOptions::default` | kept | `SvdOptions::default` |  |
 | `SvdOptions::fmt` | kept | `SvdOptions::fmt` |  |
+| `EagerSessionLinalgExt` | kept | `EagerSessionLinalgExt` |  |
 | `EagerSessionLinalgExt::cholesky` | kept | `EagerSessionLinalgExt::cholesky` |  |
 | `EagerSessionLinalgExt::det` | kept | `EagerSessionLinalgExt::det` |  |
 | `EagerSessionLinalgExt::eig` | kept | `EagerSessionLinalgExt::eig` |  |
@@ -184,8 +213,10 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `tenferro_ad::eager::EagerSession::svd_full` | removed | `EagerSessionLinalgExt::svd_with` | `SvdOptions::default().with_shape(SvdShape::Full)` |
 | `tenferro_ad::eager::EagerSession::svd_with_options` | removed | `EagerSessionLinalgExt::svd_with` |  |
 | `tenferro_ad::eager::EagerSession::triangular_solve` | changed | `EagerSessionLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
+| `EagerTensorLinalgExt` | removed | `EagerSessionLinalgExt` | issue #2552 decision 3 |
 | `EagerTensorLinalgExt::solve` | removed | `EagerSessionLinalgExt::solve` | `session.solve(&a, &b)` |
 | `tenferro_ad::eager::EagerTensor::solve` | removed | `EagerSessionLinalgExt::solve` | `session.solve(&a, &b)` |
+| `LinalgBackend` | kept | `LinalgBackend` |  |
 | `LinalgBackend::cholesky` | kept | `LinalgBackend::cholesky` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
 | `LinalgBackend::cholesky_read` | kept | `LinalgBackend::cholesky_read` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
 | `LinalgBackend::eig` | kept | `LinalgBackend::eig` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
@@ -214,9 +245,18 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `LinalgBackend::svd_with_options_read` | kept | `LinalgBackend::svd_with_options_read` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
 | `LinalgBackend::triangular_solve` | kept | `LinalgBackend::triangular_solve` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
 | `LinalgBackend::triangular_solve_read` | kept | `LinalgBackend::triangular_solve_read` | provider SPI; see OPEN-QUESTIONS-2552.md Q3 |
-| `f32` | kept | `f32` |  |
-| `f64` | kept | `f64` |  |
-| `num_complex` | kept | `num_complex` |  |
+| `LinalgScalar` | kept | `LinalgScalar` |  |
+| `LinalgScalar::Complex` | kept | `LinalgScalar::Complex` |  |
+| `LinalgScalar::RealScalar` | kept | `LinalgScalar::RealScalar` |  |
+| `f32::Complex` | kept | `f32::Complex` |  |
+| `f32::RealScalar` | kept | `f32::RealScalar` |  |
+| `f64::Complex` | kept | `f64::Complex` |  |
+| `f64::RealScalar` | kept | `f64::RealScalar` |  |
+| `num_complex::Complex32::Complex` | kept | `num_complex::Complex32::Complex` |  |
+| `num_complex::Complex32::RealScalar` | kept | `num_complex::Complex32::RealScalar` |  |
+| `num_complex::Complex64::Complex` | kept | `num_complex::Complex64::Complex` |  |
+| `num_complex::Complex64::RealScalar` | kept | `num_complex::Complex64::RealScalar` |  |
+| `TensorLinalgExt` | kept | `TensorLinalgExt` |  |
 | `TensorLinalgExt::cholesky` | kept | `TensorLinalgExt::cholesky` |  |
 | `TensorLinalgExt::det` | kept | `TensorLinalgExt::det` |  |
 | `TensorLinalgExt::eig` | kept | `TensorLinalgExt::eig` |  |
@@ -242,31 +282,32 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `TensorLinalgExt::svd_with_options` | removed | `TensorLinalgExt::svd_with` |  |
 | `TensorLinalgExt::svdvals` | kept | `TensorLinalgExt::svdvals` |  |
 | `TensorLinalgExt::triangular_solve` | changed | `TensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
-| `tenferro_tensor::types::Tensor::cholesky` | kept | `tenferro_tensor::types::Tensor::cholesky` |  |
-| `tenferro_tensor::types::Tensor::det` | kept | `tenferro_tensor::types::Tensor::det` |  |
-| `tenferro_tensor::types::Tensor::eig` | kept | `tenferro_tensor::types::Tensor::eig` |  |
-| `tenferro_tensor::types::Tensor::eigh` | kept | `tenferro_tensor::types::Tensor::eigh` |  |
-| `tenferro_tensor::types::Tensor::eigh_with_options` | kept | `tenferro_tensor::types::Tensor::eigh_with_options` |  |
-| `tenferro_tensor::types::Tensor::eigvals` | kept | `tenferro_tensor::types::Tensor::eigvals` |  |
-| `tenferro_tensor::types::Tensor::eigvalsh` | kept | `tenferro_tensor::types::Tensor::eigvalsh` |  |
-| `tenferro_tensor::types::Tensor::full_piv_lu` | kept | `tenferro_tensor::types::Tensor::full_piv_lu` |  |
-| `tenferro_tensor::types::Tensor::full_piv_lu_solve` | kept | `tenferro_tensor::types::Tensor::full_piv_lu_solve` |  |
-| `tenferro_tensor::types::Tensor::householder_qr` | kept | `tenferro_tensor::types::Tensor::householder_qr` |  |
-| `tenferro_tensor::types::Tensor::inv` | kept | `tenferro_tensor::types::Tensor::inv` |  |
-| `tenferro_tensor::types::Tensor::lu` | kept | `tenferro_tensor::types::Tensor::lu` |  |
-| `tenferro_tensor::types::Tensor::norm` | kept | `tenferro_tensor::types::Tensor::norm` |  |
-| `tenferro_tensor::types::Tensor::pinv` | kept | `tenferro_tensor::types::Tensor::pinv` |  |
-| `tenferro_tensor::types::Tensor::pinv_with_rtol` | kept | `tenferro_tensor::types::Tensor::pinv_with_rtol` |  |
-| `tenferro_tensor::types::Tensor::qr` | kept | `tenferro_tensor::types::Tensor::qr` |  |
-| `tenferro_tensor::types::Tensor::qr_with_options` | kept | `tenferro_tensor::types::Tensor::qr_with_options` |  |
-| `tenferro_tensor::types::Tensor::rank_revealing_qr` | kept | `tenferro_tensor::types::Tensor::rank_revealing_qr` |  |
-| `tenferro_tensor::types::Tensor::slogdet` | kept | `tenferro_tensor::types::Tensor::slogdet` |  |
-| `tenferro_tensor::types::Tensor::solve` | kept | `tenferro_tensor::types::Tensor::solve` |  |
-| `tenferro_tensor::types::Tensor::svd` | kept | `tenferro_tensor::types::Tensor::svd` |  |
-| `tenferro_tensor::types::Tensor::svd_full` | kept | `tenferro_tensor::types::Tensor::svd_full` |  |
-| `tenferro_tensor::types::Tensor::svd_with_options` | kept | `tenferro_tensor::types::Tensor::svd_with_options` |  |
-| `tenferro_tensor::types::Tensor::svdvals` | kept | `tenferro_tensor::types::Tensor::svdvals` |  |
-| `tenferro_tensor::types::Tensor::triangular_solve` | kept | `tenferro_tensor::types::Tensor::triangular_solve` |  |
+| `tenferro_tensor::types::Tensor::cholesky` | kept | `TensorLinalgExt::cholesky` |  |
+| `tenferro_tensor::types::Tensor::det` | kept | `TensorLinalgExt::det` |  |
+| `tenferro_tensor::types::Tensor::eig` | kept | `TensorLinalgExt::eig` |  |
+| `tenferro_tensor::types::Tensor::eigh` | kept | `TensorLinalgExt::eigh` |  |
+| `tenferro_tensor::types::Tensor::eigh_with_options` | removed | `TensorLinalgExt::eigh_with` |  |
+| `tenferro_tensor::types::Tensor::eigvals` | kept | `TensorLinalgExt::eigvals` |  |
+| `tenferro_tensor::types::Tensor::eigvalsh` | kept | `TensorLinalgExt::eigvalsh` |  |
+| `tenferro_tensor::types::Tensor::full_piv_lu` | kept | `TensorLinalgExt::full_piv_lu` |  |
+| `tenferro_tensor::types::Tensor::full_piv_lu_solve` | kept | `TensorLinalgExt::full_piv_lu_solve` |  |
+| `tenferro_tensor::types::Tensor::householder_qr` | kept | `TensorLinalgExt::householder_qr` |  |
+| `tenferro_tensor::types::Tensor::inv` | kept | `TensorLinalgExt::inv` |  |
+| `tenferro_tensor::types::Tensor::lu` | kept | `TensorLinalgExt::lu` |  |
+| `tenferro_tensor::types::Tensor::norm` | changed | `TensorLinalgExt::norm` | `ord`, `usize` axes and `keepdim: bool` become `NormOptions` (`isize` axes, `KeepDims`) on `norm_with` |
+| `tenferro_tensor::types::Tensor::pinv` | kept | `TensorLinalgExt::pinv` |  |
+| `tenferro_tensor::types::Tensor::pinv_with_rtol` | removed | `TensorLinalgExt::pinv_with` | `PinvOptions::default().with_rtol(rtol)` |
+| `tenferro_tensor::types::Tensor::qr` | kept | `TensorLinalgExt::qr` |  |
+| `tenferro_tensor::types::Tensor::qr_with_options` | removed | `TensorLinalgExt::qr_with` |  |
+| `tenferro_tensor::types::Tensor::rank_revealing_qr` | changed | `TensorLinalgExt::rank_revealing_qr` | options move to `rank_revealing_qr_with`; the short form uses defaults |
+| `tenferro_tensor::types::Tensor::slogdet` | kept | `TensorLinalgExt::slogdet` |  |
+| `tenferro_tensor::types::Tensor::solve` | kept | `TensorLinalgExt::solve` |  |
+| `tenferro_tensor::types::Tensor::svd` | kept | `TensorLinalgExt::svd` |  |
+| `tenferro_tensor::types::Tensor::svd_full` | removed | `TensorLinalgExt::svd_with` | `SvdOptions::default().with_shape(SvdShape::Full)` |
+| `tenferro_tensor::types::Tensor::svd_with_options` | removed | `TensorLinalgExt::svd_with` |  |
+| `tenferro_tensor::types::Tensor::svdvals` | kept | `TensorLinalgExt::svdvals` |  |
+| `tenferro_tensor::types::Tensor::triangular_solve` | changed | `TensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
+| `TensorReadLinalgExt` | removed | `TensorLinalgExt` | `TensorRead<'_>` implements `LinalgInput` |
 | `TensorReadLinalgExt::cholesky_read` | removed | `TensorLinalgExt::cholesky` | receiver `TensorRead<'_>` |
 | `TensorReadLinalgExt::det_read` | removed | `TensorLinalgExt::det` | receiver `TensorRead<'_>` |
 | `TensorReadLinalgExt::eig_read` | removed | `TensorLinalgExt::eig` | receiver `TensorRead<'_>` |
@@ -292,31 +333,32 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `TensorReadLinalgExt::svd_with_options_read` | removed | `TensorLinalgExt::svd_with` | receiver `TensorRead<'_>` |
 | `TensorReadLinalgExt::svdvals_read` | removed | `TensorLinalgExt::svdvals` | receiver `TensorRead<'_>` |
 | `TensorReadLinalgExt::triangular_solve_read` | removed | `TensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
-| `tenferro_tensor::types::TensorRead::cholesky_read` | kept | `tenferro_tensor::types::TensorRead::cholesky_read` |  |
-| `tenferro_tensor::types::TensorRead::det_read` | kept | `tenferro_tensor::types::TensorRead::det_read` |  |
-| `tenferro_tensor::types::TensorRead::eig_read` | kept | `tenferro_tensor::types::TensorRead::eig_read` |  |
-| `tenferro_tensor::types::TensorRead::eigh_read` | kept | `tenferro_tensor::types::TensorRead::eigh_read` |  |
-| `tenferro_tensor::types::TensorRead::eigh_with_options_read` | kept | `tenferro_tensor::types::TensorRead::eigh_with_options_read` |  |
-| `tenferro_tensor::types::TensorRead::eigvals_read` | kept | `tenferro_tensor::types::TensorRead::eigvals_read` |  |
-| `tenferro_tensor::types::TensorRead::eigvalsh_read` | kept | `tenferro_tensor::types::TensorRead::eigvalsh_read` |  |
-| `tenferro_tensor::types::TensorRead::full_piv_lu_read` | kept | `tenferro_tensor::types::TensorRead::full_piv_lu_read` |  |
-| `tenferro_tensor::types::TensorRead::full_piv_lu_solve_read` | kept | `tenferro_tensor::types::TensorRead::full_piv_lu_solve_read` |  |
-| `tenferro_tensor::types::TensorRead::inv_read` | kept | `tenferro_tensor::types::TensorRead::inv_read` |  |
-| `tenferro_tensor::types::TensorRead::lu_read` | kept | `tenferro_tensor::types::TensorRead::lu_read` |  |
-| `tenferro_tensor::types::TensorRead::norm_read` | kept | `tenferro_tensor::types::TensorRead::norm_read` |  |
-| `tenferro_tensor::types::TensorRead::pinv_read` | kept | `tenferro_tensor::types::TensorRead::pinv_read` |  |
-| `tenferro_tensor::types::TensorRead::pinv_with_rtol_read` | kept | `tenferro_tensor::types::TensorRead::pinv_with_rtol_read` |  |
-| `tenferro_tensor::types::TensorRead::qr_read` | kept | `tenferro_tensor::types::TensorRead::qr_read` |  |
-| `tenferro_tensor::types::TensorRead::qr_with_options_read` | kept | `tenferro_tensor::types::TensorRead::qr_with_options_read` |  |
-| `tenferro_tensor::types::TensorRead::rank_revealing_qr_read` | kept | `tenferro_tensor::types::TensorRead::rank_revealing_qr_read` |  |
-| `tenferro_tensor::types::TensorRead::slogdet_read` | kept | `tenferro_tensor::types::TensorRead::slogdet_read` |  |
-| `tenferro_tensor::types::TensorRead::solve_read` | kept | `tenferro_tensor::types::TensorRead::solve_read` |  |
-| `tenferro_tensor::types::TensorRead::solve_read_into` | kept | `tenferro_tensor::types::TensorRead::solve_read_into` |  |
-| `tenferro_tensor::types::TensorRead::svd_full_read` | kept | `tenferro_tensor::types::TensorRead::svd_full_read` |  |
-| `tenferro_tensor::types::TensorRead::svd_read` | kept | `tenferro_tensor::types::TensorRead::svd_read` |  |
-| `tenferro_tensor::types::TensorRead::svd_with_options_read` | kept | `tenferro_tensor::types::TensorRead::svd_with_options_read` |  |
-| `tenferro_tensor::types::TensorRead::svdvals_read` | kept | `tenferro_tensor::types::TensorRead::svdvals_read` |  |
-| `tenferro_tensor::types::TensorRead::triangular_solve_read` | kept | `tenferro_tensor::types::TensorRead::triangular_solve_read` |  |
+| `tenferro_tensor::types::TensorRead::cholesky_read` | removed | `TensorLinalgExt::cholesky` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::det_read` | removed | `TensorLinalgExt::det` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::eig_read` | removed | `TensorLinalgExt::eig` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::eigh_read` | removed | `TensorLinalgExt::eigh` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::eigh_with_options_read` | removed | `TensorLinalgExt::eigh_with` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::eigvals_read` | removed | `TensorLinalgExt::eigvals` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::eigvalsh_read` | removed | `TensorLinalgExt::eigvalsh` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::full_piv_lu_read` | removed | `TensorLinalgExt::full_piv_lu` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::full_piv_lu_solve_read` | removed | `TensorLinalgExt::full_piv_lu_solve` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::inv_read` | removed | `TensorLinalgExt::inv` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::lu_read` | removed | `TensorLinalgExt::lu` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::norm_read` | removed | `TensorLinalgExt::norm` | `ord`, `usize` axes and `keepdim: bool` become `NormOptions` (`isize` axes, `KeepDims`) on `norm_with` |
+| `tenferro_tensor::types::TensorRead::pinv_read` | removed | `TensorLinalgExt::pinv` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::pinv_with_rtol_read` | removed | `TensorLinalgExt::pinv_with` | `PinvOptions::default().with_rtol(rtol)` |
+| `tenferro_tensor::types::TensorRead::qr_read` | removed | `TensorLinalgExt::qr` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::qr_with_options_read` | removed | `TensorLinalgExt::qr_with` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::rank_revealing_qr_read` | removed | `TensorLinalgExt::rank_revealing_qr` | options move to `rank_revealing_qr_with`; the short form uses defaults |
+| `tenferro_tensor::types::TensorRead::slogdet_read` | removed | `TensorLinalgExt::slogdet` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::solve_read` | removed | `TensorLinalgExt::solve` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::solve_read_into` | removed | `TensorLinalgExt::solve_into` | destination stays `TensorWrite<'_>` |
+| `tenferro_tensor::types::TensorRead::svd_full_read` | removed | `TensorLinalgExt::svd_with` | `SvdOptions::default().with_shape(SvdShape::Full)` |
+| `tenferro_tensor::types::TensorRead::svd_read` | removed | `TensorLinalgExt::svd` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::svd_with_options_read` | removed | `TensorLinalgExt::svd_with` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::svdvals_read` | removed | `TensorLinalgExt::svdvals` | receiver `TensorRead<'_>` |
+| `tenferro_tensor::types::TensorRead::triangular_solve_read` | removed | `TensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
+| `TraceContextLinalgExt` | removed | `TracedTensorLinalgExt` | issue #2552 decision 4 |
 | `TraceContextLinalgExt::cholesky` | removed | `TracedTensorLinalgExt::cholesky` | call on the `TracedTensor` instead of `ctx.op(value)` |
 | `TraceContextLinalgExt::det` | removed | `TracedTensorLinalgExt::det` | call on the `TracedTensor` instead of `ctx.op(value)` |
 | `TraceContextLinalgExt::eig` | removed | `TracedTensorLinalgExt::eig` | call on the `TracedTensor` instead of `ctx.op(value)` |
@@ -342,31 +384,32 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `TraceContextLinalgExt::svd_full` | removed | `TracedTensorLinalgExt::svd_with` | `SvdOptions::default().with_shape(SvdShape::Full)` |
 | `TraceContextLinalgExt::svd_with_options` | removed | `TracedTensorLinalgExt::svd_with` | call on the `TracedTensor` instead of `ctx.op(value)` |
 | `TraceContextLinalgExt::triangular_solve` | removed | `TracedTensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
-| `tenferro_runtime::trace::TraceContext::cholesky` | kept | `tenferro_runtime::trace::TraceContext::cholesky` |  |
-| `tenferro_runtime::trace::TraceContext::det` | kept | `tenferro_runtime::trace::TraceContext::det` |  |
-| `tenferro_runtime::trace::TraceContext::eig` | kept | `tenferro_runtime::trace::TraceContext::eig` |  |
-| `tenferro_runtime::trace::TraceContext::eigh` | kept | `tenferro_runtime::trace::TraceContext::eigh` |  |
-| `tenferro_runtime::trace::TraceContext::eigh_with_options` | kept | `tenferro_runtime::trace::TraceContext::eigh_with_options` |  |
-| `tenferro_runtime::trace::TraceContext::eigvals` | kept | `tenferro_runtime::trace::TraceContext::eigvals` |  |
-| `tenferro_runtime::trace::TraceContext::eigvalsh` | kept | `tenferro_runtime::trace::TraceContext::eigvalsh` |  |
-| `tenferro_runtime::trace::TraceContext::full_piv_lu` | kept | `tenferro_runtime::trace::TraceContext::full_piv_lu` |  |
-| `tenferro_runtime::trace::TraceContext::full_piv_lu_solve` | kept | `tenferro_runtime::trace::TraceContext::full_piv_lu_solve` |  |
-| `tenferro_runtime::trace::TraceContext::householder_qr` | kept | `tenferro_runtime::trace::TraceContext::householder_qr` |  |
-| `tenferro_runtime::trace::TraceContext::inv` | kept | `tenferro_runtime::trace::TraceContext::inv` |  |
-| `tenferro_runtime::trace::TraceContext::lstsq` | kept | `tenferro_runtime::trace::TraceContext::lstsq` |  |
-| `tenferro_runtime::trace::TraceContext::lu` | kept | `tenferro_runtime::trace::TraceContext::lu` |  |
-| `tenferro_runtime::trace::TraceContext::norm` | kept | `tenferro_runtime::trace::TraceContext::norm` |  |
-| `tenferro_runtime::trace::TraceContext::pinv` | kept | `tenferro_runtime::trace::TraceContext::pinv` |  |
-| `tenferro_runtime::trace::TraceContext::pinv_with_rtol` | kept | `tenferro_runtime::trace::TraceContext::pinv_with_rtol` |  |
-| `tenferro_runtime::trace::TraceContext::qr` | kept | `tenferro_runtime::trace::TraceContext::qr` |  |
-| `tenferro_runtime::trace::TraceContext::qr_with_options` | kept | `tenferro_runtime::trace::TraceContext::qr_with_options` |  |
-| `tenferro_runtime::trace::TraceContext::rank_revealing_qr` | kept | `tenferro_runtime::trace::TraceContext::rank_revealing_qr` |  |
-| `tenferro_runtime::trace::TraceContext::slogdet` | kept | `tenferro_runtime::trace::TraceContext::slogdet` |  |
-| `tenferro_runtime::trace::TraceContext::solve` | kept | `tenferro_runtime::trace::TraceContext::solve` |  |
-| `tenferro_runtime::trace::TraceContext::svd` | kept | `tenferro_runtime::trace::TraceContext::svd` |  |
-| `tenferro_runtime::trace::TraceContext::svd_full` | kept | `tenferro_runtime::trace::TraceContext::svd_full` |  |
-| `tenferro_runtime::trace::TraceContext::svd_with_options` | kept | `tenferro_runtime::trace::TraceContext::svd_with_options` |  |
-| `tenferro_runtime::trace::TraceContext::triangular_solve` | kept | `tenferro_runtime::trace::TraceContext::triangular_solve` |  |
+| `tenferro_runtime::trace::TraceContext::cholesky` | removed | `TracedTensorLinalgExt::cholesky` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::det` | removed | `TracedTensorLinalgExt::det` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::eig` | removed | `TracedTensorLinalgExt::eig` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::eigh` | removed | `TracedTensorLinalgExt::eigh` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::eigh_with_options` | removed | `TracedTensorLinalgExt::eigh_with` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::eigvals` | removed | `TracedTensorLinalgExt::eigvals` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::eigvalsh` | removed | `TracedTensorLinalgExt::eigvalsh` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::full_piv_lu` | removed | `TracedTensorLinalgExt::full_piv_lu` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::full_piv_lu_solve` | removed | `TracedTensorLinalgExt::full_piv_lu_solve` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::householder_qr` | removed | `TracedTensorLinalgExt::householder_qr` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::inv` | removed | `TracedTensorLinalgExt::inv` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::lstsq` | removed | `TracedTensorLinalgExt::lstsq` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::lu` | removed | `TracedTensorLinalgExt::lu` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::norm` | removed | `TracedTensorLinalgExt::norm` | `ord`, `usize` axes and `keepdim: bool` become `NormOptions` (`isize` axes, `KeepDims`) on `norm_with` |
+| `tenferro_runtime::trace::TraceContext::pinv` | removed | `TracedTensorLinalgExt::pinv` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::pinv_with_rtol` | removed | `TracedTensorLinalgExt::pinv_with` | `PinvOptions::default().with_rtol(rtol)` |
+| `tenferro_runtime::trace::TraceContext::qr` | removed | `TracedTensorLinalgExt::qr` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::qr_with_options` | removed | `TracedTensorLinalgExt::qr_with` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::rank_revealing_qr` | removed | `TracedTensorLinalgExt::rank_revealing_qr` | options move to `rank_revealing_qr_with`; the short form uses defaults |
+| `tenferro_runtime::trace::TraceContext::slogdet` | removed | `TracedTensorLinalgExt::slogdet` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::solve` | removed | `TracedTensorLinalgExt::solve` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::svd` | removed | `TracedTensorLinalgExt::svd` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::svd_full` | removed | `TracedTensorLinalgExt::svd_with` | `SvdOptions::default().with_shape(SvdShape::Full)` |
+| `tenferro_runtime::trace::TraceContext::svd_with_options` | removed | `TracedTensorLinalgExt::svd_with` | call on the `TracedTensor` instead of `ctx.op(value)` |
+| `tenferro_runtime::trace::TraceContext::triangular_solve` | removed | `TracedTensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
+| `TracedTensorLinalgExt` | kept | `TracedTensorLinalgExt` |  |
 | `TracedTensorLinalgExt::cholesky` | kept | `TracedTensorLinalgExt::cholesky` |  |
 | `TracedTensorLinalgExt::det` | kept | `TracedTensorLinalgExt::det` |  |
 | `TracedTensorLinalgExt::eig` | kept | `TracedTensorLinalgExt::eig` |  |
@@ -392,31 +435,32 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `TracedTensorLinalgExt::svd_full` | removed | `TracedTensorLinalgExt::svd_with` | `SvdOptions::default().with_shape(SvdShape::Full)` |
 | `TracedTensorLinalgExt::svd_with_options` | removed | `TracedTensorLinalgExt::svd_with` |  |
 | `TracedTensorLinalgExt::triangular_solve` | changed | `TracedTensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
-| `tenferro_runtime::traced::TracedTensor::cholesky` | kept | `tenferro_runtime::traced::TracedTensor::cholesky` |  |
-| `tenferro_runtime::traced::TracedTensor::det` | kept | `tenferro_runtime::traced::TracedTensor::det` |  |
-| `tenferro_runtime::traced::TracedTensor::eig` | kept | `tenferro_runtime::traced::TracedTensor::eig` |  |
-| `tenferro_runtime::traced::TracedTensor::eigh` | kept | `tenferro_runtime::traced::TracedTensor::eigh` |  |
-| `tenferro_runtime::traced::TracedTensor::eigh_with_options` | kept | `tenferro_runtime::traced::TracedTensor::eigh_with_options` |  |
-| `tenferro_runtime::traced::TracedTensor::eigvals` | kept | `tenferro_runtime::traced::TracedTensor::eigvals` |  |
-| `tenferro_runtime::traced::TracedTensor::eigvalsh` | kept | `tenferro_runtime::traced::TracedTensor::eigvalsh` |  |
-| `tenferro_runtime::traced::TracedTensor::full_piv_lu` | kept | `tenferro_runtime::traced::TracedTensor::full_piv_lu` |  |
-| `tenferro_runtime::traced::TracedTensor::full_piv_lu_solve` | kept | `tenferro_runtime::traced::TracedTensor::full_piv_lu_solve` |  |
-| `tenferro_runtime::traced::TracedTensor::householder_qr` | kept | `tenferro_runtime::traced::TracedTensor::householder_qr` |  |
-| `tenferro_runtime::traced::TracedTensor::inv` | kept | `tenferro_runtime::traced::TracedTensor::inv` |  |
-| `tenferro_runtime::traced::TracedTensor::lstsq` | kept | `tenferro_runtime::traced::TracedTensor::lstsq` |  |
-| `tenferro_runtime::traced::TracedTensor::lu` | kept | `tenferro_runtime::traced::TracedTensor::lu` |  |
-| `tenferro_runtime::traced::TracedTensor::norm` | kept | `tenferro_runtime::traced::TracedTensor::norm` |  |
-| `tenferro_runtime::traced::TracedTensor::pinv` | kept | `tenferro_runtime::traced::TracedTensor::pinv` |  |
-| `tenferro_runtime::traced::TracedTensor::pinv_with_rtol` | kept | `tenferro_runtime::traced::TracedTensor::pinv_with_rtol` |  |
-| `tenferro_runtime::traced::TracedTensor::qr` | kept | `tenferro_runtime::traced::TracedTensor::qr` |  |
-| `tenferro_runtime::traced::TracedTensor::qr_with_options` | kept | `tenferro_runtime::traced::TracedTensor::qr_with_options` |  |
-| `tenferro_runtime::traced::TracedTensor::rank_revealing_qr` | kept | `tenferro_runtime::traced::TracedTensor::rank_revealing_qr` |  |
-| `tenferro_runtime::traced::TracedTensor::slogdet` | kept | `tenferro_runtime::traced::TracedTensor::slogdet` |  |
-| `tenferro_runtime::traced::TracedTensor::solve` | kept | `tenferro_runtime::traced::TracedTensor::solve` |  |
-| `tenferro_runtime::traced::TracedTensor::svd` | kept | `tenferro_runtime::traced::TracedTensor::svd` |  |
-| `tenferro_runtime::traced::TracedTensor::svd_full` | kept | `tenferro_runtime::traced::TracedTensor::svd_full` |  |
-| `tenferro_runtime::traced::TracedTensor::svd_with_options` | kept | `tenferro_runtime::traced::TracedTensor::svd_with_options` |  |
-| `tenferro_runtime::traced::TracedTensor::triangular_solve` | kept | `tenferro_runtime::traced::TracedTensor::triangular_solve` |  |
+| `tenferro_runtime::traced::TracedTensor::cholesky` | kept | `TracedTensorLinalgExt::cholesky` |  |
+| `tenferro_runtime::traced::TracedTensor::det` | kept | `TracedTensorLinalgExt::det` |  |
+| `tenferro_runtime::traced::TracedTensor::eig` | kept | `TracedTensorLinalgExt::eig` |  |
+| `tenferro_runtime::traced::TracedTensor::eigh` | kept | `TracedTensorLinalgExt::eigh` |  |
+| `tenferro_runtime::traced::TracedTensor::eigh_with_options` | removed | `TracedTensorLinalgExt::eigh_with` |  |
+| `tenferro_runtime::traced::TracedTensor::eigvals` | kept | `TracedTensorLinalgExt::eigvals` |  |
+| `tenferro_runtime::traced::TracedTensor::eigvalsh` | kept | `TracedTensorLinalgExt::eigvalsh` |  |
+| `tenferro_runtime::traced::TracedTensor::full_piv_lu` | kept | `TracedTensorLinalgExt::full_piv_lu` |  |
+| `tenferro_runtime::traced::TracedTensor::full_piv_lu_solve` | kept | `TracedTensorLinalgExt::full_piv_lu_solve` |  |
+| `tenferro_runtime::traced::TracedTensor::householder_qr` | kept | `TracedTensorLinalgExt::householder_qr` |  |
+| `tenferro_runtime::traced::TracedTensor::inv` | kept | `TracedTensorLinalgExt::inv` |  |
+| `tenferro_runtime::traced::TracedTensor::lstsq` | kept | `TracedTensorLinalgExt::lstsq` |  |
+| `tenferro_runtime::traced::TracedTensor::lu` | kept | `TracedTensorLinalgExt::lu` |  |
+| `tenferro_runtime::traced::TracedTensor::norm` | changed | `TracedTensorLinalgExt::norm` | `ord`, `usize` axes and `keepdim: bool` become `NormOptions` (`isize` axes, `KeepDims`) on `norm_with` |
+| `tenferro_runtime::traced::TracedTensor::pinv` | kept | `TracedTensorLinalgExt::pinv` |  |
+| `tenferro_runtime::traced::TracedTensor::pinv_with_rtol` | removed | `TracedTensorLinalgExt::pinv_with` | `PinvOptions::default().with_rtol(rtol)` |
+| `tenferro_runtime::traced::TracedTensor::qr` | kept | `TracedTensorLinalgExt::qr` |  |
+| `tenferro_runtime::traced::TracedTensor::qr_with_options` | removed | `TracedTensorLinalgExt::qr_with` |  |
+| `tenferro_runtime::traced::TracedTensor::rank_revealing_qr` | changed | `TracedTensorLinalgExt::rank_revealing_qr` | options move to `rank_revealing_qr_with`; the short form uses defaults |
+| `tenferro_runtime::traced::TracedTensor::slogdet` | kept | `TracedTensorLinalgExt::slogdet` |  |
+| `tenferro_runtime::traced::TracedTensor::solve` | kept | `TracedTensorLinalgExt::solve` |  |
+| `tenferro_runtime::traced::TracedTensor::svd` | kept | `TracedTensorLinalgExt::svd` |  |
+| `tenferro_runtime::traced::TracedTensor::svd_full` | removed | `TracedTensorLinalgExt::svd_with` | `SvdOptions::default().with_shape(SvdShape::Full)` |
+| `tenferro_runtime::traced::TracedTensor::svd_with_options` | removed | `TracedTensorLinalgExt::svd_with` |  |
+| `tenferro_runtime::traced::TracedTensor::triangular_solve` | changed | `TracedTensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
+| `TypedTensorLinalgExt` | removed | `TensorLinalgExt` | `TypedTensor<T>` implements `LinalgInput` |
 | `TypedTensorLinalgExt::cholesky` | removed | `TensorLinalgExt::cholesky` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
 | `TypedTensorLinalgExt::det` | removed | `TensorLinalgExt::det` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
 | `TypedTensorLinalgExt::eig` | removed | `TensorLinalgExt::eig` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
@@ -441,30 +485,36 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `TypedTensorLinalgExt::svd_with_options` | removed | `TensorLinalgExt::svd_with` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
 | `TypedTensorLinalgExt::svdvals` | removed | `TensorLinalgExt::svdvals` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
 | `TypedTensorLinalgExt::triangular_solve` | removed | `TensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
-| `tenferro_tensor::types::TypedTensor::cholesky` | kept | `tenferro_tensor::types::TypedTensor::cholesky` |  |
-| `tenferro_tensor::types::TypedTensor::det` | kept | `tenferro_tensor::types::TypedTensor::det` |  |
-| `tenferro_tensor::types::TypedTensor::eig` | kept | `tenferro_tensor::types::TypedTensor::eig` |  |
-| `tenferro_tensor::types::TypedTensor::eigh` | kept | `tenferro_tensor::types::TypedTensor::eigh` |  |
-| `tenferro_tensor::types::TypedTensor::eigh_with_options` | kept | `tenferro_tensor::types::TypedTensor::eigh_with_options` |  |
-| `tenferro_tensor::types::TypedTensor::eigvals` | kept | `tenferro_tensor::types::TypedTensor::eigvals` |  |
-| `tenferro_tensor::types::TypedTensor::eigvalsh` | kept | `tenferro_tensor::types::TypedTensor::eigvalsh` |  |
-| `tenferro_tensor::types::TypedTensor::full_piv_lu` | kept | `tenferro_tensor::types::TypedTensor::full_piv_lu` |  |
-| `tenferro_tensor::types::TypedTensor::full_piv_lu_solve` | kept | `tenferro_tensor::types::TypedTensor::full_piv_lu_solve` |  |
-| `tenferro_tensor::types::TypedTensor::inv` | kept | `tenferro_tensor::types::TypedTensor::inv` |  |
-| `tenferro_tensor::types::TypedTensor::lu` | kept | `tenferro_tensor::types::TypedTensor::lu` |  |
-| `tenferro_tensor::types::TypedTensor::norm` | kept | `tenferro_tensor::types::TypedTensor::norm` |  |
-| `tenferro_tensor::types::TypedTensor::pinv` | kept | `tenferro_tensor::types::TypedTensor::pinv` |  |
-| `tenferro_tensor::types::TypedTensor::pinv_with_rtol` | kept | `tenferro_tensor::types::TypedTensor::pinv_with_rtol` |  |
-| `tenferro_tensor::types::TypedTensor::qr` | kept | `tenferro_tensor::types::TypedTensor::qr` |  |
-| `tenferro_tensor::types::TypedTensor::qr_with_options` | kept | `tenferro_tensor::types::TypedTensor::qr_with_options` |  |
-| `tenferro_tensor::types::TypedTensor::rank_revealing_qr` | kept | `tenferro_tensor::types::TypedTensor::rank_revealing_qr` |  |
-| `tenferro_tensor::types::TypedTensor::slogdet` | kept | `tenferro_tensor::types::TypedTensor::slogdet` |  |
-| `tenferro_tensor::types::TypedTensor::solve` | kept | `tenferro_tensor::types::TypedTensor::solve` |  |
-| `tenferro_tensor::types::TypedTensor::svd` | kept | `tenferro_tensor::types::TypedTensor::svd` |  |
-| `tenferro_tensor::types::TypedTensor::svd_full` | kept | `tenferro_tensor::types::TypedTensor::svd_full` |  |
-| `tenferro_tensor::types::TypedTensor::svd_with_options` | kept | `tenferro_tensor::types::TypedTensor::svd_with_options` |  |
-| `tenferro_tensor::types::TypedTensor::svdvals` | kept | `tenferro_tensor::types::TypedTensor::svdvals` |  |
-| `tenferro_tensor::types::TypedTensor::triangular_solve` | kept | `tenferro_tensor::types::TypedTensor::triangular_solve` |  |
+| `tenferro_tensor::types::TypedTensor::cholesky` | removed | `TensorLinalgExt::cholesky` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::det` | removed | `TensorLinalgExt::det` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::eig` | removed | `TensorLinalgExt::eig` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::eigh` | removed | `TensorLinalgExt::eigh` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::eigh_with_options` | removed | `TensorLinalgExt::eigh_with` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::eigvals` | removed | `TensorLinalgExt::eigvals` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::eigvalsh` | removed | `TensorLinalgExt::eigvalsh` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::full_piv_lu` | removed | `TensorLinalgExt::full_piv_lu` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::full_piv_lu_solve` | removed | `TensorLinalgExt::full_piv_lu_solve` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::inv` | removed | `TensorLinalgExt::inv` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::lu` | removed | `TensorLinalgExt::lu` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::norm` | removed | `TensorLinalgExt::norm` | `ord`, `usize` axes and `keepdim: bool` become `NormOptions` (`isize` axes, `KeepDims`) on `norm_with` |
+| `tenferro_tensor::types::TypedTensor::pinv` | removed | `TensorLinalgExt::pinv` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::pinv_with_rtol` | removed | `TensorLinalgExt::pinv_with` | `PinvOptions::default().with_rtol(rtol)` |
+| `tenferro_tensor::types::TypedTensor::qr` | removed | `TensorLinalgExt::qr` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::qr_with_options` | removed | `TensorLinalgExt::qr_with` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::rank_revealing_qr` | removed | `TensorLinalgExt::rank_revealing_qr` | options move to `rank_revealing_qr_with`; the short form uses defaults |
+| `tenferro_tensor::types::TypedTensor::slogdet` | removed | `TensorLinalgExt::slogdet` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::solve` | removed | `TensorLinalgExt::solve` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::svd` | removed | `TensorLinalgExt::svd` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::svd_full` | removed | `TensorLinalgExt::svd_with` | `SvdOptions::default().with_shape(SvdShape::Full)` |
+| `tenferro_tensor::types::TypedTensor::svd_with_options` | removed | `TensorLinalgExt::svd_with` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::svdvals` | removed | `TensorLinalgExt::svdvals` | receiver `TypedTensor<T>`; typed outputs through `LinalgInput` |
+| `tenferro_tensor::types::TypedTensor::triangular_solve` | removed | `TensorLinalgExt::triangular_solve` | four `bool` flags become `TriangularSolveOptions` (`Side`, `Uplo`, `Transpose`, `Diagonal`) on `triangular_solve_with` |
+| `TypedEig` | removed | `Eig` | `Eig<TypedTensor<T::Complex>>` |
+| `TypedFullPivLu` | removed | `FullPivLu` | `FullPivLu<TypedTensor<T>, TypedTensor<T::Real>>` |
+| `TypedLu` | removed | `Lu` | `Lu<TypedTensor<T>, TypedTensor<T::Real>>` |
+| `TypedRankRevealingQrResult` | removed | `RankRevealingQrResult` | `RankRevealingQrResult<TypedTensor<T>, TypedTensor<i64>>` |
+| `TypedSvd` | removed | `Svd` | `Svd<TypedTensor<T>, TypedTensor<T::Real>>` |
+| `EighDriver` | kept | `EighDriver` |  |
 | `EighDriver::Auto` | kept | `EighDriver::Auto` |  |
 | `EighDriver::DivideAndConquer` | kept | `EighDriver::DivideAndConquer` |  |
 | `EighDriver::Jacobi` | kept | `EighDriver::Jacobi` |  |
@@ -472,21 +522,24 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `EighDriver::eq` | kept | `EighDriver::eq` |  |
 | `EighDriver::default` | kept | `EighDriver::default` |  |
 | `EighDriver::fmt` | kept | `EighDriver::fmt` |  |
+| `EighGauge` | kept | `EighGauge` |  |
 | `EighGauge::CanonicalPivot` | kept | `EighGauge::CanonicalPivot` |  |
 | `EighGauge::Raw` | kept | `EighGauge::Raw` |  |
 | `EighGauge::clone` | kept | `EighGauge::clone` |  |
 | `EighGauge::eq` | kept | `EighGauge::eq` |  |
 | `EighGauge::fmt` | kept | `EighGauge::fmt` |  |
+| `Error` | kept | `Error` |  |
 | `Error::NonConvergence` | kept | `Error::NonConvergence` |  |
-| `Error::NonConvergence::op` | kept | `Error::NonConvergence::op` |  |
+| `Error::NonConvergence::op (field)` | kept | `Error::NonConvergence::op (field)` |  |
 | `Error::NonFinite` | kept | `Error::NonFinite` |  |
-| `Error::NonFinite::op` | kept | `Error::NonFinite::op` |  |
-| `Error::NonFinite::role` | kept | `Error::NonFinite::role` |  |
+| `Error::NonFinite::op (field)` | kept | `Error::NonFinite::op (field)` |  |
+| `Error::NonFinite::role (field)` | kept | `Error::NonFinite::role (field)` |  |
 | `Error::Singular` | kept | `Error::Singular` |  |
-| `Error::Singular::op` | kept | `Error::Singular::op` |  |
+| `Error::Singular::op (field)` | kept | `Error::Singular::op (field)` |  |
 | `Error::UnsupportedDType` | kept | `Error::UnsupportedDType` |  |
-| `Error::UnsupportedDType::dtype` | kept | `Error::UnsupportedDType::dtype` |  |
-| `Error::UnsupportedDType::op` | kept | `Error::UnsupportedDType::op` |  |
+| `Error::UnsupportedDType::dtype (field)` | kept | `Error::UnsupportedDType::dtype (field)` |  |
+| `Error::UnsupportedDType::op (field)` | kept | `Error::UnsupportedDType::op (field)` |  |
+| `LinalgAdOpKind` | kept | `LinalgAdOpKind` |  |
 | `LinalgAdOpKind::Cholesky` | kept | `LinalgAdOpKind::Cholesky` |  |
 | `LinalgAdOpKind::Eig` | kept | `LinalgAdOpKind::Eig` |  |
 | `LinalgAdOpKind::EigVals` | kept | `LinalgAdOpKind::EigVals` |  |
@@ -513,10 +566,12 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `LinalgAdOpKind::SvdFull` | kept | `LinalgAdOpKind::SvdFull` |  |
 | `LinalgAdOpKind::SvdVals` | kept | `LinalgAdOpKind::SvdVals` |  |
 | `LinalgAdOpKind::TriangularSolve` | kept | `LinalgAdOpKind::TriangularSolve` |  |
+| `LinalgAdOpKind::COUNT` | kept | `LinalgAdOpKind::COUNT` |  |
 | `LinalgAdOpKind::as_index` | kept | `LinalgAdOpKind::as_index` |  |
 | `LinalgAdOpKind::clone` | kept | `LinalgAdOpKind::clone` |  |
 | `LinalgAdOpKind::eq` | kept | `LinalgAdOpKind::eq` |  |
 | `LinalgAdOpKind::fmt` | kept | `LinalgAdOpKind::fmt` |  |
+| `LinalgAdRoute` | kept | `LinalgAdRoute` |  |
 | `LinalgAdRoute::CustomPreferredWithLinearizeFallback` | kept | `LinalgAdRoute::CustomPreferredWithLinearizeFallback` |  |
 | `LinalgAdRoute::CustomVjp` | kept | `LinalgAdRoute::CustomVjp` |  |
 | `LinalgAdRoute::Linearize` | kept | `LinalgAdRoute::Linearize` |  |
@@ -526,6 +581,7 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `LinalgAdRoute::clone` | kept | `LinalgAdRoute::clone` |  |
 | `LinalgAdRoute::eq` | kept | `LinalgAdRoute::eq` |  |
 | `LinalgAdRoute::fmt` | kept | `LinalgAdRoute::fmt` |  |
+| `LinalgAdRuleSupport` | kept | `LinalgAdRuleSupport` |  |
 | `LinalgAdRuleSupport::NonDifferentiable` | kept | `LinalgAdRuleSupport::NonDifferentiable` |  |
 | `LinalgAdRuleSupport::PartiallySupported` | kept | `LinalgAdRuleSupport::PartiallySupported` |  |
 | `LinalgAdRuleSupport::PendingOracle` | kept | `LinalgAdRuleSupport::PendingOracle` |  |
@@ -535,11 +591,13 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `LinalgAdRuleSupport::clone` | kept | `LinalgAdRuleSupport::clone` |  |
 | `LinalgAdRuleSupport::eq` | kept | `LinalgAdRuleSupport::eq` |  |
 | `LinalgAdRuleSupport::fmt` | kept | `LinalgAdRuleSupport::fmt` |  |
+| `QrGauge` | kept | `QrGauge` |  |
 | `QrGauge::PositiveDiagonal` | kept | `QrGauge::PositiveDiagonal` |  |
 | `QrGauge::Raw` | kept | `QrGauge::Raw` |  |
 | `QrGauge::clone` | kept | `QrGauge::clone` |  |
 | `QrGauge::eq` | kept | `QrGauge::eq` |  |
 | `QrGauge::fmt` | kept | `QrGauge::fmt` |  |
+| `SvdDriver` | kept | `SvdDriver` |  |
 | `SvdDriver::Auto` | kept | `SvdDriver::Auto` |  |
 | `SvdDriver::Jacobi` | kept | `SvdDriver::Jacobi` |  |
 | `SvdDriver::Polar` | kept | `SvdDriver::Polar` |  |
@@ -548,41 +606,48 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `SvdDriver::eq` | kept | `SvdDriver::eq` |  |
 | `SvdDriver::default` | kept | `SvdDriver::default` |  |
 | `SvdDriver::fmt` | kept | `SvdDriver::fmt` |  |
+| `SvdGauge` | kept | `SvdGauge` |  |
 | `SvdGauge::CanonicalPivot` | kept | `SvdGauge::CanonicalPivot` |  |
 | `SvdGauge::Raw` | kept | `SvdGauge::Raw` |  |
 | `SvdGauge::clone` | kept | `SvdGauge::clone` |  |
 | `SvdGauge::eq` | kept | `SvdGauge::eq` |  |
 | `SvdGauge::fmt` | kept | `SvdGauge::fmt` |  |
+| `HouseholderQr` | kept | `HouseholderQr` |  |
 | `HouseholderQr::append_columns` | kept | `HouseholderQr::append_columns` |  |
 | `HouseholderQr::from_factors` | kept | `HouseholderQr::from_factors` |  |
 | `HouseholderQr::q_columns` | kept | `HouseholderQr::q_columns` |  |
 | `HouseholderQr::r` | kept | `HouseholderQr::r` |  |
 | `HouseholderQr::clone` | kept | `HouseholderQr::clone` |  |
 | `HouseholderQr::fmt` | kept | `HouseholderQr::fmt` |  |
-| `LinalgAdModeSupport::route` | kept | `LinalgAdModeSupport::route` |  |
-| `LinalgAdModeSupport::status` | kept | `LinalgAdModeSupport::status` |  |
+| `LinalgAdModeSupport` | kept | `LinalgAdModeSupport` |  |
+| `LinalgAdModeSupport::route (field)` | kept | `LinalgAdModeSupport::route (field)` |  |
+| `LinalgAdModeSupport::status (field)` | kept | `LinalgAdModeSupport::status (field)` |  |
 | `LinalgAdModeSupport::clone` | kept | `LinalgAdModeSupport::clone` |  |
 | `LinalgAdModeSupport::eq` | kept | `LinalgAdModeSupport::eq` |  |
 | `LinalgAdModeSupport::fmt` | kept | `LinalgAdModeSupport::fmt` |  |
-| `LinalgAdOutputSupport::index` | kept | `LinalgAdOutputSupport::index` |  |
-| `LinalgAdOutputSupport::name` | kept | `LinalgAdOutputSupport::name` |  |
-| `LinalgAdOutputSupport::status` | kept | `LinalgAdOutputSupport::status` |  |
+| `LinalgAdOutputSupport` | kept | `LinalgAdOutputSupport` |  |
+| `LinalgAdOutputSupport::index (field)` | kept | `LinalgAdOutputSupport::index (field)` |  |
+| `LinalgAdOutputSupport::name (field)` | kept | `LinalgAdOutputSupport::name (field)` |  |
+| `LinalgAdOutputSupport::status (field)` | kept | `LinalgAdOutputSupport::status (field)` |  |
 | `LinalgAdOutputSupport::clone` | kept | `LinalgAdOutputSupport::clone` |  |
 | `LinalgAdOutputSupport::eq` | kept | `LinalgAdOutputSupport::eq` |  |
 | `LinalgAdOutputSupport::fmt` | kept | `LinalgAdOutputSupport::fmt` |  |
-| `LinalgAdSupport::caveats` | kept | `LinalgAdSupport::caveats` |  |
-| `LinalgAdSupport::custom_linear_transpose_rule` | kept | `LinalgAdSupport::custom_linear_transpose_rule` |  |
-| `LinalgAdSupport::custom_vjp_rule` | kept | `LinalgAdSupport::custom_vjp_rule` |  |
-| `LinalgAdSupport::jvp` | kept | `LinalgAdSupport::jvp` |  |
-| `LinalgAdSupport::kind` | kept | `LinalgAdSupport::kind` |  |
-| `LinalgAdSupport::linearize` | kept | `LinalgAdSupport::linearize` |  |
-| `LinalgAdSupport::linearize_rule` | kept | `LinalgAdSupport::linearize_rule` |  |
-| `LinalgAdSupport::outputs` | kept | `LinalgAdSupport::outputs` |  |
-| `LinalgAdSupport::transpose` | kept | `LinalgAdSupport::transpose` |  |
-| `LinalgAdSupport::vjp` | kept | `LinalgAdSupport::vjp` |  |
+| `LinalgAdSupport` | kept | `LinalgAdSupport` |  |
+| `LinalgAdSupport::caveats (field)` | kept | `LinalgAdSupport::caveats (field)` |  |
+| `LinalgAdSupport::custom_linear_transpose_rule (field)` | kept | `LinalgAdSupport::custom_linear_transpose_rule (field)` |  |
+| `LinalgAdSupport::custom_vjp_rule (field)` | kept | `LinalgAdSupport::custom_vjp_rule (field)` |  |
+| `LinalgAdSupport::jvp (field)` | kept | `LinalgAdSupport::jvp (field)` |  |
+| `LinalgAdSupport::kind (field)` | kept | `LinalgAdSupport::kind (field)` |  |
+| `LinalgAdSupport::linearize (field)` | kept | `LinalgAdSupport::linearize (field)` |  |
+| `LinalgAdSupport::linearize_rule (field)` | kept | `LinalgAdSupport::linearize_rule (field)` |  |
+| `LinalgAdSupport::outputs (field)` | kept | `LinalgAdSupport::outputs (field)` |  |
+| `LinalgAdSupport::transpose (field)` | kept | `LinalgAdSupport::transpose (field)` |  |
+| `LinalgAdSupport::vjp (field)` | kept | `LinalgAdSupport::vjp (field)` |  |
 | `LinalgAdSupport::clone` | kept | `LinalgAdSupport::clone` |  |
 | `LinalgAdSupport::eq` | kept | `LinalgAdSupport::eq` |  |
 | `LinalgAdSupport::fmt` | kept | `LinalgAdSupport::fmt` |  |
+| `DEFAULT_DECOMPOSITION_DERIVATIVE_EPS` | kept | `DEFAULT_DECOMPOSITION_DERIVATIVE_EPS` |  |
+| `LINALG_EXTENSION_FAMILY_ID` | kept | `LINALG_EXTENSION_FAMILY_ID` |  |
 | `all_linalg_ad_support` | kept | `all_linalg_ad_support` |  |
 | `eig_values_with_exec` | removed | `TensorLinalgExt::eigvals` | receiver `TypedTensorView`; engine argument |
 | `eigh_values_with_exec` | removed | `TensorLinalgExt::eigvalsh` | receiver `TypedTensorView`; engine argument |
@@ -594,3 +659,4 @@ Public symbols: 562 (1432 listing lines). changed: 12, kept: 438, removed: 102, 
 | `semantic_ad_rules` | kept | `semantic_ad_rules` |  |
 | `svd_values_with_exec` | removed | `TensorLinalgExt::svdvals` | receiver `TypedTensorView`; engine argument |
 | `svd_with_exec` | removed | `TensorLinalgExt::svd_with` | receiver `TypedTensorView`; engine argument; `full` becomes `SvdShape` |
+| `Result` | removed | `-` | no public function returned it; use `tenferro_tensor::Result` (concrete), `tenferro_runtime::Result` (traced) or `tenferro_ad::Result` (eager) |

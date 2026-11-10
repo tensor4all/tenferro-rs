@@ -1,11 +1,10 @@
 # Linear Algebra
 
 tenferro exposes linear algebra through the `tenferro-linalg` operation crate.
-Use `TensorLinalgExt`, `TensorReadLinalgExt`, or `TypedTensorLinalgExt` for direct
-execution without autodiff, `EagerSessionLinalgExt` inside
-`EagerRuntime::with_eager_session` for eager `backward()` / functional transform
-workflows (with `EagerTensorLinalgExt::solve` as a calling-thread `no_grad`
-exception), and `TracedTensorLinalgExt` when the
+Use `TensorLinalgExt` (implemented for `Tensor`, `TensorRead`, `TypedTensor<T>`,
+and `TypedTensorView`) for direct execution without autodiff,
+`EagerSessionLinalgExt` inside `EagerRuntime::with_eager_session` for eager
+`backward()` / functional transform workflows, and `TracedTensorLinalgExt` when the
 operation should be part of a graph, `grad`/`vjp`/`jvp`, or repeated compile/run
 workflow.
 
@@ -42,7 +41,7 @@ tenferro-linalg = { version = "...", features = ["autodiff"] }
 Concrete graph/runtime users can omit `tenferro-ad` and the `autodiff` feature
 when they do not need eager linalg helpers or linalg AD rules. For
 inference-only code, call the operations on `Tensor`/`TypedTensor` inside a
-backend session (`TensorLinalgExt` / `TypedTensorLinalgExt`, for example
+backend session (`TensorLinalgExt`, for example
 `triangular_solve`, `solve`, `cholesky`); that route needs no `autodiff`. There
 is no separate eager-without-AD feature: `EagerSession` lives in `tenferro-ad`,
 which is all that `autodiff` adds, so such a feature would save no dependency.
@@ -54,7 +53,7 @@ Box<dyn std::error::Error>>` for a standalone binary.
 | Layer | Linear algebra style |
 | --- | --- |
 | Concrete `Tensor` / `TensorRead` / `TypedTensor<T>` | crate-root linalg extension traits; methods take the caller's `&mut dyn Engine` |
-| `EagerTensor` | `EagerSessionLinalgExt` methods on a borrowed `EagerSession` behind `autodiff`, except tensor-owned `EagerTensorLinalgExt::solve`; tracked variables support `backward()` and functional transforms where AD rules support the operation |
+| `EagerTensor` | `EagerSessionLinalgExt` methods on a borrowed `EagerSession` behind `autodiff`, for example `session.svd(&x)` and `session.solve(&a, &b)`; tracked variables support `backward()` and functional transforms where AD rules support the operation |
 | `TracedTensor` | `TracedTensorLinalgExt` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
 
 CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
@@ -68,24 +67,29 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Dense solve | `solve` | `solve` | `solve` |
 | Triangular solve | `triangular_solve` | `triangular_solve` | `triangular_solve` |
 | Cholesky | `cholesky` | `cholesky` | `cholesky` |
-| SVD | `svd`, `svdvals`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
-| QR | `qr`, `qr_with_options` | `qr`, `qr_with_options` | `qr`, `qr_with_options` |
+| SVD | `svd`, `svd_with`, `svdvals`, `svdvals_with` | `svd`, `svd_with` | `svd`, `svd_with` |
+| QR | `qr`, `qr_with` | `qr`, `qr_with` | `qr`, `qr_with` |
 | Incremental compact QR | `householder_qr`, `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` | `EagerSessionLinalgExt::householder_qr` and state operations with `&mut EagerSession` | same state operations on `TracedTensor` |
-| Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` | `eigh`, `eigh_with_options`, `eigvalsh` |
+| Hermitian eigen | `eigh`, `eigh_with`, `eigvalsh` | `eigh`, `eigh_with`, `eigvalsh` | `eigh`, `eigh_with`, `eigvalsh` |
 | General eigen | `eig` | `eig`, `eigvals` | `eig`, `eigvals` |
 | LU | `lu` | `lu` | `lu` |
 | Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` |
-| Pseudoinverse | `pinv` | `pinv`, `pinv_with_rtol` | `pinv`, `pinv_with_rtol` |
+| Pseudoinverse | `pinv`, `pinv_with` | `pinv`, `pinv_with` | `pinv`, `pinv_with` |
 | Determinants | `det`, `slogdet` | `det`, `slogdet` | `det`, `slogdet` |
 | Matrix inverse | `inv` | `inv` | `inv` |
-| Norms | `norm` | `norm` | `norm` |
+| Norms | `norm`, `norm_with` | `norm`, `norm_with` | `norm`, `norm_with` |
 
-Concrete, read, typed, eager-session, and traced tensor APIs are crate-root
-extension traits. Eager decompositions take `&mut EagerSession` from
-`EagerRuntime::with_eager_session`; do not call the tensor-owned `solve` entry
-inside an active borrowed session. Concrete methods take `&mut dyn Engine` obtained through
-the caller-held engine. `TensorReadLinalgExt::svdvals_read`
-and `eigvalsh_read` accept borrowed inputs. A provider may consume the borrowed
+Concrete, eager-session, and traced tensor APIs are crate-root extension
+traits. Every operation has one entry per input kind: `op` with default
+options, `op_with` taking an options value, and (for operations that support
+it) `op_into` writing into a caller-provided output. Multi-output operations
+return named result structs (`Svd { u, s, vh }`, `Qr { q, r }`,
+`Lu { p, l, u, parity }`, `FullPivLu { p, l, u, q, parity }`,
+`Eig { values, vectors }`, `Eigh { values, vectors }`,
+`Slogdet { sign, logabsdet }`). Eager decompositions take `&mut EagerSession`
+from `EagerRuntime::with_eager_session`. Concrete methods take `&mut dyn Engine` obtained through
+the caller-held engine. The same `TensorLinalgExt` methods accept borrowed
+inputs such as `TypedTensorView`, for example `view.svdvals(&mut engine)`. A provider may consume the borrowed
 view without copying it when its own layout rules allow, and otherwise
 materializes it once inside its own boundary; no zero-copy guarantee is made,
 the borrowed source is never modified, and a provider that cannot read the view
@@ -207,7 +211,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
 let mut engine = CpuEngine::serial();
-let (u, s, vt) = a.svd(&mut engine)?;
+let tenferro_linalg::Svd { u, s, vh: vt } = a.svd(&mut engine)?;
 
 assert_eq!(u.shape(), &[2, 2]);
 assert_eq!(vt.shape(), &[2, 2]);
@@ -248,9 +252,9 @@ let a = trace.from_vec_col_major(
         0.0, 0.0, 1.0,
     ],
 )?;
-let (u, s, vt) = a
-    .svd_with_options(
-        SvdOptions::default()
+let tenferro_linalg::Svd { u, s, vh: vt } = a
+    .svd_with(
+        &SvdOptions::default()
             .with_gauge(SvdGauge::CanonicalPivot)
             .with_derivative_eps(1.0e-10),
     )?;
@@ -299,7 +303,7 @@ let a = trace.from_vec_col_major(
     ],
 )?;
 // Forces cuSOLVER `gesvd` on CUDA; CPU providers ignore the driver.
-let (u, s, vt) = a.svd_with_options(SvdOptions::default().with_driver(SvdDriver::QrBased))?;
+let tenferro_linalg::Svd { u, s, vh: vt } = a.svd_with(&SvdOptions::default().with_driver(SvdDriver::QrBased))?;
 
 assert_eq!(u.concrete_shape()?, vec![3, 2]);
 assert_eq!(s.concrete_shape()?, vec![2]);
@@ -339,8 +343,8 @@ let a = trace.from_vec_col_major(
 )?;
 // On CUDA this reaches `syevjBatched`: one launch for the whole batch.
 // CPU providers ignore the driver.
-let (values, vectors) =
-    a.eigh_with_options(EighOptions::default().with_driver(EighDriver::Jacobi))?;
+let tenferro_linalg::Eigh { values, vectors } =
+    a.eigh_with(&EighOptions::default().with_driver(EighDriver::Jacobi))?;
 
 assert_eq!(values.concrete_shape()?, vec![2, 2]);
 assert_eq!(vectors.concrete_shape()?, vec![2, 2, 2]);
@@ -364,7 +368,7 @@ let a = trace.from_vec_col_major(
         0.0, 0.0, 1.0,
     ],
 )?;
-let (_u, s, _vt) = a.svd()?;
+let tenferro_linalg::Svd { s, .. } = a.svd()?;
 let repeated = s.take_axis(0, &[0, 1, 0])?;
 
 assert_eq!(repeated.concrete_shape()?, vec![3]);
@@ -397,8 +401,8 @@ let a = Tensor::from_vec_col_major(
     ],
 )?;
 let mut engine = CpuEngine::serial();
-let (q, r) = a.qr_with_options(
-    QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
+let tenferro_linalg::Qr { q, r } = a.qr_with(
+    &QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
     &mut engine,
 )?;
 
@@ -498,7 +502,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])?;
 let mut engine = CpuEngine::serial();
-let (values, vectors) = a.eigh(&mut engine)?;
+let tenferro_linalg::Eigh { values, vectors } = a.eigh(&mut engine)?;
 
 assert_eq!(values.shape(), &[2]);
 assert_eq!(vectors.shape(), &[2, 2]);
@@ -584,7 +588,7 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 3.0]);
 
 ## Complete-Pivot LU Solve
 
-`full_piv_lu` returns `(P, L, U, Q, parity)` with the reconstruction convention
+`full_piv_lu` returns a `FullPivLu { p, l, u, q, parity }` struct with the reconstruction convention
 `A = P^T * L * U * Q`, equivalently `P * A * Q^T = L * U`. The `parity` output
 is a scalar real tensor containing `+1` or `-1`: `F32` for `F32`/`C32` inputs
 and `F64` for `F64`/`C64` inputs. The tensor extension
@@ -618,7 +622,7 @@ let a = Tensor::from_vec_col_major(
 )?;
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 
-let (p, l, u, q, parity) = a.full_piv_lu(&mut engine)?;
+let tenferro_linalg::FullPivLu { p, l, u, q, parity } = a.full_piv_lu(&mut engine)?;
 let pt = p.transpose(&[1, 0], &mut engine)?;
 let pt_l = pt.matmul(&l, &mut engine)?;
 let pt_lu = pt_l.matmul(&u, &mut engine)?;

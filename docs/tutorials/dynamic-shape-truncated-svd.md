@@ -108,7 +108,8 @@ fn cpu_runtime_with_linalg_and_einsum(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let trace = TraceContext::new();
     let x = trace.input_concrete_shape(DType::F64, &[4, 4])?;
-    let (u, s, vt) = x.svd_with_options(SvdOptions::default().with_derivative_eps(1.0e-12))?;
+    let tenferro_linalg::Svd { u, s, vh: vt } =
+        x.svd_with(&SvdOptions::default().with_derivative_eps(1.0e-12))?;
 
     let threshold = trace.from_vec_col_major(vec![], vec![0.5_f64])?;
     let keep_count = s

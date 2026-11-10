@@ -52,9 +52,14 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
   repository and whether tenferro will support its semantics as a public
   contract. If unclear, keep it `pub(crate)` and expose a smaller high-level
   API.
-- Tensor operation names are public vocabulary: unsuffixed names take owned
-  compact tensor inputs; `_read` marks APIs that accept borrowed views or
-  `TensorRead`-style references.
+- Tensor operation names are public vocabulary, and a name says only what is
+  computed (#2552): the only suffixes are `_with` (the operation's options
+  argument) and `_into` (a caller-provided destination). The input kind is not
+  part of the name: an operation is implemented once on the borrowed view and
+  owned, borrowed (`TensorRead`) and typed inputs reach it through a
+  metadata-only conversion. `tenferro-linalg` follows this; the einsum, FFT and
+  runtime session surfaces still carry `_read` names until their #2552 stage,
+  and new code must not add more.
 - Owned tensor constructors use `impl IntoRankShape<R>` for rank-aware
   shape input and `impl IntoShapeVec` at dynamic-rank boundaries. Static-rank
   arrays (including array references) must match the rank at compile time;
@@ -914,21 +919,20 @@ inline `#[cfg(test)]` restriction from it.
   FFT, ...): a tensor-, slice- or typed-owned eager operation must not open a
   session, engine or hidden pool internally; it runs on the engine the caller
   passed in. Do not add operator overloads that hide eager entry. The only
-  exceptions are the tensor-owned linalg `solve`, which preserves
-  calling-thread `no_grad` behavior, and consuming in-place FFT, which preserves
-  exclusive ownership; neither is a precedent for new implicit eager operation
-  methods.
+  exception is consuming in-place FFT, which preserves exclusive ownership; it
+  is not a precedent for new implicit eager operation methods.
 - **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use
   crate-root extension traits (`TensorSessionOpsExt`,
   `TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) whose
-  methods run on a caller-provided `&mut dyn Engine` (the engine is the first
-  argument and a fallible operation is written `?`). The facade targets the
+  methods run on a caller-provided `&mut dyn Engine` (the engine is the last
+  argument, after the operands and the options and before a destination, and a
+  fallible operation is written `?`). The facade targets the
   `Dynamic` representation; a `Host` owner reaches it through the zero-copy
   `into_dynamic()`. Private helper modules are fine, but public `tensor` /
   `typed_tensor` module free functions are not part of the release API.
 - **Extension families**: extension crates cannot add inherent methods to
   external tensor types, so their canonical tensor-facing surface is extension
-  traits (`TracedTensorLinalgExt`, `EagerSessionEinsumExt`, `EagerSessionLinalgExt`,
+  traits (`TensorLinalgExt`, `TracedTensorLinalgExt`, `EagerSessionEinsumExt`, `EagerSessionLinalgExt`,
   `EagerSessionFftExt`, `TraceContextEinsumExt`, `TracedTensorEinsumExt`,
   `TracedTensorFftExt`) re-exported at the crate root. Do not expose public
   `traced_tensor` / `eager_tensor` module free functions for standard
@@ -944,7 +948,9 @@ inline `#[cfg(test)]` restriction from it.
   a suffix only to avoid a naming conflict.
 - Unsuffixed operation names allocate and return a fresh result tensor.
 - `_read` means one or more inputs are `TensorRead`/borrowed views; the output
-  is still backend-allocated unless another suffix names an output.
+  is still backend-allocated unless another suffix names an output. It is
+  retired from public operation names by #2552 (see the naming rule above) and
+  remains on backend hooks and on surfaces not yet migrated.
 - Bare `_into` overwrites a caller-provided output. The operation validates
   dtype and shape, does not resize the destination, and does not read the
   previous output value as part of the semantic update.

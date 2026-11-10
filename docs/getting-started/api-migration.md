@@ -11,11 +11,11 @@ and caller-held engines. Historical worklogs are not API documentation.
 | --- | --- |
 | <code>tenferro_einsum::&#8203;eager_tensor</code> | Import `tenferro_einsum::EagerSessionEinsumExt` and call the trait method on a borrowed session: `ctx.with_eager_session(\|s\| s.einsum(&[&a, &b], "ij,jk->ik"))?`. |
 | `tenferro_einsum::EagerEinsumExt` (`[&a, &b].einsum(...)` on eager values), `EagerTensorEinsumExt` (`a.tensordot(&b, axes)`) | `EagerSessionEinsumExt` on a borrowed session: `s.einsum(&[&a, &b], "ij,jk->ik")`, `s.einsum_notation(...)`, `s.einsum_subscripts(...)`, `s.tensordot(&a, &b, axes)`. |
-| <code>tenferro_linalg::&#8203;eager_tensor</code> | Import `tenferro_linalg::EagerTensorLinalgExt` and call the trait method on the eager value. |
+| <code>tenferro_linalg::&#8203;eager_tensor</code> | Import `tenferro_linalg::EagerSessionLinalgExt` and call the trait method on a borrowed session: `session.svd(&x)?`, `session.solve(&a, &b)?`. |
 | <code>tenferro_runtime::&#8203;traced_tensor</code> | Use the current traced tensor types and their extension traits, such as `tenferro_linalg::TracedTensorLinalgExt`. |
 | `tenferro_einsum::einsum` | Use the current trait method, for example `TraceContextEinsumExt::einsum` or `TracedTensorEinsumExt::einsum`, for the receiver you have. |
 | `tenferro_einsum::einsum_subscripts_with` | Import the owning einsum extension trait and call its session/context method. |
-| `tenferro_linalg::svd`, `qr`, `eigh`, `solve` | Import `TensorLinalgExt`, `TypedTensorLinalgExt`, or `TensorReadLinalgExt` and call `.svd(...)`, `.qr(...)`, `.eigh(...)`, or `.solve(...)` on the input. |
+| `tenferro_linalg::svd`, `qr`, `eigh`, `solve` | Import `TensorLinalgExt` and call `.svd(...)`, `.qr(...)`, `.eigh(...)`, or `.solve(...)` on the input (`Tensor`, `TensorRead`, `TypedTensor<T>`, or `TypedTensorView`). Multi-output results are named structs such as `Svd { u, s, vh }`. |
 | `tenferro_tensor::HostTensor<T>` / `HostTensorView<'a, T>` | `TypedTensor<T, DynRank, Host>` (`from_host_vec_col_major`, `as_slice`, `host_data_mut`) and `TypedTensorView<'a, T, DynRank, Host>` (`from_host_slice`, `as_host_slice`). Scalar-set members and `ErasedHostTensor` payloads use the same types. |
 | `tenferro_tensor::core::{DefaultScalars, HostTensor, ...}` | `tenferro_tensor::core` re-exports metadata only; import tensor types, including `DefaultScalars`, from the `tenferro_tensor` root. |
 | `TypedTensorView::try_slice`, `try_slice_axis`, `try_reshape` (and the `TypedTensorViewMut` forms) | `slice_view`, `slice_axis_view`, `reshape_view`. |

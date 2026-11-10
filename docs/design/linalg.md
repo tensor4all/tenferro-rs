@@ -26,9 +26,12 @@ tenferro-linalg
 `tenferro-linalg` owns:
 
 - shape and option validation
-- `TensorLinalgExt`, `TensorReadLinalgExt`, and `TypedTensorLinalgExt` for
-  backend-explicit primal execution
-- fixed-arity result tuples and typed real/complex output mappings
+- `TensorLinalgExt` for backend-explicit primal execution, implemented once on
+  the borrowed `TensorRead` view and reached from `Tensor`, `TensorRead`,
+  `TypedTensor<T>` and `TypedTensorView` through `LinalgInput`
+- one `XxxOptions` type per operation and named result structs (`Svd`, `Qr`,
+  `Lu`, `FullPivLu`, `Eig`, `Eigh`, `Slogdet`, `RankRevealingQrResult`) with typed
+  real/complex output mappings
 - composite lowering
 - traced extension op payloads and runtime registration
 - optional eager helpers and linalg AD rules behind `autodiff`
@@ -102,18 +105,41 @@ not the provider's `Vec` wrappers, and maps the provider's
 `Error::InsufficientWorkspace` as an internal-contract failure because the
 host's own query sized the call.
 
-## Concrete, Read, And Typed Boundary
+## Call Grammar (#2552)
 
-Owned dynamic tensors call the matching `LinalgBackend` owned hook. Borrowed
-tensor reads use the `_read` surface and preserve strided layouts until the
-selected provider performs documented same-placement canonicalization. Typed
-tensors erase only the borrowed input through `TensorScalar::tensor_read`, then
-validate each dynamic backend output while downcasting it to the fixed typed
-tuple.
+Every operation has the same name on every layer and at most three forms:
+
+| layer | forms |
+|---|---|
+| concrete (`TensorLinalgExt`) | `a.op(&mut engine)`, `a.op_with(&options, &mut engine)`, `a.op_into(.., &options, &mut engine, destination)` |
+| traced (`TracedTensorLinalgExt`) | `t.op()`, `t.op_with(&options)` |
+| eager (`EagerSessionLinalgExt`, feature `autodiff`) | `session.op(&x)`, `session.op_with(&x, &options)` |
+
+The short form runs `op_with` with `XxxOptions::default()`. Every operation has an
+options type: `#[non_exhaustive]`, built with `Default` and `with_*` setters, with
+two-way choices as enums (`SvdShape`, `Side`, `Uplo`, `Transpose`, `Diagonal`,
+`KeepDims`) rather than `bool`, and axes as `isize`. Multi-output operations return
+named structs generic over the tensor type, destructured as
+`let Svd { u, s, vh } = a.svd(&mut engine)?;`. The engine is the last argument
+before a destination and owns its execution resources, so no `Exec` or buffer pool
+appears in a signature. The separate `Typed*` traits, `*_read` linalg methods,
+`*_with_options` and `*_with_exec` entries, `TraceContextLinalgExt` and
+`EagerTensorLinalgExt` that preceded this grammar are gone.
+
+## Concrete And Typed Boundary
+
+The concrete layer is implemented once on the borrowed `TensorRead` view.
+`LinalgInput` is a sealed, metadata-only conversion: `Tensor` and `TensorRead`
+map to dynamic outputs, while `TypedTensor<T>` and `TypedTensorView` map to typed
+outputs, so typed input stays typed. The view preserves strided layouts until the
+selected provider performs documented same-placement canonicalization. For typed
+input, each dynamic backend output is validated while downcasting it to the typed
+result struct. `LinalgBackend` keeps its owned and `_read` hooks as the provider
+SPI; they are not the user-facing grammar.
 
 ### The borrowed-read contract is backend-neutral
 
-A `_read` entry promises that a provider *may* consume the borrowed view
+A backend `_read` hook promises that a provider *may* consume the borrowed view
 without copying it when its own layout rules allow, and otherwise materialises
 it once inside its own boundary. It never promises zero copy, never modifies
 the borrowed source, and returns a typed error rather than a narrowed result
@@ -159,8 +185,8 @@ surfaces such as factorization contracts with pivots or `info` metadata.
 
 ## QR Solver Status Reporting
 
-Ordinary QR (`LinalgBackend::qr` and `qr_with_options`, including the traced and
-eager surfaces) does not inspect the CUDA cuSOLVER `geqrf`/`orgqr` device status
+Ordinary QR (`qr` / `qr_with` on every layer, lowering to `LinalgBackend::qr` and
+`qr_with_options`) does not inspect the CUDA cuSOLVER `geqrf`/`orgqr` device status
 flags. Reading them is a blocking device-to-host copy that waits for the
 factorization kernels, and the flags report neither a reachable illegal-argument
 case nor a rank-deficient factor. Synchronous provider return codes are still

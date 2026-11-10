@@ -100,7 +100,7 @@ for example `Ok::<_, tenferro_ad::Error>(value)`, and a tensor-level error from
 `.map_err(tenferro_ad::Error::from)`.
 
 Operation-family crates add eager extension traits. For example,
-`tenferro_linalg::EagerTensorLinalgExt` owns linalg eager methods and
+`tenferro_linalg::EagerSessionLinalgExt` owns linalg eager methods on a borrowed session and
 `tenferro_einsum::EagerSessionEinsumExt` owns eager einsum and `tensordot` on a
 borrowed session, for example
 `ctx.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?`.
@@ -288,11 +288,11 @@ let qr = a.qr(&mut engine)?;
 let chol = a.cholesky(&mut engine)?;
 let eigh = a.eigh(&mut engine)?;
 let x = a.solve(&b, &mut engine)?;
-assert_eq!(svd.1.shape(), &[3]);
-assert_eq!(qr.0.shape(), &[3, 3]);
+assert_eq!(svd.s.shape(), &[3]);
+assert_eq!(qr.q.shape(), &[3, 3]);
 assert_eq!(chol.shape(), &[3, 3]);
-assert_eq!(eigh.0.shape(), &[3]);
-assert_eq!(eigh.1.shape(), &[3, 3]);
+assert_eq!(eigh.values.shape(), &[3]);
+assert_eq!(eigh.vectors.shape(), &[3, 3]);
 assert_eq!(x.shape(), &[3]);
 ```
 <!-- end-snippet-source -->
