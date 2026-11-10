@@ -120,7 +120,7 @@ th{font-size:12px;letter-spacing:.05em;color:var(--muted);font-weight:600}
 
 <div class="wrap">
 <header class="col">
-  <div class="eyebrow">tensor4all/tenferro-rs · issue #2552 への提案 · 2026-11-10 · v0.2 とプロトタイプの結果まで反映（実体化ポリシーは撤回）</div>
+  <div class="eyebrow">tensor4all/tenferro-rs · issue #2552 への提案 · 2026-11-10 · v0.2 とプロトタイプの結果まで反映（実体化ポリシーは撤回、公開カウンタは要件外）</div>
   <h1 style="margin-top:10px">tenferro API の文法</h1>
   <p class="lead">演算ごと・層ごとに名前を増やす今のやり方をやめて、全クレート共通の「呼び出しの文法」を1つ決めます。ルールは7つで、どれも文章ではなく生成・型・スナップショットのどれかで守ります。</p>
   <div class="stats">
@@ -267,8 +267,8 @@ EinsumPlan::prepare(inputs, spec /* &amp;str でも可 */)</pre></div>
     </div></article>
 
     <article class="rule"><div class="num">4</div><div class="body">
-      <h3>実行器は呼び出しごとの引数。コピーは禁止せず、数える</h3>
-      <p class="why">実行器（Engine / EagerSession）は引数で渡し、Engine に呼び出しをまたぐ状態を持たせない。<b>実体化ポリシー（<code>Allow</code> / <code>Forbid</code>）は文法に入れない</b>（2026-11-10 に裁定を見直し）。プロトタイプでは、native CPU で <code>Forbid</code> が拒否するのは SVD read の負ストライドと rank 3 以上の非コンパクトなバッチだけで、einsum では何も拒否しなかった。拒否されても呼び出し側にできるのは明示的なコピー（同じコスト）か上流のレイアウト変更だけで、ポリシーは制御ではなく診断になる。代わりに、同じデバイス・同じ dtype での入力正規化は provider の中で行ってよいとし、そのつど <b>Engine の診断カウンタに記録する</b>（コピーが起きる経路でだけ加算するので、通常経路のコストは増えない）。性能を気にする利用者は、テストで 0 回であることを確かめる。デバイス転送と dtype 変換は今までどおり明示的に行う。</p>
+      <h3>実行器は呼び出しごとの引数。コピーを禁止する引数は置かない</h3>
+      <p class="why">実行器（Engine / EagerSession）は引数で渡し、Engine に呼び出しをまたぐ状態を持たせない。<b>実体化ポリシー（<code>Allow</code> / <code>Forbid</code>）は文法に入れない</b>（2026-11-10 に裁定を見直し）。プロトタイプでは、native CPU で <code>Forbid</code> が拒否するのは SVD read の負ストライドと rank 3 以上の非コンパクトなバッチだけで、einsum では何も拒否しなかった。拒否されても呼び出し側にできるのは明示的なコピー（同じコスト）か上流のレイアウト変更だけで、ポリシーは制御ではなく診断になる。また、ポリシーが何を禁じるのかを、利用者に安定して約束できる形で定義できなかった。同じデータ移動でも、選ばれたカーネルによって正規化とも workspace とも分類されてしまう。そこで、同じデバイス・同じ dtype でのレイアウト変換は実行の中で行ってよいとし、op ごとに文書化する。ポリシーを engine の状態・options・リクエストのラッパーへ移すこともしない。<b>公開カウンタも今回の要件にしない</b>（必須でも禁止でもなく、具体的な利用者と数え方の約束ができてから別に設計する）。避けられるコピーは、内部・テスト用の計測とベンチマークで、入力全体の一時コピー、パッキング、workspace の確保と再利用を区別して確かめる。デバイス転送と dtype 変換は今までどおり明示的に行う。</p>
       <div class="ba">
         <div class="before"><div class="tag">いま</div><pre>a.svd(session)            // 最後
 x.solve(engine, b)        // 2番目
@@ -280,8 +280,8 @@ a.svd_with(&amp;o, e)
 sess.solve_with(&amp;x, &amp;b, &amp;o)
 a.einsum_into(spec, &amp;o, e,
               Dest::accumulate(&amp;mut c))
-// コピーは数えて、テストで確かめる
-assert_eq!(e.input_normalization_stats().count, 0)</pre></div>
+// 既知の避けられるコピーは
+// 回帰・性能テストで押さえる（公開 API は増やさない）</pre></div>
       </div>
       <div class="held"><span class="chip c-gen">生成</span><span class="chip c-type">型</span></div>
       <div class="kills">消えるもの：エンジン位置の3流派、公開シグネチャに出ている <code>tcontract_exec::Exec</code> / <code>BufferPool</code>（Exec を包む Engine 型のコンストラクタ1か所に寄せる。置き換えられることを試作で示してから削除する。例外 E08）</div>
@@ -355,7 +355,7 @@ Uplo::Lower, Side::Left
 SvdOptions::default()
     .full_matrices(true)</pre></div>
   <div class="m"><h3><span class="k c-freeze">凍結</span>公開 API スナップショット</h3>
-    <p><code>cargo public-api</code> の出力をクレートごとにコミットします。CI では既に <span class="mono">check-no-public-rayon.sh</span> がこのツールを使っています。公開面が変わる PR は差分として必ず目に入ります。ただし、スナップショットはレビューの証拠であって、意味が一貫していることの証明ではありません。正規化の回数（診断カウンタ）、エイリアス、所有権、数値結果といった振る舞いは、別途テストで確かめます（v0.2 D）。</p>
+    <p><code>cargo public-api</code> の出力をクレートごとにコミットします。CI では既に <span class="mono">check-no-public-rayon.sh</span> がこのツールを使っています。公開面が変わる PR は差分として必ず目に入ります。ただし、スナップショットはレビューの証拠であって、意味が一貫していることの証明ではありません。adapter 間でレイアウトの扱いが一致すること、provider が直接読める strided 経路が残っていること、エイリアス、所有権、出力先の更新、数値結果といった振る舞いは、別途テストで確かめます（v0.2 D、2026-11-10 の決定更新）。</p>
 <pre>$ cargo public-api -p tenferro-linalg \
     &gt; api/tenferro-linalg.txt
 CI: git diff --exit-code api/</pre></div>
@@ -389,7 +389,7 @@ CI: git diff --exit-code api/</pre></div>
   <div class="step"><div class="sn">STEP 1</div><h3>現行を基準として記録</h3><p>全公開クレートの public-api スナップショットを、feature とツールチェーンを明示してコミットする。新設計の承認ではないので、プロトタイプを待たずに取れる。</p></div>
   <div class="step"><div class="sn">STEP 2</div><h3>6つの縦断プロトタイプ</h3><p>複素 SVD、係数付き einsum、消費型 FFT、レイアウトを変えたときのプラン再利用、エラー原因の保持、TraceContext 縮約木。新しい目標 API はこれが通ってから固定する。</p></div>
   <div class="step"><div class="sn">STEP 3</div><h3>レジストリ生成と削除</h3><p>レジストリから 3 層を生成して旧 API を置き換え、削除する。スナップショットの差分がそのまま退役リストになる。</p></div>
-  <div class="step"><div class="sn">STEP 4</div><h3>隠れたコピーの削減と規約の同期</h3><p>入力正規化の診断カウンタを入れ、eager einsum の毎回コピー、rank 3 SVD のギャザー、CUDA の転置ギャザーを減らす。agent-rules と生成文書は同じ PR 群で更新する。</p></div>
+  <div class="step"><div class="sn">STEP 4</div><h3>隠れたコピーの削減と規約の同期</h3><p>eager einsum の毎回コピー、rank 3 SVD のギャザー、CUDA の転置ギャザーを減らし、それぞれに回帰・性能テストを置く。公開カウンタは入れない。agent-rules と生成文書は同じ PR 群で更新する。</p></div>
 </div>
 
 <section class="col">
