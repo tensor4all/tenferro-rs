@@ -1,6 +1,6 @@
 #![cfg(feature = "autodiff")]
 
-use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
+use tenferro_einsum::{EinsumOptimize, TracedEinsumOps};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticFingerprint};
 use tenferro_runtime::{ExtensionCacheSelector, GraphCompiler, TraceContext};
@@ -14,15 +14,15 @@ fn matrix() -> ProgramInputSpec {
 
 #[test]
 fn trace_context_parse_cache_reuses_exact_notation() {
-    let mut trace = TraceContext::new();
-    let lhs = trace.input(matrix()).unwrap();
-    let rhs = trace.input(matrix()).unwrap();
+    let trace = TraceContext::new();
+    let lhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+    let rhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
 
-    trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
+    trace.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
     let first = trace
         .with_extension_caches(|caches| caches.stats(ExtensionCacheSelector::All))
         .unwrap();
-    trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
+    trace.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
     let second = trace
         .with_extension_caches(|caches| caches.stats(ExtensionCacheSelector::All))
         .unwrap();
@@ -34,14 +34,18 @@ fn trace_context_parse_cache_reuses_exact_notation() {
 #[test]
 fn plan_policy_participates_in_semantic_fingerprint() {
     fn fingerprint(optimize: EinsumOptimize) -> SemanticFingerprint {
-        let mut trace = TraceContext::new();
-        let lhs = trace.input(matrix()).unwrap();
-        let rhs = trace.input(matrix()).unwrap();
+        let trace = TraceContext::new();
+        let lhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+        let rhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
         let output = trace
-            .einsum_with(&[lhs, rhs], "ij,jk->ik", optimize)
+            .einsum_with(
+                &[&lhs, &rhs],
+                "ij,jk->ik",
+                &tenferro_einsum::EinsumOptions::default().optimize(optimize),
+            )
             .unwrap();
         trace
-            .finish(&[output])
+            .finish(&[output.trace_value()])
             .unwrap()
             .program()
             .semantic_fingerprint()
@@ -55,11 +59,11 @@ fn plan_policy_participates_in_semantic_fingerprint() {
 
 #[test]
 fn compiler_does_not_own_semantic_runtime_staging_cache() {
-    let mut trace = TraceContext::new();
-    let lhs = trace.input(matrix()).unwrap();
-    let rhs = trace.input(matrix()).unwrap();
-    let output = trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let trace = TraceContext::new();
+    let lhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+    let rhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     let mut compiler = GraphCompiler::new();
 
     compiler.compile_traced_graph(&graph).unwrap();
@@ -72,11 +76,11 @@ fn compiler_does_not_own_semantic_runtime_staging_cache() {
 
 #[test]
 fn runtime_plan_cache_reuses_identical_shapes() {
-    let mut trace = TraceContext::new();
-    let lhs = trace.input(matrix()).unwrap();
-    let rhs = trace.input(matrix()).unwrap();
-    let output = trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let trace = TraceContext::new();
+    let lhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+    let rhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();

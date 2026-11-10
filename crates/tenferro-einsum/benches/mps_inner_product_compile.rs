@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_einsum::TracedEinsumOps;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
 use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, Tensor, TraceContext, TracedGraph};
@@ -64,9 +64,15 @@ fn build_inner_product_graph(
                 &[*bra_core],
             )
             .unwrap()[0];
+        let [env_t, bra_t, ket_t] = [env, bra_core, ket_core].map(|value| {
+            trace
+                .derive_tensor(value)
+                .expect("trace value has metadata")
+        });
         env = trace
-            .einsum(&[env, bra_core, ket_core], "ab,acr,bcs->rs")
-            .expect("MPS inner-product contraction should build");
+            .einsum(&[&env_t, &bra_t, &ket_t], "ab,acr,bcs->rs")
+            .expect("MPS inner-product contraction should build")
+            .trace_value();
     }
     env
 }

@@ -6,10 +6,8 @@ use tenferro_tensor::{
 };
 
 use crate::{
-    parse_einsum_subscripts, ConcreteEinsumPlan, EinsumAxis, EinsumNotation, Error,
-    TensorEinsumExt, TensorEinsumIntoExt, TensorReadEinsumExt, TensorReadEinsumIntoExt,
-    TensorTensordotExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt, TypedTensorReadEinsumExt,
-    TypedTensorReadEinsumIntoExt, TypedTensorTensordotExt,
+    parse_einsum_subscripts, ConcreteEinsumPlan, EinsumAxis, EinsumNotation, EinsumOps, Error,
+    TensordotOps,
 };
 
 fn assert_f64_tensor(tensor: &Tensor, shape: &[usize], expected: &[f64]) {
@@ -74,10 +72,11 @@ fn binary_read_into_rejects_extra_inputs_without_mutating_output() {
     let owned = {
         let session = &mut backend;
         {
-            [&lhs, &rhs, &extra].einsum_into_subscripts(
+            [&lhs, &rhs, &extra].einsum_into(
                 &subscripts,
+                &crate::EinsumOptions::default(),
                 session,
-                TensorWrite::from_tensor(&mut owned_out),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut owned_out)),
             )
         }
     };
@@ -93,10 +92,11 @@ fn binary_read_into_rejects_extra_inputs_without_mutating_output() {
     let read = {
         let session = &mut backend;
         {
-            reads.einsum_read_into_subscripts(
+            reads.einsum_into(
                 &subscripts,
+                &crate::EinsumOptions::default(),
                 session,
-                TensorWrite::from_tensor(&mut read_out),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut read_out)),
             )
         }
     };
@@ -115,7 +115,12 @@ fn binary_read_into_rejects_extra_inputs_without_mutating_output() {
     let typed = {
         let session = &mut backend;
         {
-            typed_views.einsum_read_into_subscripts(&subscripts, session, &mut typed_out)
+            typed_views.einsum_into(
+                &subscripts,
+                &crate::EinsumOptions::default(),
+                session,
+                tenferro_tensor::Dest::overwrite(&mut typed_out),
+            )
         }
     };
     assert!(typed.is_err());
@@ -173,7 +178,7 @@ fn concrete_einsum_ellipsis_supports_broadcast_and_programmatic_notation() {
         let session = &mut backend;
         {
             let string_result = [&lhs, &rhs].einsum("...ij,...jk->...ik", session)?;
-            let programmatic_result = [&lhs, &rhs].einsum_notation(&notation, session)?;
+            let programmatic_result = [&lhs, &rhs].einsum(&notation, session)?;
             Ok::<_, crate::Error>((string_result, programmatic_result))
         }
     })()
@@ -214,10 +219,11 @@ fn concrete_programmatic_notation_covers_read_into_and_prepared_surfaces() {
     {
         let session = &mut backend;
         {
-            [&lhs, &rhs].einsum_into_notation(
+            [&lhs, &rhs].einsum_into(
                 &notation,
+                &crate::EinsumOptions::default(),
                 session,
-                TensorWrite::from_tensor(&mut erased_out),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut erased_out)),
             )
         }
     }
@@ -233,7 +239,7 @@ fn concrete_programmatic_notation_covers_read_into_and_prepared_surfaces() {
     let typed = {
         let session = &mut backend;
         {
-            [&typed_lhs, &typed_rhs].einsum_notation(&notation, session)
+            [&typed_lhs, &typed_rhs].einsum(&notation, session)
         }
     }
     .unwrap();
@@ -242,7 +248,7 @@ fn concrete_programmatic_notation_covers_read_into_and_prepared_surfaces() {
     let typed_views = [typed_lhs.as_view(), typed_rhs.as_view()];
     let typed_read = {
         let session = &mut backend;
-        typed_views.einsum_read_notation(&notation, session)
+        typed_views.einsum(&notation, session)
     }
     .unwrap();
     assert_eq!(typed_read.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
@@ -251,7 +257,12 @@ fn concrete_programmatic_notation_covers_read_into_and_prepared_surfaces() {
     {
         let session = &mut backend;
         {
-            [&typed_lhs, &typed_rhs].einsum_into_notation(&notation, session, &mut typed_out)
+            [&typed_lhs, &typed_rhs].einsum_into(
+                &notation,
+                &crate::EinsumOptions::default(),
+                session,
+                tenferro_tensor::Dest::overwrite(&mut typed_out),
+            )
         }
     }
     .unwrap();
@@ -262,7 +273,12 @@ fn concrete_programmatic_notation_covers_read_into_and_prepared_surfaces() {
     {
         let session = &mut backend;
         {
-            typed_views.einsum_read_into_notation(&notation, session, &mut typed_read_out)
+            typed_views.einsum_into(
+                &notation,
+                &crate::EinsumOptions::default(),
+                session,
+                tenferro_tensor::Dest::overwrite(&mut typed_read_out),
+            )
         }
     }
     .unwrap();
@@ -274,7 +290,7 @@ fn concrete_programmatic_notation_covers_read_into_and_prepared_surfaces() {
     let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
     let read_result = {
         let session = &mut backend;
-        reads.einsum_read_notation(&notation, session)
+        reads.einsum(&notation, session)
     }
     .unwrap();
     assert_f64_tensor(&read_result, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
@@ -282,20 +298,26 @@ fn concrete_programmatic_notation_covers_read_into_and_prepared_surfaces() {
     {
         let session = &mut backend;
         {
-            reads.einsum_read_into_notation(
+            reads.einsum_into(
                 &notation,
+                &crate::EinsumOptions::default(),
                 session,
-                TensorWrite::from_tensor(&mut read_out),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut read_out)),
             )
         }
     }
     .unwrap();
     assert_f64_tensor(&read_out, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
 
-    ConcreteEinsumPlan::prepare_notation([&lhs, &rhs], &notation).unwrap();
-    ConcreteEinsumPlan::prepare_typed_notation::<f64, _>([&typed_lhs, &typed_rhs], &notation)
+    ConcreteEinsumPlan::prepare(&[&lhs, &rhs], &notation, &crate::EinsumOptions::default())
         .unwrap();
-    ConcreteEinsumPlan::prepare_read_notation(reads, &notation).unwrap();
+    ConcreteEinsumPlan::prepare(
+        &[&typed_lhs, &typed_rhs],
+        &notation,
+        &crate::EinsumOptions::default(),
+    )
+    .unwrap();
+    ConcreteEinsumPlan::prepare(&reads, &notation, &crate::EinsumOptions::default()).unwrap();
 }
 
 #[test]
@@ -336,12 +358,12 @@ fn public_tensor_einsum_ext_accepts_slice_and_integer_subscripts() {
 
     let slice_result = {
         let session = &mut backend;
-        inputs.as_slice().einsum_subscripts(&subscripts, session)
+        inputs.as_slice().einsum(&subscripts, session)
     }
     .unwrap();
     let array_result = {
         let session = &mut backend;
-        [&lhs, &rhs].einsum_subscripts(&subscripts, session)
+        [&lhs, &rhs].einsum(&subscripts, session)
     }
     .unwrap();
 
@@ -376,13 +398,15 @@ fn public_typed_tensor_einsum_ext_preserves_complex_dtype() {
     let subscripts = parse_einsum_subscripts("ij,jk->ik").unwrap();
     let integer_result = {
         let session = &mut backend;
-        [&lhs, &rhs].einsum_subscripts(&subscripts, session)
+        [&lhs, &rhs].einsum(&subscripts, session)
     }
     .unwrap();
-    let plan = ConcreteEinsumPlan::prepare_typed_subscripts([&lhs, &rhs], &subscripts).unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], &subscripts, &crate::EinsumOptions::default())
+            .unwrap();
     let planned_result = {
         let session = &mut backend;
-        plan.execute_typed([&lhs, &rhs], session)
+        plan.execute(&[&lhs, &rhs], session)
     }
     .unwrap();
 
@@ -415,12 +439,12 @@ fn public_typed_tensor_einsum_ext_accepts_slice_and_integer_subscripts() {
 
     let slice_result = {
         let session = &mut backend;
-        inputs.as_slice().einsum_subscripts(&subscripts, session)
+        inputs.as_slice().einsum(&subscripts, session)
     }
     .unwrap();
     let array_result = {
         let session = &mut backend;
-        [&lhs, &rhs].einsum_subscripts(&subscripts, session)
+        [&lhs, &rhs].einsum(&subscripts, session)
     }
     .unwrap();
 
@@ -453,14 +477,19 @@ fn public_typed_tensor_read_einsum_ext_accepts_borrowed_strided_complex_views() 
     let result = {
         let session = &mut backend;
         {
-            [matrix_view.clone(), vector_view.clone()].einsum_read("ij,j->i", session)
+            [matrix_view.clone(), vector_view.clone()].einsum("ij,j->i", session)
         }
     }
     .unwrap();
     {
         let session = &mut backend;
         {
-            [matrix_view, vector_view].einsum_read_into("ij,j->i", session, &mut out)
+            [matrix_view, vector_view].einsum_into(
+                "ij,j->i",
+                &crate::EinsumOptions::default(),
+                session,
+                tenferro_tensor::Dest::overwrite(&mut out),
+            )
         }
     }
     .unwrap();
@@ -488,7 +517,7 @@ fn public_tensor_read_einsum_ext_accepts_strided_views() {
 
     let result = {
         let session = &mut backend;
-        inputs.einsum_read("ij,j->i", session)
+        inputs.einsum("ij,j->i", session)
     }
     .unwrap();
 
@@ -510,15 +539,13 @@ fn public_tensor_read_einsum_ext_accepts_slice_and_integer_subscripts() {
     let slice_result = {
         let session = &mut backend;
         {
-            inputs
-                .as_slice()
-                .einsum_read_subscripts(&subscripts, session)
+            inputs.as_slice().einsum(&subscripts, session)
         }
     }
     .unwrap();
     let array_result = {
         let session = &mut backend;
-        inputs.einsum_read_subscripts(&subscripts, session)
+        inputs.einsum(&subscripts, session)
     }
     .unwrap();
 
@@ -540,8 +567,9 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
         {
             [&lhs, &rhs].einsum_into(
                 "ij,jk->ik",
+                &crate::EinsumOptions::default(),
                 session,
-                TensorWrite::from_tensor(&mut dynamic_out),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut dynamic_out)),
             )
         }
     }
@@ -558,7 +586,12 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
     {
         let session = &mut backend;
         {
-            [&typed_lhs, &typed_rhs].einsum_into("ij,jk->ik", session, &mut typed_out)
+            [&typed_lhs, &typed_rhs].einsum_into(
+                "ij,jk->ik",
+                &crate::EinsumOptions::default(),
+                session,
+                tenferro_tensor::Dest::overwrite(&mut typed_out),
+            )
         }
     }
     .unwrap();
@@ -573,8 +606,9 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
             {
                 [&typed_lhs, &typed_rhs].einsum_into(
                     "ij,jk->ik",
+                    &crate::EinsumOptions::default(),
                     session,
-                    TypedTensorWrite::from_view(out_view),
+                    tenferro_tensor::Dest::overwrite(TypedTensorWrite::from_view(out_view)),
                 )
             }
         }
@@ -594,7 +628,12 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
         {
             let session = &mut backend;
             {
-                inputs.einsum_read_into("ij,jk->ik", session, TensorWrite::from_view(out_view))
+                inputs.einsum_into(
+                    "ij,jk->ik",
+                    &crate::EinsumOptions::default(),
+                    session,
+                    tenferro_tensor::Dest::overwrite(TensorWrite::from_view(out_view)),
+                )
             }
         }
         .unwrap();
@@ -623,7 +662,12 @@ fn public_einsum_read_into_swaps_binary_operands_for_exact_output_order() {
     {
         let session = &mut backend;
         {
-            [lhs.as_view(), rhs.as_view()].einsum_read_into("ij,pj->pi", session, &mut output)
+            [lhs.as_view(), rhs.as_view()].einsum_into(
+                "ij,pj->pi",
+                &crate::EinsumOptions::default(),
+                session,
+                tenferro_tensor::Dest::overwrite(&mut output),
+            )
         }
     }
     .unwrap();
@@ -662,15 +706,17 @@ fn typed_view_read_into_compact_planner_handles_notation_and_parsed_labels() {
     (|| {
         let session = &mut backend;
         {
-            [lhs.as_view(), rhs.as_view()].einsum_read_into_notation(
+            [lhs.as_view(), rhs.as_view()].einsum_into(
                 &notation,
+                &crate::EinsumOptions::default(),
                 session,
-                &mut notation_out,
+                tenferro_tensor::Dest::overwrite(&mut notation_out),
             )?;
-            [lhs.as_view(), rhs.as_view()].einsum_read_into_subscripts(
+            [lhs.as_view(), rhs.as_view()].einsum_into(
                 &parsed,
+                &crate::EinsumOptions::default(),
                 session,
-                &mut parsed_out,
+                tenferro_tensor::Dest::overwrite(&mut parsed_out),
             )
         }
     })()
@@ -713,7 +759,12 @@ fn swapped_binary_einsum_preserves_complex_values() {
     {
         let session = &mut backend;
         {
-            [lhs.as_view(), rhs.as_view()].einsum_read_into("ij,pj->pi", session, &mut output)
+            [lhs.as_view(), rhs.as_view()].einsum_into(
+                "ij,pj->pi",
+                &crate::EinsumOptions::default(),
+                session,
+                tenferro_tensor::Dest::overwrite(&mut output),
+            )
         }
     }
     .unwrap();
@@ -748,10 +799,11 @@ fn swapped_binary_einsum_writes_strided_output_without_reordering_payload() {
     {
         let session = &mut backend;
         {
-            [lhs.as_view(), rhs.as_view()].einsum_read_into(
+            [lhs.as_view(), rhs.as_view()].einsum_into(
                 "ij,pj->pi",
+                &crate::EinsumOptions::default(),
                 session,
-                TypedTensorWrite::from_view(out),
+                tenferro_tensor::Dest::overwrite(TypedTensorWrite::from_view(out)),
             )
         }
     }
@@ -787,7 +839,12 @@ fn public_einsum_into_preserves_complex_dtype() {
 
     {
         let session = &mut backend;
-        [&lhs, &rhs].einsum_into("ij,jk->ik", session, &mut out)
+        [&lhs, &rhs].einsum_into(
+            "ij,jk->ik",
+            &crate::EinsumOptions::default(),
+            session,
+            tenferro_tensor::Dest::overwrite(&mut out),
+        )
     }
     .unwrap();
 
@@ -810,16 +867,17 @@ fn public_einsum_into_rejects_output_shape_and_dtype_mismatch() {
         {
             [&lhs, &rhs].einsum_into(
                 "ij,jk->ik",
+                &crate::EinsumOptions::default(),
                 session,
-                TensorWrite::from_tensor(&mut wrong_shape),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut wrong_shape)),
             )
         }
     }
     .unwrap_err();
     assert!(matches!(
         shape_err,
-        Error::Validation {
-            op: "TensorEinsumIntoExt::einsum_into",
+        tenferro_tensor::Error::Validation {
+            op: "einsum_into",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
     ));
@@ -830,18 +888,19 @@ fn public_einsum_into_rejects_output_shape_and_dtype_mismatch() {
         {
             [&lhs, &rhs].einsum_into(
                 "ij,jk->ik",
+                &crate::EinsumOptions::default(),
                 session,
-                TensorWrite::from_tensor(&mut wrong_dtype),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut wrong_dtype)),
             )
         }
     }
     .unwrap_err();
     assert!(matches!(
         dtype_err,
-        Error::Tensor(tenferro_tensor::Error::Validation {
-            op: "TensorEinsumIntoExt::einsum_into",
+        tenferro_tensor::Error::Validation {
+            op: "einsum_into",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        })
+        }
     ));
 }
 
@@ -871,9 +930,10 @@ fn einsum_into_gemm_fast_path_uses_exact_output_operand_order() {
 fn ordinary_binary_read_into_dispatches_before_tree_preparation() {
     let source = include_str!("concrete.rs");
     let typed = source
-        .split("TypedTensorReadEinsumIntoExt<T> for [TypedTensorView")
+        // Typed views reach the borrowed-read entry through `EinsumOps` (#2552).
+        .split("ReadEinsumInto for [TensorRead")
         .nth(1)
-        .expect("non-AD typed-view implementation");
+        .expect("non-AD borrowed-read implementation");
     assert!(
         typed.find("parse_fast_ascii_binary_labels").unwrap()
             < typed.find("parse_einsum_notation").unwrap(),
@@ -932,11 +992,11 @@ fn einsum_into_gemm_fast_path_dispatches_to_backend_into_before_owned_fallback()
 fn prepared_read_into_reuses_borrowed_metadata_and_binary_plan() {
     let source = include_str!("concrete.rs");
     let start = source
-        .find("pub fn execute_read_into<'a, I>(")
+        .find("pub(crate) fn run_reads_into<'a, I>(")
         .expect("missing prepared read-into method");
     let tail = &source[start..];
     let end = tail
-        .find("pub fn execute_read_into_accum<'a, I>(")
+        .find("pub(crate) fn run_reads_into_accum<'a, I>(")
         .expect("missing following method");
     let body = &tail[..end];
 
@@ -954,14 +1014,16 @@ fn concrete_einsum_plan_executes_without_replanning_contract() {
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let rhs2 =
         Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f64, 0.0, 1.0, 3.0, 4.0, 5.0]).unwrap();
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
 
     let mut backend = CpuEngine::serial();
     let (first, second) = (|| {
         let session = &mut backend;
         {
-            let first = plan.execute([&lhs, &rhs], session)?;
-            let second = plan.execute([&lhs, &rhs2], session)?;
+            let first = plan.execute(&[&lhs, &rhs], session)?;
+            let second = plan.execute(&[&lhs, &rhs2], session)?;
             Ok::<_, crate::Error>((first, second))
         }
     })()
@@ -979,16 +1041,26 @@ fn concrete_einsum_plan_execute_into_writes_reused_outputs() {
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let rhs2 =
         Tensor::from_vec_col_major(vec![3, 2], vec![2.0_f64, 0.0, 1.0, 3.0, 4.0, 5.0]).unwrap();
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
     let mut backend = CpuEngine::serial();
     let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![-1.0_f64; 4]).unwrap();
 
     let first = (|| {
         let session = &mut backend;
         {
-            plan.execute_into([&lhs, &rhs], session, TensorWrite::from_tensor(&mut out))?;
+            plan.execute_into(
+                &[&lhs, &rhs],
+                session,
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
+            )?;
             let first = out.duplicate().unwrap();
-            plan.execute_into([&lhs, &rhs2], session, TensorWrite::from_tensor(&mut out))?;
+            plan.execute_into(
+                &[&lhs, &rhs2],
+                session,
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
+            )?;
             Ok::<_, crate::Error>(first)
         }
     })()
@@ -1005,9 +1077,12 @@ fn concrete_einsum_plan_execute_read_into_accum_updates_outputs() {
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let mut backend = CpuEngine::serial();
 
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
     let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
-    let fallback_plan = ConcreteEinsumPlan::prepare([&lhs], "ij->").unwrap();
+    let fallback_plan =
+        ConcreteEinsumPlan::prepare(&[&lhs], "ij->", &crate::EinsumOptions::default()).unwrap();
     let mut scalar_out = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     let accumulation =
         DotGeneralAccumulation::scaled(ContractionScalar::F64(0.5), ContractionScalar::F64(2.0))
@@ -1015,13 +1090,13 @@ fn concrete_einsum_plan_execute_read_into_accum_updates_outputs() {
     (|| {
         let session = &mut backend;
         {
-            plan.execute_read_into_accum(
+            plan.run_reads_into_accum(
                 [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
                 session,
                 DotGeneralAccumulation::add_to(DType::F64).unwrap(),
                 TensorWrite::from_tensor(&mut out),
             )?;
-            fallback_plan.execute_read_into_accum(
+            fallback_plan.run_reads_into_accum(
                 [TensorRead::from_tensor(&lhs)],
                 session,
                 accumulation,
@@ -1042,7 +1117,9 @@ fn concrete_einsum_plan_execute_typed_and_read_into_outputs() {
     let rhs =
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
-    let plan = ConcreteEinsumPlan::prepare_typed([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
     let mut backend = CpuEngine::serial();
 
     let mut typed_out = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![-1.0; 4]).unwrap();
@@ -1050,10 +1127,18 @@ fn concrete_einsum_plan_execute_typed_and_read_into_outputs() {
     (|| {
         let session = &mut backend;
         {
-            plan.execute_typed_into([&lhs, &rhs], session, &mut typed_out)?;
+            plan.execute_into(
+                &[&lhs, &rhs],
+                session,
+                tenferro_tensor::Dest::overwrite(&mut typed_out),
+            )?;
             let out_view =
                 TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut typed_strided_data).unwrap();
-            plan.execute_typed_into([&lhs, &rhs], session, TypedTensorWrite::from_view(out_view))
+            plan.execute_into(
+                &[&lhs, &rhs],
+                session,
+                tenferro_tensor::Dest::overwrite(TypedTensorWrite::from_view(out_view)),
+            )
         }
     })()
     .unwrap();
@@ -1072,13 +1157,13 @@ fn concrete_einsum_plan_execute_typed_and_read_into_outputs() {
             let out_view = TensorViewMut::F64(
                 TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut strided_data).unwrap(),
             );
-            plan.execute_read_into(
-                [
+            plan.execute_into(
+                &[
                     TensorRead::from_tensor(&lhs_erased),
                     TensorRead::from_tensor(&rhs_erased),
                 ],
                 session,
-                TensorWrite::from_view(out_view),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_view(out_view)),
             )
         }
     }
@@ -1102,13 +1187,18 @@ fn prepared_binary_read_into_reuses_swapped_dot_metadata() {
     )
     .unwrap();
     let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
-    let plan = ConcreteEinsumPlan::prepare_read(&reads, "ij,pj->pi").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&reads, "ij,pj->pi", &crate::EinsumOptions::default()).unwrap();
     let mut out = Tensor::from_vec_col_major(vec![4, 2], vec![-1.0; 8]).unwrap();
 
     {
         let session = &mut backend;
         {
-            plan.execute_read_into(&reads, session, TensorWrite::from_tensor(&mut out))
+            plan.execute_into(
+                &reads,
+                session,
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
+            )
         }
     }
     .unwrap();
@@ -1126,7 +1216,9 @@ fn concrete_einsum_plan_execute_into_rejects_incompatible_output() {
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
     let mut backend = CpuEngine::serial();
     let mut wrong_shape = Tensor::from_vec_col_major(vec![4], vec![0.0_f64; 4]).unwrap();
 
@@ -1134,9 +1226,9 @@ fn concrete_einsum_plan_execute_into_rejects_incompatible_output() {
         let session = &mut backend;
         {
             plan.execute_into(
-                [&lhs, &rhs],
+                &[&lhs, &rhs],
                 session,
-                TensorWrite::from_tensor(&mut wrong_shape),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut wrong_shape)),
             )
         }
     }
@@ -1144,7 +1236,7 @@ fn concrete_einsum_plan_execute_into_rejects_incompatible_output() {
 
     assert!(matches!(
         err,
-        Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
@@ -1166,30 +1258,41 @@ fn concrete_einsum_plan_prepares_integer_and_read_variants() {
     let read_inputs = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
     let subscripts = parse_einsum_subscripts("ij,jk->ik").unwrap();
 
-    let tensor_plan = ConcreteEinsumPlan::prepare_subscripts([&lhs, &rhs], &subscripts).unwrap();
-    let typed_plan =
-        ConcreteEinsumPlan::prepare_typed_subscripts([&typed_lhs, &typed_rhs], &subscripts)
+    let tensor_plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], &subscripts, &crate::EinsumOptions::default())
             .unwrap();
-    let read_string_plan =
-        ConcreteEinsumPlan::prepare_read(read_inputs.as_slice(), "ij,jk->ik").unwrap();
-    let read_integer_plan =
-        ConcreteEinsumPlan::prepare_read_subscripts(read_inputs.as_slice(), &subscripts).unwrap();
+    let typed_plan = ConcreteEinsumPlan::prepare(
+        &[&typed_lhs, &typed_rhs],
+        &subscripts,
+        &crate::EinsumOptions::default(),
+    )
+    .unwrap();
+    let read_string_plan = ConcreteEinsumPlan::prepare(
+        read_inputs.as_slice(),
+        "ij,jk->ik",
+        &crate::EinsumOptions::default(),
+    )
+    .unwrap();
+    let read_integer_plan = ConcreteEinsumPlan::prepare(
+        read_inputs.as_slice(),
+        &subscripts,
+        &crate::EinsumOptions::default(),
+    )
+    .unwrap();
     let debug = format!("{tensor_plan:?}");
 
     let mut backend = CpuEngine::serial();
     let tensor_result = {
         let session = &mut backend;
-        tensor_plan.execute([&lhs, &rhs], session)
+        tensor_plan.execute(&[&lhs, &rhs], session)
     }
     .unwrap();
     let (typed_result, read_string_result, read_integer_result) = (|| {
         let session = &mut backend;
         {
-            let typed_result = typed_plan.execute_typed([&typed_lhs, &typed_rhs], session)?;
-            let read_string_result =
-                read_string_plan.execute_read(read_inputs.as_slice(), session)?;
-            let read_integer_result =
-                read_integer_plan.execute_read(read_inputs.as_slice(), session)?;
+            let typed_result = typed_plan.execute(&[&typed_lhs, &typed_rhs], session)?;
+            let read_string_result = read_string_plan.execute(read_inputs.as_slice(), session)?;
+            let read_integer_result = read_integer_plan.execute(read_inputs.as_slice(), session)?;
             Ok::<_, crate::Error>((typed_result, read_string_result, read_integer_result))
         }
     })()
@@ -1211,7 +1314,9 @@ fn concrete_einsum_plan_executes_read_and_typed_inputs() {
     let rhs =
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
-    let plan = ConcreteEinsumPlan::prepare_typed([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
     let lhs_erased = Tensor::from(lhs.duplicate().unwrap());
     let rhs_erased = Tensor::from(rhs.duplicate().unwrap());
 
@@ -1219,9 +1324,9 @@ fn concrete_einsum_plan_executes_read_and_typed_inputs() {
     let (typed, read) = (|| {
         let session = &mut backend;
         {
-            let typed = plan.execute_typed([&lhs, &rhs], session)?;
-            let read = plan.execute_read(
-                [
+            let typed = plan.execute(&[&lhs, &rhs], session)?;
+            let read = plan.execute(
+                &[
                     TensorRead::from_tensor(&lhs_erased),
                     TensorRead::from_tensor(&rhs_erased),
                 ],
@@ -1244,31 +1349,33 @@ fn concrete_einsum_plan_rejects_shape_and_dtype_mismatches() {
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let wrong_shape = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     let wrong_dtype = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f32; 6]).unwrap();
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
 
     let mut backend = CpuEngine::serial();
     let (shape_err, dtype_err) = {
         let session = &mut backend;
         {
-            let shape_err = plan.execute([&lhs, &wrong_shape], session).unwrap_err();
-            let dtype_err = plan.execute([&lhs, &wrong_dtype], session).unwrap_err();
+            let shape_err = plan.execute(&[&lhs, &wrong_shape], session).unwrap_err();
+            let dtype_err = plan.execute(&[&lhs, &wrong_dtype], session).unwrap_err();
             (shape_err, dtype_err)
         }
     };
 
     assert!(matches!(
         shape_err,
-        Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
     ));
     assert!(matches!(
         dtype_err,
-        Error::Tensor(tenferro_tensor::Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        })
+        }
     ));
 }
 
@@ -1285,35 +1392,30 @@ fn concrete_einsum_public_api_reports_parse_and_input_count_errors() {
         [&lhs, &rhs].einsum("ij,(jk)->ik", session)
     }
     .unwrap_err();
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
     let count_err = {
         let session = &mut backend;
-        plan.execute([&lhs], session)
+        plan.execute(&[&lhs], session)
     }
     .unwrap_err();
 
-    assert!(matches!(parse_err, Error::InvalidSubscripts { .. }));
+    // The concrete layer returns a tensor error whose source is the einsum one.
+    assert_eq!(
+        parse_err.kind(),
+        tenferro_tensor::ErrorKind::Validation(tenferro_tensor::ValidationKind::InvalidArgument)
+    );
+    assert!(matches!(
+        std::error::Error::source(&parse_err).and_then(|e| e.downcast_ref::<Error>()),
+        Some(Error::InvalidSubscripts { .. })
+    ));
     assert!(matches!(
         count_err,
-        Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             ..
         }
-    ));
-}
-
-#[test]
-fn concrete_einsum_typed_result_reports_defensive_dtype_mismatch() {
-    let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap();
-
-    let err = crate::concrete::into_typed_result::<f64>(tensor, "test typed result").unwrap_err();
-
-    assert!(matches!(
-        err,
-        Error::Tensor(tenferro_tensor::Error::Validation {
-            op: "test typed result",
-            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        })
     ));
 }
 
@@ -1326,7 +1428,9 @@ fn f64_plan_fixture() -> (Tensor, Tensor, ConcreteEinsumPlan) {
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let rhs =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
     (lhs, rhs, plan)
 }
 
@@ -1337,7 +1441,7 @@ fn concrete_einsum_plan_execute_in_session_matches_expected_values() {
 
     let in_session = {
         let session = &mut backend;
-        plan.execute([&lhs, &rhs], session)
+        plan.execute(&[&lhs, &rhs], session)
     }
     .unwrap();
     assert_f64_tensor(&in_session, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
@@ -1345,7 +1449,7 @@ fn concrete_einsum_plan_execute_in_session_matches_expected_values() {
     let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
     let in_session = {
         let session = &mut backend;
-        plan.execute_read(reads.clone(), session)
+        plan.execute(&reads.clone(), session)
     }
     .unwrap();
     assert_f64_tensor(&in_session, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
@@ -1356,11 +1460,15 @@ fn concrete_einsum_plan_execute_in_session_matches_expected_values() {
     let typed_rhs =
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
-    let typed_plan =
-        ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
+    let typed_plan = ConcreteEinsumPlan::prepare(
+        &[&typed_lhs, &typed_rhs],
+        "ij,jk->ik",
+        &crate::EinsumOptions::default(),
+    )
+    .unwrap();
     let in_session = {
         let session = &mut backend;
-        typed_plan.execute_typed([&typed_lhs, &typed_rhs], session)
+        typed_plan.execute(&[&typed_lhs, &typed_rhs], session)
     }
     .unwrap();
     assert_eq!(in_session.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
@@ -1375,12 +1483,12 @@ fn concrete_einsum_plan_execute_in_session_rejects_bad_inputs() {
 
     let in_session = {
         let session = &mut backend;
-        plan.execute([&lhs, &wrong_shape], session)
+        plan.execute(&[&lhs, &wrong_shape], session)
     }
     .unwrap_err();
     assert!(matches!(
         in_session,
-        Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
@@ -1388,25 +1496,25 @@ fn concrete_einsum_plan_execute_in_session_rejects_bad_inputs() {
 
     let in_session = {
         let session = &mut backend;
-        plan.execute([&lhs, &wrong_dtype], session)
+        plan.execute(&[&lhs, &wrong_dtype], session)
     }
     .unwrap_err();
     assert!(matches!(
         in_session,
-        Error::Tensor(tenferro_tensor::Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        })
+        }
     ));
 
     let in_session = {
         let session = &mut backend;
-        plan.execute([&lhs], session)
+        plan.execute(&[&lhs], session)
     }
     .unwrap_err();
     assert!(matches!(
         in_session,
-        Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             ..
         }
@@ -1421,12 +1529,17 @@ fn concrete_einsum_plan_execute_typed_in_session_validates_dtype() {
     let typed_rhs =
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
-    let plan = ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
+    let plan = ConcreteEinsumPlan::prepare(
+        &[&typed_lhs, &typed_rhs],
+        "ij,jk->ik",
+        &crate::EinsumOptions::default(),
+    )
+    .unwrap();
     let mut backend = CpuEngine::serial();
 
     let in_session = {
         let session = &mut backend;
-        plan.execute_typed([&typed_lhs, &typed_rhs], session)
+        plan.execute(&[&typed_lhs, &typed_rhs], session)
     }
     .unwrap();
     assert_eq!(in_session.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
@@ -1437,15 +1550,15 @@ fn concrete_einsum_plan_execute_typed_in_session_validates_dtype() {
     let f32_rhs = TypedTensor::<f32>::from_vec_col_major(vec![3, 2], vec![1.0_f32; 6]).unwrap();
     let in_session = {
         let session = &mut backend;
-        plan.execute_typed([&f32_lhs, &f32_rhs], session)
+        plan.execute(&[&f32_lhs, &f32_rhs], session)
     }
     .unwrap_err();
     assert!(matches!(
         in_session,
-        Error::Tensor(tenferro_tensor::Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        })
+        }
     ));
 }
 
@@ -1460,40 +1573,40 @@ fn concrete_einsum_plan_execute_into_in_session_validates_output() {
         let session = &mut backend;
         {
             plan.execute_into(
-                [&lhs, &rhs],
+                &[&lhs, &rhs],
                 session,
-                TensorWrite::from_tensor(&mut wrong_shape),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut wrong_shape)),
             )
         }
     }
     .unwrap_err();
     assert!(matches!(
         in_session,
-        Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
     ));
 
-    // execute_read_into: incompatible output dtype.
+    // execute_into on borrowed reads: incompatible output dtype.
     let mut wrong_dtype_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f32; 4]).unwrap();
     let in_session = {
         let session = &mut backend;
         {
-            plan.execute_read_into(
-                [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+            plan.execute_into(
+                &[TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
                 session,
-                TensorWrite::from_tensor(&mut wrong_dtype_out),
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut wrong_dtype_out)),
             )
         }
     }
     .unwrap_err();
     assert!(matches!(
         in_session,
-        Error::Tensor(tenferro_tensor::Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        })
+        }
     ));
 
     // execute_typed_into: incompatible output shape.
@@ -1503,31 +1616,39 @@ fn concrete_einsum_plan_execute_into_in_session_validates_output() {
     let typed_rhs =
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
-    let typed_plan =
-        ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
+    let typed_plan = ConcreteEinsumPlan::prepare(
+        &[&typed_lhs, &typed_rhs],
+        "ij,jk->ik",
+        &crate::EinsumOptions::default(),
+    )
+    .unwrap();
     let mut typed_out = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![0.0; 3]).unwrap();
     let in_session = {
         let session = &mut backend;
         {
-            typed_plan.execute_typed_into([&typed_lhs, &typed_rhs], session, &mut typed_out)
+            typed_plan.execute_into(
+                &[&typed_lhs, &typed_rhs],
+                session,
+                tenferro_tensor::Dest::overwrite(&mut typed_out),
+            )
         }
     }
     .unwrap_err();
     assert!(matches!(
         in_session,
-        Error::Validation {
+        tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
     ));
 
-    // execute_read_into_accum: incompatible output shape.
+    // the accumulating route: incompatible output shape.
     let mut accum_out = Tensor::from_vec_col_major(vec![4], vec![0.0_f64; 4]).unwrap();
     let accumulation = DotGeneralAccumulation::add_to(DType::F64).unwrap();
     let in_session = {
         let session = &mut backend;
         {
-            plan.execute_read_into_accum(
+            plan.run_reads_into_accum(
                 [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
                 session,
                 accumulation,
@@ -1549,7 +1670,11 @@ fn concrete_einsum_plan_execute_into_in_session_validates_output() {
     {
         let session = &mut backend;
         {
-            plan.execute_into([&lhs, &rhs], session, TensorWrite::from_tensor(&mut out))
+            plan.execute_into(
+                &[&lhs, &rhs],
+                session,
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
+            )
         }
     }
     .unwrap();
@@ -1580,7 +1705,12 @@ fn concrete_einsum_plan_execute_typed_into_accepts_non_send_adapter() {
     let typed_rhs =
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
-    let plan = ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
+    let plan = ConcreteEinsumPlan::prepare(
+        &[&typed_lhs, &typed_rhs],
+        "ij,jk->ik",
+        &crate::EinsumOptions::default(),
+    )
+    .unwrap();
 
     let mut backend = CpuEngine::serial();
     let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0; 4]).unwrap();
@@ -1591,7 +1721,11 @@ fn concrete_einsum_plan_execute_typed_into_accepts_non_send_adapter() {
     {
         let session = &mut backend;
         {
-            plan.execute_typed_into([&typed_lhs, &typed_rhs], session, write)
+            plan.execute_into(
+                &[&typed_lhs, &typed_rhs],
+                session,
+                tenferro_tensor::Dest::overwrite(write),
+            )
         }
     }
     .unwrap();
@@ -1611,7 +1745,9 @@ fn prepared_nary_accumulation_reuses_plan_with_runtime_scalars() {
         TensorRead::from_tensor(&id),
         TensorRead::from_tensor(&id),
     ];
-    let mut plan = ConcreteEinsumPlan::prepare_read(&reads, "ij,jk,kl->il").unwrap();
+    let mut plan =
+        ConcreteEinsumPlan::prepare(&reads, "ij,jk,kl->il", &crate::EinsumOptions::default())
+            .unwrap();
     let mut backend = CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap());
     let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64; 4]).unwrap();
     for (alpha, beta, expected) in [
@@ -1621,7 +1757,7 @@ fn prepared_nary_accumulation_reuses_plan_with_runtime_scalars() {
         {
             let session = &mut backend;
             {
-                plan.execute_read_into_accum(
+                plan.run_reads_into_accum(
                     &reads,
                     session,
                     DotGeneralAccumulation {
@@ -1665,10 +1801,12 @@ fn nary_read_into_matches_allocating_execution() {
         // The tree sums `l` out of `c` before the last step.
         ("ij,jk,kl->i", vec![2]),
     ] {
-        let plan = ConcreteEinsumPlan::prepare_read(&reads, subscripts).unwrap();
+        let plan =
+            ConcreteEinsumPlan::prepare(&reads, subscripts, &crate::EinsumOptions::default())
+                .unwrap();
         let expected = {
             let session = &mut backend;
-            plan.execute_read(&reads, session)
+            plan.execute(&reads, session)
         }
         .unwrap();
         let len = shape.iter().product();
@@ -1676,7 +1814,11 @@ fn nary_read_into_matches_allocating_execution() {
         {
             let session = &mut backend;
             {
-                plan.execute_read_into(&reads, session, TensorWrite::from_tensor(&mut out))
+                plan.execute_into(
+                    &reads,
+                    session,
+                    tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
+                )
             }
         }
         .unwrap();
@@ -1695,7 +1837,11 @@ fn nary_read_into_matches_allocating_execution() {
                     {
                         let session = &mut backend;
                         {
-                            plan.execute_read_into(&reads, session, TensorWrite::from_view(view))
+                            plan.execute_into(
+                                &reads,
+                                session,
+                                tenferro_tensor::Dest::overwrite(TensorWrite::from_view(view)),
+                            )
                         }
                     }
                     .unwrap();
@@ -1715,12 +1861,17 @@ fn nary_read_into_matches_allocating_execution() {
     // A single operand has no contraction step: the result is materialized
     // and copied into the handed-back destination.
     let unary = [TensorRead::from_tensor(&a)];
-    let plan = ConcreteEinsumPlan::prepare_read(&unary, "ij->ji").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&unary, "ij->ji", &crate::EinsumOptions::default()).unwrap();
     let mut out = Tensor::from_vec_col_major(vec![3, 2], vec![-9.0_f64; 6]).unwrap();
     {
         let session = &mut backend;
         {
-            plan.execute_read_into(&unary, session, TensorWrite::from_tensor(&mut out))
+            plan.execute_into(
+                &unary,
+                session,
+                tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
+            )
         }
     }
     .unwrap();
@@ -1739,7 +1890,9 @@ fn prepared_swapped_binary_dot_accumulates_with_conjugation_on_the_named_inputs(
         .collect();
     let lhs = Tensor::from_vec_col_major(vec![2, 3], lhs_data.clone()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![3, 2], rhs_data.clone()).unwrap();
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ki").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ki", &crate::EinsumOptions::default())
+            .unwrap();
     let initial = Complex64::new(0.5, -0.5);
     let (alpha, beta) = (Complex64::new(2.0, 1.0), Complex64::new(1.0, 0.0));
 
@@ -1756,7 +1909,7 @@ fn prepared_swapped_binary_dot_accumulates_with_conjugation_on_the_named_inputs(
         {
             let session = &mut backend;
             {
-                plan.execute_read_into_accum(
+                plan.run_reads_into_accum(
                     [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
                     session,
                     accumulation,
@@ -1836,7 +1989,8 @@ fn assert_conj_accum(
     initial: Complex64,
     expected: &[Complex64],
 ) {
-    let plan = ConcreteEinsumPlan::prepare(inputs, subscripts).unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(inputs, subscripts, &crate::EinsumOptions::default()).unwrap();
     let reads: Vec<TensorRead<'_>> = inputs.iter().map(|t| TensorRead::from_tensor(t)).collect();
     assert_eq!(out_shape.iter().product::<usize>(), expected.len());
     let mut out =
@@ -1847,7 +2001,7 @@ fn assert_conj_accum(
     {
         let session = &mut backend;
         {
-            plan.execute_read_into_accum(
+            plan.run_reads_into_accum(
                 &reads,
                 session,
                 accumulation,
@@ -1898,7 +2052,9 @@ fn prepared_accum_conj_repeated_label_honours_lhs_conj() {
         vec![Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)],
     )
     .unwrap();
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ii,ij->j").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ii,ij->j", &crate::EinsumOptions::default())
+            .unwrap();
     let mut accumulation = DotGeneralAccumulation::overwrite(DType::C64).unwrap();
     accumulation.lhs_conj = true;
     let mut out = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap();
@@ -1906,7 +2062,7 @@ fn prepared_accum_conj_repeated_label_honours_lhs_conj() {
     {
         let session = &mut backend;
         {
-            plan.execute_read_into_accum(
+            plan.run_reads_into_accum(
                 [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
                 session,
                 accumulation,
@@ -1942,7 +2098,9 @@ fn prepared_accum_conj_repeated_label_honours_rhs_conj() {
         vec![Complex64::new(1.0, 1.0), Complex64::new(1.0, 0.0)],
     )
     .unwrap();
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ii,ij->j").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ii,ij->j", &crate::EinsumOptions::default())
+            .unwrap();
     let mut accumulation = DotGeneralAccumulation::overwrite(DType::C64).unwrap();
     accumulation.rhs_conj = true;
     let mut out = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap();
@@ -1950,7 +2108,7 @@ fn prepared_accum_conj_repeated_label_honours_rhs_conj() {
     {
         let session = &mut backend;
         {
-            plan.execute_read_into_accum(
+            plan.run_reads_into_accum(
                 [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
                 session,
                 accumulation,
@@ -2106,7 +2264,8 @@ fn prepared_accum_conj_ternary_honours_additive_and_overwrite_accumulation() {
 #[test]
 fn prepared_accum_conj_unary_rhs_conj_is_rejected_before_writing() {
     let (input, _) = conj_probe_matrix(2, 3, 1);
-    let plan = ConcreteEinsumPlan::prepare([&input], "ij->ji").unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&input], "ij->ji", &crate::EinsumOptions::default()).unwrap();
     let mut accumulation = DotGeneralAccumulation::overwrite(DType::C64).unwrap();
     accumulation.rhs_conj = true;
     let initial = Complex64::new(7.0, 7.0);
@@ -2115,7 +2274,7 @@ fn prepared_accum_conj_unary_rhs_conj_is_rejected_before_writing() {
     let error = {
         let session = &mut backend;
         {
-            plan.execute_read_into_accum(
+            plan.run_reads_into_accum(
                 [TensorRead::from_tensor(&input)],
                 session,
                 accumulation,

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::EagerSessionEinsumExt;
+use tenferro_einsum::EagerEinsumOps;
 use tenferro_runtime::Tensor;
 
 const SHAPE_COUNT: usize = 129;

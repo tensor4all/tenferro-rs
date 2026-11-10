@@ -176,12 +176,13 @@ pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
 ///         trait_def: pub trait LinalgOps: AsView;
 ///         impl_def: impl<X: AsView + ?Sized> LinalgOps for X;
 ///         method_where: [];
-///         receiver: self;            // or `session` + `first_arg: &T;`
+///         receiver: self;            // or `session` + `first_arg: &T;` (`&mut self`),
+///                                    // or `context` (`&self`, first operand is an argument)
 ///         tensor_arg: &impl AsView;
 ///         exec: &mut dyn Engine;     // optional
 ///         dest: Dest;                // optional; enables `_into`
 ///         result: Result;
-///         types { V = Tensor, R = Tensor }
+///         types { V = Tensor, R = Tensor } // `S` maps an operand typed `S`
 ///         forward: crate::api::concrete;
 ///         cfg: feature = "autodiff";   // optional; gates the trait and impl
 ///     }

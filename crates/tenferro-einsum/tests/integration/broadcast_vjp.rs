@@ -8,7 +8,7 @@
 
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{EagerSessionEinsumExt, TraceContextEinsumExt};
+use tenferro_einsum::{EagerEinsumOps, TracedEinsumOps};
 use tenferro_runtime::{GraphCompiler, TraceContext};
 use tenferro_tensor::Tensor;
 
@@ -77,17 +77,14 @@ fn assert_filled(label: &str, actual: &Tensor, shape: &[usize], value: f64) {
 /// cotangent for each operand, compile and run.
 fn assert_traced_vjp(case: &BroadcastCase) {
     let ad = einsum_ad();
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let lhs = trace
         .from_tensor_concrete_shape(ones(case.lhs_shape))
         .unwrap();
     let rhs = trace
         .from_tensor_concrete_shape(ones(case.rhs_shape))
         .unwrap();
-    let output = trace
-        .einsum(&[lhs.trace_value(), rhs.trace_value()], case.subscripts)
-        .unwrap();
-    let output = trace.derive_tensor(output).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], case.subscripts).unwrap();
     let cotangent = trace
         .from_tensor_concrete_shape(ones(case.output_shape))
         .unwrap();

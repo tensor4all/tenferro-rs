@@ -13,6 +13,7 @@ use crate::util::{build_size_dict, intermediate_subs};
 use crate::{Error, Result};
 
 /// A single step in the contraction sequence.
+#[derive(Clone)]
 pub(crate) struct ContractionStep {
     pub(crate) left: usize,
     pub(crate) right: usize,
@@ -68,7 +69,7 @@ impl ContractionOptimizerOptions {
     }
 
     /// Whether TreeSA would run any annealing iteration.
-    fn anneals(&self) -> bool {
+    pub(crate) fn anneals(&self) -> bool {
         self.niters > 0 && !self.betas.is_empty()
     }
 
@@ -107,6 +108,7 @@ impl ContractionOptimizerOptions {
 /// Use [`ContractionTree::optimize`] for automatic cost-based optimization
 /// (e.g., greedy algorithm based on tensor sizes), or
 /// [`ContractionTree::from_pairs`] for manual specification.
+#[derive(Clone)]
 pub struct ContractionTree {
     /// Original subscripts.
     pub(crate) subscripts: Subscripts,

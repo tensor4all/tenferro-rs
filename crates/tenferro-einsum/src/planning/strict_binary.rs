@@ -4,7 +4,7 @@ use crate::util::compute_output_shape;
 use crate::{Error, Result as EinsumResult};
 
 /// Narrow lowering plan for the bridge-equivalent binary GEMM path.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StrictBinaryLoweringPlan {
     pub(crate) size_dict: HashMap<u32, usize>,
     pub(crate) output_shape: Vec<usize>,

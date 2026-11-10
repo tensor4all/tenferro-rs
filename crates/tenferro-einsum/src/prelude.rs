@@ -1,19 +1,17 @@
-//! Einsum and tensordot extension traits for concrete, eager, and traced values.
+//! The einsum and tensordot grammar traits, options and spec types (#2552).
 
 pub use crate::{
-    ContractionTree, EinsumAxis, EinsumNotation, EinsumOptimize, EinsumSubscripts, TensorDotAxes,
-    TensorEinsumExt, TensorEinsumIntoExt, TensorReadEinsumExt, TensorReadEinsumIntoExt,
-    TensorTensordotExt, TraceContextEinsumExt, TracedTensorEinsumExt, TypedTensorEinsumExt,
-    TypedTensorEinsumIntoExt, TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
-    TypedTensorTensordotExt,
+    ConcreteEinsumPlan, ConjMask, ContractionTree, EinsumAxis, EinsumNotation, EinsumOps,
+    EinsumOptimize, EinsumOptions, EinsumSpec, EinsumSubscripts, Spec, TensorDotAxes, TensordotOps,
+    TensordotOptions, TracedEinsumOps, TracedTensordotOps,
 };
 pub use tenferro_runtime::{
-    DType, Tensor, TensorRead, TensorScalar, TensorView, TraceContext, TraceValue, TracedTensor,
-    TypedTensor, TypedTensorView,
+    DType, Tensor, TensorRead, TensorScalar, TensorView, TraceContext, TracedTensor, TypedTensor,
+    TypedTensorView,
 };
-pub use tenferro_tensor::{DotGeneralAccumulation, TensorWrite, TypedTensorWrite};
+pub use tenferro_tensor::{Conj, Dest, TensorWrite, TypedTensorWrite};
 
 #[cfg(feature = "autodiff")]
-pub use crate::EagerSessionEinsumExt;
+pub use crate::EagerEinsumOps;
 #[cfg(feature = "autodiff")]
 pub use tenferro_ad::{EagerRuntime, EagerTensor};

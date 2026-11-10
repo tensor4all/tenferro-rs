@@ -1,8 +1,6 @@
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{EagerSessionEinsumExt, EinsumOptimize, TraceContextEinsumExt};
-use tenferro_ops::dim_expr::DimExpr;
-use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_einsum::{EagerEinsumOps, EinsumOptimize, EinsumOptions, TracedEinsumOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
@@ -50,23 +48,15 @@ fn trace_and_run(
     inputs: &[Tensor],
     optimize: EinsumOptimize,
 ) -> Result<Tensor, Box<dyn std::error::Error>> {
-    let mut trace = TraceContext::new();
-    let owned_inputs = inputs
+    let trace = TraceContext::new();
+    let values = inputs
         .iter()
-        .map(|tensor| tensor.duplicate())
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let values = owned_inputs
-        .into_iter()
-        .map(|tensor| {
-            trace.input_with_default(
-                ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape())),
-                tensor,
-            )
-        })
+        .map(|tensor| trace.from_tensor_concrete_shape(tensor.duplicate()?))
         .collect::<Result<Vec<_>, _>>()?;
-    let output = trace.einsum_with(&values, "ij,jk,kl->il", optimize)?;
-    let graph = trace.finish(&[output])?;
-    let program = GraphCompiler::new().compile_traced_graph(&graph)?;
+    let refs = values.iter().collect::<Vec<_>>();
+    let options = EinsumOptions::default().optimize(optimize);
+    let output = trace.einsum_with(&refs, "ij,jk,kl->il", &options)?;
+    let program = GraphCompiler::new().compile(&output)?;
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime_with_einsum(&engine)?;
     let prepared = runtime.prepare(&program, &[], &[engine.target()])?;

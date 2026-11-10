@@ -132,7 +132,7 @@ impl GraphCompiler {
     /// Returns [`Error::Validation`] for invalid metadata or shape constraints,
     /// or [`Error::RuntimeState`] for inconsistent staging state.
     pub fn compile_traced_graph(&mut self, graph: &TracedGraph) -> Result<CompiledGraph> {
-        self.compile_frozen(graph.frozen(), Vec::new())
+        self.compile_frozen(graph.frozen(), graph.input_keys().to_vec())
     }
 
     /// Compile an immutable semantic program for ordered execution.
@@ -956,6 +956,35 @@ mod tests {
         assert_eq!(pruned_instruction.0.len(), 1);
         assert!(pruned_instruction.1.contains("pruned: true"));
         assert_eq!(pruned_instruction.2, 1);
+    }
+
+    /// `finish` + `compile_traced_graph` keeps the same input keys, order and
+    /// pruning as `compile_many` (#2552 S4); before, the finish route compiled
+    /// with no input keys.
+    #[test]
+    fn finish_route_and_compile_many_agree_on_input_keys_and_pruning() {
+        let trace = crate::TraceContext::new();
+        let a = trace
+            .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+            .unwrap();
+        let unused = trace
+            .from_vec_col_major(vec![2], vec![9.0_f64, 9.0])
+            .unwrap();
+        let b = trace
+            .from_vec_col_major(vec![2], vec![3.0_f64, 4.0])
+            .unwrap();
+        let c = b.mul(&a).unwrap();
+        let _ = unused.neg().unwrap();
+
+        let many = GraphCompiler::new().compile_many(&[&c]).unwrap();
+        let graph = trace.finish(&[c.trace_value()]).unwrap();
+        let finished = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+
+        assert_eq!(finished.input_keys(), many.input_keys());
+        assert_eq!(finished.input_count(), many.input_count());
+        assert_eq!(finished.input_count(), 2, "the unused input is pruned");
+        let unused_key = unused.input_key().expect("bound input has a key");
+        assert!(!finished.input_keys().contains(&unused_key));
     }
 
     #[test]

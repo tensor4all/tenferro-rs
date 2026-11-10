@@ -6,7 +6,9 @@ use syn::{Ident, LitStr};
 
 use super::{error_text, markdown, tidy, GenLayer, LayerKind, Op, Receiver, Registry};
 
-/// Replaces the idents `V`/`R`/`C`/`I` in `ts` using the layer's `types`.
+/// Replaces the placeholder idents `V`/`R`/`C`/`I` (result types) and `S`
+/// (a layer-specific operand type, such as the input list of an N-ary op) in
+/// `ts` using the layer's `types`.
 fn substitute(
     ts: TokenStream,
     types: &[(Ident, syn::Type)],
@@ -22,14 +24,16 @@ fn substitute(
                 ng.set_span(g.span());
                 out.extend([TokenTree::Group(ng)]);
             }
-            TokenTree::Ident(id) if matches!(id.to_string().as_str(), "V" | "R" | "C" | "I") => {
+            TokenTree::Ident(id)
+                if matches!(id.to_string().as_str(), "V" | "R" | "C" | "I" | "S") =>
+            {
                 match types.iter().find(|(k, _)| *k == id) {
                     Some((_, ty)) => ty.to_tokens(&mut out),
                     None => {
                         return Err(syn::Error::new_spanned(
                             &id,
                             format!(
-                                "op `{}` output uses `{id}`, but layer `{layer}` has no `types` mapping for it",
+                                "op `{}` uses `{id}`, but layer `{layer}` has no `types` mapping for it",
                                 op.name
                             ),
                         ))
@@ -123,6 +127,7 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
     let (receiver, first_skip) = match g.receiver {
         Receiver::SelfRef => (quote!(&self), 1usize),
         Receiver::Session => (quote!(&mut self), 0usize),
+        Receiver::Context => (quote!(&self), 0usize),
     };
 
     let mut decls = Vec::new();
@@ -156,16 +161,14 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
         let mut operand_names = Vec::new();
         for (i, operand) in op.operands.iter().enumerate().skip(first_skip) {
             let nm = &operand.name;
-            let ty = if i == 0 {
-                match &g.first_arg {
+            // An operand's own type wins; it may name the layer placeholder `S`.
+            let ty = match (&operand.ty, i) {
+                (Some(t), _) => substitute(t.to_token_stream(), &g.types, op, name)?,
+                (None, 0) => match &g.first_arg {
                     Some(t) => t.to_token_stream(),
                     None => g.tensor_arg.to_token_stream(),
-                }
-            } else {
-                match &operand.ty {
-                    Some(t) => t.to_token_stream(),
-                    None => g.tensor_arg.to_token_stream(),
-                }
+                },
+                (None, _) => g.tensor_arg.to_token_stream(),
             };
             operand_params.push(quote!(#nm: #ty));
             operand_names.push(quote!(#nm));

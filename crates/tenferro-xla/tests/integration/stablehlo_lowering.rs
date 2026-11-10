@@ -1,4 +1,4 @@
-use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_einsum::TracedEinsumOps;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
 use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, TraceContext};
@@ -181,7 +181,7 @@ fn lowers_static_symbolic_nary_einsum_extension_via_standard_ops() {
 }
 
 fn compile_nary_einsum() -> tenferro_runtime::CompiledGraph {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let inputs = [[2, 3], [3, 4], [4, 2]].map(|shape| {
         trace
             .input(ProgramInputSpec::new(
@@ -190,8 +190,11 @@ fn compile_nary_einsum() -> tenferro_runtime::CompiledGraph {
             ))
             .unwrap()
     });
-    let product = trace.einsum(&inputs, "ij,jk,kl->il").unwrap();
-    let graph = trace.finish(&[product]).unwrap();
+    let inputs = inputs.map(|value| trace.derive_tensor(value).unwrap());
+    let product = trace
+        .einsum(&[&inputs[0], &inputs[1], &inputs[2]], "ij,jk,kl->il")
+        .unwrap();
+    let graph = trace.finish(&[product.trace_value()]).unwrap();
     GraphCompiler::new().compile_traced_graph(&graph).unwrap()
 }
 

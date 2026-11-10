@@ -482,10 +482,7 @@ assert_eq!(x.shape(), &[4, 1]);
         // snippet-start:einsum_12
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{
-    TensorEinsumExt, TensorEinsumIntoExt, TypedTensorEinsumExt,
-    TypedTensorEinsumIntoExt, TypedTensorReadEinsumIntoExt,
-};
+use tenferro_einsum::EinsumOps;
 use tenferro_tensor::{
     Tensor, TensorWrite, TypedTensor, TypedTensorView,
     TypedTensorViewMut, TypedTensorWrite,
@@ -504,11 +501,7 @@ let product = [&lhs, &rhs].einsum("ij,jk->ik", &mut engine)?;
 assert_eq!(product.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let mut product_out = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4])?;
-[&lhs, &rhs].einsum_into(
-    "ij,jk->ik",
-    &mut engine,
-    TensorWrite::from_tensor(&mut product_out),
-)?;
+[&lhs, &rhs].einsum_into("ij,jk->ik", &tenferro_einsum::EinsumOptions::default(), &mut engine, tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut product_out)))?;
 assert_eq!(product_out.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 let complex_lhs = TypedTensor::<Complex64>::from_vec_col_major(
@@ -535,11 +528,7 @@ let borrowed_rhs = complex_rhs.as_view();
 let mut borrowed_storage = [Complex64::new(0.0, 0.0); 4];
 let borrowed_out =
     TypedTensorViewMut::from_slice([2, 1], [2, 4], 1, &mut borrowed_storage)?;
-[borrowed, borrowed_rhs].einsum_read_into(
-    "ij,jk->ik",
-    &mut engine,
-    TypedTensorWrite::from_view(borrowed_out),
-)?;
+[borrowed, borrowed_rhs].einsum_into("ij,jk->ik", &tenferro_einsum::EinsumOptions::default(), &mut engine, tenferro_tensor::Dest::overwrite(TypedTensorWrite::from_view(borrowed_out)))?;
 assert_eq!(
     [borrowed_storage[1], borrowed_storage[3]],
     [Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
@@ -554,7 +543,7 @@ assert_eq!(
     fn snippet_einsum_20() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_20
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{EinsumAxis, EinsumNotation, TensorEinsumExt};
+use tenferro_einsum::{EinsumAxis, EinsumNotation, EinsumOps};
 use tenferro_tensor::Tensor;
 
 let lhs = Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12])?;
@@ -568,7 +557,7 @@ let notation = EinsumNotation::new(
 );
 let mut engine = CpuEngine::serial();
 let string_result = [&lhs, &rhs].einsum("...ij,...jk->...ik", &mut engine)?;
-let programmatic_result = [&lhs, &rhs].einsum_notation(&notation, &mut engine)?;
+let programmatic_result = [&lhs, &rhs].einsum(&notation, &mut engine)?;
 assert_eq!(string_result.shape(), &[2, 2, 2]);
 assert_eq!(string_result.as_slice::<f64>()?, &[3.0; 8]);
 assert_eq!(programmatic_result.as_slice::<f64>()?, &[3.0; 8]);
@@ -582,7 +571,7 @@ assert_eq!(programmatic_result.as_slice::<f64>()?, &[3.0; 8]);
     fn snippet_einsum_13() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_13
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{ConcreteEinsumPlan, TensorReadEinsumExt, TensorReadEinsumIntoExt};
+use tenferro_einsum::{ConcreteEinsumPlan, EinsumOps};
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorWrite, TypedTensorView};
 
 let matrix_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -594,11 +583,11 @@ let inputs = [
 ];
 
 let mut engine = CpuEngine::serial();
-let result = inputs.einsum_read("ij,j->i", &mut engine)?;
+let result = inputs.einsum("ij,j->i", &mut engine)?;
 assert_eq!(result.as_slice::<f64>()?, &[140.0, 320.0]);
 
-let plan = ConcreteEinsumPlan::prepare_read(inputs.clone(), "ij,j->i")?;
-let planned = plan.execute_read(inputs, &mut engine)?;
+let plan = ConcreteEinsumPlan::prepare(&inputs.clone(), "ij,j->i", &tenferro_einsum::EinsumOptions::default())?;
+let planned = plan.execute(&inputs, &mut engine)?;
 assert_eq!(planned.as_slice::<f64>()?, &[140.0, 320.0]);
 
 let mut planned_out = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2])?;
@@ -607,11 +596,7 @@ let inputs = [
     TensorRead::from_view(TensorView::F64(matrix)),
     TensorRead::from_tensor(&vector),
 ];
-plan.execute_read_into(
-    inputs,
-    &mut engine,
-    TensorWrite::from_tensor(&mut planned_out),
-)?;
+plan.execute_into(&inputs, &mut engine, tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut planned_out)))?;
 assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
         // snippet-end:einsum_13
         Ok(())
@@ -623,8 +608,7 @@ assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
     fn snippet_einsum_14() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_14
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_einsum::TraceContextEinsumExt;
-use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_einsum::TracedEinsumOps;
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, Tensor};
 let trace = TraceContext::new();
 
@@ -637,12 +621,10 @@ let b = Tensor::from_vec_col_major(
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
 
-let mut trace = TraceContext::new();
-let a_value = trace.input(ProgramInputSpec::new(a.dtype(), [2.into(), 3.into()]))?;
-let b_value = trace.input(ProgramInputSpec::new(b.dtype(), [3.into(), 2.into()]))?;
-let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
-let graph = trace.finish(&[c])?;
-let program = GraphCompiler::new().compile_traced_graph(&graph)?;
+let a_in = trace.input_concrete_shape(a.dtype(), &[2, 3])?;
+let b_in = trace.input_concrete_shape(b.dtype(), &[3, 2])?;
+let c = trace.einsum(&[&a_in, &b_in], "ij,jk->ik")?;
+let program = GraphCompiler::new().compile(&c)?;
 
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
@@ -672,7 +654,7 @@ assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
         // snippet-start:einsum_15
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::EagerSessionEinsumExt;
+use tenferro_einsum::EagerEinsumOps;
 
 let ctx = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
@@ -713,7 +695,7 @@ assert_eq!(
     fn snippet_einsum_16() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_16
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_einsum::{TensorDotAxes, TracedTensorEinsumExt};
+use tenferro_einsum::{TensorDotAxes, TracedTensordotOps};
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 let trace = TraceContext::new();
 
@@ -760,32 +742,20 @@ assert_eq!(
     // snippet source: docs/guides/einsum.md:325
     fn snippet_einsum_17() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:einsum_17
-use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
-use tenferro_ops::dim_expr::DimExpr;
-use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_einsum::{EinsumOptimize, EinsumOptions, TracedEinsumOps};
 use tenferro_runtime::{TraceContext, DType};
 let trace = TraceContext::new();
 
-let mut trace = TraceContext::new();
-let a = trace.input(ProgramInputSpec::new(
-    DType::F64,
-    DimExpr::from_concrete(&[2, 3]),
-))?;
-let b = trace.input(ProgramInputSpec::new(
-    DType::F64,
-    DimExpr::from_concrete(&[3, 2]),
-))?;
+let a = trace.input_concrete_shape(DType::F64, &[2, 3])?;
+let b = trace.input_concrete_shape(DType::F64, &[3, 2])?;
 let c = trace.einsum_with(
-    &[a, b],
+    &[&a, &b],
     "ij,jk->ik",
-    EinsumOptimize::False,
+    &EinsumOptions::default().optimize(EinsumOptimize::False),
 )?;
 
-let graph = trace.finish(&[c])?;
-let metadata = graph
-    .program()
-    .value_metadata(graph.program().outputs()[0])?;
-assert_eq!(metadata.shape().len(), 2);
+assert_eq!(c.rank(), 2);
+assert_eq!(c.try_concrete_shape(), Some(vec![2, 2]));
         // snippet-end:einsum_17
         Ok(())
     }

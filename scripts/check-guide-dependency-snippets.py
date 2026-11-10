@@ -31,8 +31,7 @@ class GuideCase:
 EINSUM_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_einsum::{EagerSessionEinsumExt, TraceContextEinsumExt};
-use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_einsum::{EagerEinsumOps, TracedEinsumOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,12 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     )?;
 
-    let mut trace = TraceContext::new();
-    let a_value = trace.input(ProgramInputSpec::new(a.dtype(), [2.into(), 3.into()]))?;
-    let b_value = trace.input(ProgramInputSpec::new(b.dtype(), [3.into(), 2.into()]))?;
-    let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
-    let graph = trace.finish(&[c])?;
-    let program = GraphCompiler::new().compile_traced_graph(&graph)?;
+    let trace = TraceContext::new();
+    let a_in = trace.input_concrete_shape(a.dtype(), &[2, 3])?;
+    let b_in = trace.input_concrete_shape(b.dtype(), &[3, 2])?;
+    let c = trace.einsum(&[&a_in, &b_in], "ij,jk->ik")?;
+    let program = GraphCompiler::new().compile(&c)?;
     let mut engine = CpuEngine::serial();
     let mut runtime_builder = Runtime::builder();
     runtime_builder.register_engine(runtime_engine_registration(&engine)?)?;

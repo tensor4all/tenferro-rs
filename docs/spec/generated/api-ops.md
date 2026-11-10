@@ -320,3 +320,47 @@ Vector or matrix norm over the chosen axes, selected by `NormOrd`.
 | E08 | retired | `tenferro_linalg::svd_with_exec`<br>`tenferro_linalg::svd_values_with_exec`<br>`tenferro_linalg::qr_with_exec`<br>`tenferro_linalg::eigh_with_exec`<br>`tenferro_linalg::eigh_values_with_exec`<br>`tenferro_linalg::eig_values_with_exec` | free functions that run a factorization on a borrowed execution bundle and buffer pool | legacy \| free function | `tenferro_linalg::with_exec` | retired: replaced by CpuEngine::with_lanes, which hands each lane an engine that runs the ordinary grammar (view.svd_with(&opts, lane)); the six entries were added for #2462 to split threads into lanes | retired: the P7 prototype verified lifetime, buffer reuse, nesting and concurrency, and no retention after the call; the lane route keeps the steady-state allocation counts of the former entries | met: the six functions, their module and the Borrowed-Exec section of the crate docs were removed (#2552 S3); lanes and the grammar replace them |
 
 <!-- api-ops:linalg:end -->
+
+<!-- api-ops:einsum:begin -->
+## einsum
+
+| Op | concrete | concrete_tensordot | traced | traced_tensordot | eager | Suffixes |
+|---|---|---|---|---|---|---|
+| `einsum` | EinsumOps | — | TracedEinsumOps | — | EagerEinsumOps | `einsum`, `einsum_with`, `einsum_into` (overwrite, accumulate, scaled) |
+| `tensordot` | — | TensordotOps | — | TracedTensordotOps | EagerEinsumOps | `tensordot`, `tensordot_with` |
+
+### einsum
+
+Einstein summation over N inputs: contract, trace, transpose, reduce and broadcast as the spec says.
+
+- Options: `EinsumOptions`
+- Output: `V`
+- Dtypes: Every input has the same dtype (any numeric dtype the backend supports); the result has it too.
+- Layout: Strided inputs are read in place by the contraction kernels (any strides, including transposed and negative-stride views); an operand that a kernel cannot read is packed once into a compact buffer of the same placement and dtype. A two-input contraction that maps to one dot_general writes straight into the destination. Inputs stay on their device. `_into` checks the destination's dtype and shape before any write; `Accumulate` and `Scaled` read the destination, `Overwrite` and `Scaled` with `beta = 0` never read it.
+- Errors: `Validation`, `Unsupported`, `RuntimeState`
+- Omissions:
+  - `_into` is concrete only: traced and eager results are new values
+  - lanes (`CpuEngine::with_lanes`): einsum is unsupported in a lane
+  - `Scaled` needs `alpha` and `beta` of the input dtype
+
+### tensordot
+
+Contract `a` with `b` over the given axis pairs (or the last/first `n` axes); free axes of `a` come first.
+
+- Options: `TensordotOptions`
+- Output: `V`
+- Dtypes: `a` and `b` have the same dtype; the result has it too.
+- Layout: Lowered to one dot_general, which reads strided operands in place; an operand that the provider cannot read is packed once into a compact buffer of the same placement and dtype.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - lanes (`CpuEngine::with_lanes`): tensordot is unsupported in a lane
+
+### Exceptions
+
+| ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |
+|---|---|---|---|---|---|---|---|---|
+| E03 | retained | `tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache`<br>`tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats` | cache maintenance of a prepared concrete einsum plan | cache owner \| inherent method | `tenferro_einsum::concrete` | the plan owns its CPU numerical descriptor cache; clearing and inspecting it is not a tensor operation and has no options, inputs or destination | doctests of both methods; the plan's execute/execute_into follow the grammar (inputs, exec, dest) | retained while ConcreteEinsumPlan owns a CPU cache |
+| E07 | retired | `tenferro_einsum::TraceContextEinsumExt::einsum`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_notation`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_subscripts`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_with`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_notation_with`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_subscripts_with` | einsum entries that took and returned TraceValue on a `&mut TraceContext` | legacy \| trait | `tenferro_einsum::traced` | retired: replaced by TracedEinsumOps for TraceContext (`trace.einsum(&[&t1, &t2], spec)`), which takes and returns TracedTensor (#2552 decision 4) | retired: a temporary old-vs-new test recorded the same values before removal (#2552 S4) | met: the trait was removed in #2552 S4 |
+| E09 | retained | `tenferro_einsum::Error`<br>`tenferro_einsum::PlanningError`<br>`tenferro_einsum::parse_einsum_notation`<br>`tenferro_einsum::parse_einsum_subscripts`<br>`tenferro_einsum::ContractionTree::optimize`<br>`tenferro_einsum::ContractionTree::optimize_with_options`<br>`tenferro_einsum::ContractionTree::from_pairs` | the einsum parser and contraction planner | domain error \| free function | `tenferro_einsum::{error, subscripts, planning}` | parsing and planning are einsum-domain operations whose errors are einsum-domain; the grammar's operations wrap them (concrete: tenferro_tensor::Error::Extension, traced/eager: tenferro_runtime::Error::Extension) with the einsum error as source | error-cause tests reach tenferro_einsum::Error::InvalidSubscripts through source() on all three layers | retained |
+
+<!-- api-ops:einsum:end -->

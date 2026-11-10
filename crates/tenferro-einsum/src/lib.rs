@@ -12,29 +12,33 @@
 //!   `"i->ii"` embeds a vector on a diagonal
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
-//! - **Tensordot sugar**: NumPy-style axis-pair contraction extension methods,
-//!   implemented as contraction sugar rather than as linear algebra APIs.
-//! - **Concrete execution**: backend-explicit [`TensorEinsumExt`],
-//!   [`TypedTensorEinsumExt`], [`TensorReadEinsumExt`],
-//!   [`TypedTensorReadEinsumExt`], and [`ConcreteEinsumPlan`] APIs for non-AD
-//!   tensor values.
+//! - **Tensordot sugar**: NumPy-style axis-pair contraction, implemented as
+//!   contraction sugar rather than as a linear algebra API.
+//! - **One call grammar (#2552)** on three layers, declared once in the
+//!   operation registry (`docs/spec/generated/api-ops.md`):
+//!
+//!   | Layer | Traits | Spellings |
+//!   |---|---|---|
+//!   | concrete | [`EinsumOps`] on a slice/array/`Vec` of `AsView` inputs, [`TensordotOps`] | `[&a, &b].einsum(spec, exec)`, `.einsum_with(spec, &opts, exec)`, `.einsum_into(spec, &opts, exec, dest)` |
+//!   | traced | [`TracedEinsumOps`] on `TraceContext`, [`TracedTensordotOps`] | `trace.einsum(&[&t1, &t2], spec)`, `t.tensordot(&u, axes)` |
+//!   | eager (`autodiff`) | `EagerEinsumOps` on `EagerSession` | `sess.einsum(&[&x, &y], spec)` |
+//!
+//!   The spec is text, [`EinsumNotation`] or [`EinsumSubscripts`]; options
+//!   ([`EinsumOptions`]) select the contraction order and per-operand
+//!   conjugation. [`ConcreteEinsumPlan`] plans once and executes repeatedly.
 //! - **Extension runtime**: traced einsum lowers to a registered tenferro
 //!   extension runtime, keeping core op definitions small.
-//! - **Tensor extension traits**: graph-building and immediate-execution
-//!   helpers are available as methods on `GraphCompiler`, concrete input
-//!   slices/arrays, eager input slices/arrays, and tensor receivers.
 //!
 //! # Cargo features
 //!
 //! | Feature | Enables |
 //! |---|---|
 //! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
-//! | `autodiff` | The eager surface (`EagerSessionEinsumExt`) and AD rules. Adds the `tenferro-ad` dependency. |
+//! | `autodiff` | The eager layer (`EagerEinsumOps`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
 //!
-//! For contractions without AD, use the concrete [`TensorEinsumExt`] /
-//! [`TypedTensorEinsumExt`] APIs or [`ConcreteEinsumPlan`] inside a backend
-//! session; they need no `autodiff`.
+//! For contractions without AD, use the concrete [`EinsumOps`] or
+//! [`ConcreteEinsumPlan`] with an engine; they need no `autodiff`.
 //!
 //! # Examples
 //!
@@ -48,18 +52,16 @@
 //!
 //! ```
 //! use tenferro_cpu::CpuEngine;
-//! use tenferro_einsum::TensorEinsumExt;
+//! use tenferro_einsum::EinsumOps;
 //! use tenferro_tensor::Tensor;
 //!
-//! let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-//! let b = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
+//! let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?;
+//! let b = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12])?;
 //! let mut backend = CpuEngine::serial();
 //!
-//! let out = { let session = &mut backend;  {
-//!     [&a, &b].einsum("ij,jk->ik", session)
-//! } }?;
+//! let out = [&a, &b].einsum("ij,jk->ik", &mut backend)?;
 //! assert_eq!(out.shape(), &[2, 4]);
-//! # Ok::<(), tenferro_einsum::Error>(())
+//! # Ok::<(), tenferro_tensor::Error>(())
 //! ```
 //!
 //! ```
@@ -84,6 +86,7 @@
     allow(dead_code, unused_imports)
 )]
 
+mod api;
 mod binary_dot;
 mod broadcast;
 mod builder;
@@ -108,15 +111,15 @@ mod traced;
 mod typed_eager;
 pub(crate) mod util;
 
-pub use cache::EINSUM_EXTENSION_FAMILY_ID;
-pub use concrete::{
-    ConcreteEinsumPlan, TensorEinsumExt, TensorEinsumIntoExt, TensorReadEinsumExt,
-    TensorReadEinsumIntoExt, TensorTensordotExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt,
-    TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt, TypedTensorTensordotExt,
-};
 #[cfg(feature = "autodiff")]
 #[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
-pub use eager_ad::EagerSessionEinsumExt;
+pub use api::EagerEinsumOps;
+pub use api::{
+    ConjMask, EinsumInputs, EinsumOps, EinsumOptions, EinsumSpec, Spec, TensordotOps,
+    TensordotOptions, TracedEinsumOps, TracedTensordotOps,
+};
+pub use cache::EINSUM_EXTENSION_FAMILY_ID;
+pub use concrete::ConcreteEinsumPlan;
 pub use error::{Error, PlanningError, Result};
 pub use extension::extension_module;
 #[cfg(feature = "autodiff")]
@@ -129,7 +132,6 @@ pub use subscripts::{
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
 pub use tensordot::TensorDotAxes;
-pub use traced::{TraceContextEinsumExt, TracedTensorEinsumExt};
 
 #[cfg(test)]
 mod concrete_tests;

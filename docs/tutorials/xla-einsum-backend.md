@@ -15,9 +15,7 @@ OpenXLA test described below executes the same generated einsum module through
 <!-- snippet-source: docs/tutorial-code/src/bin/xla_einsum_backend.rs -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::TraceContextEinsumExt;
-use tenferro_ops::dim_expr::DimExpr;
-use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_einsum::TracedEinsumOps;
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 use tenferro_xla::XlaExecutor;
 
@@ -68,22 +66,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a_value = lhs_value()?;
     let b_value = middle_value()?;
     let c_value = tail_value()?;
-    let mut trace = TraceContext::new();
-    let a = trace.input(ProgramInputSpec::new(
-        a_value.dtype(),
-        DimExpr::from_concrete(a_value.shape()),
-    ))?;
-    let b = trace.input(ProgramInputSpec::new(
-        b_value.dtype(),
-        DimExpr::from_concrete(b_value.shape()),
-    ))?;
-    let c = trace.input(ProgramInputSpec::new(
-        c_value.dtype(),
-        DimExpr::from_concrete(c_value.shape()),
-    ))?;
-    let product = trace.einsum(&[a, b, c], "ij,jk,kl->il")?;
-    let graph = trace.finish(&[product])?;
-    let program = GraphCompiler::new().compile_traced_graph(&graph)?;
+    let trace = TraceContext::new();
+    let a = trace.input_concrete_shape(a_value.dtype(), a_value.shape())?;
+    let b = trace.input_concrete_shape(b_value.dtype(), b_value.shape())?;
+    let c = trace.input_concrete_shape(c_value.dtype(), c_value.shape())?;
+    let product = trace.einsum(&[&a, &b, &c], "ij,jk,kl->il")?;
+    let program = GraphCompiler::new().compile(&product)?;
 
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime_with_einsum(&engine)?;

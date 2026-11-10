@@ -534,8 +534,12 @@ impl TraceContext {
     /// context is already borrowed, or a typed structural/binding finalization
     /// failure.
     pub fn finish(&self, outputs: &[TraceValue]) -> Result<TracedGraph, ProgramFinishError> {
-        let frozen = self.frozen_snapshot(outputs)?;
-        Ok(TracedGraph { frozen })
+        // The same pruned snapshot `GraphCompiler::compile_many` takes, so a
+        // graph compiled from `finish` keeps the kept inputs' keys and order
+        // (#2552 S4).
+        let (frozen, kept) = self.plain_snapshot_with_inputs(outputs)?;
+        let input_keys = kept.into_iter().map(|(key, _)| key).collect();
+        Ok(TracedGraph { frozen, input_keys })
     }
 
     /// Freeze the ordered closure of `outputs` as a copy of the program.
@@ -583,6 +587,8 @@ impl fmt::Debug for TraceValue {
 #[derive(Clone)]
 pub struct TracedGraph {
     frozen: FrozenProgram,
+    /// Keys of the bound inputs the pruned graph keeps, in program order.
+    input_keys: Vec<TensorInputKey>,
 }
 
 impl TracedGraph {
@@ -598,6 +604,10 @@ impl TracedGraph {
 
     pub(crate) fn frozen(&self) -> &FrozenProgram {
         &self.frozen
+    }
+
+    pub(crate) fn input_keys(&self) -> &[TensorInputKey] {
+        &self.input_keys
     }
 }
 

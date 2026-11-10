@@ -461,3 +461,87 @@ fn cfg_key_gates_generated_trait_and_impl() {
     assert_eq!(gated::API_LAYERS, &[("on", "OnOps"), ("off", "OffOps")]);
     assert_eq!(gated::API_OPS[0].layers, ["on", "off"]);
 }
+
+/// `receiver: context;` gives `&self` with the first operand as an argument,
+/// and an operand typed `S` takes each layer's `S` mapping (#2552 S4).
+mod context_layer {
+    pub struct Trace;
+    pub struct Value(pub u32);
+    pub type Result<T> = ::std::result::Result<T, String>;
+    #[derive(Default)]
+    pub struct SumOptions {
+        pub offset: u32,
+    }
+
+    pub mod forward_ctx {
+        use super::*;
+        pub fn sum(_t: &Trace, inputs: &[&Value], o: &SumOptions) -> Result<u32> {
+            Ok(inputs.iter().map(|v| v.0).sum::<u32>() + o.offset)
+        }
+    }
+    pub mod forward_slice {
+        pub fn sum(inputs: &[u32], o: &super::SumOptions) -> super::Result<u32> {
+            Ok(inputs.iter().sum::<u32>() + o.offset)
+        }
+    }
+
+    tenferro_extension_macros::api_ops! {
+        family: context;
+
+        layer ctx {
+            trait_doc: "Context receiver.";
+            trait_def: pub trait CtxOps;
+            impl_def: impl CtxOps for Trace;
+            method_where: [];
+            receiver: context;
+            tensor_arg: &Value;
+            result: Result;
+            types { V = u32, S = &[&Value] }
+            forward: self::forward_ctx;
+        }
+        layer slice {
+            trait_doc: "Slice receiver.";
+            trait_def: pub trait SliceOps;
+            impl_def: impl SliceOps for [u32];
+            method_where: [];
+            receiver: self;
+            tensor_arg: &u32;
+            result: Result;
+            types { V = u32 }
+            forward: self::forward_slice;
+        }
+        op sum {
+            summary: "Sum.";
+            operands: (inputs: S);
+            options: SumOptions;
+            output: V;
+            dtypes: "any";
+            layers: [ctx, slice];
+            into: [];
+            layout: "None.";
+            errors: [Validation];
+            omissions: [];
+            example ctx: "let _ = 1;";
+            example slice: "let _ = 2;";
+        }
+    }
+}
+
+#[test]
+fn context_receiver_and_layer_operand_types() {
+    use context_layer::{CtxOps, SliceOps, SumOptions, Trace, Value};
+    let (a, b) = (Value(2), Value(3));
+    assert_eq!(Trace.sum(&[&a, &b]).unwrap(), 5);
+    assert_eq!(
+        Trace
+            .sum_with(&[&a, &b], &SumOptions { offset: 1 })
+            .unwrap(),
+        6
+    );
+    // The receiver layer skips the typed first operand.
+    assert_eq!([4u32, 5][..].sum().unwrap(), 9);
+    assert_eq!(
+        context_layer::API_LAYERS,
+        &[("ctx", "CtxOps"), ("slice", "SliceOps")]
+    );
+}

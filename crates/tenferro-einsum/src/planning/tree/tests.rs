@@ -47,7 +47,8 @@ fn binary_public_planning_bypasses_both_general_optimizers() {
 
     let a = tenferro_tensor::Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     let b = tenferro_tensor::Tensor::from_vec_col_major(vec![3, 4], vec![2.0_f64; 12]).unwrap();
-    let _plan = crate::ConcreteEinsumPlan::prepare([&a, &b], "ij,jk->ik").unwrap();
+    let _plan =
+        crate::ConcreteEinsumPlan::prepare(&[&a, &b], "ij,jk->ik", &Default::default()).unwrap();
     assert_eq!(counts(), (0, 0));
 
     // A positive control proves that the real general entry is instrumented.
@@ -70,11 +71,7 @@ fn binary_public_planning_bypasses_both_general_optimizers() {
 
 #[test]
 fn binary_public_execution_surfaces_bypass_general_optimizers() {
-    use crate::{
-        parse_einsum_subscripts, TensorEinsumExt, TensorEinsumIntoExt, TensorReadEinsumExt,
-        TensorReadEinsumIntoExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt,
-        TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
-    };
+    use crate::{parse_einsum_subscripts, EinsumOps};
     use tenferro_cpu::CpuEngine;
     use tenferro_tensor::{Tensor, TensorRead, TensorWrite, TypedTensor};
 
@@ -96,9 +93,9 @@ fn binary_public_execution_surfaces_bypass_general_optimizers() {
             SELF_GREEDY_CALLS.with(|count| count.set(0));
             for result in [
                 [&a, &b].einsum("ij,jk->ik", session).unwrap(),
-                [&a, &b].einsum_subscripts(&subs, session).unwrap(),
-                reads.einsum_read("ij,jk->ik", session).unwrap(),
-                reads.einsum_read_subscripts(&subs, session).unwrap(),
+                [&a, &b].einsum(&subs, session).unwrap(),
+                reads.einsum("ij,jk->ik", session).unwrap(),
+                reads.einsum(&subs, session).unwrap(),
             ] {
                 assert_eq!(result.as_slice::<f64>().unwrap(), &[6.0; 4]);
             }
@@ -112,26 +109,46 @@ fn binary_public_execution_surfaces_bypass_general_optimizers() {
             );
             assert_eq!(
                 views
-                    .einsum_read("ij,jk->ik", session)
+                    .einsum("ij,jk->ik", session)
                     .unwrap()
                     .as_slice()
                     .unwrap(),
                 &[6.0; 4]
             );
             [&a, &b]
-                .einsum_into("ij,jk->ik", session, TensorWrite::from_tensor(&mut out))
+                .einsum_into(
+                    "ij,jk->ik",
+                    &crate::EinsumOptions::default(),
+                    session,
+                    tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
+                )
                 .unwrap();
             assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0; 4]);
             reads
-                .einsum_read_into("ij,jk->ik", session, TensorWrite::from_tensor(&mut out))
+                .einsum_into(
+                    "ij,jk->ik",
+                    &crate::EinsumOptions::default(),
+                    session,
+                    tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
+                )
                 .unwrap();
             assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0; 4]);
             [&ta, &tb]
-                .einsum_into("ij,jk->ik", session, &mut tout)
+                .einsum_into(
+                    "ij,jk->ik",
+                    &crate::EinsumOptions::default(),
+                    session,
+                    tenferro_tensor::Dest::overwrite(&mut tout),
+                )
                 .unwrap();
             assert_eq!(tout.as_slice().unwrap(), &[6.0; 4]);
             views
-                .einsum_read_into("ij,jk->ik", session, &mut tout)
+                .einsum_into(
+                    "ij,jk->ik",
+                    &crate::EinsumOptions::default(),
+                    session,
+                    tenferro_tensor::Dest::overwrite(&mut tout),
+                )
                 .unwrap();
             assert_eq!(tout.as_slice().unwrap(), &[6.0; 4]);
             assert_eq!(OMECO_CALLS.with(Cell::get), 0);
@@ -147,7 +164,7 @@ fn binary_public_execution_surfaces_bypass_general_optimizers() {
 
 #[test]
 fn binary_public_einsum_preserves_general_numerical_semantics() {
-    use crate::TensorEinsumExt;
+    use crate::EinsumOps;
     use tenferro_cpu::CpuEngine;
     use tenferro_tensor::Tensor;
 

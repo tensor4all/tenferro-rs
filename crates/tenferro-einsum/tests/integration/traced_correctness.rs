@@ -1,6 +1,6 @@
 use tenferro_einsum::{
     parse_einsum_subscripts, ContractionTree, EinsumOptimize, Subscripts, TensorDotAxes,
-    TraceContextEinsumExt, TracedTensorEinsumExt,
+    TracedEinsumOps, TracedTensordotOps,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
@@ -13,39 +13,48 @@ fn spec(tensor: &Tensor) -> ProgramInputSpec {
     ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape()))
 }
 
-fn trace_default(trace: &TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {
-    trace
+fn trace_default(trace: &TraceContext, tensor: &Tensor) -> tenferro_runtime::TracedTensor {
+    let value = trace
         .input_with_default(spec(tensor), tensor.duplicate().unwrap())
-        .unwrap()
+        .unwrap();
+    trace.derive_tensor(value).unwrap()
 }
 
 fn compile_and_run(
     trace: TraceContext,
-    output: tenferro_runtime::TraceValue,
+    output: tenferro_runtime::TracedTensor,
 ) -> tenferro_runtime::Result<Tensor> {
-    let graph = trace.finish(&[output]).unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     let compiled = GraphCompiler::new().compile_traced_graph(&graph)?;
     support::run_one(&compiled, &[])
 }
 
 #[test]
 fn trace_context_einsum_ext_exposes_einsum() {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let lhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [DimExpr::Const(2), DimExpr::Const(3)],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [DimExpr::Const(2), DimExpr::Const(3)],
+                ))
+                .unwrap(),
+        )
         .unwrap();
     let rhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [DimExpr::Const(3), DimExpr::Const(4)],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [DimExpr::Const(3), DimExpr::Const(4)],
+                ))
+                .unwrap(),
+        )
         .unwrap();
 
-    let output = trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     let metadata = graph
         .program()
         .value_metadata(graph.program().outputs()[0])
@@ -57,28 +66,32 @@ fn trace_context_einsum_ext_exposes_einsum() {
 
 #[test]
 fn trace_context_reports_malformed_notation_without_mutation() {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let input = trace
-        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+                .unwrap(),
+        )
         .unwrap();
 
-    assert!(trace.einsum(&[input], "not einsum").is_err());
-    let graph = trace.finish(&[input]).unwrap();
+    assert!(trace.einsum(&[&input], "not einsum").is_err());
+    let graph = trace.finish(&[input.trace_value()]).unwrap();
     assert_eq!(graph.program().operations().count(), 0);
 }
 
 #[test]
 fn explicit_path_matmul_executes_numerically() {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
     let lhs_value = trace_default(&trace, &lhs);
     let rhs_value = trace_default(&trace, &rhs);
     let output = trace
         .einsum_with(
-            &[lhs_value, rhs_value],
+            &[&lhs_value, &rhs_value],
             "ij,jk->ik",
-            EinsumOptimize::Path(vec![(0, 1)]),
+            &tenferro_einsum::EinsumOptions::default().optimize(EinsumOptimize::Path(vec![(0, 1)])),
         )
         .unwrap();
 
@@ -89,7 +102,7 @@ fn explicit_path_matmul_executes_numerically() {
 
 #[test]
 fn concrete_precomputed_tree_executes_nary_chain() {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
     let c = Tensor::from_vec_col_major(vec![2, 2], vec![9.0_f64, 10.0, 11.0, 12.0]).unwrap();
@@ -102,9 +115,9 @@ fn concrete_precomputed_tree_executes_nary_chain() {
     let c_value = trace_default(&trace, &c);
     let output = trace
         .einsum_with(
-            &[a_value, b_value, c_value],
+            &[&a_value, &b_value, &c_value],
             "ij,jk,kl->il",
-            EinsumOptimize::Tree(tree),
+            &tenferro_einsum::EinsumOptions::default().optimize(EinsumOptimize::Tree(tree)),
         )
         .unwrap();
 
@@ -117,21 +130,29 @@ fn concrete_precomputed_tree_executes_nary_chain() {
 
 #[test]
 fn constant_shape_constraint_mismatch_fails_compilation() {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let lhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [DimExpr::Const(2), DimExpr::Const(3)],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [DimExpr::Const(2), DimExpr::Const(3)],
+                ))
+                .unwrap(),
+        )
         .unwrap();
     let rhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [DimExpr::Const(4), DimExpr::Const(2)],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [DimExpr::Const(4), DimExpr::Const(2)],
+                ))
+                .unwrap(),
+        )
         .unwrap();
-    let output = trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
 
     assert!(GraphCompiler::new().compile_traced_graph(&graph).is_err());
 }

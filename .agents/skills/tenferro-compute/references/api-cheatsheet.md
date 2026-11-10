@@ -101,8 +101,7 @@ module into the runtime that owns the registered backend engine.
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#traced-extension-operation -->
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_einsum::TraceContextEinsumExt;
-use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_einsum::TracedEinsumOps;
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 
 let a = Tensor::from_vec_col_major(
@@ -113,12 +112,11 @@ let b = Tensor::from_vec_col_major(
     vec![3, 2],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let mut trace = TraceContext::new();
-let a_value = trace.input(ProgramInputSpec::new(a.dtype(), [2.into(), 3.into()]))?;
-let b_value = trace.input(ProgramInputSpec::new(b.dtype(), [3.into(), 2.into()]))?;
-let product = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
-let graph = trace.finish(&[product])?;
-let program = GraphCompiler::new().compile_traced_graph(&graph)?;
+let trace = TraceContext::new();
+let a_in = trace.input_concrete_shape(a.dtype(), &[2, 3])?;
+let b_in = trace.input_concrete_shape(b.dtype(), &[3, 2])?;
+let product = trace.einsum(&[&a_in, &b_in], "ij,jk->ik")?;
+let program = GraphCompiler::new().compile(&product)?;
 
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();

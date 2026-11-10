@@ -20,15 +20,19 @@ fn einsum_prepared_repeat_f64_counter() -> Result<(), Box<dyn std::error::Error>
     let n = 32;
     let lhs = matrix(n, 1.0);
     let rhs = matrix(n, 2.0);
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
+    let plan = ConcreteEinsumPlan::prepare(
+        &[&lhs, &rhs],
+        "ij,jk->ik",
+        &tenferro_einsum::EinsumOptions::default(),
+    )?;
     let mut out = matrix(n, 0.0);
     let mut engine = CpuEngine::serial();
 
     let before = engine.plan_cache().contraction_stats();
     plan.execute_into(
-        [&lhs, &rhs],
+        &[&lhs, &rhs],
         &mut engine,
-        TensorWrite::from_tensor(&mut out),
+        tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
     )?;
     let built = engine.plan_cache().contraction_stats();
     assert_eq!(
@@ -43,9 +47,9 @@ fn einsum_prepared_repeat_f64_counter() -> Result<(), Box<dyn std::error::Error>
 
     for _ in 0..4 {
         plan.execute_into(
-            [&lhs, &rhs],
+            &[&lhs, &rhs],
             &mut engine,
-            TensorWrite::from_tensor(&mut out),
+            tenferro_tensor::Dest::overwrite(TensorWrite::from_tensor(&mut out)),
         )?;
     }
     let replayed = engine.plan_cache().contraction_stats();

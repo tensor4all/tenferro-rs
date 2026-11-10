@@ -20,6 +20,9 @@ pub(crate) enum Receiver {
     SelfRef,
     /// `&mut self` receiver; the first operand is an ordinary argument.
     Session,
+    /// `&self` receiver; the first operand is an ordinary argument (a context
+    /// object such as a trace that records the operation).
+    Context,
 }
 
 /// A layer that generates a trait and an impl.

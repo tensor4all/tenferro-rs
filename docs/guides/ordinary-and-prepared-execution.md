@@ -33,7 +33,7 @@ For a standalone program, place the fragment inside
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#ordinary-and-prepared-einsum -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{ConcreteEinsumPlan, EinsumSubscripts, TensorEinsumExt};
+use tenferro_einsum::{ConcreteEinsumPlan, EinsumSubscripts, EinsumOps};
 use tenferro_tensor::Tensor;
 
 let lhs = Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
@@ -44,7 +44,7 @@ let ordinary = [&lhs, &rhs].einsum("ij,jk->ik", &mut engine)?;
 assert_eq!(ordinary.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 
 // Strings are fine for one-time preparation. The plan does not retain inputs.
-let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
+let plan = ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &tenferro_einsum::EinsumOptions::default())?;
 // Borrow the same engine for the whole batch. The engine holds the plan cache
 // and buffer pool, so reusing it is what makes the per-call cost the numerical
 // operation alone.
@@ -53,13 +53,13 @@ for (data, expected) in [
     (vec![2.0_f64, 4.0, 6.0, 8.0], [4.0, 8.0, 14.0, 20.0]),
 ] {
     let next_lhs = Tensor::from_vec_col_major([2, 2], data)?;
-    let result = plan.execute([&next_lhs, &rhs], &mut engine)?;
+    let result = plan.execute(&[&next_lhs, &rhs], &mut engine)?;
     assert_eq!(result.as_slice::<f64>()?, &expected);
 }
 
 // Integer labels describe the equation; this ordinary call still plans.
 let equation = EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-let structured = [&lhs, &rhs].einsum_subscripts(&equation, &mut engine)?;
+let structured = [&lhs, &rhs].einsum(&equation, &mut engine)?;
 assert_eq!(structured.as_slice::<f64>()?, &[2.0, 4.0, 7.0, 10.0]);
 ```
 <!-- end-snippet-source -->

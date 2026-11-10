@@ -67,15 +67,15 @@ impl<'a> core::fmt::Debug for tenferro_einsum::lowering::ReducePlan<'a>
 pub fn tenferro_einsum::lowering::ReducePlan<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for tenferro_einsum::lowering::ReducePlan<'a>
 pub mod tenferro_einsum::prelude
+pub use tenferro_einsum::prelude::Conj
 pub use tenferro_einsum::prelude::DType
-pub use tenferro_einsum::prelude::DotGeneralAccumulation
+pub use tenferro_einsum::prelude::Dest
 pub use tenferro_einsum::prelude::Tensor
 pub use tenferro_einsum::prelude::TensorRead
 pub use tenferro_einsum::prelude::TensorScalar
 pub use tenferro_einsum::prelude::TensorView
 pub use tenferro_einsum::prelude::TensorWrite
 pub use tenferro_einsum::prelude::TraceContext
-pub use tenferro_einsum::prelude::TraceValue
 pub use tenferro_einsum::prelude::TracedTensor
 pub use tenferro_einsum::prelude::TypedTensor
 pub use tenferro_einsum::prelude::TypedTensorView
@@ -100,10 +100,31 @@ pub tenferro_einsum::prelude::EinsumOptimize::False
 pub tenferro_einsum::prelude::EinsumOptimize::Nested(tenferro_einsum::NestedEinsum)
 pub tenferro_einsum::prelude::EinsumOptimize::Path(alloc::vec::Vec<(usize, usize)>)
 pub tenferro_einsum::prelude::EinsumOptimize::Tree(tenferro_einsum::ContractionTree)
+impl core::clone::Clone for tenferro_einsum::EinsumOptimize
+pub fn tenferro_einsum::EinsumOptimize::clone(&self) -> tenferro_einsum::EinsumOptimize
 impl core::default::Default for tenferro_einsum::EinsumOptimize
 pub fn tenferro_einsum::EinsumOptimize::default() -> Self
 impl core::fmt::Debug for tenferro_einsum::EinsumOptimize
 pub fn tenferro_einsum::EinsumOptimize::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_einsum::prelude::Spec<'a>
+pub tenferro_einsum::prelude::Spec::Notation(&'a tenferro_einsum::EinsumNotation)
+pub tenferro_einsum::prelude::Spec::Subscripts(&'a tenferro_einsum::EinsumSubscripts)
+pub tenferro_einsum::prelude::Spec::Text(&'a str)
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
+pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::clone::Clone for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::clone(&self) -> tenferro_einsum::Spec<'a>
+impl<'a> core::convert::From<&'a alloc::string::String> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a alloc::string::String) -> Self
+impl<'a> core::convert::From<&'a str> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a str) -> Self
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumNotation> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumNotation) -> Self
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumSubscripts) -> Self
+impl<'a> core::fmt::Debug for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::Spec<'a>
 pub enum tenferro_einsum::prelude::TensorDotAxes<'a>
 pub tenferro_einsum::prelude::TensorDotAxes::Axes
 pub tenferro_einsum::prelude::TensorDotAxes::Axes::lhs: &'a [isize]
@@ -118,6 +139,35 @@ impl<'a> core::fmt::Debug for tenferro_einsum::TensorDotAxes<'a>
 pub fn tenferro_einsum::TensorDotAxes<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::Copy for tenferro_einsum::TensorDotAxes<'a>
 impl<'a> core::marker::StructuralPartialEq for tenferro_einsum::TensorDotAxes<'a>
+pub struct tenferro_einsum::prelude::ConcreteEinsumPlan
+impl tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache(&mut self)
+pub fn tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats(&self) -> tenferro_einsum::Result<tenferro_tensor::cache::CacheStats>
+impl tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::execute<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&self, &I, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<<I as tenferro_einsum::EinsumInputs>::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::ConcreteEinsumPlan::execute_into<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&self, &I, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<<I as tenferro_einsum::EinsumInputs>::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_einsum::ConcreteEinsumPlan::prepare<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&I, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_tensor::error::Result<Self>
+impl core::fmt::Debug for tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_einsum::prelude::ConjMask
+impl tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::get(&self, usize) -> tenferro_tensor::dest::Conj
+pub fn tenferro_einsum::ConjMask::is_empty(&self) -> bool
+pub fn tenferro_einsum::ConjMask::is_none(&self) -> bool
+pub fn tenferro_einsum::ConjMask::len(&self) -> usize
+pub fn tenferro_einsum::ConjMask::new(impl core::iter::traits::collect::IntoIterator<Item = tenferro_tensor::dest::Conj>) -> Self
+impl core::clone::Clone for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::clone(&self) -> tenferro_einsum::ConjMask
+impl core::cmp::Eq for tenferro_einsum::ConjMask
+impl core::cmp::PartialEq for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::eq(&self, &tenferro_einsum::ConjMask) -> bool
+impl core::default::Default for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::default() -> tenferro_einsum::ConjMask
+impl core::fmt::Debug for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_einsum::ConjMask
 pub struct tenferro_einsum::prelude::ContractionTree
 impl tenferro_einsum::ContractionTree
 pub fn tenferro_einsum::ContractionTree::from_pairs(&tenferro_einsum::Subscripts, &[&[usize]], &[(usize, usize)]) -> tenferro_einsum::Result<Self>
@@ -127,6 +177,8 @@ pub fn tenferro_einsum::ContractionTree::step_count(&self) -> usize
 pub fn tenferro_einsum::ContractionTree::step_pair(&self, usize) -> core::option::Option<(usize, usize)>
 pub fn tenferro_einsum::ContractionTree::step_plan(&self, usize) -> core::option::Option<tenferro_einsum::lowering::PairwiseStepPlan<'_>>
 pub fn tenferro_einsum::ContractionTree::step_subscripts(&self, usize) -> core::option::Option<(&[u32], &[u32], &[u32])>
+impl core::clone::Clone for tenferro_einsum::ContractionTree
+pub fn tenferro_einsum::ContractionTree::clone(&self) -> tenferro_einsum::ContractionTree
 impl core::fmt::Debug for tenferro_einsum::ContractionTree
 pub fn tenferro_einsum::ContractionTree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_einsum::prelude::EinsumNotation
@@ -146,6 +198,22 @@ pub fn tenferro_einsum::EinsumNotation::fmt(&self, &mut core::fmt::Formatter<'_>
 impl core::hash::Hash for tenferro_einsum::EinsumNotation
 pub fn tenferro_einsum::EinsumNotation::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumNotation
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumNotation> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumNotation) -> Self
+#[non_exhaustive] pub struct tenferro_einsum::prelude::EinsumOptions
+pub tenferro_einsum::prelude::EinsumOptions::conj: tenferro_einsum::ConjMask
+pub tenferro_einsum::prelude::EinsumOptions::optimize: tenferro_einsum::EinsumOptimize
+impl tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::conj(self, tenferro_einsum::ConjMask) -> Self
+pub fn tenferro_einsum::EinsumOptions::optimize(self, tenferro_einsum::EinsumOptimize) -> Self
+impl core::clone::Clone for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::clone(&self) -> tenferro_einsum::EinsumOptions
+impl core::default::Default for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::default() -> tenferro_einsum::EinsumOptions
+impl core::fmt::Debug for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_einsum::prelude::EinsumSubscripts
 pub tenferro_einsum::prelude::EinsumSubscripts::inputs: alloc::vec::Vec<alloc::vec::Vec<u32>>
 pub tenferro_einsum::prelude::EinsumSubscripts::output: alloc::vec::Vec<u32>
@@ -170,128 +238,62 @@ pub fn tenferro_einsum::EinsumSubscripts::fmt(&self, &mut core::fmt::Formatter<'
 impl core::hash::Hash for tenferro_einsum::EinsumSubscripts
 pub fn tenferro_einsum::EinsumSubscripts::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumSubscripts
-pub trait tenferro_einsum::prelude::TensorEinsumExt
-pub fn tenferro_einsum::prelude::TensorEinsumExt::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_einsum::prelude::TensorEinsumExt::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_einsum::prelude::TensorEinsumExt::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl tenferro_einsum::TensorEinsumExt for [&tenferro_tensor::types::Tensor]
-pub fn [&tenferro_tensor::types::Tensor]::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [&tenferro_tensor::types::Tensor]::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [&tenferro_tensor::types::Tensor]::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl<const N: usize> tenferro_einsum::TensorEinsumExt for [&tenferro_tensor::types::Tensor; N]
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_einsum::prelude::TensorEinsumIntoExt
-pub fn tenferro_einsum::prelude::TensorEinsumIntoExt::einsum_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn tenferro_einsum::prelude::TensorEinsumIntoExt::einsum_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn tenferro_einsum::prelude::TensorEinsumIntoExt::einsum_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-impl tenferro_einsum::TensorEinsumIntoExt for [&tenferro_tensor::types::Tensor]
-pub fn [&tenferro_tensor::types::Tensor]::einsum_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [&tenferro_tensor::types::Tensor]::einsum_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [&tenferro_tensor::types::Tensor]::einsum_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-impl<const N: usize> tenferro_einsum::TensorEinsumIntoExt for [&tenferro_tensor::types::Tensor; N]
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub trait tenferro_einsum::prelude::TensorReadEinsumExt
-pub fn tenferro_einsum::prelude::TensorReadEinsumExt::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_einsum::prelude::TensorReadEinsumExt::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_einsum::prelude::TensorReadEinsumExt::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl<'a, const N: usize> tenferro_einsum::TensorReadEinsumExt for [tenferro_tensor::types::TensorRead<'a>; N]
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl<'a> tenferro_einsum::TensorReadEinsumExt for [tenferro_tensor::types::TensorRead<'a>]
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_einsum::prelude::TensorReadEinsumIntoExt
-pub fn tenferro_einsum::prelude::TensorReadEinsumIntoExt::einsum_read_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn tenferro_einsum::prelude::TensorReadEinsumIntoExt::einsum_read_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn tenferro_einsum::prelude::TensorReadEinsumIntoExt::einsum_read_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-impl<'a, const N: usize> tenferro_einsum::TensorReadEinsumIntoExt for [tenferro_tensor::types::TensorRead<'a>; N]
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-impl<'a> tenferro_einsum::TensorReadEinsumIntoExt for [tenferro_tensor::types::TensorRead<'a>]
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub trait tenferro_einsum::prelude::TensorTensordotExt
-pub fn tenferro_einsum::prelude::TensorTensordotExt::tensordot(&self, &tenferro_tensor::types::Tensor, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl tenferro_einsum::TensorTensordotExt for tenferro_tensor::types::Tensor
-pub fn tenferro_tensor::types::Tensor::tensordot(&self, &tenferro_tensor::types::Tensor, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_einsum::prelude::TraceContextEinsumExt
-pub fn tenferro_einsum::prelude::TraceContextEinsumExt::einsum(&mut self, &[tenferro_runtime::trace::TraceValue], &str) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::prelude::TraceContextEinsumExt::einsum_notation(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumNotation) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::prelude::TraceContextEinsumExt::einsum_notation_with(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumNotation, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::prelude::TraceContextEinsumExt::einsum_subscripts(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumSubscripts) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::prelude::TraceContextEinsumExt::einsum_subscripts_with(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumSubscripts, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::prelude::TraceContextEinsumExt::einsum_with(&mut self, &[tenferro_runtime::trace::TraceValue], &str, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-impl tenferro_einsum::TraceContextEinsumExt for tenferro_runtime::trace::TraceContext
-pub fn tenferro_runtime::trace::TraceContext::einsum(&mut self, &[tenferro_runtime::trace::TraceValue], &str) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_notation(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumNotation) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_notation_with(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumNotation, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_subscripts(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumSubscripts) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_subscripts_with(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumSubscripts, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_with(&mut self, &[tenferro_runtime::trace::TraceValue], &str, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub trait tenferro_einsum::prelude::TracedTensorEinsumExt
-pub fn tenferro_einsum::prelude::TracedTensorEinsumExt::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_einsum::Result<tenferro_runtime::traced::TracedTensor>
-impl tenferro_einsum::TracedTensorEinsumExt for tenferro_runtime::traced::TracedTensor
-pub fn tenferro_runtime::traced::TracedTensor::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_einsum::Result<tenferro_runtime::traced::TracedTensor>
-pub trait tenferro_einsum::prelude::TypedTensorEinsumExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::prelude::TypedTensorEinsumExt::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn tenferro_einsum::prelude::TypedTensorEinsumExt::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn tenferro_einsum::prelude::TypedTensorEinsumExt::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<T: tenferro_tensor::types::TensorScalar, const N: usize> tenferro_einsum::TypedTensorEinsumExt<T> for [&tenferro_tensor::types::TypedTensor<T>; N]
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorEinsumExt<T> for [&tenferro_tensor::types::TypedTensor<T>]
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub trait tenferro_einsum::prelude::TypedTensorEinsumIntoExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::prelude::TypedTensorEinsumIntoExt::einsum_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn tenferro_einsum::prelude::TypedTensorEinsumIntoExt::einsum_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn tenferro_einsum::prelude::TypedTensorEinsumIntoExt::einsum_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-impl<T: tenferro_tensor::types::TensorScalar, const N: usize> tenferro_einsum::TypedTensorEinsumIntoExt<T> for [&tenferro_tensor::types::TypedTensor<T>; N]
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-impl<T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorEinsumIntoExt<T> for [&tenferro_tensor::types::TypedTensor<T>]
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub trait tenferro_einsum::prelude::TypedTensorReadEinsumExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::prelude::TypedTensorReadEinsumExt::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn tenferro_einsum::prelude::TypedTensorReadEinsumExt::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn tenferro_einsum::prelude::TypedTensorReadEinsumExt::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<'a, T: tenferro_tensor::types::TensorScalar, const N: usize> tenferro_einsum::TypedTensorReadEinsumExt<T> for [tenferro_tensor::types::TypedTensorView<'a, T>; N]
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<'a, T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorReadEinsumExt<T> for [tenferro_tensor::types::TypedTensorView<'a, T>]
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub trait tenferro_einsum::prelude::TypedTensorReadEinsumIntoExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::prelude::TypedTensorReadEinsumIntoExt::einsum_read_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn tenferro_einsum::prelude::TypedTensorReadEinsumIntoExt::einsum_read_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn tenferro_einsum::prelude::TypedTensorReadEinsumIntoExt::einsum_read_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-impl<'a, T: tenferro_tensor::types::TensorScalar, const N: usize> tenferro_einsum::TypedTensorReadEinsumIntoExt<T> for [tenferro_tensor::types::TypedTensorView<'a, T>; N]
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-impl<'a, T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorReadEinsumIntoExt<T> for [tenferro_tensor::types::TypedTensorView<'a, T>]
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub trait tenferro_einsum::prelude::TypedTensorTensordotExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::prelude::TypedTensorTensordotExt::tensordot(&self, &tenferro_tensor::types::TypedTensor<T>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorTensordotExt<T> for tenferro_tensor::types::TypedTensor<T>
-pub fn tenferro_tensor::types::TypedTensor<T>::tensordot(&self, &tenferro_tensor::types::TypedTensor<T>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumSubscripts) -> Self
+#[non_exhaustive] pub struct tenferro_einsum::prelude::TensordotOptions
+impl core::clone::Clone for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::clone(&self) -> tenferro_einsum::TensordotOptions
+impl core::cmp::Eq for tenferro_einsum::TensordotOptions
+impl core::cmp::PartialEq for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::eq(&self, &tenferro_einsum::TensordotOptions) -> bool
+impl core::default::Default for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::default() -> tenferro_einsum::TensordotOptions
+impl core::fmt::Debug for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_einsum::TensordotOptions
+impl core::marker::StructuralPartialEq for tenferro_einsum::TensordotOptions
+pub trait tenferro_einsum::prelude::EinsumOps: tenferro_einsum::EinsumInputs
+pub fn tenferro_einsum::prelude::EinsumOps::einsum(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::prelude::EinsumOps::einsum_into(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_einsum::prelude::EinsumOps::einsum_with(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+impl<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized> tenferro_einsum::EinsumOps for I
+pub fn I::einsum(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn I::einsum_into(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn I::einsum_with(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub trait tenferro_einsum::prelude::EinsumSpec
+pub fn tenferro_einsum::prelude::EinsumSpec::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for alloc::string::String
+pub fn alloc::string::String::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for str
+pub fn str::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
+pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
+pub trait tenferro_einsum::prelude::TensordotOps: tenferro_tensor::view::AsView
+pub fn tenferro_einsum::prelude::TensordotOps::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::prelude::TensordotOps::tensordot_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_einsum::TensordotOps for X
+pub fn X::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn X::tensordot_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub trait tenferro_einsum::prelude::TracedEinsumOps
+pub fn tenferro_einsum::prelude::TracedEinsumOps::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_einsum::prelude::TracedEinsumOps::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_einsum::TracedEinsumOps for tenferro_runtime::trace::TraceContext
+pub fn tenferro_runtime::trace::TraceContext::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::trace::TraceContext::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub trait tenferro_einsum::prelude::TracedTensordotOps
+pub fn tenferro_einsum::prelude::TracedTensordotOps::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_einsum::prelude::TracedTensordotOps::tensordot_with(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_einsum::TracedTensordotOps for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::tensordot_with(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub enum tenferro_einsum::EinsumAxis
 pub tenferro_einsum::EinsumAxis::Ellipsis
 pub tenferro_einsum::EinsumAxis::Label(u32)
@@ -312,6 +314,8 @@ pub tenferro_einsum::EinsumOptimize::False
 pub tenferro_einsum::EinsumOptimize::Nested(tenferro_einsum::NestedEinsum)
 pub tenferro_einsum::EinsumOptimize::Path(alloc::vec::Vec<(usize, usize)>)
 pub tenferro_einsum::EinsumOptimize::Tree(tenferro_einsum::ContractionTree)
+impl core::clone::Clone for tenferro_einsum::EinsumOptimize
+pub fn tenferro_einsum::EinsumOptimize::clone(&self) -> tenferro_einsum::EinsumOptimize
 impl core::default::Default for tenferro_einsum::EinsumOptimize
 pub fn tenferro_einsum::EinsumOptimize::default() -> Self
 impl core::fmt::Debug for tenferro_einsum::EinsumOptimize
@@ -372,6 +376,25 @@ impl core::fmt::Debug for tenferro_einsum::PlanningError
 pub fn tenferro_einsum::PlanningError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for tenferro_einsum::PlanningError
 pub fn tenferro_einsum::PlanningError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_einsum::Spec<'a>
+pub tenferro_einsum::Spec::Notation(&'a tenferro_einsum::EinsumNotation)
+pub tenferro_einsum::Spec::Subscripts(&'a tenferro_einsum::EinsumSubscripts)
+pub tenferro_einsum::Spec::Text(&'a str)
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
+pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::clone::Clone for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::clone(&self) -> tenferro_einsum::Spec<'a>
+impl<'a> core::convert::From<&'a alloc::string::String> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a alloc::string::String) -> Self
+impl<'a> core::convert::From<&'a str> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a str) -> Self
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumNotation> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumNotation) -> Self
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumSubscripts) -> Self
+impl<'a> core::fmt::Debug for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::Spec<'a>
 pub enum tenferro_einsum::TensorDotAxes<'a>
 pub tenferro_einsum::TensorDotAxes::Axes
 pub tenferro_einsum::TensorDotAxes::Axes::lhs: &'a [isize]
@@ -390,24 +413,31 @@ pub struct tenferro_einsum::ConcreteEinsumPlan
 impl tenferro_einsum::ConcreteEinsumPlan
 pub fn tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache(&mut self)
 pub fn tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats(&self) -> tenferro_einsum::Result<tenferro_tensor::cache::CacheStats>
-pub fn tenferro_einsum::ConcreteEinsumPlan::execute<'a, I>(&self, I, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor> where I: core::convert::AsRef<[&'a tenferro_tensor::types::Tensor]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::execute_into<'a, I>(&self, I, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()> where I: core::convert::AsRef<[&'a tenferro_tensor::types::Tensor]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::execute_read<'a, I>(&self, I, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor> where I: core::convert::AsRef<[tenferro_tensor::types::TensorRead<'a>]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::execute_read_into<'a, I>(&self, I, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()> where I: core::convert::AsRef<[tenferro_tensor::types::TensorRead<'a>]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::execute_read_into_accum<'a, I>(&self, I, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::backend::DotGeneralAccumulation, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()> where I: core::convert::AsRef<[tenferro_tensor::types::TensorRead<'a>]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::execute_typed<'a, T, I>(&self, I, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>> where T: tenferro_tensor::types::TensorScalar, I: core::convert::AsRef<[&'a tenferro_tensor::types::TypedTensor<T>]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::execute_typed_into<'a, 'out, T, I, O>(&self, I, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where T: tenferro_tensor::types::TensorScalar, I: core::convert::AsRef<[&'a tenferro_tensor::types::TypedTensor<T>]>, O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn tenferro_einsum::ConcreteEinsumPlan::prepare<'a, I>(I, &str) -> tenferro_einsum::Result<Self> where I: core::convert::AsRef<[&'a tenferro_tensor::types::Tensor]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::prepare_notation<'a, I>(I, &tenferro_einsum::EinsumNotation) -> tenferro_einsum::Result<Self> where I: core::convert::AsRef<[&'a tenferro_tensor::types::Tensor]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::prepare_read<'a, I>(I, &str) -> tenferro_einsum::Result<Self> where I: core::convert::AsRef<[tenferro_tensor::types::TensorRead<'a>]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::prepare_read_notation<'a, I>(I, &tenferro_einsum::EinsumNotation) -> tenferro_einsum::Result<Self> where I: core::convert::AsRef<[tenferro_tensor::types::TensorRead<'a>]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::prepare_read_subscripts<'a, I>(I, &tenferro_einsum::EinsumSubscripts) -> tenferro_einsum::Result<Self> where I: core::convert::AsRef<[tenferro_tensor::types::TensorRead<'a>]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::prepare_subscripts<'a, I>(I, &tenferro_einsum::EinsumSubscripts) -> tenferro_einsum::Result<Self> where I: core::convert::AsRef<[&'a tenferro_tensor::types::Tensor]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::prepare_typed<'a, T, I>(I, &str) -> tenferro_einsum::Result<Self> where T: tenferro_tensor::types::TensorScalar, I: core::convert::AsRef<[&'a tenferro_tensor::types::TypedTensor<T>]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::prepare_typed_notation<'a, T, I>(I, &tenferro_einsum::EinsumNotation) -> tenferro_einsum::Result<Self> where T: tenferro_tensor::types::TensorScalar, I: core::convert::AsRef<[&'a tenferro_tensor::types::TypedTensor<T>]>
-pub fn tenferro_einsum::ConcreteEinsumPlan::prepare_typed_subscripts<'a, T, I>(I, &tenferro_einsum::EinsumSubscripts) -> tenferro_einsum::Result<Self> where T: tenferro_tensor::types::TensorScalar, I: core::convert::AsRef<[&'a tenferro_tensor::types::TypedTensor<T>]>
+impl tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::execute<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&self, &I, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<<I as tenferro_einsum::EinsumInputs>::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::ConcreteEinsumPlan::execute_into<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&self, &I, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<<I as tenferro_einsum::EinsumInputs>::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_einsum::ConcreteEinsumPlan::prepare<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&I, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_tensor::error::Result<Self>
 impl core::fmt::Debug for tenferro_einsum::ConcreteEinsumPlan
 pub fn tenferro_einsum::ConcreteEinsumPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_einsum::ConjMask
+impl tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::get(&self, usize) -> tenferro_tensor::dest::Conj
+pub fn tenferro_einsum::ConjMask::is_empty(&self) -> bool
+pub fn tenferro_einsum::ConjMask::is_none(&self) -> bool
+pub fn tenferro_einsum::ConjMask::len(&self) -> usize
+pub fn tenferro_einsum::ConjMask::new(impl core::iter::traits::collect::IntoIterator<Item = tenferro_tensor::dest::Conj>) -> Self
+impl core::clone::Clone for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::clone(&self) -> tenferro_einsum::ConjMask
+impl core::cmp::Eq for tenferro_einsum::ConjMask
+impl core::cmp::PartialEq for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::eq(&self, &tenferro_einsum::ConjMask) -> bool
+impl core::default::Default for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::default() -> tenferro_einsum::ConjMask
+impl core::fmt::Debug for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_einsum::ConjMask
 pub struct tenferro_einsum::ContractionOptimizerOptions
 pub tenferro_einsum::ContractionOptimizerOptions::betas: alloc::vec::Vec<f64>
 pub tenferro_einsum::ContractionOptimizerOptions::niters: usize
@@ -428,6 +458,8 @@ pub fn tenferro_einsum::ContractionTree::step_count(&self) -> usize
 pub fn tenferro_einsum::ContractionTree::step_pair(&self, usize) -> core::option::Option<(usize, usize)>
 pub fn tenferro_einsum::ContractionTree::step_plan(&self, usize) -> core::option::Option<tenferro_einsum::lowering::PairwiseStepPlan<'_>>
 pub fn tenferro_einsum::ContractionTree::step_subscripts(&self, usize) -> core::option::Option<(&[u32], &[u32], &[u32])>
+impl core::clone::Clone for tenferro_einsum::ContractionTree
+pub fn tenferro_einsum::ContractionTree::clone(&self) -> tenferro_einsum::ContractionTree
 impl core::fmt::Debug for tenferro_einsum::ContractionTree
 pub fn tenferro_einsum::ContractionTree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_einsum::EinsumNotation
@@ -447,6 +479,22 @@ pub fn tenferro_einsum::EinsumNotation::fmt(&self, &mut core::fmt::Formatter<'_>
 impl core::hash::Hash for tenferro_einsum::EinsumNotation
 pub fn tenferro_einsum::EinsumNotation::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumNotation
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumNotation> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumNotation) -> Self
+#[non_exhaustive] pub struct tenferro_einsum::EinsumOptions
+pub tenferro_einsum::EinsumOptions::conj: tenferro_einsum::ConjMask
+pub tenferro_einsum::EinsumOptions::optimize: tenferro_einsum::EinsumOptimize
+impl tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::conj(self, tenferro_einsum::ConjMask) -> Self
+pub fn tenferro_einsum::EinsumOptions::optimize(self, tenferro_einsum::EinsumOptimize) -> Self
+impl core::clone::Clone for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::clone(&self) -> tenferro_einsum::EinsumOptions
+impl core::default::Default for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::default() -> tenferro_einsum::EinsumOptions
+impl core::fmt::Debug for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_einsum::EinsumSubscripts
 pub tenferro_einsum::EinsumSubscripts::inputs: alloc::vec::Vec<alloc::vec::Vec<u32>>
 pub tenferro_einsum::EinsumSubscripts::output: alloc::vec::Vec<u32>
@@ -471,6 +519,10 @@ pub fn tenferro_einsum::EinsumSubscripts::fmt(&self, &mut core::fmt::Formatter<'
 impl core::hash::Hash for tenferro_einsum::EinsumSubscripts
 pub fn tenferro_einsum::EinsumSubscripts::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumSubscripts
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumSubscripts) -> Self
 pub struct tenferro_einsum::Subscripts
 pub tenferro_einsum::Subscripts::inputs: alloc::vec::Vec<alloc::vec::Vec<u32>>
 pub tenferro_einsum::Subscripts::output: alloc::vec::Vec<u32>
@@ -495,129 +547,71 @@ pub fn tenferro_einsum::Subscripts::fmt(&self, &mut core::fmt::Formatter<'_>) ->
 impl core::hash::Hash for tenferro_einsum::Subscripts
 pub fn tenferro_einsum::Subscripts::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for tenferro_einsum::Subscripts
+#[non_exhaustive] pub struct tenferro_einsum::TensordotOptions
+impl core::clone::Clone for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::clone(&self) -> tenferro_einsum::TensordotOptions
+impl core::cmp::Eq for tenferro_einsum::TensordotOptions
+impl core::cmp::PartialEq for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::eq(&self, &tenferro_einsum::TensordotOptions) -> bool
+impl core::default::Default for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::default() -> tenferro_einsum::TensordotOptions
+impl core::fmt::Debug for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::TensordotOptions
+pub fn tenferro_einsum::TensordotOptions::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_einsum::TensordotOptions
+impl core::marker::StructuralPartialEq for tenferro_einsum::TensordotOptions
 pub const tenferro_einsum::EINSUM_EXTENSION_FAMILY_ID: &str
-pub trait tenferro_einsum::TensorEinsumExt
-pub fn tenferro_einsum::TensorEinsumExt::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_einsum::TensorEinsumExt::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_einsum::TensorEinsumExt::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl tenferro_einsum::TensorEinsumExt for [&tenferro_tensor::types::Tensor]
-pub fn [&tenferro_tensor::types::Tensor]::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [&tenferro_tensor::types::Tensor]::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [&tenferro_tensor::types::Tensor]::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl<const N: usize> tenferro_einsum::TensorEinsumExt for [&tenferro_tensor::types::Tensor; N]
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_einsum::TensorEinsumIntoExt
-pub fn tenferro_einsum::TensorEinsumIntoExt::einsum_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn tenferro_einsum::TensorEinsumIntoExt::einsum_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn tenferro_einsum::TensorEinsumIntoExt::einsum_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-impl tenferro_einsum::TensorEinsumIntoExt for [&tenferro_tensor::types::Tensor]
-pub fn [&tenferro_tensor::types::Tensor]::einsum_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [&tenferro_tensor::types::Tensor]::einsum_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [&tenferro_tensor::types::Tensor]::einsum_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-impl<const N: usize> tenferro_einsum::TensorEinsumIntoExt for [&tenferro_tensor::types::Tensor; N]
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [&tenferro_tensor::types::Tensor; N]::einsum_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub trait tenferro_einsum::TensorReadEinsumExt
-pub fn tenferro_einsum::TensorReadEinsumExt::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_einsum::TensorReadEinsumExt::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_einsum::TensorReadEinsumExt::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl<'a, const N: usize> tenferro_einsum::TensorReadEinsumExt for [tenferro_tensor::types::TensorRead<'a>; N]
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl<'a> tenferro_einsum::TensorReadEinsumExt for [tenferro_tensor::types::TensorRead<'a>]
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_einsum::TensorReadEinsumIntoExt
-pub fn tenferro_einsum::TensorReadEinsumIntoExt::einsum_read_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn tenferro_einsum::TensorReadEinsumIntoExt::einsum_read_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn tenferro_einsum::TensorReadEinsumIntoExt::einsum_read_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-impl<'a, const N: usize> tenferro_einsum::TensorReadEinsumIntoExt for [tenferro_tensor::types::TensorRead<'a>; N]
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [tenferro_tensor::types::TensorRead<'a>; N]::einsum_read_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-impl<'a> tenferro_einsum::TensorReadEinsumIntoExt for [tenferro_tensor::types::TensorRead<'a>]
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_into(&self, &str, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_into_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub fn [tenferro_tensor::types::TensorRead<'a>]::einsum_read_into_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_einsum::Result<()>
-pub trait tenferro_einsum::TensorTensordotExt
-pub fn tenferro_einsum::TensorTensordotExt::tensordot(&self, &tenferro_tensor::types::Tensor, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-impl tenferro_einsum::TensorTensordotExt for tenferro_tensor::types::Tensor
-pub fn tenferro_tensor::types::Tensor::tensordot(&self, &tenferro_tensor::types::Tensor, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_einsum::TraceContextEinsumExt
-pub fn tenferro_einsum::TraceContextEinsumExt::einsum(&mut self, &[tenferro_runtime::trace::TraceValue], &str) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::TraceContextEinsumExt::einsum_notation(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumNotation) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::TraceContextEinsumExt::einsum_notation_with(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumNotation, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::TraceContextEinsumExt::einsum_subscripts(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumSubscripts) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::TraceContextEinsumExt::einsum_subscripts_with(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumSubscripts, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_einsum::TraceContextEinsumExt::einsum_with(&mut self, &[tenferro_runtime::trace::TraceValue], &str, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-impl tenferro_einsum::TraceContextEinsumExt for tenferro_runtime::trace::TraceContext
-pub fn tenferro_runtime::trace::TraceContext::einsum(&mut self, &[tenferro_runtime::trace::TraceValue], &str) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_notation(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumNotation) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_notation_with(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumNotation, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_subscripts(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumSubscripts) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_subscripts_with(&mut self, &[tenferro_runtime::trace::TraceValue], &tenferro_einsum::EinsumSubscripts, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub fn tenferro_runtime::trace::TraceContext::einsum_with(&mut self, &[tenferro_runtime::trace::TraceValue], &str, tenferro_einsum::EinsumOptimize) -> tenferro_einsum::Result<tenferro_runtime::trace::TraceValue>
-pub trait tenferro_einsum::TracedTensorEinsumExt
-pub fn tenferro_einsum::TracedTensorEinsumExt::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_einsum::Result<tenferro_runtime::traced::TracedTensor>
-impl tenferro_einsum::TracedTensorEinsumExt for tenferro_runtime::traced::TracedTensor
-pub fn tenferro_runtime::traced::TracedTensor::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_einsum::Result<tenferro_runtime::traced::TracedTensor>
-pub trait tenferro_einsum::TypedTensorEinsumExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::TypedTensorEinsumExt::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn tenferro_einsum::TypedTensorEinsumExt::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn tenferro_einsum::TypedTensorEinsumExt::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<T: tenferro_tensor::types::TensorScalar, const N: usize> tenferro_einsum::TypedTensorEinsumExt<T> for [&tenferro_tensor::types::TypedTensor<T>; N]
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorEinsumExt<T> for [&tenferro_tensor::types::TypedTensor<T>]
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub trait tenferro_einsum::TypedTensorEinsumIntoExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::TypedTensorEinsumIntoExt::einsum_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn tenferro_einsum::TypedTensorEinsumIntoExt::einsum_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn tenferro_einsum::TypedTensorEinsumIntoExt::einsum_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-impl<T: tenferro_tensor::types::TensorScalar, const N: usize> tenferro_einsum::TypedTensorEinsumIntoExt<T> for [&tenferro_tensor::types::TypedTensor<T>; N]
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>; N]::einsum_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-impl<T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorEinsumIntoExt<T> for [&tenferro_tensor::types::TypedTensor<T>]
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [&tenferro_tensor::types::TypedTensor<T>]::einsum_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub trait tenferro_einsum::TypedTensorReadEinsumExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::TypedTensorReadEinsumExt::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn tenferro_einsum::TypedTensorReadEinsumExt::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn tenferro_einsum::TypedTensorReadEinsumExt::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<'a, T: tenferro_tensor::types::TensorScalar, const N: usize> tenferro_einsum::TypedTensorReadEinsumExt<T> for [tenferro_tensor::types::TypedTensorView<'a, T>; N]
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<'a, T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorReadEinsumExt<T> for [tenferro_tensor::types::TypedTensorView<'a, T>]
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read(&self, &str, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_notation(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_subscripts(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-pub trait tenferro_einsum::TypedTensorReadEinsumIntoExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::TypedTensorReadEinsumIntoExt::einsum_read_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn tenferro_einsum::TypedTensorReadEinsumIntoExt::einsum_read_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn tenferro_einsum::TypedTensorReadEinsumIntoExt::einsum_read_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-impl<'a, T: tenferro_tensor::types::TensorScalar, const N: usize> tenferro_einsum::TypedTensorReadEinsumIntoExt<T> for [tenferro_tensor::types::TypedTensorView<'a, T>; N]
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>; N]::einsum_read_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-impl<'a, T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorReadEinsumIntoExt<T> for [tenferro_tensor::types::TypedTensorView<'a, T>]
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_into<'out, O>(&self, &str, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_into_notation<'out, O>(&self, &tenferro_einsum::EinsumNotation, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub fn [tenferro_tensor::types::TypedTensorView<'a, T>]::einsum_read_into_subscripts<'out, O>(&self, &tenferro_einsum::EinsumSubscripts, &mut dyn tenferro_tensor::backend::Engine, O) -> tenferro_einsum::Result<()> where O: core::convert::Into<tenferro_tensor::types::TypedTensorWrite<'out, T>>
-pub trait tenferro_einsum::TypedTensorTensordotExt<T: tenferro_tensor::types::TensorScalar>
-pub fn tenferro_einsum::TypedTensorTensordotExt::tensordot(&self, &tenferro_tensor::types::TypedTensor<T>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
-impl<T: tenferro_tensor::types::TensorScalar> tenferro_einsum::TypedTensorTensordotExt<T> for tenferro_tensor::types::TypedTensor<T>
-pub fn tenferro_tensor::types::TypedTensor<T>::tensordot(&self, &tenferro_tensor::types::TypedTensor<T>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_einsum::Result<tenferro_tensor::types::TypedTensor<T>>
+pub trait tenferro_einsum::EinsumInputs: tenferro_einsum::api::options::sealed::Sealed
+pub type tenferro_einsum::EinsumInputs::Repr: tenferro_tensor::view::Repr
+pub fn tenferro_einsum::EinsumInputs::reads(&self) -> alloc::vec::Vec<tenferro_tensor::types::TensorRead<'_>>
+impl<X: tenferro_tensor::view::AsView, const N: usize> tenferro_einsum::EinsumInputs for [X; N]
+pub type [X; N]::Repr = <X as tenferro_tensor::view::AsView>::Repr
+pub fn [X; N]::reads(&self) -> alloc::vec::Vec<tenferro_tensor::types::TensorRead<'_>>
+impl<X: tenferro_tensor::view::AsView> tenferro_einsum::EinsumInputs for [X]
+pub type [X]::Repr = <X as tenferro_tensor::view::AsView>::Repr
+pub fn [X]::reads(&self) -> alloc::vec::Vec<tenferro_tensor::types::TensorRead<'_>>
+impl<X: tenferro_tensor::view::AsView> tenferro_einsum::EinsumInputs for alloc::vec::Vec<X>
+pub type alloc::vec::Vec<X>::Repr = <X as tenferro_tensor::view::AsView>::Repr
+pub fn alloc::vec::Vec<X>::reads(&self) -> alloc::vec::Vec<tenferro_tensor::types::TensorRead<'_>>
+pub trait tenferro_einsum::EinsumOps: tenferro_einsum::EinsumInputs
+pub fn tenferro_einsum::EinsumOps::einsum(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::EinsumOps::einsum_into(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_einsum::EinsumOps::einsum_with(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+impl<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized> tenferro_einsum::EinsumOps for I
+pub fn I::einsum(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn I::einsum_into(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn I::einsum_with(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub trait tenferro_einsum::EinsumSpec
+pub fn tenferro_einsum::EinsumSpec::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for alloc::string::String
+pub fn alloc::string::String::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for str
+pub fn str::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
+pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
+pub trait tenferro_einsum::TensordotOps: tenferro_tensor::view::AsView
+pub fn tenferro_einsum::TensordotOps::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::TensordotOps::tensordot_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_einsum::TensordotOps for X
+pub fn X::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn X::tensordot_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub trait tenferro_einsum::TracedEinsumOps
+pub fn tenferro_einsum::TracedEinsumOps::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_einsum::TracedEinsumOps::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_einsum::TracedEinsumOps for tenferro_runtime::trace::TraceContext
+pub fn tenferro_runtime::trace::TraceContext::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::trace::TraceContext::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub trait tenferro_einsum::TracedTensordotOps
+pub fn tenferro_einsum::TracedTensordotOps::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_einsum::TracedTensordotOps::tensordot_with(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_einsum::TracedTensordotOps for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::tensordot_with(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub fn tenferro_einsum::extension_module<B: tenferro_tensor::backend::Engine + 'static>(tenferro_runtime::runtime::identity::EngineId) -> core::result::Result<alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>, tenferro_runtime::runtime::error::RuntimeConfigError> where EinsumExtensionOp: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
 pub fn tenferro_einsum::parse_einsum_notation(&str) -> tenferro_einsum::Result<tenferro_einsum::EinsumNotation>
 pub fn tenferro_einsum::parse_einsum_subscripts(&str) -> tenferro_einsum::Result<tenferro_einsum::EinsumSubscripts>

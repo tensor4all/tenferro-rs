@@ -4,7 +4,7 @@
 //! `into_typed_result`.
 
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{ConcreteEinsumPlan, Error};
+use tenferro_einsum::ConcreteEinsumPlan;
 use tenferro_runtime::Tensor;
 use tenferro_tensor::backend::{
     SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot,
@@ -434,21 +434,24 @@ fn einsum_plan_typed_execute_rejects_wrong_backend_dtype() {
     let typed_rhs =
         tenferro_tensor::TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![1.0_f32; 4])
             .unwrap();
-    let plan = ConcreteEinsumPlan::prepare_typed([&typed_lhs, &typed_rhs], "ij,jk->ik").unwrap();
+    let plan = ConcreteEinsumPlan::prepare(
+        &[&typed_lhs, &typed_rhs],
+        "ij,jk->ik",
+        &tenferro_einsum::EinsumOptions::default(),
+    )
+    .unwrap();
     let mut backend = WrongDTypeSessionBackend;
 
     // The backend returns an F64 tensor regardless of the requested dtype, so
-    // the typed session surface must reject it through into_typed_result.
+    // the typed result's checked downcast rejects it as an internal error
+    // (#2552 §5.3: a failed checked downcast is `Error::Internal`).
     let in_session = {
         let session = &mut backend;
-        plan.execute_typed([&typed_lhs, &typed_rhs], session)
+        plan.execute(&[&typed_lhs, &typed_rhs], session)
     }
     .unwrap_err();
-    assert!(matches!(
-        in_session,
-        Error::Tensor(tenferro_tensor::Error::Validation {
-            op: "ConcreteEinsumPlan::execute",
-            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        })
-    ));
+    assert!(
+        matches!(in_session, tenferro_tensor::Error::Internal(_)),
+        "{in_session:?}"
+    );
 }

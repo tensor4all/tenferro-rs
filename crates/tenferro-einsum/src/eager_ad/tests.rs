@@ -13,9 +13,9 @@ fn einsum_with_engine(
     inputs: &[&EagerTensor],
     subscripts: &str,
 ) -> crate::Result<EagerTensor> {
-    inputs[0]
-        .runtime()
-        .with_eager_session(engine, |s| super::einsum(s, inputs, subscripts))
+    inputs[0].runtime().with_eager_session(engine, |s| {
+        super::einsum_spec_planned(s, inputs, crate::Spec::Text(subscripts), None)
+    })
 }
 
 /// One eager session per call on a fresh serial engine.

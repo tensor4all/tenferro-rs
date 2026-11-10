@@ -20,181 +20,28 @@ use crate::{
     Result, Subscripts, TensorDotAxes,
 };
 
-/// Backend-neutral einsum tracing methods for [`TraceContext`].
-///
-/// Each method records one semantic einsum extension operation. Contraction
-/// path materialization and provider selection remain compiler/runtime work.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_einsum::TraceContextEinsumExt;
-/// use tenferro_ops::dim_expr::DimExpr;
-/// use tenferro_runtime::program::ProgramInputSpec;
-/// use tenferro_runtime::TraceContext;
-/// use tenferro_tensor::DType;
-///
-/// let matrix = || {
-///     ProgramInputSpec::new(
-///         DType::F64,
-///         [DimExpr::Const(2), DimExpr::Const(2)],
-///     )
-/// };
-/// let mut trace = TraceContext::new();
-/// let lhs = trace.input(matrix()).unwrap();
-/// let rhs = trace.input(matrix()).unwrap();
-/// let output = trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
-/// let graph = trace.finish(&[output]).unwrap();
-/// assert_eq!(graph.program().operations().count(), 1);
-/// ```
-pub trait TraceContextEinsumExt {
-    /// Trace textual einsum notation using the default optimizer policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] for invalid input metadata, [`Error::Planning`]
-    /// for an invalid optimizer policy, or [`Error::Runtime`] when semantic
-    /// program construction fails.
-    fn einsum(&mut self, inputs: &[TraceValue], subscripts: &str) -> Result<TraceValue>;
-
-    /// Trace rank-unresolved notation using the default optimizer policy.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for invalid axis tokens,
-    /// [`Error::Validation`] for invalid input metadata, [`Error::Planning`]
-    /// for symbolic ellipsis or an invalid optimizer policy, or [`Error::Runtime`]
-    /// for graph-build failures.
-    fn einsum_notation(
-        &mut self,
-        inputs: &[TraceValue],
-        notation: &EinsumNotation,
-    ) -> Result<TraceValue>;
-
-    /// Trace parsed einsum notation using the default optimizer policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for invalid input metadata,
-    /// [`Error::Planning`] for an invalid optimizer policy, or
-    /// [`Error::Runtime`] when semantic program construction fails.
-    fn einsum_subscripts(
-        &mut self,
-        inputs: &[TraceValue],
-        subscripts: &EinsumSubscripts,
-    ) -> Result<TraceValue>;
-
-    /// Trace textual einsum notation with an explicit optimizer policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] for invalid input metadata, [`Error::Planning`]
-    /// for an invalid optimizer policy, or [`Error::Runtime`] when semantic
-    /// program construction fails.
-    fn einsum_with(
-        &mut self,
-        inputs: &[TraceValue],
-        subscripts: &str,
-        optimize: EinsumOptimize,
-    ) -> Result<TraceValue>;
-
-    /// Trace rank-unresolved notation with an explicit optimizer policy.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for invalid axis tokens,
-    /// [`Error::Validation`] for invalid input metadata, [`Error::Planning`]
-    /// for symbolic ellipsis or an invalid optimizer policy, or [`Error::Runtime`]
-    /// for graph-build failures.
-    fn einsum_notation_with(
-        &mut self,
-        inputs: &[TraceValue],
-        notation: &EinsumNotation,
-        optimize: EinsumOptimize,
-    ) -> Result<TraceValue>;
-
-    /// Trace parsed einsum notation with an explicit optimizer policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for invalid input metadata,
-    /// [`Error::Planning`] for an invalid optimizer policy, or
-    /// [`Error::Runtime`] when semantic program construction fails.
-    fn einsum_subscripts_with(
-        &mut self,
-        inputs: &[TraceValue],
-        subscripts: &EinsumSubscripts,
-        optimize: EinsumOptimize,
-    ) -> Result<TraceValue>;
-}
-
-impl TraceContextEinsumExt for TraceContext {
-    fn einsum(&mut self, inputs: &[TraceValue], subscripts: &str) -> Result<TraceValue> {
-        self.einsum_with(inputs, subscripts, EinsumOptimize::default())
-    }
-
-    fn einsum_notation(
-        &mut self,
-        inputs: &[TraceValue],
-        notation: &EinsumNotation,
-    ) -> Result<TraceValue> {
-        self.einsum_notation_with(inputs, notation, EinsumOptimize::default())
-    }
-
-    fn einsum_subscripts(
-        &mut self,
-        inputs: &[TraceValue],
-        subscripts: &EinsumSubscripts,
-    ) -> Result<TraceValue> {
-        self.einsum_subscripts_with(inputs, subscripts, EinsumOptimize::default())
-    }
-
-    fn einsum_with(
-        &mut self,
-        inputs: &[TraceValue],
-        subscripts: &str,
-        optimize: EinsumOptimize,
-    ) -> Result<TraceValue> {
-        let parsed = self
-            .with_extension_caches(|caches| cached_subscripts(caches, subscripts))
-            .map_err(semantic_trace_error)??;
-        self.einsum_notation_with(inputs, &parsed.notation, optimize)
-    }
-
-    fn einsum_notation_with(
-        &mut self,
-        inputs: &[TraceValue],
-        notation: &EinsumNotation,
-        optimize: EinsumOptimize,
-    ) -> Result<TraceValue> {
-        trace_context_einsum_notation_with(self, inputs, notation, optimize)
-    }
-
-    fn einsum_subscripts_with(
-        &mut self,
-        inputs: &[TraceValue],
-        subscripts: &EinsumSubscripts,
-        optimize: EinsumOptimize,
-    ) -> Result<TraceValue> {
-        trace_context_einsum_subscripts_with(self, inputs, subscripts, optimize, false)
+/// Traced einsum of a #2552 [`Spec`](crate::Spec) on trace values; the same
+/// recording as the former `TraceContext` entries.
+pub(crate) fn trace_einsum_spec(
+    trace: &TraceContext,
+    inputs: &[TraceValue],
+    spec: crate::Spec<'_>,
+    optimize: EinsumOptimize,
+) -> Result<TraceValue> {
+    let mut trace = trace.clone();
+    match spec {
+        crate::Spec::Text(text) => {
+            let parsed = trace
+                .with_extension_caches(|caches| cached_subscripts(caches, text))
+                .map_err(semantic_trace_error)??;
+            trace_context_einsum_notation_with(&mut trace, inputs, &parsed.notation, optimize)
+        }
+        crate::Spec::Notation(notation) => {
+            trace_context_einsum_notation_with(&mut trace, inputs, notation, optimize)
+        }
+        crate::Spec::Subscripts(subscripts) => {
+            trace_context_einsum_subscripts_with(&mut trace, inputs, subscripts, optimize, false)
+        }
     }
 }
 
@@ -336,30 +183,7 @@ fn semantic_trace_error(source: ProgramBuildError) -> Error {
     ))
 }
 
-/// Traced tensor contraction-sugar methods.
-pub trait TracedTensorEinsumExt {
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with rank, axis, duplicate-axis, or
-    /// contracted-dimension payloads for invalid axes, or [`Error::Runtime`]
-    /// for graph-build failures.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic contracted-dimension equalities are checked during compilation
-    /// or execution and retain the runtime
-    /// [`ErrorPhase`](tenferro_runtime::ErrorPhase).
-    fn tensordot(&self, rhs: &TracedTensor, axes: TensorDotAxes<'_>) -> Result<TracedTensor>;
-}
-
-impl TracedTensorEinsumExt for TracedTensor {
-    fn tensordot(&self, rhs: &TracedTensor, axes: TensorDotAxes<'_>) -> Result<TracedTensor> {
-        tensordot(self, rhs, axes)
-    }
-}
-
-fn tensordot(
+pub(crate) fn tensordot(
     lhs: &TracedTensor,
     rhs: &TracedTensor,
     axes: TensorDotAxes<'_>,

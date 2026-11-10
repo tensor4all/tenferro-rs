@@ -78,7 +78,7 @@ it to keep the first example short.
 ```rust
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 let trace = TraceContext::new();
 
@@ -109,7 +109,7 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 4.0, 6.0]);
 use tenferro_ad::AdContext;
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
 let trace = TraceContext::new();
 
 let mut compiler = GraphCompiler::new();

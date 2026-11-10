@@ -23,34 +23,27 @@ use crate::{
 /// # Examples
 ///
 /// ```
-/// use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
-/// use tenferro_ops::dim_expr::DimExpr;
-/// use tenferro_runtime::program::ProgramInputSpec;
-/// use tenferro_runtime::{DType, TraceContext};
+/// use tenferro_einsum::{EinsumOptimize, EinsumOptions, TracedEinsumOps};
+/// use tenferro_runtime::TraceContext;
 ///
-/// let mut trace = TraceContext::new();
-/// let lhs = trace.input(ProgramInputSpec::new(
-///     DType::F64,
-///     DimExpr::from_concrete(&[2, 3]),
-/// )).unwrap();
-/// let rhs = trace.input(ProgramInputSpec::new(
-///     DType::F64,
-///     DimExpr::from_concrete(&[3, 2]),
-/// )).unwrap();
-/// let out = trace.einsum_with(
-///     &[lhs, rhs],
-///     "ij,jk->ik",
-///     EinsumOptimize::False,
-/// )
-/// .unwrap();
+/// let trace = TraceContext::new();
+/// let lhs = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+/// let rhs = trace.from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
+/// let out = trace
+///     .einsum_with(
+///         &[&lhs, &rhs],
+///         "ij,jk->ik",
+///         &EinsumOptions::default().optimize(EinsumOptimize::False),
+///     )
+///     .unwrap();
 ///
-/// let graph = trace.finish(&[out]).unwrap();
+/// let graph = trace.finish(&[out.trace_value()]).unwrap();
 /// assert_eq!(
 ///     graph.program().value_metadata(graph.program().outputs()[0]).unwrap().shape().len(),
 ///     2,
 /// );
 /// ```
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum EinsumOptimize {
     /// Automatic optimization via omeco TreeSA.
     Auto(ContractionOptimizerOptions),

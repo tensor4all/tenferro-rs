@@ -1,7 +1,7 @@
 //! A tiny contraction stays on the calling thread without a pool entry.
 
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::TensorEinsumExt;
+use tenferro_einsum::EinsumOps;
 use tenferro_tensor::Tensor;
 
 fn matrix(shape: [usize; 2], data: &[f64]) -> Tensor {
@@ -48,7 +48,7 @@ fn tiny_einsum_uses_the_contraction_lane_inline_and_matches_serial() {
 
 #[test]
 fn contraction_families_match_serial_on_pooled_engines_at_one_two_and_four_threads() {
-    use tenferro_einsum::prelude::TensorTensordotExt;
+    use tenferro_einsum::prelude::TensordotOps;
     use tenferro_einsum::TensorDotAxes;
 
     let n = 32;

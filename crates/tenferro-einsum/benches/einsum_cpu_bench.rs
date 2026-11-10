@@ -5,7 +5,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::EagerSessionEinsumExt;
+use tenferro_einsum::EagerEinsumOps;
 use tenferro_runtime::Tensor;
 
 const BATCHES: &[usize] = &[16, 64, 256];

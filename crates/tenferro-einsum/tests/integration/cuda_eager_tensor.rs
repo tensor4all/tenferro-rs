@@ -1,7 +1,7 @@
 #![cfg(all(feature = "autodiff", feature = "cuda"))]
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_einsum::{EagerSessionEinsumExt, TraceContextEinsumExt};
+use tenferro_einsum::{EagerEinsumOps, TracedEinsumOps};
 use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
 use tenferro_runtime::program::ProgramInputSpec;
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
@@ -14,7 +14,7 @@ fn einsum(
     engine: &mut dyn tenferro_runtime::ExecutionEngine,
     inputs: &[&EagerTensor],
     subscripts: &str,
-) -> tenferro_einsum::Result<EagerTensor> {
+) -> tenferro_ad::Result<EagerTensor> {
     inputs[0]
         .runtime()
         .with_eager_session(engine, |s| s.einsum(inputs, subscripts))
@@ -25,10 +25,10 @@ fn einsum_notation(
     engine: &mut dyn tenferro_runtime::ExecutionEngine,
     inputs: &[&EagerTensor],
     notation: &EinsumNotation,
-) -> tenferro_einsum::Result<EagerTensor> {
+) -> tenferro_ad::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(engine, |s| s.einsum_notation(inputs, notation))
+        .with_eager_session(engine, |s| s.einsum(inputs, notation))
 }
 
 #[allow(dead_code)]
@@ -36,10 +36,10 @@ fn einsum_subscripts(
     engine: &mut dyn tenferro_runtime::ExecutionEngine,
     inputs: &[&EagerTensor],
     subscripts: &EinsumSubscripts,
-) -> tenferro_einsum::Result<EagerTensor> {
+) -> tenferro_ad::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(engine, |s| s.einsum_subscripts(inputs, subscripts))
+        .with_eager_session(engine, |s| s.einsum(inputs, subscripts))
 }
 
 #[allow(dead_code)]
@@ -48,7 +48,7 @@ fn tensordot(
     lhs: &EagerTensor,
     rhs: &EagerTensor,
     axes: TensorDotAxes<'_>,
-) -> tenferro_einsum::Result<EagerTensor> {
+) -> tenferro_ad::Result<EagerTensor> {
     lhs.runtime()
         .with_eager_session(engine, |s| s.tensordot(lhs, rhs, axes))
 }
@@ -99,20 +99,22 @@ fn cuda_einsum_ownership_copies_stay_resident() {
         ),
     ];
     for (expression, hosts, expected) in cases {
-        let mut trace = TraceContext::new();
+        let trace = TraceContext::new();
         let values = hosts
             .iter()
             .map(|host| {
-                trace
+                let value = trace
                     .input(ProgramInputSpec::new(
                         DType::F32,
                         host.shape().iter().copied().map(Into::into),
                     ))
-                    .unwrap()
+                    .unwrap();
+                trace.derive_tensor(value).unwrap()
             })
             .collect::<Vec<_>>();
-        let output = trace.einsum(&values, expression).unwrap();
-        let graph = trace.finish(&[output]).unwrap();
+        let refs = values.iter().collect::<Vec<_>>();
+        let output = trace.einsum(&refs, expression).unwrap();
+        let graph = trace.finish(&[output.trace_value()]).unwrap();
         let program = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
         let host_refs = hosts.iter().collect::<Vec<_>>();
         let cpu = super::support::run_one(&program, &host_refs).unwrap();

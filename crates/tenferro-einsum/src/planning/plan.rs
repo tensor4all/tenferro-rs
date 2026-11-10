@@ -8,7 +8,7 @@ use crate::planning::tree::ContractionTree;
 use crate::Result as EinsumResult;
 
 /// Pre-computed information for reducing axes unique to one operand.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReducePlan {
     /// Subscripts of the operand before reduction.
     pub(crate) original_subs: Vec<u32>,
@@ -23,7 +23,7 @@ pub(crate) struct ReducePlan {
 /// When an operand has repeated labels (e.g. `A[i,i,j]`), this plan
 /// describes how to extract the diagonal via one or more
 /// `Tensor::diagonal` stages before the main contraction.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DiagStage {
     /// Axis pairs to pass to `Tensor::diagonal` for this stage.
     pub(crate) axis_pairs: Vec<(usize, usize)>,
@@ -32,7 +32,7 @@ pub(crate) struct DiagStage {
 }
 
 /// Pre-computed multi-stage diagonal extraction plan for one operand.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DiagPlan {
     /// Sequential diagonal stages, each using only disjoint axis pairs.
     pub(crate) stages: Vec<DiagStage>,
@@ -41,7 +41,7 @@ pub(crate) struct DiagPlan {
 }
 
 /// Pre-computed GEMM decomposition plan for a pairwise contraction step.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GemmPlan {
     /// Pre-reduction plan for left operand (None if no reduction needed).
     pub(crate) reduce_a: Option<ReducePlan>,
@@ -93,7 +93,7 @@ pub(crate) struct GemmPlan {
 ///
 /// Every binary pattern is decomposed as:
 ///   diagonal extraction → pre-reduction → GEMM
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StepPlan {
     /// Diagonal extraction for left operand (None if no repeated labels).
     pub(crate) diag_a: Option<DiagPlan>,

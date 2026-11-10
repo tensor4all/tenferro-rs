@@ -4,7 +4,7 @@ use tenferro_runtime::error::{Error, ErrorPhase, Result};
 use tenferro_runtime::{DotGeneralConfig, TracedTensor};
 use tenferro_tensor::{ShapeMismatch, ValidationError};
 
-/// Axis specification for [`TracedTensorEinsumExt::tensordot`](crate::TracedTensorEinsumExt::tensordot)
+/// Axis specification for [`TensordotOps::tensordot`](crate::TensordotOps::tensordot)
 /// contraction sugar.
 ///
 /// `Count(n)` contracts the last `n` axes of the left operand with the first

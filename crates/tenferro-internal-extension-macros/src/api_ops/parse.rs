@@ -173,13 +173,16 @@ fn parse_layer(input: ParseStream<'_>) -> syn::Result<Layer> {
                     Receiver::SelfRef
                 } else {
                     let r: Ident = input.parse()?;
-                    if r != "session" {
-                        return Err(syn::Error::new_spanned(
-                            &r,
-                            "`receiver` must be `self` or `session`",
-                        ));
+                    match r.to_string().as_str() {
+                        "session" => Receiver::Session,
+                        "context" => Receiver::Context,
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                &r,
+                                "`receiver` must be `self`, `session` or `context`",
+                            ))
+                        }
                     }
-                    Receiver::Session
                 };
                 set(&mut receiver, &key, r)?;
             }
