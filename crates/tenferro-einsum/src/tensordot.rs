@@ -177,10 +177,7 @@ fn normalize_axis(axis: isize, rank: usize, _operand: &'static str) -> Result<us
         return Err(Error::validation(
             "tensordot",
             ErrorPhase::GraphBuild,
-            ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
-                rank,
-            },
+            ValidationError::AxisOutOfBounds { axis, rank },
         ));
     }
     usize::try_from(normalized).map_err(|_| {

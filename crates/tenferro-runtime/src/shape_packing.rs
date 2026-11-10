@@ -21,10 +21,7 @@ fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result
             Error::validation(
                 op,
                 ErrorPhase::GraphBuild,
-                ValidationError::AxisOutOfBounds {
-                    axis: axis.unsigned_abs(),
-                    rank,
-                },
+                ValidationError::AxisOutOfBounds { axis, rank },
             )
         })?
     };
@@ -32,10 +29,7 @@ fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result
         return Err(Error::validation(
             op,
             ErrorPhase::GraphBuild,
-            ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
-                rank,
-            },
+            ValidationError::AxisOutOfBounds { axis, rank },
         ));
     }
     Ok(normalized)
@@ -46,10 +40,7 @@ fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<u
         Error::validation(
             op,
             ErrorPhase::GraphBuild,
-            ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
-                rank,
-            },
+            ValidationError::AxisOutOfBounds { axis, rank },
         )
     })?;
     let normalized = if axis >= 0 {
@@ -62,7 +53,7 @@ fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<u
                     op,
                     ErrorPhase::GraphBuild,
                     ValidationError::AxisOutOfBounds {
-                        axis: axis.unsigned_abs(),
+                        axis,
                         rank: insert_rank,
                     },
                 )
@@ -73,7 +64,7 @@ fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<u
             op,
             ErrorPhase::GraphBuild,
             ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
+                axis,
                 rank: insert_rank,
             },
         ));
@@ -204,7 +195,10 @@ fn validate_axis_selection(
         return Err(Error::validation(
             op,
             ErrorPhase::GraphBuild,
-            ValidationError::AxisOutOfBounds { axis, rank },
+            ValidationError::AxisOutOfBounds {
+                axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                rank,
+            },
         ));
     }
     if seen[axis] {
@@ -665,7 +659,7 @@ impl TracedTensor {
                 "concatenate",
                 ErrorPhase::GraphBuild,
                 ValidationError::AxisOutOfBounds {
-                    axis,
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
                     rank: first.rank,
                 },
             ));

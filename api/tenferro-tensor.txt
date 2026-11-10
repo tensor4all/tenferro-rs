@@ -44,6 +44,14 @@ impl core::clone::Clone for tenferro_tensor::backend::ContractionScalar
 pub fn tenferro_tensor::backend::ContractionScalar::clone(&self) -> tenferro_tensor::backend::ContractionScalar
 impl core::cmp::PartialEq for tenferro_tensor::backend::ContractionScalar
 pub fn tenferro_tensor::backend::ContractionScalar::eq(&self, &tenferro_tensor::backend::ContractionScalar) -> bool
+impl core::convert::From<f32> for tenferro_tensor::backend::ContractionScalar
+pub fn tenferro_tensor::backend::ContractionScalar::from(f32) -> Self
+impl core::convert::From<f64> for tenferro_tensor::backend::ContractionScalar
+pub fn tenferro_tensor::backend::ContractionScalar::from(f64) -> Self
+impl core::convert::From<num_complex::Complex<f32>> for tenferro_tensor::backend::ContractionScalar
+pub fn tenferro_tensor::backend::ContractionScalar::from(tenferro_tensor::Complex32) -> Self
+impl core::convert::From<num_complex::Complex<f64>> for tenferro_tensor::backend::ContractionScalar
+pub fn tenferro_tensor::backend::ContractionScalar::from(tenferro_tensor::Complex64) -> Self
 impl core::fmt::Debug for tenferro_tensor::backend::ContractionScalar
 pub fn tenferro_tensor::backend::ContractionScalar::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_tensor::backend::ContractionScalar
@@ -552,6 +560,9 @@ pub fn tenferro_tensor::types::TensorRead<'a>::strides(&self) -> tenferro_tensor
 pub fn tenferro_tensor::types::TensorRead<'a>::tensor_view(self) -> core::option::Option<tenferro_tensor::types::TensorView<'a>>
 impl<'a> tenferro_tensor::types::TensorRead<'a>
 pub fn tenferro_tensor::types::TensorRead<'a>::try_host(self, &'static str) -> tenferro_tensor::error::Result<tenferro_tensor::types::TensorView<'a, tenferro_tensor::types::Host>>
+impl tenferro_tensor::AsView for tenferro_tensor::types::TensorRead<'_>
+pub type tenferro_tensor::types::TensorRead<'_>::Repr = tenferro_tensor::Erased
+pub fn tenferro_tensor::types::TensorRead<'_>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 impl<'a> core::clone::Clone for tenferro_tensor::types::TensorRead<'a>
 pub fn tenferro_tensor::types::TensorRead<'a>::clone(&self) -> tenferro_tensor::types::TensorRead<'a>
 impl<'a> core::fmt::Debug for tenferro_tensor::types::TensorRead<'a>
@@ -693,6 +704,11 @@ impl core::convert::From<tenferro_tensor::types::TypedTensor<num_complex::Comple
 pub fn tenferro_tensor::types::Tensor::from(tenferro_tensor::types::TypedTensor<num_complex::Complex<f64>>) -> Self
 impl core::fmt::Debug for tenferro_tensor::types::Tensor
 pub fn tenferro_tensor::types::Tensor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl tenferro_tensor::AsView for tenferro_tensor::types::Tensor
+pub type tenferro_tensor::types::Tensor::Repr = tenferro_tensor::Erased
+pub fn tenferro_tensor::types::Tensor::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+impl<'a> core::convert::From<&'a mut tenferro_tensor::types::Tensor> for tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::types::TensorWrite<'a>::from(&'a mut tenferro_tensor::types::Tensor) -> Self
 pub struct tenferro_tensor::prelude::TypedTensor<T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation>
 impl<R: tenferro_tensor_core::rank::TensorRank> tenferro_tensor::types::TypedTensor<f32, R>
 pub fn tenferro_tensor::types::TypedTensor<f32, R>::as_complex_view(&self) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensorView<'_, num_complex::Complex32, tenferro_tensor_core::rank::DynRank>>
@@ -840,6 +856,9 @@ impl<T, const N: usize> core::ops::index::IndexMut<[usize; N]> for tenferro_tens
 pub fn tenferro_tensor::types::TypedTensor<T, tenferro_tensor_core::rank::Rank<N>>::index_mut(&mut self, [usize; N]) -> &mut T
 impl<T: core::clone::Clone, R: tenferro_tensor_core::rank::TensorRank> core::clone::Clone for tenferro_tensor::types::TypedTensor<T, R, tenferro_tensor::types::Host>
 pub fn tenferro_tensor::types::TypedTensor<T, R, tenferro_tensor::types::Host>::clone(&self) -> Self
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::AsView for tenferro_tensor::types::TypedTensor<T>
+pub type tenferro_tensor::types::TypedTensor<T>::Repr = tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::types::TypedTensor<T>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 pub struct tenferro_tensor::prelude::TypedTensorView<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation>
 impl<'a, R: tenferro_tensor_core::rank::TensorRank> tenferro_tensor::types::TypedTensorView<'a, f32, R>
 pub fn tenferro_tensor::types::TypedTensorView<'a, f32, R>::as_complex_view(&self) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensorView<'a, num_complex::Complex32, tenferro_tensor_core::rank::DynRank>>
@@ -891,6 +910,9 @@ impl<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types
 pub fn tenferro_tensor::types::TypedTensorView<'a, T, R, D>::clone(&self) -> Self
 impl<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation> core::fmt::Debug for tenferro_tensor::types::TypedTensorView<'a, T, R, D>
 pub fn tenferro_tensor::types::TypedTensorView<'a, T, R, D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::AsView for tenferro_tensor::types::TypedTensorView<'_, T>
+pub type tenferro_tensor::types::TypedTensorView<'_, T>::Repr = tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::types::TypedTensorView<'_, T>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 pub trait tenferro_tensor::prelude::TensorScalar: core::marker::Copy + core::clone::Clone + core::marker::Send + core::marker::Sync + 'static + tenferro_tensor::types::private::Sealed
 pub type tenferro_tensor::prelude::TensorScalar::Real: tenferro_tensor::types::TensorScalar
 pub fn tenferro_tensor::prelude::TensorScalar::as_slice(&tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<&[Self]>
@@ -1127,6 +1149,9 @@ pub fn tenferro_tensor::types::TensorRead<'a>::strides(&self) -> tenferro_tensor
 pub fn tenferro_tensor::types::TensorRead<'a>::tensor_view(self) -> core::option::Option<tenferro_tensor::types::TensorView<'a>>
 impl<'a> tenferro_tensor::types::TensorRead<'a>
 pub fn tenferro_tensor::types::TensorRead<'a>::try_host(self, &'static str) -> tenferro_tensor::error::Result<tenferro_tensor::types::TensorView<'a, tenferro_tensor::types::Host>>
+impl tenferro_tensor::AsView for tenferro_tensor::types::TensorRead<'_>
+pub type tenferro_tensor::types::TensorRead<'_>::Repr = tenferro_tensor::Erased
+pub fn tenferro_tensor::types::TensorRead<'_>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 impl<'a> core::clone::Clone for tenferro_tensor::types::TensorRead<'a>
 pub fn tenferro_tensor::types::TensorRead<'a>::clone(&self) -> tenferro_tensor::types::TensorRead<'a>
 impl<'a> core::fmt::Debug for tenferro_tensor::types::TensorRead<'a>
@@ -1228,6 +1253,8 @@ impl<'a> tenferro_tensor::types::TensorViewMut<'a>
 pub fn tenferro_tensor::types::TensorViewMut<'a>::try_mut_host(self, &'static str) -> tenferro_tensor::error::Result<tenferro_tensor::types::TensorViewMut<'a, tenferro_tensor::types::Host>>
 impl<'a, D: core::fmt::Debug + tenferro_tensor::types::Representation> core::fmt::Debug for tenferro_tensor::types::TensorViewMut<'a, D>
 pub fn tenferro_tensor::types::TensorViewMut<'a, D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::convert::From<tenferro_tensor::types::TensorViewMut<'a>> for tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::types::TensorWrite<'a>::from(tenferro_tensor::types::TensorViewMut<'a>) -> Self
 pub enum tenferro_tensor::types::TensorWrite<'a>
 pub tenferro_tensor::types::TensorWrite::Tensor(&'a mut tenferro_tensor::types::Tensor)
 pub tenferro_tensor::types::TensorWrite::View(tenferro_tensor::types::TensorViewMut<'a>)
@@ -1246,6 +1273,10 @@ pub fn tenferro_tensor::types::TensorWrite<'a>::shape(&self) -> &[usize]
 pub fn tenferro_tensor::types::TensorWrite<'a>::strides(&self) -> tenferro_tensor::error::Result<alloc::vec::Vec<isize>>
 impl<'a> tenferro_tensor::types::TensorWrite<'a>
 pub fn tenferro_tensor::types::TensorWrite<'a>::try_mut_host(self, &'static str) -> tenferro_tensor::error::Result<tenferro_tensor::types::TensorViewMut<'a, tenferro_tensor::types::Host>>
+impl<'a> core::convert::From<&'a mut tenferro_tensor::types::Tensor> for tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::types::TensorWrite<'a>::from(&'a mut tenferro_tensor::types::Tensor) -> Self
+impl<'a> core::convert::From<tenferro_tensor::types::TensorViewMut<'a>> for tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::types::TensorWrite<'a>::from(tenferro_tensor::types::TensorViewMut<'a>) -> Self
 impl<'a> core::fmt::Debug for tenferro_tensor::types::TensorWrite<'a>
 pub fn tenferro_tensor::types::TensorWrite<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum tenferro_tensor::types::TypedTensorWrite<'a, T>
@@ -1504,6 +1535,11 @@ impl core::convert::From<tenferro_tensor::types::TypedTensor<num_complex::Comple
 pub fn tenferro_tensor::types::Tensor::from(tenferro_tensor::types::TypedTensor<num_complex::Complex<f64>>) -> Self
 impl core::fmt::Debug for tenferro_tensor::types::Tensor
 pub fn tenferro_tensor::types::Tensor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl tenferro_tensor::AsView for tenferro_tensor::types::Tensor
+pub type tenferro_tensor::types::Tensor::Repr = tenferro_tensor::Erased
+pub fn tenferro_tensor::types::Tensor::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+impl<'a> core::convert::From<&'a mut tenferro_tensor::types::Tensor> for tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::types::TensorWrite<'a>::from(&'a mut tenferro_tensor::types::Tensor) -> Self
 pub struct tenferro_tensor::types::TensorValue
 impl tenferro_tensor::types::TensorValue
 pub fn tenferro_tensor::types::TensorValue::as_tensor(&self) -> core::option::Option<&tenferro_tensor::types::Tensor>
@@ -1681,6 +1717,9 @@ impl<T, const N: usize> core::ops::index::IndexMut<[usize; N]> for tenferro_tens
 pub fn tenferro_tensor::types::TypedTensor<T, tenferro_tensor_core::rank::Rank<N>>::index_mut(&mut self, [usize; N]) -> &mut T
 impl<T: core::clone::Clone, R: tenferro_tensor_core::rank::TensorRank> core::clone::Clone for tenferro_tensor::types::TypedTensor<T, R, tenferro_tensor::types::Host>
 pub fn tenferro_tensor::types::TypedTensor<T, R, tenferro_tensor::types::Host>::clone(&self) -> Self
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::AsView for tenferro_tensor::types::TypedTensor<T>
+pub type tenferro_tensor::types::TypedTensor<T>::Repr = tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::types::TypedTensor<T>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 pub struct tenferro_tensor::types::TypedTensorView<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation>
 impl<'a, R: tenferro_tensor_core::rank::TensorRank> tenferro_tensor::types::TypedTensorView<'a, f32, R>
 pub fn tenferro_tensor::types::TypedTensorView<'a, f32, R>::as_complex_view(&self) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensorView<'a, num_complex::Complex32, tenferro_tensor_core::rank::DynRank>>
@@ -1732,6 +1771,9 @@ impl<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types
 pub fn tenferro_tensor::types::TypedTensorView<'a, T, R, D>::clone(&self) -> Self
 impl<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation> core::fmt::Debug for tenferro_tensor::types::TypedTensorView<'a, T, R, D>
 pub fn tenferro_tensor::types::TypedTensorView<'a, T, R, D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::AsView for tenferro_tensor::types::TypedTensorView<'_, T>
+pub type tenferro_tensor::types::TypedTensorView<'_, T>::Repr = tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::types::TypedTensorView<'_, T>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 pub struct tenferro_tensor::types::TypedTensorViewMut<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation>
 impl<'a, R: tenferro_tensor_core::rank::TensorRank> tenferro_tensor::types::TypedTensorViewMut<'a, f32, R>
 pub fn tenferro_tensor::types::TypedTensorViewMut<'a, f32, R>::as_complex_view_mut(&mut self) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensorViewMut<'_, num_complex::Complex32, tenferro_tensor_core::rank::DynRank>>
@@ -2051,6 +2093,24 @@ pub fn tenferro_tensor::config::CompareDir::fmt(&self, &mut core::fmt::Formatter
 impl core::hash::Hash for tenferro_tensor::config::CompareDir
 pub fn tenferro_tensor::config::CompareDir::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for tenferro_tensor::config::CompareDir
+pub enum tenferro_tensor::Conj
+pub tenferro_tensor::Conj::No
+pub tenferro_tensor::Conj::Yes
+impl tenferro_tensor::Conj
+pub fn tenferro_tensor::Conj::is_yes(self) -> bool
+impl core::clone::Clone for tenferro_tensor::Conj
+pub fn tenferro_tensor::Conj::clone(&self) -> tenferro_tensor::Conj
+impl core::cmp::Eq for tenferro_tensor::Conj
+impl core::cmp::PartialEq for tenferro_tensor::Conj
+pub fn tenferro_tensor::Conj::eq(&self, &tenferro_tensor::Conj) -> bool
+impl core::default::Default for tenferro_tensor::Conj
+pub fn tenferro_tensor::Conj::default() -> tenferro_tensor::Conj
+impl core::fmt::Debug for tenferro_tensor::Conj
+pub fn tenferro_tensor::Conj::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_tensor::Conj
+pub fn tenferro_tensor::Conj::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_tensor::Conj
+impl core::marker::StructuralPartialEq for tenferro_tensor::Conj
 pub enum tenferro_tensor::ContractionScalar
 pub tenferro_tensor::ContractionScalar::C32(num_complex::Complex32)
 pub tenferro_tensor::ContractionScalar::C64(num_complex::Complex64)
@@ -2064,6 +2124,14 @@ impl core::clone::Clone for tenferro_tensor::backend::ContractionScalar
 pub fn tenferro_tensor::backend::ContractionScalar::clone(&self) -> tenferro_tensor::backend::ContractionScalar
 impl core::cmp::PartialEq for tenferro_tensor::backend::ContractionScalar
 pub fn tenferro_tensor::backend::ContractionScalar::eq(&self, &tenferro_tensor::backend::ContractionScalar) -> bool
+impl core::convert::From<f32> for tenferro_tensor::backend::ContractionScalar
+pub fn tenferro_tensor::backend::ContractionScalar::from(f32) -> Self
+impl core::convert::From<f64> for tenferro_tensor::backend::ContractionScalar
+pub fn tenferro_tensor::backend::ContractionScalar::from(f64) -> Self
+impl core::convert::From<num_complex::Complex<f32>> for tenferro_tensor::backend::ContractionScalar
+pub fn tenferro_tensor::backend::ContractionScalar::from(tenferro_tensor::Complex32) -> Self
+impl core::convert::From<num_complex::Complex<f64>> for tenferro_tensor::backend::ContractionScalar
+pub fn tenferro_tensor::backend::ContractionScalar::from(tenferro_tensor::Complex64) -> Self
 impl core::fmt::Debug for tenferro_tensor::backend::ContractionScalar
 pub fn tenferro_tensor::backend::ContractionScalar::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_tensor::backend::ContractionScalar
@@ -2114,6 +2182,37 @@ impl core::fmt::Debug for tenferro_tensor::config::DegenerateDotKind
 pub fn tenferro_tensor::config::DegenerateDotKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_tensor::config::DegenerateDotKind
 impl core::marker::StructuralPartialEq for tenferro_tensor::config::DegenerateDotKind
+#[non_exhaustive] pub enum tenferro_tensor::Dest<W>
+pub tenferro_tensor::Dest::Accumulate(W)
+pub tenferro_tensor::Dest::Overwrite(W)
+pub tenferro_tensor::Dest::Scaled
+pub tenferro_tensor::Dest::Scaled::alpha: tenferro_tensor::backend::ContractionScalar
+pub tenferro_tensor::Dest::Scaled::beta: tenferro_tensor::backend::ContractionScalar
+pub tenferro_tensor::Dest::Scaled::out: W
+impl<W> tenferro_tensor::Dest<W>
+pub fn tenferro_tensor::Dest<W>::accumulate(impl core::convert::Into<W>) -> Self
+pub fn tenferro_tensor::Dest<W>::into_target(self) -> W
+pub fn tenferro_tensor::Dest<W>::mode(&self) -> tenferro_tensor::DestMode
+pub fn tenferro_tensor::Dest<W>::overwrite(impl core::convert::Into<W>) -> Self
+pub fn tenferro_tensor::Dest<W>::scaled(impl core::convert::Into<W>, impl core::convert::Into<tenferro_tensor::backend::ContractionScalar>, impl core::convert::Into<tenferro_tensor::backend::ContractionScalar>) -> Self
+pub fn tenferro_tensor::Dest<W>::target(&self) -> &W
+impl<W: core::fmt::Debug> core::fmt::Debug for tenferro_tensor::Dest<W>
+pub fn tenferro_tensor::Dest<W>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_tensor::DestMode
+pub tenferro_tensor::DestMode::Accumulate
+pub tenferro_tensor::DestMode::Overwrite
+pub tenferro_tensor::DestMode::Scaled
+impl core::clone::Clone for tenferro_tensor::DestMode
+pub fn tenferro_tensor::DestMode::clone(&self) -> tenferro_tensor::DestMode
+impl core::cmp::Eq for tenferro_tensor::DestMode
+impl core::cmp::PartialEq for tenferro_tensor::DestMode
+pub fn tenferro_tensor::DestMode::eq(&self, &tenferro_tensor::DestMode) -> bool
+impl core::fmt::Debug for tenferro_tensor::DestMode
+pub fn tenferro_tensor::DestMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_tensor::DestMode
+pub fn tenferro_tensor::DestMode::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_tensor::DestMode
+impl core::marker::StructuralPartialEq for tenferro_tensor::DestMode
 pub enum tenferro_tensor::DeviceKind
 pub tenferro_tensor::DeviceKind::Cpu
 pub tenferro_tensor::DeviceKind::Gpu(tenferro_tensor::types::GpuBackendKind)
@@ -2353,6 +2452,9 @@ pub fn tenferro_tensor::types::TensorRead<'a>::strides(&self) -> tenferro_tensor
 pub fn tenferro_tensor::types::TensorRead<'a>::tensor_view(self) -> core::option::Option<tenferro_tensor::types::TensorView<'a>>
 impl<'a> tenferro_tensor::types::TensorRead<'a>
 pub fn tenferro_tensor::types::TensorRead<'a>::try_host(self, &'static str) -> tenferro_tensor::error::Result<tenferro_tensor::types::TensorView<'a, tenferro_tensor::types::Host>>
+impl tenferro_tensor::AsView for tenferro_tensor::types::TensorRead<'_>
+pub type tenferro_tensor::types::TensorRead<'_>::Repr = tenferro_tensor::Erased
+pub fn tenferro_tensor::types::TensorRead<'_>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 impl<'a> core::clone::Clone for tenferro_tensor::types::TensorRead<'a>
 pub fn tenferro_tensor::types::TensorRead<'a>::clone(&self) -> tenferro_tensor::types::TensorRead<'a>
 impl<'a> core::fmt::Debug for tenferro_tensor::types::TensorRead<'a>
@@ -2454,6 +2556,8 @@ impl<'a> tenferro_tensor::types::TensorViewMut<'a>
 pub fn tenferro_tensor::types::TensorViewMut<'a>::try_mut_host(self, &'static str) -> tenferro_tensor::error::Result<tenferro_tensor::types::TensorViewMut<'a, tenferro_tensor::types::Host>>
 impl<'a, D: core::fmt::Debug + tenferro_tensor::types::Representation> core::fmt::Debug for tenferro_tensor::types::TensorViewMut<'a, D>
 pub fn tenferro_tensor::types::TensorViewMut<'a, D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::convert::From<tenferro_tensor::types::TensorViewMut<'a>> for tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::types::TensorWrite<'a>::from(tenferro_tensor::types::TensorViewMut<'a>) -> Self
 pub enum tenferro_tensor::TensorWrite<'a>
 pub tenferro_tensor::TensorWrite::Tensor(&'a mut tenferro_tensor::types::Tensor)
 pub tenferro_tensor::TensorWrite::View(tenferro_tensor::types::TensorViewMut<'a>)
@@ -2472,6 +2576,10 @@ pub fn tenferro_tensor::types::TensorWrite<'a>::shape(&self) -> &[usize]
 pub fn tenferro_tensor::types::TensorWrite<'a>::strides(&self) -> tenferro_tensor::error::Result<alloc::vec::Vec<isize>>
 impl<'a> tenferro_tensor::types::TensorWrite<'a>
 pub fn tenferro_tensor::types::TensorWrite<'a>::try_mut_host(self, &'static str) -> tenferro_tensor::error::Result<tenferro_tensor::types::TensorViewMut<'a, tenferro_tensor::types::Host>>
+impl<'a> core::convert::From<&'a mut tenferro_tensor::types::Tensor> for tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::types::TensorWrite<'a>::from(&'a mut tenferro_tensor::types::Tensor) -> Self
+impl<'a> core::convert::From<tenferro_tensor::types::TensorViewMut<'a>> for tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::types::TensorWrite<'a>::from(tenferro_tensor::types::TensorViewMut<'a>) -> Self
 impl<'a> core::fmt::Debug for tenferro_tensor::types::TensorWrite<'a>
 pub fn tenferro_tensor::types::TensorWrite<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum tenferro_tensor::TypedTensorWrite<'a, T>
@@ -2727,6 +2835,17 @@ impl core::fmt::Debug for tenferro_tensor::types::Dynamic
 pub fn tenferro_tensor::types::Dynamic::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl tenferro_tensor::types::Representation for tenferro_tensor::types::Dynamic
 pub fn tenferro_tensor::types::Dynamic::default_placement() -> tenferro_tensor::types::Placement
+pub struct tenferro_tensor::Erased
+impl core::clone::Clone for tenferro_tensor::Erased
+pub fn tenferro_tensor::Erased::clone(&self) -> tenferro_tensor::Erased
+impl core::fmt::Debug for tenferro_tensor::Erased
+pub fn tenferro_tensor::Erased::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_tensor::Erased
+impl tenferro_tensor::Repr for tenferro_tensor::Erased
+pub type tenferro_tensor::Erased::Value = tenferro_tensor::types::Tensor
+pub type tenferro_tensor::Erased::Write<'a> = tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::Erased::erase_write<'a>(Self::Write) -> tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::Erased::wrap_value(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub struct tenferro_tensor::ErasedHostTensor
 impl tenferro_tensor::ErasedHostTensor
 pub fn tenferro_tensor::ErasedHostTensor::as_dense<T: tenferro_tensor_core::scalar::Scalar>(&self) -> core::option::Option<(&[T], &[usize])>
@@ -2973,6 +3092,11 @@ impl core::convert::From<tenferro_tensor::types::TypedTensor<num_complex::Comple
 pub fn tenferro_tensor::types::Tensor::from(tenferro_tensor::types::TypedTensor<num_complex::Complex<f64>>) -> Self
 impl core::fmt::Debug for tenferro_tensor::types::Tensor
 pub fn tenferro_tensor::types::Tensor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl tenferro_tensor::AsView for tenferro_tensor::types::Tensor
+pub type tenferro_tensor::types::Tensor::Repr = tenferro_tensor::Erased
+pub fn tenferro_tensor::types::Tensor::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+impl<'a> core::convert::From<&'a mut tenferro_tensor::types::Tensor> for tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::types::TensorWrite<'a>::from(&'a mut tenferro_tensor::types::Tensor) -> Self
 pub struct tenferro_tensor::TensorValue
 impl tenferro_tensor::types::TensorValue
 pub fn tenferro_tensor::types::TensorValue::as_tensor(&self) -> core::option::Option<&tenferro_tensor::types::Tensor>
@@ -2994,6 +3118,19 @@ pub fn tenferro_tensor::types::TensorValue::transpose_view(self, impl core::conv
 pub fn tenferro_tensor::types::TensorValue::try_reshape_view(self, impl tenferro_tensor_core::IntoShapeVec) -> core::result::Result<Self, tenferro_tensor::types::TensorValueViewError>
 impl core::fmt::Debug for tenferro_tensor::types::TensorValue
 pub fn tenferro_tensor::types::TensorValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_tensor::Typed<T>(_)
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::Repr for tenferro_tensor::Typed<T>
+pub type tenferro_tensor::Typed<T>::Value = tenferro_tensor::types::TypedTensor<T>
+pub type tenferro_tensor::Typed<T>::Write<'a> = tenferro_tensor::types::TypedTensorWrite<'a, T>
+pub fn tenferro_tensor::Typed<T>::erase_write<'a>(Self::Write) -> tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::Typed<T>::wrap_value(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensor<T>>
+impl<T> core::clone::Clone for tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::Typed<T>::clone(&self) -> Self
+impl<T> core::default::Default for tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::Typed<T>::default() -> Self
+impl<T> core::fmt::Debug for tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::Typed<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T> core::marker::Copy for tenferro_tensor::Typed<T>
 pub struct tenferro_tensor::TypedTensor<T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation>
 impl<R: tenferro_tensor_core::rank::TensorRank> tenferro_tensor::types::TypedTensor<f32, R>
 pub fn tenferro_tensor::types::TypedTensor<f32, R>::as_complex_view(&self) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensorView<'_, num_complex::Complex32, tenferro_tensor_core::rank::DynRank>>
@@ -3141,6 +3278,9 @@ impl<T, const N: usize> core::ops::index::IndexMut<[usize; N]> for tenferro_tens
 pub fn tenferro_tensor::types::TypedTensor<T, tenferro_tensor_core::rank::Rank<N>>::index_mut(&mut self, [usize; N]) -> &mut T
 impl<T: core::clone::Clone, R: tenferro_tensor_core::rank::TensorRank> core::clone::Clone for tenferro_tensor::types::TypedTensor<T, R, tenferro_tensor::types::Host>
 pub fn tenferro_tensor::types::TypedTensor<T, R, tenferro_tensor::types::Host>::clone(&self) -> Self
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::AsView for tenferro_tensor::types::TypedTensor<T>
+pub type tenferro_tensor::types::TypedTensor<T>::Repr = tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::types::TypedTensor<T>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 pub struct tenferro_tensor::TypedTensorView<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation>
 impl<'a, R: tenferro_tensor_core::rank::TensorRank> tenferro_tensor::types::TypedTensorView<'a, f32, R>
 pub fn tenferro_tensor::types::TypedTensorView<'a, f32, R>::as_complex_view(&self) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensorView<'a, num_complex::Complex32, tenferro_tensor_core::rank::DynRank>>
@@ -3192,6 +3332,9 @@ impl<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types
 pub fn tenferro_tensor::types::TypedTensorView<'a, T, R, D>::clone(&self) -> Self
 impl<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation> core::fmt::Debug for tenferro_tensor::types::TypedTensorView<'a, T, R, D>
 pub fn tenferro_tensor::types::TypedTensorView<'a, T, R, D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::AsView for tenferro_tensor::types::TypedTensorView<'_, T>
+pub type tenferro_tensor::types::TypedTensorView<'_, T>::Repr = tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::types::TypedTensorView<'_, T>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 pub struct tenferro_tensor::TypedTensorViewMut<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types::Representation>
 impl<'a, R: tenferro_tensor_core::rank::TensorRank> tenferro_tensor::types::TypedTensorViewMut<'a, f32, R>
 pub fn tenferro_tensor::types::TypedTensorViewMut<'a, f32, R>::as_complex_view_mut(&mut self) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensorViewMut<'_, num_complex::Complex32, tenferro_tensor_core::rank::DynRank>>
@@ -3244,6 +3387,24 @@ impl<'a, T, R: tenferro_tensor_core::rank::TensorRank, D: tenferro_tensor::types
 pub fn tenferro_tensor::types::TypedTensorViewMut<'a, T, R, D>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a, T> core::convert::From<tenferro_tensor::types::TypedTensorViewMut<'a, T>> for tenferro_tensor::types::TypedTensorWrite<'a, T>
 pub fn tenferro_tensor::types::TypedTensorWrite<'a, T>::from(tenferro_tensor::types::TypedTensorViewMut<'a, T>) -> Self
+pub trait tenferro_tensor::AsView: tenferro_tensor::view::sealed::Sealed
+pub type tenferro_tensor::AsView::Repr: tenferro_tensor::Repr
+pub fn tenferro_tensor::AsView::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+impl tenferro_tensor::AsView for tenferro_tensor::types::Tensor
+pub type tenferro_tensor::types::Tensor::Repr = tenferro_tensor::Erased
+pub fn tenferro_tensor::types::Tensor::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+impl tenferro_tensor::AsView for tenferro_tensor::types::TensorRead<'_>
+pub type tenferro_tensor::types::TensorRead<'_>::Repr = tenferro_tensor::Erased
+pub fn tenferro_tensor::types::TensorRead<'_>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::AsView for tenferro_tensor::types::TypedTensor<T>
+pub type tenferro_tensor::types::TypedTensor<T>::Repr = tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::types::TypedTensor<T>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::AsView for tenferro_tensor::types::TypedTensorView<'_, T>
+pub type tenferro_tensor::types::TypedTensorView<'_, T>::Repr = tenferro_tensor::Typed<T>
+pub fn tenferro_tensor::types::TypedTensorView<'_, T>::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+impl<X: tenferro_tensor::AsView + ?core::marker::Sized> tenferro_tensor::AsView for &X
+pub type &X::Repr = <X as tenferro_tensor::AsView>::Repr
+pub fn &X::as_read(&self) -> tenferro_tensor::types::TensorRead<'_>
 pub trait tenferro_tensor::BackendStorage<T>: core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static
 pub fn tenferro_tensor::BackendStorage::allocation_domain(&self) -> core::option::Option<tenferro_tensor::types::AllocationDomainId>
 pub fn tenferro_tensor::BackendStorage::allocation_id(&self) -> core::option::Option<tenferro_tensor::types::AllocationId>
@@ -3270,6 +3431,21 @@ pub fn tenferro_tensor::Engine::native_engine(&mut self) -> core::option::Option
 pub fn tenferro_tensor::Engine::norm_squared_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_tensor::Engine::softmax_read(&mut self, tenferro_tensor::types::TensorRead<'_>, usize) -> tenferro_tensor::error::Result<core::option::Option<tenferro_tensor::types::Tensor>>
 pub fn tenferro_tensor::Engine::vdot_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub trait tenferro_tensor::Repr: tenferro_tensor::view::sealed::Sealed
+pub type tenferro_tensor::Repr::Value
+pub type tenferro_tensor::Repr::Write<'a>
+pub fn tenferro_tensor::Repr::erase_write<'a>(Self::Write) -> tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::Repr::wrap_value(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Value>
+impl tenferro_tensor::Repr for tenferro_tensor::Erased
+pub type tenferro_tensor::Erased::Value = tenferro_tensor::types::Tensor
+pub type tenferro_tensor::Erased::Write<'a> = tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::Erased::erase_write<'a>(Self::Write) -> tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::Erased::wrap_value(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl<T: tenferro_tensor::types::TensorScalar> tenferro_tensor::Repr for tenferro_tensor::Typed<T>
+pub type tenferro_tensor::Typed<T>::Value = tenferro_tensor::types::TypedTensor<T>
+pub type tenferro_tensor::Typed<T>::Write<'a> = tenferro_tensor::types::TypedTensorWrite<'a, T>
+pub fn tenferro_tensor::Typed<T>::erase_write<'a>(Self::Write) -> tenferro_tensor::types::TensorWrite<'a>
+pub fn tenferro_tensor::Typed<T>::wrap_value(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::TypedTensor<T>>
 pub trait tenferro_tensor::Representation: tenferro_tensor::types::representation_sealed::Sealed + 'static
 pub fn tenferro_tensor::Representation::default_placement() -> tenferro_tensor::types::Placement
 impl tenferro_tensor::types::Representation for tenferro_tensor::types::Dynamic

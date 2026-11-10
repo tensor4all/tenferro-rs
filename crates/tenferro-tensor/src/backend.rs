@@ -86,7 +86,10 @@ fn validate_axis_list(
         if axis >= rank {
             return Err(validation(
                 op,
-                ValidationError::AxisOutOfBounds { axis, rank },
+                ValidationError::AxisOutOfBounds {
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                    rank,
+                },
             ));
         }
         if axes[..index].contains(&axis) {

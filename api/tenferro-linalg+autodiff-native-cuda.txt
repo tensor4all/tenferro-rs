@@ -557,6 +557,22 @@ pub type tenferro_linalg::prelude::TypedFullPivLu<T> = (tenferro_tensor::types::
 pub type tenferro_linalg::prelude::TypedLu<T> = (tenferro_tensor::types::TypedTensor<T>, tenferro_tensor::types::TypedTensor<T>, tenferro_tensor::types::TypedTensor<T>, tenferro_tensor::types::TypedTensor<<T as tenferro_tensor::types::TensorScalar>::Real>)
 pub type tenferro_linalg::prelude::TypedRankRevealingQrResult<T> = tenferro_linalg::RankRevealingQrResult<tenferro_tensor::types::TypedTensor<T>, tenferro_tensor::types::TypedTensor<i64>>
 pub type tenferro_linalg::prelude::TypedSvd<T> = (tenferro_tensor::types::TypedTensor<T>, tenferro_tensor::types::TypedTensor<<T as tenferro_tensor::types::TensorScalar>::Real>, tenferro_tensor::types::TypedTensor<T>)
+pub enum tenferro_linalg::Diag
+pub tenferro_linalg::Diag::NonUnit
+pub tenferro_linalg::Diag::Unit
+impl core::clone::Clone for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::clone(&self) -> tenferro_linalg::Diag
+impl core::cmp::Eq for tenferro_linalg::Diag
+impl core::cmp::PartialEq for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::eq(&self, &tenferro_linalg::Diag) -> bool
+impl core::default::Default for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::default() -> tenferro_linalg::Diag
+impl core::fmt::Debug for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::Diag
+impl core::marker::StructuralPartialEq for tenferro_linalg::Diag
 pub enum tenferro_linalg::EighDriver
 pub tenferro_linalg::EighDriver::Auto
 pub tenferro_linalg::EighDriver::DivideAndConquer
@@ -602,6 +618,22 @@ impl core::fmt::Debug for tenferro_linalg::error::Error
 pub fn tenferro_linalg::error::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for tenferro_linalg::error::Error
 pub fn tenferro_linalg::error::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_linalg::KeepDims
+pub tenferro_linalg::KeepDims::No
+pub tenferro_linalg::KeepDims::Yes
+impl core::clone::Clone for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::clone(&self) -> tenferro_linalg::KeepDims
+impl core::cmp::Eq for tenferro_linalg::KeepDims
+impl core::cmp::PartialEq for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::eq(&self, &tenferro_linalg::KeepDims) -> bool
+impl core::default::Default for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::default() -> tenferro_linalg::KeepDims
+impl core::fmt::Debug for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::KeepDims
+impl core::marker::StructuralPartialEq for tenferro_linalg::KeepDims
 pub enum tenferro_linalg::LinalgAdOpKind
 pub tenferro_linalg::LinalgAdOpKind::Cholesky
 pub tenferro_linalg::LinalgAdOpKind::Eig
@@ -673,6 +705,23 @@ impl core::fmt::Debug for tenferro_linalg::LinalgAdRuleSupport
 pub fn tenferro_linalg::LinalgAdRuleSupport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_linalg::LinalgAdRuleSupport
 impl core::marker::StructuralPartialEq for tenferro_linalg::LinalgAdRuleSupport
+pub enum tenferro_linalg::MatOp
+pub tenferro_linalg::MatOp::Adjoint
+pub tenferro_linalg::MatOp::None
+pub tenferro_linalg::MatOp::Transpose
+impl core::clone::Clone for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::clone(&self) -> tenferro_linalg::MatOp
+impl core::cmp::Eq for tenferro_linalg::MatOp
+impl core::cmp::PartialEq for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::eq(&self, &tenferro_linalg::MatOp) -> bool
+impl core::default::Default for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::default() -> tenferro_linalg::MatOp
+impl core::fmt::Debug for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::MatOp
+impl core::marker::StructuralPartialEq for tenferro_linalg::MatOp
 pub enum tenferro_linalg::QrGauge
 pub tenferro_linalg::QrGauge::PositiveDiagonal
 pub tenferro_linalg::QrGauge::Raw
@@ -685,6 +734,22 @@ impl core::fmt::Debug for tenferro_linalg::QrGauge
 pub fn tenferro_linalg::QrGauge::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_linalg::QrGauge
 impl core::marker::StructuralPartialEq for tenferro_linalg::QrGauge
+pub enum tenferro_linalg::Side
+pub tenferro_linalg::Side::Left
+pub tenferro_linalg::Side::Right
+impl core::clone::Clone for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::clone(&self) -> tenferro_linalg::Side
+impl core::cmp::Eq for tenferro_linalg::Side
+impl core::cmp::PartialEq for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::eq(&self, &tenferro_linalg::Side) -> bool
+impl core::default::Default for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::default() -> tenferro_linalg::Side
+impl core::fmt::Debug for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::Side
+impl core::marker::StructuralPartialEq for tenferro_linalg::Side
 pub enum tenferro_linalg::SvdDriver
 pub tenferro_linalg::SvdDriver::Auto
 pub tenferro_linalg::SvdDriver::Jacobi
@@ -713,6 +778,36 @@ impl core::fmt::Debug for tenferro_linalg::SvdGauge
 pub fn tenferro_linalg::SvdGauge::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_linalg::SvdGauge
 impl core::marker::StructuralPartialEq for tenferro_linalg::SvdGauge
+pub enum tenferro_linalg::Uplo
+pub tenferro_linalg::Uplo::Lower
+pub tenferro_linalg::Uplo::Upper
+impl core::clone::Clone for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::clone(&self) -> tenferro_linalg::Uplo
+impl core::cmp::Eq for tenferro_linalg::Uplo
+impl core::cmp::PartialEq for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::eq(&self, &tenferro_linalg::Uplo) -> bool
+impl core::default::Default for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::default() -> tenferro_linalg::Uplo
+impl core::fmt::Debug for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::Uplo
+impl core::marker::StructuralPartialEq for tenferro_linalg::Uplo
+pub struct tenferro_linalg::Eig<C>
+pub tenferro_linalg::Eig::values: C
+pub tenferro_linalg::Eig::vectors: C
+impl<C: core::clone::Clone> core::clone::Clone for tenferro_linalg::Eig<C>
+pub fn tenferro_linalg::Eig<C>::clone(&self) -> tenferro_linalg::Eig<C>
+impl<C: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Eig<C>
+pub fn tenferro_linalg::Eig<C>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::Eigh<V, R>
+pub tenferro_linalg::Eigh::values: R
+pub tenferro_linalg::Eigh::vectors: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Eigh<V, R>
+pub fn tenferro_linalg::Eigh<V, R>::clone(&self) -> tenferro_linalg::Eigh<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Eigh<V, R>
+pub fn tenferro_linalg::Eigh<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_linalg::EighOptions
 pub tenferro_linalg::EighOptions::derivative_eps: f64
 pub tenferro_linalg::EighOptions::driver: tenferro_linalg::EighDriver
@@ -731,6 +826,16 @@ impl core::fmt::Debug for tenferro_linalg::EighOptions
 pub fn tenferro_linalg::EighOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_linalg::EighOptions
 impl core::marker::StructuralPartialEq for tenferro_linalg::EighOptions
+pub struct tenferro_linalg::FullPivLu<V, R>
+pub tenferro_linalg::FullPivLu::l: V
+pub tenferro_linalg::FullPivLu::p: V
+pub tenferro_linalg::FullPivLu::parity: R
+pub tenferro_linalg::FullPivLu::q: V
+pub tenferro_linalg::FullPivLu::u: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::FullPivLu<V, R>
+pub fn tenferro_linalg::FullPivLu<V, R>::clone(&self) -> tenferro_linalg::FullPivLu<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::FullPivLu<V, R>
+pub fn tenferro_linalg::FullPivLu<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_linalg::HouseholderQr<T>
 impl tenferro_linalg::HouseholderQr<tenferro_ad::eager::EagerTensor>
 pub fn tenferro_linalg::HouseholderQr<tenferro_ad::eager::EagerTensor>::append_columns(&self, &tenferro_ad::eager::EagerTensor, &mut tenferro_ad::eager::EagerSession<'_>) -> tenferro_runtime::error::Result<Self>
@@ -796,6 +901,22 @@ impl core::fmt::Debug for tenferro_linalg::LinalgAdSupport
 pub fn tenferro_linalg::LinalgAdSupport::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_linalg::LinalgAdSupport
 impl core::marker::StructuralPartialEq for tenferro_linalg::LinalgAdSupport
+pub struct tenferro_linalg::Lu<V, R>
+pub tenferro_linalg::Lu::l: V
+pub tenferro_linalg::Lu::p: V
+pub tenferro_linalg::Lu::parity: R
+pub tenferro_linalg::Lu::u: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Lu<V, R>
+pub fn tenferro_linalg::Lu<V, R>::clone(&self) -> tenferro_linalg::Lu<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Lu<V, R>
+pub fn tenferro_linalg::Lu<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::Qr<V>
+pub tenferro_linalg::Qr::q: V
+pub tenferro_linalg::Qr::r: V
+impl<V: core::clone::Clone> core::clone::Clone for tenferro_linalg::Qr<V>
+pub fn tenferro_linalg::Qr<V>::clone(&self) -> tenferro_linalg::Qr<V>
+impl<V: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Qr<V>
+pub fn tenferro_linalg::Qr<V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_linalg::QrOptions
 pub tenferro_linalg::QrOptions::gauge: tenferro_linalg::QrGauge
 impl tenferro_linalg::QrOptions
@@ -838,6 +959,21 @@ impl<T: core::clone::Clone, M: core::clone::Clone> core::clone::Clone for tenfer
 pub fn tenferro_linalg::RankRevealingQrResult<T, M>::clone(&self) -> tenferro_linalg::RankRevealingQrResult<T, M>
 impl<T: core::fmt::Debug, M: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::RankRevealingQrResult<T, M>
 pub fn tenferro_linalg::RankRevealingQrResult<T, M>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::Slogdet<V, R>
+pub tenferro_linalg::Slogdet::log_abs_det: R
+pub tenferro_linalg::Slogdet::sign: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Slogdet<V, R>
+pub fn tenferro_linalg::Slogdet<V, R>::clone(&self) -> tenferro_linalg::Slogdet<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Slogdet<V, R>
+pub fn tenferro_linalg::Slogdet<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::Svd<V, R>
+pub tenferro_linalg::Svd::s: R
+pub tenferro_linalg::Svd::u: V
+pub tenferro_linalg::Svd::vh: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Svd<V, R>
+pub fn tenferro_linalg::Svd<V, R>::clone(&self) -> tenferro_linalg::Svd<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Svd<V, R>
+pub fn tenferro_linalg::Svd<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_linalg::SvdOptions
 pub tenferro_linalg::SvdOptions::derivative_eps: f64
 pub tenferro_linalg::SvdOptions::driver: tenferro_linalg::SvdDriver

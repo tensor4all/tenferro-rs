@@ -10199,7 +10199,10 @@ fn slice_axis_specs(
     if axis >= rank {
         return Err(crate::Error::validation(
             op,
-            ValidationError::AxisOutOfBounds { axis, rank },
+            ValidationError::AxisOutOfBounds {
+                axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                rank,
+            },
         ));
     }
 

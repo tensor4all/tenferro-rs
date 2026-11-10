@@ -313,7 +313,7 @@ fn reduction_output_meta(
             return Err(graph_validation(
                 op,
                 ValidationError::AxisOutOfBounds {
-                    axis,
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
                     rank: tensor.rank,
                 },
             ));
@@ -344,7 +344,7 @@ fn validate_traced_axis(tensor: &TracedTensor, axis: usize, op: &'static str) ->
         return Err(graph_validation(
             op,
             ValidationError::AxisOutOfBounds {
-                axis,
+                axis: isize::try_from(axis).unwrap_or(isize::MAX),
                 rank: tensor.rank,
             },
         ));
@@ -358,7 +358,10 @@ fn validate_traced_axes(rank: usize, axes: &[usize], op: &'static str) -> Result
         if axis >= rank {
             return Err(graph_validation(
                 op,
-                ValidationError::AxisOutOfBounds { axis, rank },
+                ValidationError::AxisOutOfBounds {
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                    rank,
+                },
             ));
         }
         if seen[axis] {
@@ -398,7 +401,10 @@ fn validate_traced_perm(rank: usize, perm: &[usize], op: &'static str) -> Result
         if axis >= rank {
             return Err(graph_validation(
                 op,
-                ValidationError::AxisOutOfBounds { axis, rank },
+                ValidationError::AxisOutOfBounds {
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                    rank,
+                },
             ));
         }
         if seen[axis] {
@@ -453,7 +459,7 @@ fn validate_broadcast_in_dim_args(
             return Err(graph_validation(
                 op,
                 ValidationError::AxisOutOfBounds {
-                    axis: dim,
+                    axis: isize::try_from(dim).unwrap_or(isize::MAX),
                     rank: output_shape.len(),
                 },
             ));

@@ -107,7 +107,7 @@ pub enum ValidationError {
     #[error("rank mismatch: expected {expected}, actual {actual}")]
     RankMismatch { expected: usize, actual: usize },
     #[error("axis {axis} out of bounds for rank {rank}")]
-    AxisOutOfBounds { axis: usize, rank: usize },
+    AxisOutOfBounds { axis: isize, rank: usize },
     #[error("duplicate {role} axis {axis}")]
     DuplicateAxis { axis: usize, role: &'static str },
     #[error("axis {axis} appears in both {first_role} and {second_role}")]

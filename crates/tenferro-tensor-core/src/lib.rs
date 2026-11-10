@@ -22,6 +22,7 @@
 use num_complex::{Complex32, Complex64};
 use tinyvec::TinyVec;
 
+mod axis;
 mod error;
 mod layout;
 mod rank;
@@ -29,6 +30,7 @@ mod scalar;
 #[macro_use]
 mod scalar_set;
 
+pub use axis::{normalize_axes, normalize_axis, AxisVec};
 pub use error::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 pub use layout::TensorLayout;
 pub use rank::{DynRank, IntoRankShape, Rank, TensorRank};
@@ -377,7 +379,10 @@ fn validate_permutation(rank: usize, axes: &[usize]) -> Result<()> {
         let mut seen = 0u128;
         for &axis in axes {
             if axis >= rank {
-                return Err(ValidationError::AxisOutOfBounds { axis, rank });
+                return Err(ValidationError::AxisOutOfBounds {
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                    rank,
+                });
             }
             let bit = 1u128 << axis;
             if seen & bit != 0 {
@@ -393,7 +398,10 @@ fn validate_permutation(rank: usize, axes: &[usize]) -> Result<()> {
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(ValidationError::AxisOutOfBounds { axis, rank });
+            return Err(ValidationError::AxisOutOfBounds {
+                axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                rank,
+            });
         }
         if seen[axis] {
             return Err(ValidationError::DuplicateAxis {

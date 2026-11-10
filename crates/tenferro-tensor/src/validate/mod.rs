@@ -169,7 +169,10 @@ pub fn validate_permutation_axes(op: &'static str, rank: usize, perm: &[usize]) 
         if axis >= rank {
             return Err(Error::validation(
                 op,
-                ValidationError::AxisOutOfBounds { axis, rank },
+                ValidationError::AxisOutOfBounds {
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                    rank,
+                },
             ));
         }
         if seen[axis] {
@@ -213,7 +216,10 @@ pub fn validate_unique_axes(
         if axis >= rank {
             return Err(Error::validation(
                 op,
-                ValidationError::AxisOutOfBounds { axis, rank },
+                ValidationError::AxisOutOfBounds {
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                    rank,
+                },
             ));
         }
         if seen[axis] {

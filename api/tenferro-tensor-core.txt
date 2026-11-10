@@ -116,7 +116,7 @@ pub fn tenferro_tensor_core::ShapeMismatch::fmt(&self, &mut core::fmt::Formatter
 impl core::marker::StructuralPartialEq for tenferro_tensor_core::ShapeMismatch
 #[non_exhaustive] pub enum tenferro_tensor_core::ValidationError
 pub tenferro_tensor_core::ValidationError::AxisOutOfBounds
-pub tenferro_tensor_core::ValidationError::AxisOutOfBounds::axis: usize
+pub tenferro_tensor_core::ValidationError::AxisOutOfBounds::axis: isize
 pub tenferro_tensor_core::ValidationError::AxisOutOfBounds::rank: usize
 pub tenferro_tensor_core::ValidationError::AxisRoleConflict
 pub tenferro_tensor_core::ValidationError::AxisRoleConflict::axis: usize
@@ -416,8 +416,11 @@ pub type num_complex::Complex64::Real = f64
 pub fn num_complex::Complex64::dtype() -> tenferro_tensor_core::DType
 pub fn tenferro_tensor_core::ad_admission<T: tenferro_tensor_core::Scalar>(u32) -> core::result::Result<(), tenferro_tensor_core::AdAdmissionError>
 pub fn tenferro_tensor_core::col_major_strides(&[usize]) -> tenferro_tensor_core::Result<tenferro_tensor_core::StrideVec>
+pub fn tenferro_tensor_core::normalize_axes(&[isize], usize) -> core::result::Result<tinyvec::tinyvec::TinyVec<[usize; 8]>, tenferro_tensor_core::ValidationError>
+pub fn tenferro_tensor_core::normalize_axis(isize, usize) -> core::result::Result<usize, tenferro_tensor_core::ValidationError>
 pub fn tenferro_tensor_core::promote_in_set<Tag: core::marker::Copy + core::cmp::PartialEq>(&[Tag], &[tenferro_tensor_core::MemberSpec], Tag, Tag) -> Tag
 pub const fn tenferro_tensor_core::promote_specs(tenferro_tensor_core::MemberSpec, tenferro_tensor_core::MemberSpec) -> tenferro_tensor_core::MemberSpec
+pub type tenferro_tensor_core::AxisVec = tinyvec::tinyvec::TinyVec<[isize; 8]>
 pub type tenferro_tensor_core::Result<T> = core::result::Result<T, tenferro_tensor_core::ValidationError>
 pub type tenferro_tensor_core::ShapeVec = tinyvec::tinyvec::TinyVec<[usize; 8]>
 pub type tenferro_tensor_core::StrideVec = tinyvec::tinyvec::TinyVec<[isize; 8]>
