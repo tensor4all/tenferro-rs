@@ -142,6 +142,18 @@ sys.stderr.write("stub gh: unsupported command: " + " ".join(args) + "\\n")
 sys.exit(1)
 """.format(python=sys.executable, label=LABEL, page_limit=PAGE_LIMIT)
 
+# BSD grep (macOS) has no `-P`, so the reporter must not depend on it. This shim
+# takes the place of `grep` on PATH and rejects the GNU-only options exactly the
+# way Apple's grep does.
+BSD_GREP_SHIM = """#!/usr/bin/env bash
+for arg in "$@"; do
+  case "${arg}" in
+    -P|--perl-regexp|-oP|-Po) echo "grep: invalid option -- P" >&2; exit 2 ;;
+  esac
+done
+exec /bin/grep "$@"
+"""
+
 RUN_URL = "https://example.invalid/tensor4all/tenferro-rs/actions/runs/1234"
 
 
@@ -163,6 +175,9 @@ class OracleNightlyReporterTests(unittest.TestCase):
         stub = self.tmp / "gh"
         stub.write_text(STUB_GH, encoding="utf-8")
         stub.chmod(0o755)
+        bsd_grep = self.tmp / "grep"
+        bsd_grep.write_text(BSD_GREP_SHIM, encoding="utf-8")
+        bsd_grep.chmod(0o755)
         self.calls_path = self.tmp / "gh-calls.txt"
         self.labels_state = self.tmp / "labels.txt"
 
@@ -266,8 +281,10 @@ class OracleNightlyReporterTests(unittest.TestCase):
         )
 
     def test_case_ids_are_whole_tokens(self) -> None:
-        # A longer token (`…_0012`) and a `__`-prefixed op name must not be
-        # reported as a different, shorter case ID.
+        # A longer token (`…_0012`), a `__`-prefixed op name and a path component
+        # must not be reported as a different, shorter case ID. The `grep` on PATH
+        # here rejects GNU-only options, so a `grep -oP` implementation cannot pass
+        # on this test on any platform, macOS included.
         self.run_nightly("failed_replay_tokens", "issues-none.json")
 
         body = self.body_of("issue", "create")

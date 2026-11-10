@@ -26,13 +26,11 @@ PAGE_LIMIT=1000
 DB_ROOT="third_party/tensor-ad-oracles"
 TORCH_PIN="${DB_ROOT}/pyproject.toml"
 # Records are named <op>_<dtype>_<family>_<number>; the replay error strings carry
-# the failing record's case_id verbatim. The lookarounds keep a longer token
-# (`…_0012`), a `__`-prefixed op name and a path component (`…/cache_f64_x_001`)
-# from being reported as a case ID. The replay runner reports the first error it
-# collects, so this is the first failing record rather than an inventory. No
+# the failing record's case_id verbatim. The replay runner reports the first error
+# it collects, so this is the first failing record rather than an inventory. No
 # `__`-prefixed op is in the replay support table, so those report as "no case ID"
 # rather than being guessed at.
-CASE_ID_PATTERN='(?<![A-Za-z0-9_/])[A-Za-z][A-Za-z0-9_]*_(f32|f64|c64|c128)_[A-Za-z0-9_]+_[0-9]{3}(?![A-Za-z0-9_])'
+CASE_ID_RE='[A-Za-z][A-Za-z0-9_]*_(?:f32|f64|c64|c128)_[A-Za-z0-9_]+_[0-9]{3}'
 CASE_ID_LIMIT=20
 
 TRACKER_NUMBER=""
@@ -62,7 +60,20 @@ oracle_db_line() {
 extract_case_ids() {
   local log_file="${1:-}"
   [ -n "${log_file}" ] && [ -f "${log_file}" ] || return 0
-  grep -oP -- "${CASE_ID_PATTERN}" "${log_file}" 2>/dev/null | sort -u || true
+  # The whole-token test is done on the match offsets instead of with lookaround
+  # assertions: BSD grep (macOS) has no `grep -P`, and this must give the same
+  # answer with the `perl` that ships with macOS. A match must not be preceded by
+  # a word character or a path separator, so `…_0012`, a `__`-prefixed op name and
+  # a path component are not reported as a different case ID.
+  perl -ne '
+    my $re = qr/('"${CASE_ID_RE}"')/;
+    while (/$re/g) {
+      my ($id, $start, $end) = ($1, $-[1], $+[1]);
+      next if $start > 0 && substr($_, $start - 1, 1) =~ m{[A-Za-z0-9_/]};
+      next if $end < length($_) && substr($_, $end, 1) =~ m{[A-Za-z0-9_]};
+      print "$id\n";
+    }
+  ' < "${log_file}" | sort -u || true
 }
 
 case_id_section() {
