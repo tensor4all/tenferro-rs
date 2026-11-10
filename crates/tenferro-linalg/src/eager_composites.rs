@@ -7,6 +7,7 @@ use tenferro_runtime::ErrorPhase;
 use crate::eager_ext::EagerSessionLinalgExt;
 use crate::traced::real_values_dtype;
 use crate::validation::{ensure_float_or_complex, validate_lstsq, validate_square_matrix};
+use crate::{Diagonal, Side, Transpose, TriangularSolveOptions, Uplo};
 
 pub(crate) fn slogdet(
     session: &mut EagerSession<'_>,
@@ -65,7 +66,15 @@ pub(crate) fn lstsq(
     let q_conj = session.conj(&q)?;
     let qh = session.transpose(&q_conj, &matrix_transpose_perm(q.shape().len()))?;
     let qh_b = session.dot_general(&qh, b, trailing_batch_dot_config(qh.shape().len()))?;
-    session.triangular_solve(&r, &qh_b, true, false, false, false)
+    session.triangular_solve_with(
+        &r,
+        &qh_b,
+        &TriangularSolveOptions::default()
+            .with_side(Side::Left)
+            .with_uplo(Uplo::Upper)
+            .with_transpose(Transpose::NoTranspose)
+            .with_diagonal(Diagonal::NonUnit),
+    )
 }
 
 pub(crate) fn pinv(session: &mut EagerSession<'_>, a: &EagerTensor) -> Result<EagerTensor> {

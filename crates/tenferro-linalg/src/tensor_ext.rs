@@ -19,9 +19,19 @@ use tenferro_tensor::{
 };
 
 use crate::extension::{EighOptions, QrOptions, SvdOptions};
+use crate::input::{typed_output, LinalgInput};
+use crate::options::{ensure_full_svd_options, resolve_norm_axes};
 use crate::traced::real_values_dtype;
 use crate::validation::validate_square_matrix;
+use crate::{
+    CholeskyOptions, DetOptions, Diagonal, EigOptions, EigvalsOptions, EigvalshOptions,
+    FullPivLuOptions, FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, KeepDims, LuOptions,
+    NormOptions, PinvOptions, Side, SlogdetOptions, SolveOptions, SvdShape, SvdvalsOptions,
+    Transpose, TriangularSolveOptions, Uplo,
+};
 use crate::{LinalgBackend, RankRevealingQrOptions, RankRevealingQrResult};
+
+type Res<T> = tenferro_tensor::Result<T>;
 
 /// Scalar types supported by statically typed linear algebra methods: `f32`, `f64`,
 /// `Complex32` and `Complex64`.
@@ -331,156 +341,195 @@ pub type TypedEig<T> = (
     TypedTensor<<T as LinalgScalar>::Complex>,
 );
 
-/// Linear algebra methods for dtype-erased owned tensors.
+/// Linear algebra methods for every concrete input kind.
+///
+/// Implemented for owned [`Tensor`], borrowed [`TensorRead`] and typed
+/// [`TypedTensorView`](tenferro_tensor::TypedTensorView) through the blanket impl over
+/// [`LinalgInput`]. Each operation `op(exec)` is the short form of
+/// `op_with(&OpOptions::default(), exec)`. Outputs follow the input: dtype-erased input gives
+/// [`Tensor`], a typed view gives typed tensors (`Self::Real` for singular values, norms and
+/// parity, `Self::Complex` for general eigenvalues). Every method dispatches to the built-in
+/// CPU/CUDA execution sessions through an erased `&mut dyn Engine`.
 ///
 /// # Examples
 ///
 /// ```rust
 /// use tenferro_cpu::CpuEngine;
-/// use tenferro_linalg::TensorLinalgExt;
+/// use tenferro_linalg::{SvdOptions, SvdShape, TensorLinalgExt};
 /// use tenferro_tensor::Tensor;
 ///
 /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
 /// let mut host = tenferro_cpu::CpuEngine::serial();
 /// let (_u, singular_values, _vt) = a.svd(&mut host)?;
 /// assert_eq!(singular_values.as_slice::<f64>()?, &[4.0, 2.0]);
+/// let (u, _s, _vt) = a.svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)?;
+/// assert_eq!(u.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub trait TensorLinalgExt {
+pub trait TensorLinalgExt: LinalgInput {
+    /// Compute the singular value decomposition `(U, S, Vt)`.
+    ///
+    /// Short form of [`Self::svd_with`] with default options.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation, unsupported-backend, numerical, or output-contract errors.
+    ///
+    /// As [`Self::svd_with`].
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (_u, s, _vt) = a.svd(&mut host)?;
+    /// let r = a.svd(&mut host)?;
+    /// let (_u, s, _vt) = r;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
-    /// Compute singular values without allocating singular-vector outputs.
+    fn svd(&self, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Real, Self::Out)> {
+        self.svd_with(&SvdOptions::default(), exec)
+    }
+
+    /// Compute the singular value decomposition `(U, S, Vt)`.
+    ///
+    /// `SvdShape::Thin` is the thin decomposition and honours the gauge, driver and
+    /// `derivative_eps` of the options. `SvdShape::Full` returns `U` shaped `m x m` and `Vt`
+    /// shaped `n x n`, so the trailing `Vt` rows span the input's right nullspace and the
+    /// trailing `U` columns span its left nullspace; it combines only with the default gauge,
+    /// driver and `derivative_eps`, and the thin decomposition is never substituted for it.
     ///
     /// # Errors
-    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected
-    /// backend has no values-only capability, rather than silently computing a
-    /// full decomposition and discarding its vectors.
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected backend does not support the operation,
+    /// plus validation, numerical, or output-contract errors.
     ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::Tensor;
-    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let values = a.svdvals(&mut host)?;
-    /// assert_eq!(values.as_slice::<f64>()?, &[4.0, 2.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    fn svdvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
-    /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation errors for matrix metadata or options, plus SVD backend errors.
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::{SvdOptions, TensorLinalgExt};
-    /// # use tenferro_tensor::Tensor;
-    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (_u, s, _vt) = { a.svd_with_options(SvdOptions::default(), &mut host) }?;
-    /// assert_eq!(s.shape(), &[2]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    fn svd_with_options(
-        &self,
-        options: SvdOptions,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
-    /// Compute the full-matrices SVD `(U, S, Vt)` with `U` shaped `m x m` and
-    /// `Vt` shaped `n x n`, so the trailing `Vt` rows span the input's right
-    /// nullspace and the trailing `U` columns span its left nullspace.
-    ///
-    /// # Errors
-    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected
-    /// backend or CPU provider has no full-matrices kernel; the thin
-    /// decomposition is never substituted for it. Returns validation errors for
-    /// an unsupported rank or dtype, plus backend, numerical, or
-    /// output-contract errors.
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{SvdOptions, SvdShape, TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (u, s, vt) = a.svd_full(&mut host)?;
+    /// let r = a.svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)?;
+    /// let (u, s, vt) = r;
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(s.shape(), &[1]);
     /// assert_eq!(vt.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd_full(
+    fn svd_with(
         &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
+        options: &SvdOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<(Self::Out, Self::Real, Self::Out)> {
+        ensure_full_svd_options("svd", options)?;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "svd", |backend| {
+            three(
+                match options.shape {
+                    SvdShape::Thin => backend.svd_with_options_read(a, *options)?,
+                    SvdShape::Full => backend.svd_full_read(a)?,
+                },
+                "svd",
+            )
+        })?;
+        Ok((
+            Self::linalg_out(outs.0)?,
+            Self::linalg_real(outs.1)?,
+            Self::linalg_out(outs.2)?,
+        ))
+    }
+
+    /// Compute singular values without allocating singular-vector outputs.
+    ///
+    /// Short form of [`Self::svdvals_with`] with default options.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation, unsupported-backend, numerical, or output-contract errors.
+    ///
+    /// As [`Self::svdvals_with`].
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
-    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (q, r) = a.qr(&mut host)?;
-    /// assert_eq!(q.shape(), &[2, 2]);
-    /// assert_eq!(r.shape(), &[2, 2]);
+    /// let r = a.svdvals(&mut host)?;
+    /// assert_eq!(r.as_slice::<f64>()?, &[4.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    fn svdvals(&self, exec: &mut dyn Engine) -> Res<Self::Real> {
+        self.svdvals_with(&SvdvalsOptions::default(), exec)
+    }
 
-    /// Initialize opaque compact Householder QR state.
+    /// Compute singular values without allocating singular-vector outputs.
     ///
     /// # Errors
     ///
-    /// Returns validation errors for non-matrix or unsupported-dtype input and
-    /// typed provider errors when compact QR is unavailable.
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected backend has no values-only
+    /// capability, rather than silently computing a full decomposition and discarding its vectors.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_linalg::TensorLinalgExt;
-    /// use tenferro_tensor::Tensor;
-    /// let a = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
-    /// let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let qr = a.householder_qr(&mut host)?;
-    /// assert!(format!("{qr:?}").starts_with("HouseholderQr"));
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{SvdvalsOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.svdvals_with(&SvdvalsOptions::default(), &mut host)?;
+    /// assert_eq!(r.as_slice::<f64>()?, &[4.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn householder_qr(
-        &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<crate::HouseholderQr<Tensor>>;
+    fn svdvals_with(&self, options: &SvdvalsOptions, exec: &mut dyn Engine) -> Res<Self::Real> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "svdvals", |backend| backend.svd_values_read(a))?;
+        Self::linalg_real(outs)
+    }
 
-    /// The CUDA provider does not read the cuSOLVER `geqrf`/`orgqr` status
-    /// flags, so forward QR reports neither a vendor parameter error nor a
-    /// rank deficiency: shapes and dtypes are validated up front, and a
-    /// rank-deficient input still yields its valid factors.
+    /// Compute the thin QR decomposition `(Q, R)`.
+    ///
+    /// Short form of [`Self::qr_with`] with default options.
     ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation errors for matrix metadata or options, plus QR backend errors.
+    ///
+    /// As [`Self::qr_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.qr(&mut host)?;
+    /// let (q, r) = r;
+    /// assert_eq!(q.shape(), &[2, 2]);
+    /// assert_eq!(r.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn qr(&self, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Out)> {
+        self.qr_with(&QrOptions::default(), exec)
+    }
+
+    /// Compute the thin QR decomposition `(Q, R)`.
+    ///
+    /// The CUDA provider does not read the cuSOLVER `geqrf`/`orgqr` status flags, so forward QR
+    /// reports neither a vendor parameter error nor a rank deficiency: shapes and dtypes are
+    /// validated up front, and a rank-deficient input still yields its valid factors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected backend does not support the operation,
+    /// plus validation, numerical, or output-contract errors.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -489,22 +538,120 @@ pub trait TensorLinalgExt {
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (q, r) = { a.qr_with_options(QrOptions::default(), &mut host) }?;
+    /// let r = a.qr_with(&QrOptions::default(), &mut host)?;
+    /// let (q, r) = r;
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr_with_options(
+    fn qr_with(&self, options: &QrOptions, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Out)> {
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "qr", |backend| {
+            two(backend.qr_with_options_read(a, *options)?, "qr")
+        })?;
+        Ok((Self::linalg_out(outs.0)?, Self::linalg_out(outs.1)?))
+    }
+
+    /// Initialize opaque compact Householder QR state.
+    ///
+    /// Short form of [`Self::householder_qr_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::householder_qr_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.householder_qr(&mut host)?;
+    /// assert!(format!("{r:?}").starts_with("HouseholderQr"));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn householder_qr(&self, exec: &mut dyn Engine) -> Res<crate::HouseholderQr<Tensor>> {
+        self.householder_qr_with(&HouseholderQrOptions::default(), exec)
+    }
+
+    /// Initialize opaque compact Householder QR state.
+    ///
+    /// The state is always a `HouseholderQr<Tensor>`, also for a typed input.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation errors for non-matrix or unsupported-dtype input and typed provider errors
+    /// when compact QR is unavailable.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{HouseholderQrOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.householder_qr_with(&HouseholderQrOptions::default(), &mut host)?;
+    /// assert!(format!("{r:?}").starts_with("HouseholderQr"));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn householder_qr_with(
         &self,
-        options: QrOptions,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+        options: &HouseholderQrOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<crate::HouseholderQr<Tensor>> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "householder_qr", |backend| {
+            match a.as_tensor() {
+                Some(t) => backend.householder_qr(t),
+                None => {
+                    let shape = a.shape().to_vec();
+                    let compact = backend.reshape_read(a, &shape)?;
+                    backend.householder_qr(&compact)
+                }
+            }
+            .map(crate::HouseholderQr::from_backend)
+        })?;
+        Ok(outs)
+    }
+
+    /// Compute column-pivoted rank-revealing QR with fixed-shape tensor metadata.
+    ///
+    /// Short form of [`Self::rank_revealing_qr_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::rank_revealing_qr_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.rank_revealing_qr(&mut host)?;
+    /// assert_eq!(r.rank.as_slice::<i64>()?, &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn rank_revealing_qr(
+        &self,
+        exec: &mut dyn Engine,
+    ) -> Res<RankRevealingQrResult<Self::Out, Self::Index>> {
+        self.rank_revealing_qr_with(&RankRevealingQrOptions::default(), exec)
+    }
+
     /// Compute column-pivoted rank-revealing QR with fixed-shape tensor metadata.
     ///
     /// # Errors
-    /// Returns validation errors for rank, dtype, or invalid tolerances;
-    /// numerical failure for non-finite input or diagonal values; and explicit
-    /// unsupported/backend errors when the selected provider cannot execute RRQR.
+    ///
+    /// Returns validation errors for rank, dtype, or invalid tolerances; numerical failure for
+    /// non-finite input or diagonal values; and explicit unsupported/backend errors when the selected
+    /// provider cannot execute RRQR.
     ///
     /// # Examples
     ///
@@ -514,51 +661,110 @@ pub trait TensorLinalgExt {
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let result = {
-    ///     a.rank_revealing_qr(RankRevealingQrOptions::default().with_rtol(1e-12), &mut host)
-    /// }?;
-    /// assert_eq!(result.column_permutation.shape(), &[2]);
-    /// assert_eq!(result.rank.shape(), &[] as &[usize]);
+    /// let r = a.rank_revealing_qr_with(&RankRevealingQrOptions::default().with_rtol(1e-12), &mut host)?;
+    /// assert_eq!(r.column_permutation.shape(), &[2]);
+    /// assert_eq!(r.rank.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn rank_revealing_qr(
+    fn rank_revealing_qr_with(
         &self,
-        options: RankRevealingQrOptions,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<RankRevealingQrResult<Tensor>>;
+        options: &RankRevealingQrOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<RankRevealingQrResult<Self::Out, Self::Index>> {
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "rank_revealing_qr", |backend| {
+            rank_revealing_qr_result(backend.rank_revealing_qr_read(a, *options)?)
+        })?;
+        Ok(RankRevealingQrResult {
+            q: Self::linalg_out(outs.q)?,
+            r: Self::linalg_out(outs.r)?,
+            column_permutation: Self::linalg_index(outs.column_permutation)?,
+            rank: Self::linalg_index(outs.rank)?,
+        })
+    }
+
+    /// Compute the partial-pivot LU decomposition `(P, L, U, parity)`.
+    ///
+    /// Short form of [`Self::lu_with`] with default options.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation, unsupported-backend, numerical, or output-contract errors.
+    ///
+    /// As [`Self::lu_with`].
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (_p, l, u, parity) = a.lu(&mut host)?;
+    /// let r = a.lu(&mut host)?;
+    /// let (_p, l, u, parity) = r;
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn lu(
-        &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor)>;
+    fn lu(&self, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Out, Self::Out, Self::Real)> {
+        self.lu_with(&LuOptions::default(), exec)
+    }
+
+    /// Compute the partial-pivot LU decomposition `(P, L, U, parity)`.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation, unsupported-backend, numerical, or output-contract errors.
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected backend does not support the operation,
+    /// plus validation, numerical, or output-contract errors.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{LuOptions, TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (p, _l, _u, q, parity) = a.full_piv_lu(&mut host)?;
+    /// let r = a.lu_with(&LuOptions::default(), &mut host)?;
+    /// let (_p, l, u, _parity) = r;
+    /// assert_eq!(l.shape(), &[2, 2]);
+    /// assert_eq!(u.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn lu_with(
+        &self,
+        options: &LuOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<(Self::Out, Self::Out, Self::Out, Self::Real)> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "lu", |backend| four(backend.lu_read(a)?, "lu"))?;
+        Ok((
+            Self::linalg_out(outs.0)?,
+            Self::linalg_out(outs.1)?,
+            Self::linalg_out(outs.2)?,
+            Self::linalg_real(outs.3)?,
+        ))
+    }
+
+    /// Compute the complete-pivot LU decomposition `(P, L, U, Q, parity)`.
+    ///
+    /// Short form of [`Self::full_piv_lu_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::full_piv_lu_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.full_piv_lu(&mut host)?;
+    /// let (p, _l, _u, q, parity) = r;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[] as &[usize]);
@@ -566,88 +772,299 @@ pub trait TensorLinalgExt {
     /// ```
     fn full_piv_lu(
         &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)>;
+        exec: &mut dyn Engine,
+    ) -> Res<(Self::Out, Self::Out, Self::Out, Self::Out, Self::Real)> {
+        self.full_piv_lu_with(&FullPivLuOptions::default(), exec)
+    }
+
+    /// Compute the complete-pivot LU decomposition `(P, L, U, Q, parity)`.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation errors for incompatible inputs or a backend/singular-system error.
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected backend does not support the operation,
+    /// plus validation, numerical, or output-contract errors.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{FullPivLuOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.full_piv_lu_with(&FullPivLuOptions::default(), &mut host)?;
+    /// let (p, _l, _u, q, _parity) = r;
+    /// assert_eq!(p.shape(), &[2, 2]);
+    /// assert_eq!(q.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn full_piv_lu_with(
+        &self,
+        options: &FullPivLuOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<(Self::Out, Self::Out, Self::Out, Self::Out, Self::Real)> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "full_piv_lu", |backend| {
+            five(backend.full_piv_lu_read(a)?, "full_piv_lu")
+        })?;
+        Ok((
+            Self::linalg_out(outs.0)?,
+            Self::linalg_out(outs.1)?,
+            Self::linalg_out(outs.2)?,
+            Self::linalg_out(outs.3)?,
+            Self::linalg_real(outs.4)?,
+        ))
+    }
+
+    /// Solve `A X = B` through the complete-pivot LU decomposition.
+    ///
+    /// Short form of [`Self::full_piv_lu_solve_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::full_piv_lu_solve_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let x = a.full_piv_lu_solve(&b, &mut host)?;
-    /// assert_eq!(x.shape(), &[2, 1]);
+    /// let r = a.full_piv_lu_solve(&b, &mut host)?;
+    /// assert_eq!(r.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn full_piv_lu_solve(
-        &self,
-        b: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
-    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
-    /// the forward solve path, so it performs no per-call non-singularity check
-    /// and issues no host round trip. An exactly singular input is left to the
-    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
-    /// still report their own exactly singular factor as `Error::Singular`.
+    fn full_piv_lu_solve<B: LinalgInput>(&self, b: &B, exec: &mut dyn Engine) -> Res<Self::Out> {
+        self.full_piv_lu_solve_with(b, &FullPivLuSolveOptions::default(), exec)
+    }
+
+    /// Solve `A X = B` through the complete-pivot LU decomposition.
+    ///
+    /// A rank-deficient system (a pivot at or below `eps * max|pivot|`) is rejected by the backend solve.
     ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    ///
     /// Returns validation errors for incompatible inputs or a backend/singular-system error.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{FullPivLuSolveOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0])?;
+    /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![-1.0_f64, 5.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.full_piv_lu_solve_with(&b, &FullPivLuSolveOptions::default(), &mut host)?;
+    /// assert_eq!(r.shape(), &[2, 1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn full_piv_lu_solve_with<B: LinalgInput>(
+        &self,
+        b: &B,
+        options: &FullPivLuSolveOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<Self::Out> {
+        let _ = options;
+        let a = self.linalg_read();
+        let b = b.linalg_read();
+        let outs = with_linalg_backend(exec, "full_piv_lu_solve", |backend| {
+            full_piv_lu_solve_impl(a, b, backend)
+        })?;
+        Self::linalg_out(outs)
+    }
+
+    /// Solve `A X = B`.
+    ///
+    /// Short form of [`Self::solve_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::solve_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let x = a.solve(&b, &mut host)?;
-    /// assert_eq!(x.as_slice::<f64>()?, &[2.0, 2.0]);
+    /// let r = a.solve(&b, &mut host)?;
+    /// assert_eq!(r.as_slice::<f64>()?, &[2.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn solve(&self, b: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
+    fn solve<B: LinalgInput>(&self, b: &B, exec: &mut dyn Engine) -> Res<Self::Out> {
+        self.solve_with(b, &SolveOptions::default(), exec)
+    }
+
+    /// Solve `A X = B`.
+    ///
+    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on the forward solve
+    /// path, so it performs no per-call non-singularity check and issues no host round trip. An
+    /// exactly singular input is left to the caller's verification, as in `torch.linalg.solve`. CPU
+    /// providers may still report their own exactly singular factor as `Error::Singular`.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation errors for a non-square input or backend/numerical errors.
+    ///
+    /// Returns validation errors for incompatible inputs or a backend/singular-system error.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{SolveOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.solve_with(&b, &SolveOptions::default(), &mut host)?;
+    /// assert_eq!(r.as_slice::<f64>()?, &[2.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn solve_with<B: LinalgInput>(
+        &self,
+        b: &B,
+        options: &SolveOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<Self::Out> {
+        let _ = options;
+        let a = self.linalg_read();
+        let b = b.linalg_read();
+        let outs = with_linalg_backend(exec, "solve", |backend| backend.solve_read(a, b))?;
+        Self::linalg_out(outs)
+    }
+
+    /// Solve `A X = B` into a caller-owned destination without allocating the result at the
+    /// public API boundary.
+    ///
+    /// Backends with a native path may write directly into a compatible target; otherwise the
+    /// ordinary solve plus copy behaviour applies. The CUDA singularity note of
+    /// [`Self::solve_with`] applies here too.
+    ///
+    /// # Errors
+    ///
+    /// Returns `tenferro_tensor_core::ShapeMismatch` or
+    /// `tenferro_tensor_core::ValidationError::DTypeMismatch` for incompatible destination
+    /// metadata, `tenferro_tensor_core::ValidationError::InvalidArgument` for aliasing or
+    /// placement violations, `Error::Unsupported` when the extension implementation or provider
+    /// is unavailable, and `Error::Singular` for a singular system.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{SolveOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::{Tensor, TensorWrite};
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0])?;
+    /// # let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// a.solve_into(&b, &SolveOptions::default(), &mut host, TensorWrite::from_tensor(&mut out))?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[2.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn solve_into<B: LinalgInput>(
+        &self,
+        b: &B,
+        options: &SolveOptions,
+        exec: &mut dyn Engine,
+        out: TensorWrite<'_>,
+    ) -> Res<()> {
+        let _ = options;
+        let a = self.linalg_read();
+        let b = b.linalg_read();
+        with_linalg_backend(exec, "solve_into", |backend| {
+            backend.solve_read_into(a, b, out)
+        })
+    }
+
+    /// Compute the lower Cholesky factor.
+    ///
+    /// Short form of [`Self::cholesky_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::cholesky_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let l = a.cholesky(&mut host)?;
-    /// assert_eq!(l.shape(), &[2, 2]);
+    /// let r = a.cholesky(&mut host)?;
+    /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn cholesky(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
+    fn cholesky(&self, exec: &mut dyn Engine) -> Res<Self::Out> {
+        self.cholesky_with(&CholeskyOptions::default(), exec)
+    }
+
+    /// Compute the lower Cholesky factor.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation, unsupported-backend, convergence, or output-contract errors.
+    ///
+    /// Returns validation errors for a non-square input, or backend/positive-definiteness errors.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{CholeskyOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.cholesky_with(&CholeskyOptions::default(), &mut host)?;
+    /// assert_eq!(r.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn cholesky_with(&self, options: &CholeskyOptions, exec: &mut dyn Engine) -> Res<Self::Out> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "cholesky", |backend| backend.cholesky_read(a))?;
+        Self::linalg_out(outs)
+    }
+
+    /// Compute the Hermitian eigendecomposition `(values, vectors)`.
+    ///
+    /// Short form of [`Self::eigh_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::eigh_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (values, vectors) = a.eigh(&mut host)?;
+    /// let r = a.eigh(&mut host)?;
+    /// let (values, vectors) = r;
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    fn eigh(&self, exec: &mut dyn Engine) -> Res<(Self::Real, Self::Out)> {
+        self.eigh_with(&EighOptions::default(), exec)
+    }
+
+    /// Compute the Hermitian eigendecomposition `(values, vectors)`.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation errors for matrix metadata or options, plus Eigh backend errors.
+    ///
+    /// Returns validation, unsupported-backend, convergence, or output-contract errors.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -656,221 +1073,525 @@ pub trait TensorLinalgExt {
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (values, vectors) = { a.eigh_with_options(EighOptions::default(), &mut host) }?;
+    /// let r = a.eigh_with(&EighOptions::default(), &mut host)?;
+    /// let (values, vectors) = r;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigh_with_options(
+    fn eigh_with(
         &self,
-        options: EighOptions,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+        options: &EighOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<(Self::Real, Self::Out)> {
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "eigh", |backend| {
+            two(backend.eigh_with_options_read(a, *options)?, "eigh")
+        })?;
+        Ok((Self::linalg_real(outs.0)?, Self::linalg_out(outs.1)?))
+    }
+
+    /// Compute the general eigendecomposition `(values, vectors)`.
+    ///
+    /// Short form of [`Self::eig_with`] with default options.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation, unsupported-backend, convergence, or output-contract errors.
+    ///
+    /// As [`Self::eig_with`].
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (values, vectors) = a.eig(&mut host)?;
+    /// let r = a.eig(&mut host)?;
+    /// let (values, vectors) = r;
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    /// Eigenvectors come back with unit 2-norm columns, whichever provider computed them;
-    /// a column the provider left non-finite is reported as a numerical failure instead
-    /// of being returned as `NaN` (#2148).
-    fn eig(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    fn eig(&self, exec: &mut dyn Engine) -> Res<(Self::Complex, Self::Complex)> {
+        self.eig_with(&EigOptions::default(), exec)
+    }
+
+    /// Compute the general eigendecomposition `(values, vectors)`.
+    ///
+    /// Eigenvectors come back with unit 2-norm columns, whichever provider computed them; a column
+    /// the provider left non-finite is reported as a numerical failure instead of being returned as
+    /// `NaN` (#2148).
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation errors for incompatible inputs/flags or backend/numerical errors.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// Returns validation, unsupported-backend, convergence, or output-contract errors.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{EigOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.eig_with(&EigOptions::default(), &mut host)?;
+    /// let (values, vectors) = r;
+    /// assert_eq!(values.shape(), &[2]);
+    /// assert_eq!(vectors.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn eig_with(
+        &self,
+        options: &EigOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<(Self::Complex, Self::Complex)> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "eig", |backend| two(backend.eig_read(a)?, "eig"))?;
+        Ok((Self::linalg_complex(outs.0)?, Self::linalg_complex(outs.1)?))
+    }
+
+    /// Compute the eigenvalues of a general matrix.
+    ///
+    /// Short form of [`Self::eigvals_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::eigvals_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.eigvals(&mut host)?;
+    /// assert_eq!(r.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn eigvals(&self, exec: &mut dyn Engine) -> Res<Self::Complex> {
+        self.eigvals_with(&EigvalsOptions::default(), exec)
+    }
+
+    /// Compute the eigenvalues of a general matrix.
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation, backend, convergence, or contract errors of [`Self::eig`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{EigvalsOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.eigvals_with(&EigvalsOptions::default(), &mut host)?;
+    /// assert_eq!(r.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn eigvals_with(&self, options: &EigvalsOptions, exec: &mut dyn Engine) -> Res<Self::Complex> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "eigvals", |backend| backend.eig_values_read(a))?;
+        Self::linalg_complex(outs)
+    }
+
+    /// Compute the eigenvalues of a Hermitian matrix.
+    ///
+    /// Short form of [`Self::eigvalsh_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::eigvalsh_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.eigvalsh(&mut host)?;
+    /// assert_eq!(r.as_slice::<f64>()?, &[1.0, 3.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn eigvalsh(&self, exec: &mut dyn Engine) -> Res<Self::Real> {
+        self.eigvalsh_with(&EigvalshOptions::default(), exec)
+    }
+
+    /// Compute the eigenvalues of a Hermitian matrix.
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation, backend, convergence, or contract errors of [`Self::eigh`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{EigvalshOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.eigvalsh_with(&EigvalshOptions::default(), &mut host)?;
+    /// assert_eq!(r.as_slice::<f64>()?, &[1.0, 3.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn eigvalsh_with(&self, options: &EigvalshOptions, exec: &mut dyn Engine) -> Res<Self::Real> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "eigvalsh", |backend| backend.eigh_values_read(a))?;
+        Self::linalg_real(outs)
+    }
+
+    /// Solve a triangular system `op(A) X = B` or `X op(A) = B`.
+    ///
+    /// Short form of [`Self::triangular_solve_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::triangular_solve_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0])?;
+    /// # let b = Tensor::from_vec_col_major(vec![1, 2], vec![4.0_f64, 9.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// // The default options solve `X A = B` with the upper triangle of `A`.
+    /// let r = a.triangular_solve(&b, &mut host)?;
+    /// assert_eq!(r.shape(), &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn triangular_solve<B: LinalgInput>(&self, b: &B, exec: &mut dyn Engine) -> Res<Self::Out> {
+        self.triangular_solve_with(b, &TriangularSolveOptions::default(), exec)
+    }
+
+    /// Solve a triangular system `op(A) X = B` or `X op(A) = B`.
+    ///
+    /// The side, triangle, transposition and diagonal handling come from the options.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation errors for incompatible inputs/options or backend/singular errors.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{Side, TriangularSolveOptions, Uplo, TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0])?;
     /// # let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let x = { a.triangular_solve(&b, true, false, false, false, &mut host) }?;
-    /// assert_eq!(x.shape(), &[2, 1]);
+    /// let r = a.triangular_solve_with(&b, &TriangularSolveOptions::default().with_side(Side::Left).with_uplo(Uplo::Upper), &mut host)?;
+    /// assert_eq!(r.shape(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn triangular_solve(
+    fn triangular_solve_with<B: LinalgInput>(
         &self,
-        b: &Tensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+        b: &B,
+        options: &TriangularSolveOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<Self::Out> {
+        let a = self.linalg_read();
+        let b = b.linalg_read();
+        let outs = with_linalg_backend(exec, "triangular_solve", |backend| {
+            backend.triangular_solve_read(
+                a,
+                b,
+                options.side == Side::Left,
+                options.uplo == Uplo::Lower,
+                options.transpose == Transpose::Transpose,
+                options.diagonal == Diagonal::Unit,
+            )
+        })?;
+        Self::linalg_out(outs)
+    }
+
+    /// Compute the sign and the log-absolute value of the determinant.
+    ///
+    /// Short form of [`Self::slogdet_with`] with default options.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation, unsupported-backend, numerical, or LU output-contract errors.
+    ///
+    /// As [`Self::slogdet_with`].
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let (sign, logabsdet) = a.slogdet(&mut host)?;
+    /// let r = a.slogdet(&mut host)?;
+    /// let (sign, logabsdet) = r;
     /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
     /// assert_eq!(logabsdet.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn slogdet(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    fn slogdet(&self, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Real)> {
+        self.slogdet_with(&SlogdetOptions::default(), exec)
+    }
+
+    /// Compute the sign and the log-absolute value of the determinant.
+    ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns the validation, backend, numerical, or contract errors from [`Self::slogdet`].
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the selected backend does not support the operation,
+    /// plus validation, numerical, or output-contract errors.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{SlogdetOptions, TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let determinant = a.det(&mut host)?;
-    /// assert!((determinant.as_slice::<f64>()?[0] - 8.0).abs() < 1.0e-12);
+    /// let r = a.slogdet_with(&SlogdetOptions::default(), &mut host)?;
+    /// let (sign, _logabsdet) = r;
+    /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn det(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
-    /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation, unsupported-backend, or singular-solve numerical errors.
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::Tensor;
-    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let inverse = a.inv(&mut host)?;
-    /// assert_eq!(inverse.as_slice::<f64>()?, &[0.5, 0.0, 0.0, 0.25]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    fn inv(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
-    /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns the validation, backend, convergence, or contract errors from [`Self::eigh`].
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::Tensor;
-    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
-    /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let values = a.eigvalsh(&mut host)?;
-    /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    fn eigvalsh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
-    /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns the validation, backend, convergence, or contract errors from [`Self::eig`].
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::Tensor;
-    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
-    /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let values = a.eigvals(&mut host)?;
-    /// assert_eq!(values.shape(), &[2]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    fn eigvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
-    /// Compute the Moore-Penrose pseudoinverse with the dtype-default cutoff.
-    ///
-    /// The cutoff thresholds an SVD whose default driver is accuracy-preserving
-    /// (`SvdDriver::Auto`), so a rank-deficient rank is retained or dropped the
-    /// same way as on CPU. CPU providers and CUDA share this contract.
-    ///
-    /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation, unsupported-backend, numerical, or SVD contract errors.
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::Tensor;
-    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let pseudoinverse = a.pinv(&mut host)?;
-    /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    fn pinv(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor>;
-    /// Compute the Moore-Penrose pseudoinverse with an explicit relative cutoff.
-    ///
-    /// Like [`Self::pinv`], the threshold is applied to an accuracy-preserving
-    /// default SVD (`SvdDriver::Auto`), so the retained rank matches the CPU
-    /// reference.
-    ///
-    /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns a validation error for invalid `rtol`, plus errors from [`Self::pinv`].
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
-    /// # use tenferro_tensor::Tensor;
-    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
-    /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let pseudoinverse = a.pinv_with_rtol(1.0e-12, &mut host)?;
-    /// assert_eq!(pseudoinverse.shape(), &[2, 2]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    fn pinv_with_rtol(
+    fn slogdet_with(
         &self,
-        rtol: f64,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+        options: &SlogdetOptions,
+        exec: &mut dyn Engine,
+    ) -> Res<(Self::Out, Self::Real)> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = slogdet_tensors(a, "slogdet", exec)?;
+        Ok((Self::linalg_out(outs.0)?, Self::linalg_real(outs.1)?))
+    }
+
+    /// Compute the determinant.
+    ///
+    /// Short form of [`Self::det_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::det_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.det(&mut host)?;
+    /// assert!((r.as_slice::<f64>()?[0] - 8.0).abs() < 1.0e-12);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn det(&self, exec: &mut dyn Engine) -> Res<Self::Out> {
+        self.det_with(&DetOptions::default(), exec)
+    }
+
+    /// Compute the determinant.
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation, backend, numerical, or contract errors of [`Self::slogdet`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{DetOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.det_with(&DetOptions::default(), &mut host)?;
+    /// assert!((r.as_slice::<f64>()?[0] - 8.0).abs() < 1.0e-12);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn det_with(&self, options: &DetOptions, exec: &mut dyn Engine) -> Res<Self::Out> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = det_tensors(a, exec)?;
+        Self::linalg_out(outs)
+    }
+
+    /// Compute the matrix inverse.
+    ///
+    /// Short form of [`Self::inv_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::inv_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.inv(&mut host)?;
+    /// assert_eq!(r.as_slice::<f64>()?, &[0.5, 0.0, 0.0, 0.25]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn inv(&self, exec: &mut dyn Engine) -> Res<Self::Out> {
+        self.inv_with(&InvOptions::default(), exec)
+    }
+
+    /// Compute the matrix inverse.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation, unsupported-backend, or singular-solve numerical errors.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{InvOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.inv_with(&InvOptions::default(), &mut host)?;
+    /// assert_eq!(r.as_slice::<f64>()?, &[0.5, 0.0, 0.0, 0.25]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn inv_with(&self, options: &InvOptions, exec: &mut dyn Engine) -> Res<Self::Out> {
+        let _ = options;
+        let a = self.linalg_read();
+        let outs = with_linalg_backend(exec, "inv", |backend| inv_read(a, backend))?;
+        Self::linalg_out(outs)
+    }
+
+    /// Compute the Moore-Penrose pseudoinverse.
+    ///
+    /// Short form of [`Self::pinv_with`] with default options.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::pinv_with`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.pinv(&mut host)?;
+    /// assert_eq!(r.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn pinv(&self, exec: &mut dyn Engine) -> Res<Self::Out> {
+        self.pinv_with(&PinvOptions::default(), exec)
+    }
+
+    /// Compute the Moore-Penrose pseudoinverse.
+    ///
+    /// `rtol: None` uses the dtype-default cutoff; `Some(rtol)` an explicit relative cutoff. The
+    /// cutoff thresholds an SVD whose default driver is accuracy-preserving (`SvdDriver::Auto`), so a
+    /// rank-deficient rank is retained or dropped the same way as on CPU. CPU providers and CUDA
+    /// share this contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an invalid `rtol`, plus validation, unsupported-backend,
+    /// numerical, or SVD contract errors.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{PinvOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.pinv_with(&PinvOptions::default().with_rtol(1.0e-12), &mut host)?;
+    /// assert_eq!(r.shape(), &[2, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn pinv_with(&self, options: &PinvOptions, exec: &mut dyn Engine) -> Res<Self::Out> {
+        let a = self.linalg_read();
+        let outs =
+            with_linalg_backend(exec, "pinv", |backend| pinv_read(a, options.rtol, backend))?;
+        Self::linalg_out(outs)
+    }
+
     /// Compute a vector, matrix, or tensor norm.
     ///
-    /// `ord = None` is the Frobenius/Euclidean norm. `ord = Some(0.0)` is the
-    /// count of entries that are not equal to zero: `NaN` counts as nonzero,
-    /// both `+0.0` and `-0.0` count as zero, and `±inf` count as nonzero
-    /// (#2359; see `docs/spec/tensor-semantics.md`).
+    /// Short form of [`Self::norm_with`] with default options.
     ///
     /// # Errors
-    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
-    /// Returns validation errors for axes/order combinations or required backend operations.
+    ///
+    /// As [`Self::norm_with`].
+    ///
     /// # Examples
     ///
     /// ```rust
     /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::TensorLinalgExt;
+    /// # use tenferro_linalg::{TensorLinalgExt};
     /// # use tenferro_tensor::Tensor;
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
-    /// let frobenius = a.norm(None, None, false, &mut host)?;
-    /// assert_eq!(frobenius.shape(), &[] as &[usize]);
+    /// let r = a.norm(&mut host)?;
+    /// assert_eq!(r.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn norm(
-        &self,
-        ord: Option<f64>,
-        dim: Option<&[usize]>,
-        keepdim: bool,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
+    fn norm(&self, exec: &mut dyn Engine) -> Res<Self::Real> {
+        self.norm_with(&NormOptions::default(), exec)
+    }
+
+    /// Compute a vector, matrix, or tensor norm.
+    ///
+    /// `ord: None` is the Frobenius/Euclidean norm. `ord: Some(0.0)` is the count of entries that are
+    /// not equal to zero: `NaN` counts as nonzero, both `+0.0` and `-0.0` count as zero, and `±inf`
+    /// count as nonzero (#2359; see `docs/spec/tensor-semantics.md`). Negative `axes` count from the
+    /// end; `axes: None` reduces every axis.
+    ///
+    /// # Errors
+    ///
+    /// Returns validation errors for axes/order combinations or required backend operations.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuEngine;
+    /// # use tenferro_linalg::{KeepDims, NormOptions, TensorLinalgExt};
+    /// # use tenferro_tensor::Tensor;
+    /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 4.0])?;
+    /// # let mut host = tenferro_cpu::CpuEngine::serial();
+    /// let r = a.norm_with(&NormOptions::default().with_keep_dims(KeepDims::Keep), &mut host)?;
+    /// assert_eq!(r.shape(), &[1, 1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    fn norm_with(&self, options: &NormOptions, exec: &mut dyn Engine) -> Res<Self::Real> {
+        let a = self.linalg_read();
+        let dim = resolve_norm_axes("norm", options.axes.as_deref(), a.shape().len())?;
+        let outs = with_linalg_backend(exec, "norm", |backend| {
+            norm_from_read(
+                a,
+                options.ord,
+                dim.as_deref(),
+                options.keep_dims == KeepDims::Keep,
+                backend,
+            )
+        })?;
+        Self::linalg_real(outs)
+    }
 }
+
+impl<X: LinalgInput> TensorLinalgExt for X {}
 
 /// Linear algebra methods for borrowed tensor reads.
 ///
@@ -1974,171 +2695,6 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
     ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>>;
 }
 
-impl TensorLinalgExt for Tensor {
-    fn svd(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
-        with_linalg_backend(session, "svd", |backend| three(backend.svd(self)?, "svd"))
-    }
-    fn svdvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "svdvals", |backend| backend.svd_values(self))
-    }
-
-    fn svd_with_options(
-        &self,
-        options: SvdOptions,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
-        with_linalg_backend(session, "svd_with_options", |backend| {
-            three(backend.svd_with_options(self, options)?, "svd_with_options")
-        })
-    }
-    fn svd_full(
-        &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
-        with_linalg_backend(session, "svd_full", |backend| {
-            three(backend.svd_full(self)?, "svd_full")
-        })
-    }
-    fn qr(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        with_linalg_backend(session, "qr", |backend| two(backend.qr(self)?, "qr"))
-    }
-    fn householder_qr(
-        &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<crate::HouseholderQr<Tensor>> {
-        with_linalg_backend(session, "householder_qr", |backend| {
-            backend
-                .householder_qr(self)
-                .map(crate::HouseholderQr::from_backend)
-        })
-    }
-    fn qr_with_options(
-        &self,
-        options: QrOptions,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        with_linalg_backend(session, "qr_with_options", |backend| {
-            two(backend.qr_with_options(self, options)?, "qr_with_options")
-        })
-    }
-    fn rank_revealing_qr(
-        &self,
-        options: RankRevealingQrOptions,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<RankRevealingQrResult<Tensor>> {
-        with_linalg_backend(session, "rank_revealing_qr", |backend| {
-            rank_revealing_qr_result(backend.rank_revealing_qr(self, options)?)
-        })
-    }
-    fn lu(
-        &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor)> {
-        with_linalg_backend(session, "lu", |backend| four(backend.lu(self)?, "lu"))
-    }
-    fn full_piv_lu(
-        &self,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
-        with_linalg_backend(session, "full_piv_lu", |backend| {
-            five(backend.full_piv_lu(self)?, "full_piv_lu")
-        })
-    }
-    fn full_piv_lu_solve(
-        &self,
-        b: &Tensor,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "full_piv_lu_solve", |backend| {
-            backend.full_piv_lu_solve(self, b, false)
-        })
-    }
-    fn solve(&self, b: &Tensor, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "solve", |backend| backend.solve(self, b))
-    }
-    fn cholesky(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "cholesky", |backend| backend.cholesky(self))
-    }
-    fn eigh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        with_linalg_backend(session, "eigh", |backend| two(backend.eigh(self)?, "eigh"))
-    }
-    fn eigh_with_options(
-        &self,
-        options: EighOptions,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        with_linalg_backend(session, "eigh_with_options", |backend| {
-            two(
-                backend.eigh_with_options(self, options)?,
-                "eigh_with_options",
-            )
-        })
-    }
-    fn eig(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        with_linalg_backend(session, "eig", |backend| two(backend.eig(self)?, "eig"))
-    }
-    fn triangular_solve(
-        &self,
-        b: &Tensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "triangular_solve", |backend| {
-            backend.triangular_solve(self, b, left_side, lower, transpose_a, unit_diagonal)
-        })
-    }
-    fn slogdet(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        validate_square_matrix("slogdet", self.shape())?;
-        if self.shape()[0] == 0 && self.shape()[1] == 0 {
-            return empty_square_slogdet_on(session, "slogdet", TensorRead::from_tensor(self));
-        }
-        with_linalg_backend(session, "slogdet", |backend| {
-            slogdet_from_lu(four(backend.lu(self)?, "slogdet")?, backend)
-        })
-    }
-    fn det(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
-        validate_square_matrix("det", self.shape())?;
-        with_linalg_backend(session, "det", |backend| {
-            det_impl(self.slogdet(backend)?, backend)
-        })
-    }
-    fn inv(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "inv", |backend| inv_owned(self, backend))
-    }
-    fn eigvalsh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "eigvalsh", |backend| backend.eigh_values(self))
-    }
-    fn eigvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "eigvals", |backend| backend.eig_values(self))
-    }
-    fn pinv(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "pinv", |backend| pinv_owned(self, None, backend))
-    }
-    fn pinv_with_rtol(
-        &self,
-        rtol: f64,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "pinv_with_rtol", |backend| {
-            pinv_owned(self, Some(rtol), backend)
-        })
-    }
-    fn norm(
-        &self,
-        ord: Option<f64>,
-        dim: Option<&[usize]>,
-        keepdim: bool,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        with_linalg_backend(session, "norm", |backend| {
-            norm_from_read(TensorRead::from_tensor(self), ord, dim, keepdim, backend)
-        })
-    }
-}
-
 impl TensorReadLinalgExt for TensorRead<'_> {
     fn svd_read(
         self,
@@ -2222,28 +2778,7 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         with_linalg_backend(session, "full_piv_lu_solve_read", |backend| {
-            // Every surface goes through the backend solve, which rejects a rank-deficient
-            // system (a pivot at or below `eps * max|pivot|`). A borrowed view is made compact
-            // first.
-            let a_owned;
-            let a = match self.as_tensor() {
-                Some(a) => a,
-                None => {
-                    let shape = self.shape().to_vec();
-                    a_owned = backend.reshape_read(self, &shape)?;
-                    &a_owned
-                }
-            };
-            let b_owned;
-            let b = match b.as_tensor() {
-                Some(b) => b,
-                None => {
-                    let shape = b.shape().to_vec();
-                    b_owned = backend.reshape_read(b, &shape)?;
-                    &b_owned
-                }
-            };
-            backend.full_piv_lu_solve(a, b, false)
+            full_piv_lu_solve_impl(self, b, backend)
         })
     }
     fn solve_read(
@@ -2708,23 +3243,59 @@ fn empty_square_slogdet_on(
     ))
 }
 
-fn typed_output<T: TensorScalar>(tensor: Tensor) -> tenferro_tensor::Result<TypedTensor<T>> {
-    if tensor.dtype() != T::dtype() {
-        return Err(tenferro_tensor::Error::Internal(format!(
-            "typed linalg backend contract expected {:?}, got {:?}",
-            T::dtype(),
-            tensor.dtype()
-        )));
+/// The complete-pivot LU solve on borrowed views.
+///
+/// Every surface goes through the backend solve, which rejects a rank-deficient system (a pivot
+/// at or below `eps * max|pivot|`). A borrowed view is made compact first.
+fn full_piv_lu_solve_impl(
+    a: TensorRead<'_>,
+    b: TensorRead<'_>,
+    backend: &mut dyn LinalgBackend,
+) -> tenferro_tensor::Result<Tensor> {
+    let a_owned;
+    let a = match a.as_tensor() {
+        Some(a) => a,
+        None => {
+            let shape = a.shape().to_vec();
+            a_owned = backend.reshape_read(a, &shape)?;
+            &a_owned
+        }
+    };
+    let b_owned;
+    let b = match b.as_tensor() {
+        Some(b) => b,
+        None => {
+            let shape = b.shape().to_vec();
+            b_owned = backend.reshape_read(b, &shape)?;
+            &b_owned
+        }
+    };
+    backend.full_piv_lu_solve(a, b, false)
+}
+
+/// Sign and log-absolute determinant of a borrowed square matrix, with the empty `0 x 0`
+/// shortcut taken after the backend's own input-residency boundary.
+fn slogdet_tensors(
+    a: TensorRead<'_>,
+    op: &'static str,
+    exec: &mut dyn Engine,
+) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+    validate_square_matrix(op, a.shape())?;
+    if a.shape()[0] == 0 && a.shape()[1] == 0 {
+        return empty_square_slogdet_on(exec, op, a);
     }
-    match T::into_typed(tensor) {
-        Ok(typed) => Ok(typed),
-        // INVARIANT: the dtype guard above already accepted this tensor, so the
-        // refusal arm is unreachable for a matching preset scalar.
-        Err(failure) => Err(tenferro_tensor::Error::Internal(format!(
-            "typed linalg backend contract lost its dtype guard: {}",
-            failure.error()
-        ))),
-    }
+    with_linalg_backend(exec, op, |backend| {
+        slogdet_from_lu(four(backend.lu_read(a)?, op)?, backend)
+    })
+}
+
+/// Determinant of a borrowed square matrix as `sign * exp(logabsdet)`.
+fn det_tensors(a: TensorRead<'_>, exec: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+    validate_square_matrix("det", a.shape())?;
+    with_linalg_backend(exec, "det", |backend| {
+        let slogdet = slogdet_tensors(a, "det", backend)?;
+        det_impl(slogdet, backend)
+    })
 }
 
 fn arity(name: &'static str, expected: usize, actual: usize) -> tenferro_tensor::Error {
@@ -2808,32 +3379,12 @@ fn det_impl<B: LinalgBackend + ?Sized>(
         TensorRead::from_tensor(&magnitude),
     )
 }
-fn inv_owned<B: LinalgBackend + ?Sized>(
-    a: &Tensor,
-    backend: &mut B,
-) -> tenferro_tensor::Result<Tensor> {
-    let eye = eye_like(a.dtype(), a.shape(), backend)?;
-    backend.solve(a, &eye)
-}
 fn inv_read<B: LinalgBackend + ?Sized>(
     a: TensorRead<'_>,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
     let eye = eye_like(a.dtype(), a.shape(), backend)?;
     backend.solve_read(a, TensorRead::from_tensor(&eye))
-}
-fn pinv_owned<B: LinalgBackend + ?Sized>(
-    a: &Tensor,
-    rtol: Option<f64>,
-    backend: &mut B,
-) -> tenferro_tensor::Result<Tensor> {
-    ensure_float_or_complex("pinv", a.dtype())?;
-    let outputs = three(backend.svd(a)?, "pinv")?;
-    pinv_from_svd(
-        outputs,
-        rtol.unwrap_or_else(|| default_pinv_rtol(a.dtype(), a.shape())),
-        backend,
-    )
 }
 fn pinv_read<B: LinalgBackend + ?Sized>(
     a: TensorRead<'_>,

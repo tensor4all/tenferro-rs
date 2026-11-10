@@ -12,207 +12,412 @@ use crate::extension::{
 };
 use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
 use crate::validation::{ensure_float_or_complex, validate_lstsq, validate_square_matrix};
-use crate::{RankRevealingQrOptions, RankRevealingQrResult};
+use crate::{
+    CholeskyOptions, DetOptions, Diagonal, EigOptions, EigvalsOptions, EigvalshOptions,
+    FullPivLuOptions, FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, KeepDims,
+    LstsqOptions, LuOptions, NormOptions, PinvOptions, RankRevealingQrOptions,
+    RankRevealingQrResult, Side, SlogdetOptions, SolveOptions, SvdShape, Transpose,
+    TriangularSolveOptions, Uplo,
+};
 
 /// Linear algebra extension methods for [`TracedTensor`].
+///
+/// Each operation `op` has a short form `op(..)` that uses the default options
+/// and an `op_with(.., &OpOptions)` form that takes the operation's options by
+/// reference.
 pub trait TracedTensorLinalgExt {
     /// Build a traced SVD operation with default options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// unsupported dtype, or `Error::Validation` for invalid graph metadata.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype, or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Backend numerical failures and concrete shape mismatches can be
-    /// reported as `Error::Extension` or `Error::Validation` during compile or
-    /// execution when symbolic inputs are bound.
-    fn svd(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
-
-    /// Build a traced SVD operation with explicit derivative and gauge options.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation::InvalidArgument` for a non-finite or
-    /// non-positive derivative epsilon, or `Error::Extension` for unsupported
-    /// dtype and graph registration failures.
-    ///
-    /// # Deferred errors
-    ///
-    /// Solver convergence and symbolic shape checks may be reported during
-    /// compile or execution.
-    fn svd_with_options(
-        &self,
-        options: SvdOptions,
-    ) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
-
-    /// Build a traced full-matrices SVD operation returning square `U (m x m)`
-    /// and `Vh (n x n)`, whose trailing `n - rank` rows span the input's right
-    /// nullspace.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` when the input is not a batched matrix
-    /// (rank `>= 2`), `Error::Extension` with `ErrorKind::Unsupported` for
-    /// integer or boolean dtypes, or `Error::Extension` for graph
-    /// registration failures.
-    ///
-    /// # Deferred errors
-    ///
-    /// The active backend returns `Error::Extension` with
-    /// `ErrorKind::Unsupported` at execution if it does not implement
-    /// full-matrices SVD; both CPU providers and the CUDA backend implement
-    /// it. Automatic differentiation is intentionally unsupported for the full
-    /// variant (see the linalg AD support manifest) and surfaces a typed AD
-    /// error rather than a silent thin-SVD fallback.
-    fn svd_full(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
-
-    /// Build a traced QR operation.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
-    ///
-    /// # Deferred errors
-    ///
-    /// Concrete shape validation and backend QR failures may be reported at
-    /// compile or execution time for symbolic inputs.
-    fn qr(&self) -> Result<(TracedTensor, TracedTensor)>;
-
-    /// Build opaque compact Householder QR state.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` for known invalid graph metadata or
-    /// `Error::Extension` for an unsupported operation.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic shape and backend provider checks may fail at compile or execution.
+    /// Backend numerical failures and concrete shape mismatches can be reported as `Error::Extension` or `Error::Validation` during compile or execution when symbolic inputs are bound.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_linalg::{SvdOptions, SvdShape};
     /// use tenferro_runtime::TraceContext;
+    ///
     /// let trace = TraceContext::new();
-    /// let a = trace.from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (u, s, vh) = a.svd()?;
+    /// assert_eq!(u.rank(), 2);
+    /// assert_eq!(s.rank(), 1);
+    /// assert_eq!(vh.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn svd(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
+
+    /// Build a traced SVD operation with explicit options.
+    ///
+    /// `SvdOptions::shape` selects the thin (`Thin`, default) or full-matrices
+    /// (`Full`) factorization. The full variant returns square `U (m x m)` and
+    /// `Vh (n x n)` whose trailing `n - rank` rows span the right nullspace; it
+    /// rejects a non-default gauge, driver or derivative epsilon, and automatic
+    /// differentiation is unsupported for it (see the linalg AD support
+    /// manifest).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype, or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Backend numerical failures and concrete shape mismatches can be reported as `Error::Extension` or `Error::Validation` during compile or execution when symbolic inputs are bound.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{SvdOptions, SvdShape};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (u, _s, vh) = a.svd_with(&SvdOptions::default().with_shape(SvdShape::Full))?;
+    /// assert_eq!(u.rank(), 2);
+    /// assert_eq!(vh.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn svd_with(&self, options: &SvdOptions) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
+
+    /// Build a traced QR operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{QrOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (q, r) = a.qr()?;
+    /// assert_eq!(q.rank(), 2);
+    /// assert_eq!(r.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn qr(&self) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced QR operation with explicit options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{QrOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (q, _r) = a.qr_with(&QrOptions::default())?;
+    /// assert_eq!(q.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn qr_with(&self, options: &QrOptions) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced compact Householder QR state with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{HouseholderQrOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
     /// let qr = a.householder_qr()?;
     /// assert!(format!("{qr:?}").starts_with("HouseholderQr"));
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     fn householder_qr(&self) -> Result<crate::HouseholderQr<TracedTensor>>;
 
-    /// Build a traced QR operation with explicit gauge options.
+    /// Build a traced compact Householder QR state with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// unsupported dtype, or `Error::Validation` for invalid graph metadata.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Symbolic shape checks and backend QR failures can be deferred to compile
-    /// or execution.
-    fn qr_with_options(&self, options: QrOptions) -> Result<(TracedTensor, TracedTensor)>;
-
-    /// Build fixed-arity traced column-pivoted rank-revealing QR.
-    ///
-    /// # Errors
-    /// Returns graph-build validation errors for rank, dtype, or invalid
-    /// tolerances, and extension registration failures.
-    ///
-    /// # Deferred errors
-    /// Symbolic shape checks, non-finite numerical failures, and unsupported
-    /// backend execution are reported during compile or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_linalg::{RankRevealingQrOptions, TracedTensorLinalgExt};
-    /// use tenferro_runtime::TracedTensor;
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{HouseholderQrOptions};
     /// use tenferro_runtime::TraceContext;
+    ///
     /// let trace = TraceContext::new();
-    /// let a = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0])?;
-    /// let result = a.rank_revealing_qr(RankRevealingQrOptions::default())?;
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let qr = a.householder_qr_with(&HouseholderQrOptions::default())?;
+    /// assert!(format!("{qr:?}").starts_with("HouseholderQr"));
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn householder_qr_with(
+        &self,
+        options: &HouseholderQrOptions,
+    ) -> Result<crate::HouseholderQr<TracedTensor>>;
+
+    /// Build a traced fixed-arity column-pivoted rank-revealing QR with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{RankRevealingQrOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let result = a.rank_revealing_qr()?;
     /// assert_eq!(result.q.rank(), 2);
     /// assert_eq!(result.column_permutation.rank(), 1);
     /// assert_eq!(result.rank.rank(), 0);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn rank_revealing_qr(
-        &self,
-        options: RankRevealingQrOptions,
-    ) -> Result<RankRevealingQrResult<TracedTensor>>;
+    fn rank_revealing_qr(&self) -> Result<RankRevealingQrResult<TracedTensor>>;
 
-    /// Build a traced Hermitian eigendecomposition operation.
+    /// Build a traced fixed-arity column-pivoted rank-revealing QR with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Concrete square-shape validation and solver failures may be reported at
-    /// compile or execution time.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{RankRevealingQrOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let result = a.rank_revealing_qr_with(&RankRevealingQrOptions::default())?;
+    /// assert_eq!(result.q.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn rank_revealing_qr_with(
+        &self,
+        options: &RankRevealingQrOptions,
+    ) -> Result<RankRevealingQrResult<TracedTensor>>;
+
+    /// Build a traced Hermitian eigendecomposition with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{EighOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (_values, vectors) = a.eigh()?;
+    /// assert_eq!(vectors.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn eigh(&self) -> Result<(TracedTensor, TracedTensor)>;
 
     /// Build a traced Hermitian eigendecomposition with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation::InvalidArgument` for an invalid derivative
-    /// epsilon, or `Error::Extension` for unsupported dtype and registration
-    /// failures.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// The square requirement is checked concretely when the backend executes
-    /// the factorization; no symbolic square equality is recorded. Numerical
-    /// eigensolver failures may also be reported during execution.
-    fn eigh_with_options(&self, options: EighOptions) -> Result<(TracedTensor, TracedTensor)>;
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{EighOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (_values, vectors) = a.eigh_with(&EighOptions::default())?;
+    /// assert_eq!(vectors.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn eigh_with(&self, options: &EighOptions) -> Result<(TracedTensor, TracedTensor)>;
 
-    /// Build a traced Cholesky factorization operation.
+    /// Build a traced Cholesky factorization with default options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Non-square or non-positive-definite concrete inputs can produce
-    /// validation or numerical extension errors during compile or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{CholeskyOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let factor = a.cholesky()?;
+    /// assert_eq!(factor.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn cholesky(&self) -> Result<TracedTensor>;
 
-    /// Build a traced LU factorization operation.
+    /// Build a traced Cholesky factorization with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Concrete shape checks and backend factorization failures may be
-    /// reported during compile or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{CholeskyOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let factor = a.cholesky_with(&CholeskyOptions::default())?;
+    /// assert_eq!(factor.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn cholesky_with(&self, options: &CholeskyOptions) -> Result<TracedTensor>;
+
+    /// Build a traced LU factorization with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{LuOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let _factors = a.lu()?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn lu(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)>;
 
-    /// Build a traced complete-pivot LU factorization operation.
+    /// Build a traced LU factorization with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Concrete square-shape checks and backend factorization failures may be
-    /// reported during compile or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{LuOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let _factors = a.lu_with(&LuOptions::default())?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn lu_with(
+        &self,
+        options: &LuOptions,
+    ) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)>;
+
+    /// Build a traced complete-pivot LU factorization with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{FullPivLuOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let _factors = a.full_piv_lu()?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn full_piv_lu(
         &self,
     ) -> Result<(
@@ -222,20 +427,117 @@ pub trait TracedTensorLinalgExt {
         TracedTensor,
         TracedTensor,
     )>;
-    /// Build a traced general eigendecomposition operation.
+
+    /// Build a traced complete-pivot LU factorization with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Concrete shape validation and numerical eigensolver failures may be
-    /// reported during compile or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{FullPivLuOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let _factors = a.full_piv_lu_with(&FullPivLuOptions::default())?;
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn full_piv_lu_with(
+        &self,
+        options: &FullPivLuOptions,
+    ) -> Result<(
+        TracedTensor,
+        TracedTensor,
+        TracedTensor,
+        TracedTensor,
+        TracedTensor,
+    )>;
+
+    /// Build a traced general eigendecomposition with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{EigOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (_values, vectors) = a.eig()?;
+    /// assert_eq!(vectors.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn eig(&self) -> Result<(TracedTensor, TracedTensor)>;
 
-    /// Build a traced linear solve operation.
+    /// Build a traced general eigendecomposition with explicit options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{EigOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (_values, vectors) = a.eig_with(&EigOptions::default())?;
+    /// assert_eq!(vectors.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn eig_with(&self, options: &EigOptions) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced linear solve operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{SolveOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let b = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// let x = a.solve(&b)?;
+    /// assert_eq!(x.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn solve(&self, b: &TracedTensor) -> Result<TracedTensor>;
+
+    /// Build a traced linear solve operation with explicit options.
     ///
     /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
     /// the forward solve path, so it performs no per-call non-singularity check
@@ -245,173 +547,558 @@ pub trait TracedTensorLinalgExt {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for incompatible coefficient/rhs metadata
-    /// and `Error::Extension` for unsupported dtype or registration failures.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Singular systems and concrete shape mismatches are reported as
-    /// numerical or validation errors during compile or execution.
-    fn solve(&self, b: &TracedTensor) -> Result<TracedTensor>;
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{SolveOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let b = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// let x = a.solve_with(&b, &SolveOptions::default())?;
+    /// assert_eq!(x.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn solve_with(&self, b: &TracedTensor, options: &SolveOptions) -> Result<TracedTensor>;
 
-    /// Build a traced least-squares solve `argmin_x ||A x - b||_2` for a tall
-    /// or square, full-column-rank `A`, via the thin QR factorization.
+    /// Build a traced least-squares solve `argmin_x ||A x - b||_2` for a tall or square, full-column-rank `A`, via the thin QR factorization with default options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for an invalid rank (`A` or `b` not a
-    /// batched matrix, rank `< 2`), a symbolic shape, a wide/underdetermined
-    /// `A` (`rows < cols`), or an unsupported dtype (not floating-point or
-    /// complex).
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Backend QR and triangular-solve failures and concrete shape mismatches
-    /// are reported during compile or execution. Rank-deficient `A` is not
-    /// detected: `R` is singular and the result is ill-defined, so callers must
-    /// ensure full column rank.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{LstsqOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let b = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// let x = a.lstsq(&b)?;
+    /// assert_eq!(x.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn lstsq(&self, b: &TracedTensor) -> Result<TracedTensor>;
 
-    /// Build a traced complete-pivot LU solve operation.
+    /// Build a traced least-squares solve `argmin_x ||A x - b||_2` for a tall or square, full-column-rank `A`, via the thin QR factorization with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for incompatible coefficient/rhs metadata
-    /// and `Error::Extension` for unsupported dtype or registration failures.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Singular systems and concrete shape mismatches may be reported during
-    /// compile or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{LstsqOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let b = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// let x = a.lstsq_with(&b, &LstsqOptions::default())?;
+    /// assert_eq!(x.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn lstsq_with(&self, b: &TracedTensor, options: &LstsqOptions) -> Result<TracedTensor>;
+
+    /// Build a traced complete-pivot LU solve operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{FullPivLuSolveOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let b = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// let x = a.full_piv_lu_solve(&b)?;
+    /// assert_eq!(x.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn full_piv_lu_solve(&self, b: &TracedTensor) -> Result<TracedTensor>;
 
-    /// Build a traced triangular solve operation.
+    /// Build a traced complete-pivot LU solve operation with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for incompatible coefficient/rhs shapes or
-    /// invalid solve flags, and `Error::Extension` for unsupported dtype.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Singular or zero-diagonal systems can fail numerically during compile or
-    /// execution after symbolic inputs are bound.
-    fn triangular_solve(
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{FullPivLuSolveOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let b = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// let x = a.full_piv_lu_solve_with(&b, &FullPivLuSolveOptions::default())?;
+    /// assert_eq!(x.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn full_piv_lu_solve_with(
         &self,
         b: &TracedTensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
+        options: &FullPivLuSolveOptions,
     ) -> Result<TracedTensor>;
-    /// Build a traced sign/log-determinant operation.
+
+    /// Build a traced triangular solve operation (left side, lower triangular, no transpose, non-unit diagonal by default) with default options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for invalid matrix metadata or
-    /// `Error::Extension` for unsupported dtype and registration failures.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Concrete singularity and shape failures can be reported during compile
-    /// or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{Side, TriangularSolveOptions, Uplo};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let b = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// let x = a.triangular_solve(&b)?;
+    /// assert_eq!(x.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn triangular_solve(&self, b: &TracedTensor) -> Result<TracedTensor>;
+
+    /// Build a traced triangular solve operation (left side, lower triangular, no transpose, non-unit diagonal by default) with explicit options.
+    ///
+    /// The options choose `side`, `uplo`, `transpose` and `diagonal`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{Side, TriangularSolveOptions, Uplo};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let b = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+    /// let options = TriangularSolveOptions::default()
+    ///     .with_side(Side::Right)
+    ///     .with_uplo(Uplo::Upper);
+    /// let x = a.triangular_solve_with(&b, &options)?;
+    /// assert_eq!(x.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn triangular_solve_with(
+        &self,
+        b: &TracedTensor,
+        options: &TriangularSolveOptions,
+    ) -> Result<TracedTensor>;
+
+    /// Build a traced sign/log-determinant operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{SlogdetOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (sign, logabsdet) = a.slogdet()?;
+    /// assert_eq!(sign.rank(), 0);
+    /// assert_eq!(logabsdet.rank(), 0);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn slogdet(&self) -> Result<(TracedTensor, TracedTensor)>;
 
-    /// Build a traced determinant operation.
+    /// Build a traced sign/log-determinant operation with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for invalid matrix metadata or
-    /// `Error::Extension` for unsupported dtype.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Concrete singularity and shape failures may be reported during compile
-    /// or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{SlogdetOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let (sign, _logabsdet) = a.slogdet_with(&SlogdetOptions::default())?;
+    /// assert_eq!(sign.rank(), 0);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn slogdet_with(&self, options: &SlogdetOptions) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced determinant operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{DetOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let d = a.det()?;
+    /// assert_eq!(d.rank(), 0);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn det(&self) -> Result<TracedTensor>;
 
-    /// Build a traced matrix-inverse operation.
+    /// Build a traced determinant operation with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for incompatible rank/shape metadata or
-    /// `Error::Extension` for unsupported dtype.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Singular matrices produce a numerical error during compile or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{DetOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let d = a.det_with(&DetOptions::default())?;
+    /// assert_eq!(d.rank(), 0);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn det_with(&self, options: &DetOptions) -> Result<TracedTensor>;
+
+    /// Build a traced matrix-inverse operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{InvOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let ainv = a.inv()?;
+    /// assert_eq!(ainv.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn inv(&self) -> Result<TracedTensor>;
 
-    /// Build a traced Hermitian eigenvalue-only operation.
+    /// Build a traced matrix-inverse operation with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for invalid-rank metadata or
-    /// `Error::Extension` for unsupported dtype.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// A known non-square input is rejected when the backend executes the
-    /// factorization; solver failures may also be reported during execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{InvOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let ainv = a.inv_with(&InvOptions::default())?;
+    /// assert_eq!(ainv.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn inv_with(&self, options: &InvOptions) -> Result<TracedTensor>;
+
+    /// Build a traced Hermitian eigenvalue-only operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{EigvalshOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let values = a.eigvalsh()?;
+    /// assert_eq!(values.rank(), 1);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn eigvalsh(&self) -> Result<TracedTensor>;
 
-    /// Build a traced general eigenvalue-only operation.
+    /// Build a traced Hermitian eigenvalue-only operation with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for invalid matrix metadata or
-    /// `Error::Extension` for unsupported dtype.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Concrete shape and eigensolver failures may be reported during compile
-    /// or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{EigvalshOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let values = a.eigvalsh_with(&EigvalshOptions::default())?;
+    /// assert_eq!(values.rank(), 1);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn eigvalsh_with(&self, options: &EigvalshOptions) -> Result<TracedTensor>;
+
+    /// Build a traced general eigenvalue-only operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{EigvalsOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let values = a.eigvals()?;
+    /// assert_eq!(values.rank(), 1);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn eigvals(&self) -> Result<TracedTensor>;
 
-    /// Build a traced pseudoinverse operation with the default tolerance.
+    /// Build a traced general eigenvalue-only operation with explicit options.
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for invalid rank/shape metadata or
-    /// `Error::Extension` for unsupported dtype.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// SVD convergence and concrete shape failures may be reported during
-    /// compile or execution.
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{EigvalsOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let values = a.eigvals_with(&EigvalsOptions::default())?;
+    /// assert_eq!(values.rank(), 1);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn eigvals_with(&self, options: &EigvalsOptions) -> Result<TracedTensor>;
+
+    /// Build a traced pseudoinverse operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{PinvOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let ainv = a.pinv()?;
+    /// assert_eq!(ainv.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
     fn pinv(&self) -> Result<TracedTensor>;
 
-    /// Build a traced pseudoinverse with an explicit relative tolerance.
+    /// Build a traced pseudoinverse operation with explicit options.
+    ///
+    /// `PinvOptions::rtol` of `None` uses the dtype-dependent default relative
+    /// tolerance; `Some(r)` uses `r` (non-finite or negative values are rejected).
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation::InvalidArgument` when `rtol` is non-finite
-    /// or negative, or `Error::Extension` for unsupported dtype.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// SVD convergence and concrete shape failures may be reported during
-    /// compile or execution.
-    fn pinv_with_rtol(&self, rtol: f64) -> Result<TracedTensor>;
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{PinvOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let ainv = a.pinv_with(&PinvOptions::default().with_rtol(1e-12))?;
+    /// assert_eq!(ainv.rank(), 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn pinv_with(&self, options: &PinvOptions) -> Result<TracedTensor>;
 
-    /// Build a traced vector/matrix norm operation.
+    /// Build a traced vector/matrix norm operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{NormOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let n = a.norm()?;
+    /// assert_eq!(n.rank(), 0);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn norm(&self) -> Result<TracedTensor>;
+
+    /// Build a traced vector/matrix norm operation with explicit options.
     ///
     /// `ord = Some(0.0)` counts the entries that are not equal to zero: `NaN`
     /// counts as nonzero, both `+0.0` and `-0.0` count as zero, and `±inf`
-    /// count as nonzero (#2359).
+    /// count as nonzero (#2359). `axes` are signed and resolved against the
+    /// input rank; `None` reduces over all axes. A concrete shape is required
+    /// immediately; symbolic shapes produce `Error::TensorRuntime` wrapping
+    /// `ValidationError::InvalidArgument` for `shape` during graph construction.
     ///
     /// # Errors
     ///
-    /// Requires a concrete shape immediately. Returns `Error::Validation` for
-    /// invalid or duplicate axes or an invalid norm order. Symbolic shapes
-    /// produce `Error::TensorRuntime` wrapping `ValidationError::InvalidArgument`
-    /// for `shape` during graph construction; unsupported dtypes produce
-    /// `Error::Extension`.
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an unsupported dtype or `Error::Validation` for invalid graph metadata.
     ///
     /// # Deferred errors
     ///
-    /// Backend numerical or runtime failures may occur during execution.
-    fn norm(&self, ord: Option<f64>, dim: Option<&[usize]>, keepdim: bool) -> Result<TracedTensor>;
+    /// Concrete shape validation and backend failures may be reported at compile or execution time for symbolic inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
+    /// use tenferro_linalg::{NormOptions};
+    /// use tenferro_runtime::TraceContext;
+    ///
+    /// let trace = TraceContext::new();
+    /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+    /// let options = NormOptions::default().with_ord(1.0).with_axes(vec![-1]);
+    /// let n = a.norm_with(&options)?;
+    /// assert_eq!(n.rank(), 1);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    fn norm_with(&self, options: &NormOptions) -> Result<TracedTensor>;
 }
 
 /// Linear algebra tracing methods for [`TraceContext`].
@@ -645,6 +1332,7 @@ pub trait TraceContextLinalgExt {
     /// # Examples
     ///
     /// ```rust
+    /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{RankRevealingQrOptions, TraceContextLinalgExt};
     /// use tenferro_runtime::TraceContext;
     /// let trace = TraceContext::new();
@@ -1406,55 +2094,75 @@ impl TraceContextLinalgExt for TraceContext {
 
 impl TracedTensorLinalgExt for TracedTensor {
     fn svd(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
-        self.context().svd(self.trace_value())
+        self.svd_with(&SvdOptions::default())
     }
 
-    fn svd_with_options(
-        &self,
-        options: SvdOptions,
-    ) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
-        self.context().svd_with_options(self.trace_value(), options)
-    }
-
-    fn svd_full(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
-        self.context().svd_full(self.trace_value())
+    fn svd_with(&self, options: &SvdOptions) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+        crate::options::ensure_full_svd_options("svd", options)?;
+        match options.shape {
+            SvdShape::Thin => svd_with_options(self, *options),
+            SvdShape::Full => svd_full(self),
+        }
     }
 
     fn qr(&self) -> Result<(TracedTensor, TracedTensor)> {
-        self.context().qr(self.trace_value())
+        self.qr_with(&QrOptions::default())
+    }
+
+    fn qr_with(&self, options: &QrOptions) -> Result<(TracedTensor, TracedTensor)> {
+        qr_with_options(self, *options)
     }
 
     fn householder_qr(&self) -> Result<crate::HouseholderQr<TracedTensor>> {
-        self.context().householder_qr(self.trace_value())
+        self.householder_qr_with(&HouseholderQrOptions::default())
     }
 
-    fn qr_with_options(&self, options: QrOptions) -> Result<(TracedTensor, TracedTensor)> {
-        self.context().qr_with_options(self.trace_value(), options)
-    }
-
-    fn rank_revealing_qr(
+    fn householder_qr_with(
         &self,
-        options: RankRevealingQrOptions,
+        options: &HouseholderQrOptions,
+    ) -> Result<crate::HouseholderQr<TracedTensor>> {
+        let _ = options;
+        householder_qr(self)
+    }
+
+    fn rank_revealing_qr(&self) -> Result<RankRevealingQrResult<TracedTensor>> {
+        self.rank_revealing_qr_with(&RankRevealingQrOptions::default())
+    }
+
+    fn rank_revealing_qr_with(
+        &self,
+        options: &RankRevealingQrOptions,
     ) -> Result<RankRevealingQrResult<TracedTensor>> {
-        self.context()
-            .rank_revealing_qr(self.trace_value(), options)
+        rank_revealing_qr(self, *options)
     }
 
     fn eigh(&self) -> Result<(TracedTensor, TracedTensor)> {
-        self.context().eigh(self.trace_value())
+        self.eigh_with(&EighOptions::default())
     }
 
-    fn eigh_with_options(&self, options: EighOptions) -> Result<(TracedTensor, TracedTensor)> {
-        self.context()
-            .eigh_with_options(self.trace_value(), options)
+    fn eigh_with(&self, options: &EighOptions) -> Result<(TracedTensor, TracedTensor)> {
+        eigh_with_options(self, *options)
     }
 
     fn cholesky(&self) -> Result<TracedTensor> {
-        self.context().cholesky(self.trace_value())
+        self.cholesky_with(&CholeskyOptions::default())
+    }
+
+    fn cholesky_with(&self, options: &CholeskyOptions) -> Result<TracedTensor> {
+        let _ = options;
+        cholesky(self)
     }
 
     fn lu(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
-        self.context().lu(self.trace_value())
+        self.lu_with(&LuOptions::default())
+    }
+
+    fn lu_with(
+        &self,
+        options: &LuOptions,
+    ) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
+        let _ = options;
+        lu(self)
     }
 
     fn full_piv_lu(
@@ -1466,74 +2174,150 @@ impl TracedTensorLinalgExt for TracedTensor {
         TracedTensor,
         TracedTensor,
     )> {
-        self.context().full_piv_lu(self.trace_value())
+        self.full_piv_lu_with(&FullPivLuOptions::default())
+    }
+
+    fn full_piv_lu_with(
+        &self,
+        options: &FullPivLuOptions,
+    ) -> Result<(
+        TracedTensor,
+        TracedTensor,
+        TracedTensor,
+        TracedTensor,
+        TracedTensor,
+    )> {
+        let _ = options;
+        full_piv_lu(self)
     }
 
     fn eig(&self) -> Result<(TracedTensor, TracedTensor)> {
-        self.context().eig(self.trace_value())
+        self.eig_with(&EigOptions::default())
+    }
+
+    fn eig_with(&self, options: &EigOptions) -> Result<(TracedTensor, TracedTensor)> {
+        let _ = options;
+        eig(self)
     }
 
     fn solve(&self, b: &TracedTensor) -> Result<TracedTensor> {
-        self.context().solve(self.trace_value(), b.trace_value())
+        self.solve_with(b, &SolveOptions::default())
+    }
+
+    fn solve_with(&self, b: &TracedTensor, options: &SolveOptions) -> Result<TracedTensor> {
+        let _ = options;
+        solve(self, b)
     }
 
     fn lstsq(&self, b: &TracedTensor) -> Result<TracedTensor> {
-        self.context().lstsq(self.trace_value(), b.trace_value())
+        self.lstsq_with(b, &LstsqOptions::default())
+    }
+
+    fn lstsq_with(&self, b: &TracedTensor, options: &LstsqOptions) -> Result<TracedTensor> {
+        let _ = options;
+        lstsq(self, b)
     }
 
     fn full_piv_lu_solve(&self, b: &TracedTensor) -> Result<TracedTensor> {
-        self.context()
-            .full_piv_lu_solve(self.trace_value(), b.trace_value())
+        self.full_piv_lu_solve_with(b, &FullPivLuSolveOptions::default())
     }
 
-    fn triangular_solve(
+    fn full_piv_lu_solve_with(
         &self,
         b: &TracedTensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
+        options: &FullPivLuSolveOptions,
     ) -> Result<TracedTensor> {
-        self.context().triangular_solve(
-            self.trace_value(),
-            b.trace_value(),
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
+        let _ = options;
+        full_piv_lu_solve(self, b)
+    }
+
+    fn triangular_solve(&self, b: &TracedTensor) -> Result<TracedTensor> {
+        self.triangular_solve_with(b, &TriangularSolveOptions::default())
+    }
+
+    fn triangular_solve_with(
+        &self,
+        b: &TracedTensor,
+        options: &TriangularSolveOptions,
+    ) -> Result<TracedTensor> {
+        triangular_solve(
+            self,
+            b,
+            options.side == Side::Left,
+            options.uplo == Uplo::Lower,
+            options.transpose == Transpose::Transpose,
+            options.diagonal == Diagonal::Unit,
         )
     }
 
     fn slogdet(&self) -> Result<(TracedTensor, TracedTensor)> {
-        self.context().slogdet(self.trace_value())
+        self.slogdet_with(&SlogdetOptions::default())
+    }
+
+    fn slogdet_with(&self, options: &SlogdetOptions) -> Result<(TracedTensor, TracedTensor)> {
+        let _ = options;
+        slogdet(self)
     }
 
     fn det(&self) -> Result<TracedTensor> {
-        self.context().det(self.trace_value())
+        self.det_with(&DetOptions::default())
+    }
+
+    fn det_with(&self, options: &DetOptions) -> Result<TracedTensor> {
+        let _ = options;
+        det(self)
     }
 
     fn inv(&self) -> Result<TracedTensor> {
-        self.context().inv(self.trace_value())
+        self.inv_with(&InvOptions::default())
+    }
+
+    fn inv_with(&self, options: &InvOptions) -> Result<TracedTensor> {
+        let _ = options;
+        inv(self)
     }
 
     fn eigvalsh(&self) -> Result<TracedTensor> {
-        self.context().eigvalsh(self.trace_value())
+        self.eigvalsh_with(&EigvalshOptions::default())
+    }
+
+    fn eigvalsh_with(&self, options: &EigvalshOptions) -> Result<TracedTensor> {
+        let _ = options;
+        eigvalsh(self)
     }
 
     fn eigvals(&self) -> Result<TracedTensor> {
-        self.context().eigvals(self.trace_value())
+        self.eigvals_with(&EigvalsOptions::default())
+    }
+
+    fn eigvals_with(&self, options: &EigvalsOptions) -> Result<TracedTensor> {
+        let _ = options;
+        eigvals(self)
     }
 
     fn pinv(&self) -> Result<TracedTensor> {
-        self.context().pinv(self.trace_value())
+        self.pinv_with(&PinvOptions::default())
     }
 
-    fn pinv_with_rtol(&self, rtol: f64) -> Result<TracedTensor> {
-        self.context().pinv_with_rtol(self.trace_value(), rtol)
+    fn pinv_with(&self, options: &PinvOptions) -> Result<TracedTensor> {
+        match options.rtol {
+            None => pinv(self),
+            Some(rtol) => pinv_with_rtol(self, rtol),
+        }
     }
 
-    fn norm(&self, ord: Option<f64>, dim: Option<&[usize]>, keepdim: bool) -> Result<TracedTensor> {
-        self.context().norm(self.trace_value(), ord, dim, keepdim)
+    fn norm(&self) -> Result<TracedTensor> {
+        self.norm_with(&NormOptions::default())
+    }
+
+    fn norm_with(&self, options: &NormOptions) -> Result<TracedTensor> {
+        let axes = crate::options::resolve_norm_axes("norm", options.axes.as_deref(), self.rank())?;
+        norm(
+            self,
+            options.ord,
+            axes.as_deref(),
+            options.keep_dims == KeepDims::Keep,
+        )
     }
 }
 

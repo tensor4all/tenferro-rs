@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_complex::Complex64;
 use tenferro_cpu::{with_cpu_engine, CpuEngine};
-use tenferro_linalg::{LinalgBackend, RankRevealingQrOptions, TensorLinalgExt};
+use tenferro_linalg::{LinalgBackend, Side, TensorLinalgExt, TriangularSolveOptions, Uplo};
 use tenferro_tensor::{Engine, Tensor, TypedTensor};
 
 /// Counts allocations and live bytes while armed.
@@ -488,8 +488,14 @@ fn check_remaining_families(host: &mut CpuEngine, kind: &str, failures: &mut Vec
         spd.cholesky(session).unwrap();
     });
     check(host, failures, &name("triangular_solve/48"), |session| {
-        spd.triangular_solve(&a, true, true, false, false, session)
-            .unwrap();
+        spd.triangular_solve_with(
+            &a,
+            &TriangularSolveOptions::default()
+                .with_side(Side::Left)
+                .with_uplo(Uplo::Lower),
+            session,
+        )
+        .unwrap();
     });
     check(host, failures, &name("lu/48"), |session| {
         a.lu(session).unwrap();
@@ -513,8 +519,7 @@ fn check_remaining_families(host: &mut CpuEngine, kind: &str, failures: &mut Vec
         tall.householder_qr(session).unwrap();
     });
     check(host, failures, &name("rank_revealing_qr/tall"), |session| {
-        tall.rank_revealing_qr(RankRevealingQrOptions::default(), session)
-            .unwrap();
+        tall.rank_revealing_qr(session).unwrap();
     });
     check(host, failures, &name("eigh/48"), |session| {
         spd.eigh(session).unwrap();

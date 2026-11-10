@@ -8,7 +8,8 @@
 
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    TensorLinalgExt, TensorReadLinalgExt, TracedTensorLinalgExt, TypedTensorLinalgExt,
+    Side, TensorLinalgExt, TensorReadLinalgExt, TracedTensorLinalgExt, TriangularSolveOptions,
+    TypedTensorLinalgExt,
 };
 use tenferro_runtime::{DType, Error, GraphCompiler, TracedTensor};
 use tenferro_tensor::{Tensor, TensorRead, TypedTensor, ValidationError};
@@ -416,7 +417,11 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                 "triangular_solve" => {
                     assert_error(
                         &label("owned"),
-                        a.triangular_solve(&b, true, false, false, false, &mut host),
+                        a.triangular_solve_with(
+                            &b,
+                            &TriangularSolveOptions::default().with_side(Side::Left),
+                            &mut host,
+                        ),
                     );
                     assert_error(
                         &label("read"),
@@ -437,13 +442,20 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     assert_error(
                         &label("eager"),
                         eager_runtime().with_eager_session(&mut CpuEngine::serial(), |session| {
-                            session.triangular_solve(&eager_a, &eager_b, true, false, false, false)
+                            session.triangular_solve_with(
+                                &eager_a,
+                                &eager_b,
+                                &TriangularSolveOptions::default().with_side(Side::Left),
+                            )
                         }),
                     );
                     assert_traced_error(
                         &label("traced"),
                         traced_a
-                            .triangular_solve(&traced_b, true, false, false, false)
+                            .triangular_solve_with(
+                                &traced_b,
+                                &TriangularSolveOptions::default().with_side(Side::Left),
+                            )
                             .map(|x| vec![x]),
                     );
                 }

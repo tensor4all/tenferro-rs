@@ -21,7 +21,13 @@ use crate::extension::{
     SvdOptions,
 };
 use crate::rank_revealing_qr::validate_rank_revealing_qr_options;
-use crate::{RankRevealingQrOptions, RankRevealingQrResult};
+use crate::{
+    CholeskyOptions, DetOptions, Diagonal, EigOptions, EigvalsOptions, EigvalshOptions,
+    FullPivLuOptions, FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, KeepDims,
+    LstsqOptions, LuOptions, NormOptions, PinvOptions, RankRevealingQrOptions,
+    RankRevealingQrResult, Side, SlogdetOptions, SolveOptions, SvdShape, Transpose,
+    TriangularSolveOptions, Uplo,
+};
 
 /// Tensor-owned linear solve. Other eager linear-algebra operations use
 /// [`EagerSessionLinalgExt`] inside [`tenferro_ad::EagerRuntime::with_eager_session`].
@@ -83,6 +89,9 @@ impl EagerTensorLinalgExt for EagerTensor {
 
 /// Linear algebra operations on a runtime-bound borrowed eager session.
 ///
+/// Every operation `op(&x, ..)` has a configurable form `op_with(&x, .., &Options)`; the
+/// short form is the `_with` form with default options.
+///
 /// # Examples
 /// ```rust
 /// use tenferro_ad::{EagerRuntime, Tensor};
@@ -102,104 +111,99 @@ pub trait EagerSessionLinalgExt {
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let factor = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-    ///     let input = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![9.0_f64])?)?;
-    ///     session.cholesky(&input)
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![9.0_f64])?)?;
+    ///     s.cholesky(&a)
     /// })?;
-    /// assert_eq!(factor.value()?.as_slice::<f64>()?, &[3.0]);
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
-    /// Returns typed validation, extension, backend, module or unsupported-executor errors.
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
     fn cholesky(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
 
-    /// Compute a thin singular value decomposition in this borrowed session.
+    /// Configurable form of [`Self::cholesky`], taking explicit options.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt, CholeskyOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let (_u, values, _vt) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![9.0_f64])?)?;
+    ///     s.cholesky_with(&a, &CholeskyOptions::default())
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[3.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn cholesky_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &CholeskyOptions,
+    ) -> Result<EagerTensor>;
+
+    /// Compute an SVD in this borrowed session.
+    ///
+    /// The default options request the thin factorization with the default gauge, driver, and
+    /// derivative regularizer. `SvdShape::Full` requests the full-matrices factorization,
+    /// including the right nullspace; it does not combine with a non-default gauge, driver, or
+    /// derivative epsilon.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
     ///     s.svd(&a)
     /// })?;
+    /// let (_u, values, _vt) = r;
     /// assert_eq!(values.value()?.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
-    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    /// Returns typed invalid-tolerance, extension, backend, or unsupported errors, and
+    /// `Error::Unsupported` for `SvdShape::Full` combined with a non-default gauge, driver, or
+    /// derivative epsilon.
     fn svd(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
 
-    /// Compute thin SVD with an explicit gauge, driver, and derivative regularizer.
+    /// Configurable form of [`Self::svd`], taking explicit options.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::{EagerSessionLinalgExt, SvdOptions};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, SvdShape, SvdOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let (_u, values, _vt) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
-    ///     s.svd_with_options(&a, SvdOptions::default())
-    /// })?;
-    /// assert_eq!(values.value()?.as_slice::<f64>()?, &[3.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    /// # Errors
-    /// Returns typed invalid-tolerance, extension, backend, or unsupported errors.
-    fn svd_with_options(
-        &mut self,
-        input: &EagerTensor,
-        options: SvdOptions,
-    ) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
-
-    /// Compute full-matrices SVD, including the right nullspace.
-    ///
-    /// # Examples
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
-    /// let ctx = EagerRuntime::new()?;
-    /// let (u, values, vh) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 2], vec![1.0_f64, 1.0])?)?;
-    ///     s.svd_full(&a)
+    ///     s.svd_with(&a, &SvdOptions::default().with_shape(SvdShape::Full))
     /// })?;
+    /// let (u, values, vh) = r;
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(values.shape(), &[1]);
     /// assert_eq!(vh.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
-    /// Returns `Error::Validation` with `ValidationError::RankMismatch` when the
-    /// input is not a (batched) matrix, `Error::UnsupportedAdRule` when a
-    /// traced input needs a derivative this decomposition does not provide,
-    /// `Error::Extension` carrying the linalg failure
-    /// (for example `Error::NonConvergence` or an unsupported dtype), or
-    /// `Error::TensorRuntime` for a backend failure.
-    fn svd_full(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
+    /// Returns typed invalid-tolerance, extension, backend, or unsupported errors, and
+    /// `Error::Unsupported` for `SvdShape::Full` combined with a non-default gauge, driver, or
+    /// derivative epsilon.
+    fn svd_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &SvdOptions,
+    ) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
 
     /// Compute a thin QR decomposition in this borrowed session.
-    ///
-    /// # Examples
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
-    /// let ctx = EagerRuntime::new()?;
-    /// let (q, r) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
-    ///     s.qr(&a)
-    /// })?;
-    /// assert_eq!(q.shape(), &[1, 1]);
-    /// assert_eq!(r.shape(), &[1, 1]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    /// # Errors
-    /// Returns typed validation, extension, backend, or unsupported-executor errors.
-    fn qr(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)>;
-
-    /// Compute QR with an explicit post-processing gauge.
     ///
     /// The CUDA provider does not read the cuSOLVER `geqrf`/`orgqr` status
     /// flags, so forward QR issues no host round trip and reports neither a
@@ -209,49 +213,94 @@ pub trait EagerSessionLinalgExt {
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::{EagerSessionLinalgExt, QrOptions};
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let (q, r) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
-    ///     s.qr_with_options(&a, QrOptions::default())
+    ///     s.qr(&a)
     /// })?;
+    /// let (q, r) = r;
     /// assert_eq!(q.shape(), &[1, 1]);
     /// assert_eq!(r.shape(), &[1, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
-    /// Returns typed validation, extension, backend, or unsupported errors.
-    fn qr_with_options(
-        &mut self,
-        input: &EagerTensor,
-        options: QrOptions,
-    ) -> Result<(EagerTensor, EagerTensor)>;
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn qr(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)>;
 
-    /// Solve a triangular system in this borrowed session.
+    /// Configurable form of [`Self::qr`], taking explicit options.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt, QrOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
-    ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
-    ///     s.triangular_solve(&a, &b, true, true, false, false)
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![3.0_f64])?)?;
+    ///     s.qr_with(&a, &QrOptions::default())
     /// })?;
-    /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0]);
+    /// let (q, r) = r;
+    /// assert_eq!(q.shape(), &[1, 1]);
+    /// assert_eq!(r.shape(), &[1, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed validation, extension, backend, or unsupported-executor errors.
-    fn triangular_solve(
+    fn qr_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &QrOptions,
+    ) -> Result<(EagerTensor, EagerTensor)>;
+
+    /// Solve a triangular system in this borrowed session.
+    ///
+    /// The default options solve `X op(A) = B` with the upper triangle, no transpose, and a
+    /// stored diagonal; set the `TriangularSolveOptions` fields to change the side, triangle,
+    /// transpose, or diagonal.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
+    ///     s.triangular_solve(&a, &b)
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn triangular_solve(&mut self, matrix: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor>;
+
+    /// Configurable form of [`Self::triangular_solve`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, Side, TriangularSolveOptions, Uplo};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
+    ///     s.triangular_solve_with(&a, &b, &TriangularSolveOptions::default().with_side(Side::Left).with_uplo(Uplo::Lower))
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn triangular_solve_with(
         &mut self,
         matrix: &EagerTensor,
         rhs: &EagerTensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
+        options: &TriangularSolveOptions,
     ) -> Result<EagerTensor>;
 
     /// Solve a square linear system in this borrowed session.
@@ -259,59 +308,114 @@ pub trait EagerSessionLinalgExt {
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.solve(&a, &b)
     /// })?;
-    /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0]);
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
     /// the forward solve path, so it performs no per-call non-singularity check
     /// and issues no host round trip. An exactly singular input is left to the
     /// caller's verification, as in `torch.linalg.solve`. CPU providers may
     /// still report their own exactly singular factor as `Error::Singular`.
     ///
+    ///
     /// # Errors
     /// Returns typed validation, extension, backend, or unsupported-executor errors.
     fn solve(&mut self, matrix: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor>;
+
+    /// Configurable form of [`Self::solve`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, SolveOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
+    ///     s.solve_with(&a, &b, &SolveOptions::default())
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn solve_with(
+        &mut self,
+        matrix: &EagerTensor,
+        rhs: &EagerTensor,
+        options: &SolveOptions,
+    ) -> Result<EagerTensor>;
 
     /// Solve a full-column-rank least-squares problem inside this session.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![2.0_f64, 4.0])?)?;
     ///     s.lstsq(&a, &b)
     /// })?;
-    /// assert!((x.value()?.as_slice::<f64>()?[0] - 2.0).abs() < 1e-12);
+    /// assert!((r.value()?.as_slice::<f64>()?[0] - 2.0).abs() < 1e-12);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed rank/shape/dtype validation, extension, backend, or unsupported errors.
     fn lstsq(&mut self, matrix: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor>;
+
+    /// Configurable form of [`Self::lstsq`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, LstsqOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
+    ///     let b = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![2.0_f64, 4.0])?)?;
+    ///     s.lstsq_with(&a, &b, &LstsqOptions::default())
+    /// })?;
+    /// assert!((r.value()?.as_slice::<f64>()?[0] - 2.0).abs() < 1e-12);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed rank/shape/dtype validation, extension, backend, or unsupported errors.
+    fn lstsq_with(
+        &mut self,
+        matrix: &EagerTensor,
+        rhs: &EagerTensor,
+        options: &LstsqOptions,
+    ) -> Result<EagerTensor>;
 
     /// Factor a matrix without leaving this borrowed session.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let (_p, _l, u, _parity) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.lu(&a)
     /// })?;
+    /// let (_p, _l, u, _parity) = r;
     /// assert_eq!(u.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed validation, extension, backend, or unsupported-executor errors.
     fn lu(
@@ -319,140 +423,290 @@ pub trait EagerSessionLinalgExt {
         input: &EagerTensor,
     ) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)>;
 
+    /// Configurable form of [`Self::lu`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, LuOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     s.lu_with(&a, &LuOptions::default())
+    /// })?;
+    /// let (_p, _l, u, _parity) = r;
+    /// assert_eq!(u.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn lu_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &LuOptions,
+    ) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)>;
+
     /// Compute determinant sign and logarithm of its absolute value in this session.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let (sign, logabs) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.slogdet(&a)
     /// })?;
+    /// let (sign, logabs) = r;
     /// assert_eq!(sign.value()?.as_slice::<f64>()?, &[1.0]);
     /// assert!((logabs.value()?.as_slice::<f64>()?[0] - 2.0_f64.ln()).abs() < 1e-12);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed validation, extension, backend, or unsupported-executor errors.
     fn slogdet(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)>;
+
+    /// Configurable form of [`Self::slogdet`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, SlogdetOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     s.slogdet_with(&a, &SlogdetOptions::default())
+    /// })?;
+    /// let (sign, logabs) = r;
+    /// assert_eq!(sign.value()?.as_slice::<f64>()?, &[1.0]);
+    /// assert!((logabs.value()?.as_slice::<f64>()?[0] - 2.0_f64.ln()).abs() < 1e-12);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn slogdet_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &SlogdetOptions,
+    ) -> Result<(EagerTensor, EagerTensor)>;
 
     /// Compute a determinant inside the borrowed session.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let det = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.det(&a)
     /// })?;
-    /// assert_eq!(det.value()?.as_slice::<f64>()?, &[2.0]);
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed validation, extension, backend, or unsupported-executor errors.
     fn det(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
+
+    /// Configurable form of [`Self::det`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, DetOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     s.det_with(&a, &DetOptions::default())
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn det_with(&mut self, input: &EagerTensor, options: &DetOptions) -> Result<EagerTensor>;
 
     /// Invert a square matrix inside this borrowed session.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let inverse = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.inv(&a)
     /// })?;
-    /// assert_eq!(inverse.value()?.as_slice::<f64>()?, &[0.5]);
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[0.5]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed rank/shape/dtype validation, extension, backend, or unsupported errors.
     fn inv(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
+
+    /// Configurable form of [`Self::inv`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, InvOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     s.inv_with(&a, &InvOptions::default())
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[0.5]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed rank/shape/dtype validation, extension, backend, or unsupported errors.
+    fn inv_with(&mut self, input: &EagerTensor, options: &InvOptions) -> Result<EagerTensor>;
 
     /// Compute eigenvalues of a Hermitian matrix in this borrowed session.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let values = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigvalsh(&a)
     /// })?;
-    /// assert_eq!(values.value()?.as_slice::<f64>()?, &[4.0]);
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed validation, extension, backend, or unsupported-executor errors.
     fn eigvalsh(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
+
+    /// Configurable form of [`Self::eigvalsh`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, EigvalshOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
+    ///     s.eigvalsh_with(&a, &EigvalshOptions::default())
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[4.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn eigvalsh_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &EigvalshOptions,
+    ) -> Result<EagerTensor>;
 
     /// Compute general eigenvalues in this borrowed session.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let values = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigvals(&a)
     /// })?;
-    /// assert_eq!(values.value()?.as_slice::<num_complex::Complex64>()?, &[num_complex::Complex64::new(4.0, 0.0)]);
+    /// assert_eq!(r.value()?.as_slice::<num_complex::Complex64>()?, &[num_complex::Complex64::new(4.0, 0.0)]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed validation, extension, backend, or unsupported-executor errors.
     fn eigvals(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
 
-    /// Compute eigenvalues and vectors of a Hermitian matrix in this session.
+    /// Configurable form of [`Self::eigvals`], taking explicit options.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt, EigvalsOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let (values, vectors) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
+    ///     s.eigvals_with(&a, &EigvalsOptions::default())
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<num_complex::Complex64>()?, &[num_complex::Complex64::new(4.0, 0.0)]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    fn eigvals_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &EigvalsOptions,
+    ) -> Result<EagerTensor>;
+
+    /// Compute eigenvalues and vectors of a Hermitian matrix in this session.
+    ///
+    /// The options choose the eigenvector gauge, the derivative regularizer, and the driver.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eigh(&a)
     /// })?;
+    /// let (values, vectors) = r;
     /// assert_eq!(values.value()?.as_slice::<f64>()?, &[4.0]);
     /// assert_eq!(vectors.shape(), &[1, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    /// # Errors
-    /// Returns typed validation, unsupported-dtype, extension, or backend errors.
-    fn eigh(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)>;
-
-    /// Compute Hermitian eigendecomposition with explicit gauge and tolerance.
     ///
-    /// # Examples
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::{EagerSessionLinalgExt, EighOptions};
-    /// let ctx = EagerRuntime::new()?;
-    /// let (values, _vectors) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
-    ///     s.eigh_with_options(&a, EighOptions::default())
-    /// })?;
-    /// assert_eq!(values.value()?.as_slice::<f64>()?, &[4.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
     /// # Errors
     /// Returns `Error::Validation` with `ValidationError::InvalidArgument` for an
     /// invalid tolerance or with `ValidationError::ShapeMismatch` for a
     /// non-square input, `Error::Extension` carrying the linalg failure
     /// (for example `Error::NonConvergence` or an unsupported dtype), or
     /// `Error::TensorRuntime` for a backend failure.
-    fn eigh_with_options(
+    fn eigh(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)>;
+
+    /// Configurable form of [`Self::eigh`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, EighOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
+    ///     s.eigh_with(&a, &EighOptions::default())
+    /// })?;
+    /// let (values, vectors) = r;
+    /// assert_eq!(values.value()?.as_slice::<f64>()?, &[4.0]);
+    /// assert_eq!(vectors.shape(), &[1, 1]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns `Error::Validation` with `ValidationError::InvalidArgument` for an
+    /// invalid tolerance or with `ValidationError::ShapeMismatch` for a
+    /// non-square input, `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype), or
+    /// `Error::TensorRuntime` for a backend failure.
+    fn eigh_with(
         &mut self,
         input: &EagerTensor,
-        options: EighOptions,
+        options: &EighOptions,
     ) -> Result<(EagerTensor, EagerTensor)>;
 
     /// Compute general eigenvalues and eigenvectors inside this session.
@@ -463,16 +717,18 @@ pub trait EagerSessionLinalgExt {
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let (values, vectors) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.eig(&a)
     /// })?;
+    /// let (values, vectors) = r;
     /// assert_eq!(values.value()?.as_slice::<num_complex::Complex64>()?, &[num_complex::Complex64::new(4.0, 0.0)]);
     /// assert_eq!(vectors.shape(), &[1, 1]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns `Error::Validation` with `ValidationError::RankMismatch` or
     /// `ValidationError::ShapeMismatch` for a non-square (batched) matrix,
@@ -481,82 +737,126 @@ pub trait EagerSessionLinalgExt {
     /// `Error::TensorRuntime` for a backend failure.
     fn eig(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)>;
 
-    /// Compute the Moore-Penrose pseudoinverse using the default tolerance.
-    ///
-    /// The cutoff is applied to an accuracy-preserving default SVD
-    /// (`SvdDriver::Auto`), so the retained rank matches the CPU reference.
+    /// Configurable form of [`Self::eig`], taking explicit options.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt, EigOptions};
     /// let ctx = EagerRuntime::new()?;
-    /// let inverse = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
+    ///     s.eig_with(&a, &EigOptions::default())
+    /// })?;
+    /// let (values, vectors) = r;
+    /// assert_eq!(values.value()?.as_slice::<num_complex::Complex64>()?, &[num_complex::Complex64::new(4.0, 0.0)]);
+    /// assert_eq!(vectors.shape(), &[1, 1]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch` or
+    /// `ValidationError::ShapeMismatch` for a non-square (batched) matrix,
+    /// `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype), or
+    /// `Error::TensorRuntime` for a backend failure.
+    fn eig_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &EigOptions,
+    ) -> Result<(EagerTensor, EagerTensor)>;
+
+    /// Compute the Moore-Penrose pseudoinverse.
+    ///
+    /// With `PinvOptions::rtol` unset the cutoff is the default tolerance. The cutoff is applied
+    /// to an accuracy-preserving default SVD (`SvdDriver::Auto`), so the retained rank matches
+    /// the CPU reference.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     s.pinv(&a)
     /// })?;
-    /// assert_eq!(inverse.value()?.as_slice::<f64>()?, &[0.5]);
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[0.5]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    /// # Errors
-    /// Returns `Error::Validation` with `ValidationError::RankMismatch` when the
-    /// input is not a (batched) matrix, `Error::Extension` carrying the linalg failure
-    /// (for example `Error::NonConvergence` or an unsupported dtype) from the
-    /// underlying SVD, or `Error::TensorRuntime` for a backend failure.
-    fn pinv(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
-
-    /// Compute the pseudoinverse with an explicit relative tolerance.
     ///
-    /// Like [`Self::pinv`], the threshold is applied to an accuracy-preserving
-    /// default SVD (`SvdDriver::Auto`).
-    ///
-    /// # Examples
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
-    /// let ctx = EagerRuntime::new()?;
-    /// let inverse = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
-    ///     s.pinv_with_rtol(&a, 1.0e-12)
-    /// })?;
-    /// assert_eq!(inverse.value()?.as_slice::<f64>()?, &[0.5]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
     /// # Errors
     /// Returns `Error::Validation` with `ValidationError::RankMismatch` when the
     /// input is not a (batched) matrix, `ValidationError::InvalidArgument` for a
     /// negative or non-finite tolerance, `Error::Extension` carrying the linalg failure
-    /// (for example `Error::NonConvergence` or an unsupported dtype) from
-    /// the underlying SVD, or `Error::TensorRuntime` for a backend failure.
-    fn pinv_with_rtol(&mut self, input: &EagerTensor, rtol: f64) -> Result<EagerTensor>;
+    /// (for example `Error::NonConvergence` or an unsupported dtype) from the
+    /// underlying SVD, or `Error::TensorRuntime` for a backend failure.
+    fn pinv(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
+
+    /// Configurable form of [`Self::pinv`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, PinvOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     s.pinv_with(&a, &PinvOptions::default().with_rtol(1.0e-12))
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[0.5]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch` when the
+    /// input is not a (batched) matrix, `ValidationError::InvalidArgument` for a
+    /// negative or non-finite tolerance, `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype) from the
+    /// underlying SVD, or `Error::TensorRuntime` for a backend failure.
+    fn pinv_with(&mut self, input: &EagerTensor, options: &PinvOptions) -> Result<EagerTensor>;
 
     /// Compute a vector, matrix, or tensor norm in this session.
     /// An empty axis list is a no-op and clones the input without dispatch.
     /// `ord = Some(0.0)` counts the entries that are not equal to zero: `NaN`
     /// counts as nonzero, both `+0.0` and `-0.0` count as zero, and `±inf`
-    /// count as nonzero (#2359).
+    /// count as nonzero (#2359). Axes in `NormOptions::axes` may be negative.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let result = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?)?;
-    ///     s.norm(&a, Some(2.0), Some(&[0]), false)
+    ///     s.norm(&a)
     /// })?;
-    /// assert_eq!(result.value()?.as_slice::<f64>()?, &[5.0]);
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[5.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed unsupported-dtype, invalid-axis/order, SVD, or backend errors.
-    fn norm(
-        &mut self,
-        input: &EagerTensor,
-        ord: Option<f64>,
-        dim: Option<&[usize]>,
-        keepdim: bool,
-    ) -> Result<EagerTensor>;
+    fn norm(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
+
+    /// Configurable form of [`Self::norm`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, NormOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0])?)?;
+    ///     s.norm_with(&a, &NormOptions::default().with_ord(2.0).with_axes(vec![-1]))
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[5.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed unsupported-dtype, invalid-axis/order, SVD, or backend errors.
+    fn norm_with(&mut self, input: &EagerTensor, options: &NormOptions) -> Result<EagerTensor>;
 
     /// Compute complete-pivot LU factors `(P, L, U, Q, parity)` in this session.
     /// Reconstruction uses `A = P^T * L * U * Q`; scalar `parity` is real
@@ -565,17 +865,19 @@ pub trait EagerSessionLinalgExt {
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let (p, _l, _u, q, parity) = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?)?;
     ///     s.full_piv_lu(&a)
     /// })?;
+    /// let (p, _l, _u, q, parity) = r;
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed rank/shape, unsupported-provider, numerical, or output-count errors.
     fn full_piv_lu(
@@ -589,41 +891,100 @@ pub trait EagerSessionLinalgExt {
         EagerTensor,
     )>;
 
+    /// Configurable form of [`Self::full_piv_lu`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, FullPivLuOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?)?;
+    ///     s.full_piv_lu_with(&a, &FullPivLuOptions::default())
+    /// })?;
+    /// let (p, _l, _u, q, parity) = r;
+    /// assert_eq!(p.shape(), &[2, 2]);
+    /// assert_eq!(q.shape(), &[2, 2]);
+    /// assert_eq!(parity.shape(), &[] as &[usize]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed rank/shape, unsupported-provider, numerical, or output-count errors.
+    fn full_piv_lu_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &FullPivLuOptions,
+    ) -> Result<(
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+    )>;
+
     /// Solve a linear system using complete-pivot LU in this session.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
     ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
     ///     s.full_piv_lu_solve(&a, &b)
     /// })?;
-    /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0]);
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed rank/shape, unsupported-provider, singularity, or backend errors.
     fn full_piv_lu_solve(&mut self, matrix: &EagerTensor, rhs: &EagerTensor)
         -> Result<EagerTensor>;
+
+    /// Configurable form of [`Self::full_piv_lu_solve`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, FullPivLuSolveOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?)?;
+    ///     let b = s.constant_from(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?)?;
+    ///     s.full_piv_lu_solve_with(&a, &b, &FullPivLuSolveOptions::default())
+    /// })?;
+    /// assert_eq!(r.value()?.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed rank/shape, unsupported-provider, singularity, or backend errors.
+    fn full_piv_lu_solve_with(
+        &mut self,
+        matrix: &EagerTensor,
+        rhs: &EagerTensor,
+        options: &FullPivLuSolveOptions,
+    ) -> Result<EagerTensor>;
 
     /// Compute column-pivoted rank-revealing QR in this session.
     ///
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::{EagerSessionLinalgExt, RankRevealingQrOptions};
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let result = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?)?;
-    ///     s.rank_revealing_qr(&a, RankRevealingQrOptions::default())
+    ///     s.rank_revealing_qr(&a)
     /// })?;
-    /// assert_eq!(result.column_permutation.shape(), &[2]);
-    /// assert_eq!(result.rank.value()?.as_slice::<i64>()?, &[2]);
+    /// assert_eq!(r.column_permutation.shape(), &[2]);
+    /// assert_eq!(r.rank.value()?.as_slice::<i64>()?, &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns `Error::Validation` with `ValidationError::RankMismatch`,
     /// `ValidationError::DTypeMismatch` or `ValidationError::InvalidArgument` for
@@ -633,7 +994,34 @@ pub trait EagerSessionLinalgExt {
     fn rank_revealing_qr(
         &mut self,
         input: &EagerTensor,
-        options: RankRevealingQrOptions,
+    ) -> Result<RankRevealingQrResult<EagerTensor>>;
+
+    /// Configurable form of [`Self::rank_revealing_qr`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, RankRevealingQrOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?)?;
+    ///     s.rank_revealing_qr_with(&a, &RankRevealingQrOptions::default())
+    /// })?;
+    /// assert_eq!(r.column_permutation.shape(), &[2]);
+    /// assert_eq!(r.rank.value()?.as_slice::<i64>()?, &[2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns `Error::Validation` with `ValidationError::RankMismatch`,
+    /// `ValidationError::DTypeMismatch` or `ValidationError::InvalidArgument` for
+    /// an invalid rank, dtype or tolerance, `Error::Extension` carrying the linalg failure
+    /// (for example `Error::NonConvergence` or an unsupported dtype), or
+    /// `Error::TensorRuntime` for a backend failure.
+    fn rank_revealing_qr_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &RankRevealingQrOptions,
     ) -> Result<RankRevealingQrResult<EagerTensor>>;
 
     /// Initialize compact Householder QR state in this borrowed session.
@@ -641,60 +1029,101 @@ pub trait EagerSessionLinalgExt {
     /// # Examples
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_linalg::EagerSessionLinalgExt;
+    /// use tenferro_linalg::{EagerSessionLinalgExt};
     /// let ctx = EagerRuntime::new()?;
-    /// let state = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
     ///     s.householder_qr(&a)
     /// })?;
-    /// assert!(format!("{state:?}").starts_with("HouseholderQr"));
+    /// assert!(format!("{r:?}").starts_with("HouseholderQr"));
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
     /// # Errors
     /// Returns typed invalid metadata, unsupported executor, or backend errors.
     fn householder_qr(&mut self, input: &EagerTensor) -> Result<crate::HouseholderQr<EagerTensor>>;
+
+    /// Configurable form of [`Self::householder_qr`], taking explicit options.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_linalg::{EagerSessionLinalgExt, HouseholderQrOptions};
+    /// let ctx = EagerRuntime::new()?;
+    /// let r = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let a = s.constant_from(Tensor::from_vec_col_major([2, 1], vec![1.0_f64, 2.0])?)?;
+    ///     s.householder_qr_with(&a, &HouseholderQrOptions::default())
+    /// })?;
+    /// assert!(format!("{r:?}").starts_with("HouseholderQr"));
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns typed invalid metadata, unsupported executor, or backend errors.
+    fn householder_qr_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &HouseholderQrOptions,
+    ) -> Result<crate::HouseholderQr<EagerTensor>>;
 }
 
 impl EagerSessionLinalgExt for EagerSession<'_> {
-    fn svd(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
-        self.svd_with_options(input, SvdOptions::default())
+    fn cholesky(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.cholesky_with(input, &CholeskyOptions::default())
     }
 
-    fn svd_with_options(
+    fn cholesky_with(
         &mut self,
         input: &EagerTensor,
-        options: SvdOptions,
-    ) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
-        validate_derivative_eps("svd_with_options", options.derivative_eps)?;
-        three_outputs(
-            apply_linalg_eager_in_session(
-                self,
-                LinalgOp::Svd {
-                    derivative_eps: options.derivative_eps,
-                    gauge: options.gauge,
-                    driver: options.driver,
-                },
-                &[input],
-            )?,
-            "svd",
+        _options: &CholeskyOptions,
+    ) -> Result<EagerTensor> {
+        one_output(
+            apply_linalg_eager_in_session(self, LinalgOp::Cholesky, &[input])?,
+            "cholesky",
         )
     }
 
-    fn svd_full(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
-        three_outputs(
-            apply_linalg_eager_in_session(self, LinalgOp::SvdFull, &[input])?,
-            "svd_full",
-        )
+    fn svd(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
+        self.svd_with(input, &SvdOptions::default())
+    }
+
+    fn svd_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &SvdOptions,
+    ) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
+        crate::options::ensure_full_svd_options("svd", options)?;
+        match options.shape {
+            SvdShape::Thin => {
+                validate_derivative_eps("svd_with", options.derivative_eps)?;
+                three_outputs(
+                    apply_linalg_eager_in_session(
+                        self,
+                        LinalgOp::Svd {
+                            derivative_eps: options.derivative_eps,
+                            gauge: options.gauge,
+                            driver: options.driver,
+                        },
+                        &[input],
+                    )?,
+                    "svd",
+                )
+            }
+            SvdShape::Full => three_outputs(
+                apply_linalg_eager_in_session(self, LinalgOp::SvdFull, &[input])?,
+                "svd_full",
+            ),
+        }
     }
 
     fn qr(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
-        self.qr_with_options(input, QrOptions::default())
+        self.qr_with(input, &QrOptions::default())
     }
 
-    fn qr_with_options(
+    fn qr_with(
         &mut self,
         input: &EagerTensor,
-        options: QrOptions,
+        options: &QrOptions,
     ) -> Result<(EagerTensor, EagerTensor)> {
         two_outputs(
             apply_linalg_eager_in_session(
@@ -708,30 +1137,24 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
         )
     }
 
-    fn cholesky(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
-        one_output(
-            apply_linalg_eager_in_session(self, LinalgOp::Cholesky, &[input])?,
-            "cholesky",
-        )
+    fn triangular_solve(&mut self, matrix: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.triangular_solve_with(matrix, rhs, &TriangularSolveOptions::default())
     }
 
-    fn triangular_solve(
+    fn triangular_solve_with(
         &mut self,
         matrix: &EagerTensor,
         rhs: &EagerTensor,
-        left_side: bool,
-        lower: bool,
-        transpose_a: bool,
-        unit_diagonal: bool,
+        options: &TriangularSolveOptions,
     ) -> Result<EagerTensor> {
         one_output(
             apply_linalg_eager_in_session(
                 self,
                 LinalgOp::TriangularSolve {
-                    left_side,
-                    lower,
-                    transpose_a,
-                    unit_diagonal,
+                    left_side: options.side == Side::Left,
+                    lower: options.uplo == Uplo::Lower,
+                    transpose_a: options.transpose == Transpose::Transpose,
+                    unit_diagonal: options.diagonal == Diagonal::Unit,
                 },
                 &[matrix, rhs],
             )?,
@@ -740,6 +1163,15 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
     }
 
     fn solve(&mut self, matrix: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.solve_with(matrix, rhs, &SolveOptions::default())
+    }
+
+    fn solve_with(
+        &mut self,
+        matrix: &EagerTensor,
+        rhs: &EagerTensor,
+        _options: &SolveOptions,
+    ) -> Result<EagerTensor> {
         if !matrix.tracks_grad() && !rhs.tracks_grad() {
             return one_output(
                 apply_linalg_eager_in_session(self, LinalgOp::Solve, &[matrix, rhs])?,
@@ -755,12 +1187,29 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
     }
 
     fn lstsq(&mut self, matrix: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
+        self.lstsq_with(matrix, rhs, &LstsqOptions::default())
+    }
+
+    fn lstsq_with(
+        &mut self,
+        matrix: &EagerTensor,
+        rhs: &EagerTensor,
+        _options: &LstsqOptions,
+    ) -> Result<EagerTensor> {
         eager_composites::lstsq(self, matrix, rhs)
     }
 
     fn lu(
         &mut self,
         input: &EagerTensor,
+    ) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)> {
+        self.lu_with(input, &LuOptions::default())
+    }
+
+    fn lu_with(
+        &mut self,
+        input: &EagerTensor,
+        _options: &LuOptions,
     ) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)> {
         let mut outputs = apply_linalg_eager_in_session(self, LinalgOp::Lu, &[input])?.into_iter();
         match (
@@ -778,18 +1227,42 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
     }
 
     fn slogdet(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
+        self.slogdet_with(input, &SlogdetOptions::default())
+    }
+
+    fn slogdet_with(
+        &mut self,
+        input: &EagerTensor,
+        _options: &SlogdetOptions,
+    ) -> Result<(EagerTensor, EagerTensor)> {
         eager_composites::slogdet(self, input)
     }
 
     fn det(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.det_with(input, &DetOptions::default())
+    }
+
+    fn det_with(&mut self, input: &EagerTensor, _options: &DetOptions) -> Result<EagerTensor> {
         eager_composites::det(self, input)
     }
 
     fn inv(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.inv_with(input, &InvOptions::default())
+    }
+
+    fn inv_with(&mut self, input: &EagerTensor, _options: &InvOptions) -> Result<EagerTensor> {
         eager_composites::inv(self, input)
     }
 
     fn eigvalsh(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.eigvalsh_with(input, &EigvalshOptions::default())
+    }
+
+    fn eigvalsh_with(
+        &mut self,
+        input: &EagerTensor,
+        _options: &EigvalshOptions,
+    ) -> Result<EagerTensor> {
         one_output(
             apply_linalg_eager_in_session(
                 self,
@@ -804,6 +1277,14 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
     }
 
     fn eigvals(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.eigvals_with(input, &EigvalsOptions::default())
+    }
+
+    fn eigvals_with(
+        &mut self,
+        input: &EagerTensor,
+        _options: &EigvalsOptions,
+    ) -> Result<EagerTensor> {
         one_output(
             apply_linalg_eager_in_session(
                 self,
@@ -817,15 +1298,15 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
     }
 
     fn eigh(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
-        self.eigh_with_options(input, EighOptions::default())
+        self.eigh_with(input, &EighOptions::default())
     }
 
-    fn eigh_with_options(
+    fn eigh_with(
         &mut self,
         input: &EagerTensor,
-        options: EighOptions,
+        options: &EighOptions,
     ) -> Result<(EagerTensor, EagerTensor)> {
-        validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
+        validate_derivative_eps("eigh_with", options.derivative_eps)?;
         two_outputs(
             apply_linalg_eager_in_session(
                 self,
@@ -841,6 +1322,14 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
     }
 
     fn eig(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
+        self.eig_with(input, &EigOptions::default())
+    }
+
+    fn eig_with(
+        &mut self,
+        input: &EagerTensor,
+        _options: &EigOptions,
+    ) -> Result<(EagerTensor, EagerTensor)> {
         two_outputs(
             apply_linalg_eager_in_session(
                 self,
@@ -854,26 +1343,52 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
     }
 
     fn pinv(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
-        eager_composites::pinv(self, input)
+        self.pinv_with(input, &PinvOptions::default())
     }
 
-    fn pinv_with_rtol(&mut self, input: &EagerTensor, rtol: f64) -> Result<EagerTensor> {
-        eager_composites::pinv_with_rtol(self, input, rtol)
+    fn pinv_with(&mut self, input: &EagerTensor, options: &PinvOptions) -> Result<EagerTensor> {
+        match options.rtol {
+            None => eager_composites::pinv(self, input),
+            Some(rtol) => eager_composites::pinv_with_rtol(self, input, rtol),
+        }
     }
 
-    fn norm(
-        &mut self,
-        input: &EagerTensor,
-        ord: Option<f64>,
-        dim: Option<&[usize]>,
-        keepdim: bool,
-    ) -> Result<EagerTensor> {
-        eager_composites::norm(self, input, ord, dim, keepdim)
+    fn norm(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.norm_with(input, &NormOptions::default())
+    }
+
+    fn norm_with(&mut self, input: &EagerTensor, options: &NormOptions) -> Result<EagerTensor> {
+        let axes = crate::options::resolve_norm_axes(
+            "norm",
+            options.axes.as_deref(),
+            input.shape().len(),
+        )?;
+        eager_composites::norm(
+            self,
+            input,
+            options.ord,
+            axes.as_deref(),
+            options.keep_dims == KeepDims::Keep,
+        )
     }
 
     fn full_piv_lu(
         &mut self,
         input: &EagerTensor,
+    ) -> Result<(
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+        EagerTensor,
+    )> {
+        self.full_piv_lu_with(input, &FullPivLuOptions::default())
+    }
+
+    fn full_piv_lu_with(
+        &mut self,
+        input: &EagerTensor,
+        _options: &FullPivLuOptions,
     ) -> Result<(
         EagerTensor,
         EagerTensor,
@@ -903,6 +1418,15 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
         matrix: &EagerTensor,
         rhs: &EagerTensor,
     ) -> Result<EagerTensor> {
+        self.full_piv_lu_solve_with(matrix, rhs, &FullPivLuSolveOptions::default())
+    }
+
+    fn full_piv_lu_solve_with(
+        &mut self,
+        matrix: &EagerTensor,
+        rhs: &EagerTensor,
+        _options: &FullPivLuSolveOptions,
+    ) -> Result<EagerTensor> {
         one_output(
             apply_linalg_eager_in_session(
                 self,
@@ -916,9 +1440,16 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
     fn rank_revealing_qr(
         &mut self,
         input: &EagerTensor,
-        options: RankRevealingQrOptions,
     ) -> Result<RankRevealingQrResult<EagerTensor>> {
-        validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
+        self.rank_revealing_qr_with(input, &RankRevealingQrOptions::default())
+    }
+
+    fn rank_revealing_qr_with(
+        &mut self,
+        input: &EagerTensor,
+        options: &RankRevealingQrOptions,
+    ) -> Result<RankRevealingQrResult<EagerTensor>> {
+        validate_rank_revealing_qr_options("rank_revealing_qr", *options)?;
         let mut outputs = apply_linalg_eager_in_session(
             self,
             LinalgOp::RankRevealingQr {
@@ -951,6 +1482,14 @@ impl EagerSessionLinalgExt for EagerSession<'_> {
     }
 
     fn householder_qr(&mut self, input: &EagerTensor) -> Result<crate::HouseholderQr<EagerTensor>> {
+        self.householder_qr_with(input, &HouseholderQrOptions::default())
+    }
+
+    fn householder_qr_with(
+        &mut self,
+        input: &EagerTensor,
+        _options: &HouseholderQrOptions,
+    ) -> Result<crate::HouseholderQr<EagerTensor>> {
         crate::householder::eager_state(apply_linalg_eager_in_session(
             self,
             LinalgOp::HouseholderQrFactor,

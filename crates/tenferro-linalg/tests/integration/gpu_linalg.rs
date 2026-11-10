@@ -9,7 +9,7 @@ use tenferro_gpu::{
     cuda::CudaEngine,
 };
 use tenferro_linalg::{
-    EighDriver, EighOptions, HouseholderQr, LinalgBackend, QrGauge, QrOptions,
+    EighDriver, EighOptions, HouseholderQr, LinalgBackend, PinvOptions, QrGauge, QrOptions,
     RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt, TensorReadLinalgExt,
     TracedTensorLinalgExt,
 };
@@ -818,7 +818,10 @@ fn test_cuda_svd_auto_driver_matches_default_svd() {
     let default_outputs =
         with_cuda_linalg_session(&mut gpu, |session| session.svd(&gpu_input)).unwrap();
     let auto_outputs = with_cuda_linalg_session(&mut gpu, |session| {
-        session.svd_with_options(&gpu_input, SvdOptions::default().with_driver(SvdDriver::Auto))
+        session.svd_with_options(
+            &gpu_input,
+            SvdOptions::default().with_driver(SvdDriver::Auto),
+        )
     })
     .unwrap();
     for (default, auto) in default_outputs.iter().zip(&auto_outputs) {
@@ -1564,7 +1567,10 @@ fn test_cuda_eigh_auto_driver_matches_default_eigh() {
     let default_outputs =
         with_cuda_linalg_session(&mut gpu, |session| session.eigh(&gpu_input)).unwrap();
     let auto_outputs = with_cuda_linalg_session(&mut gpu, |session| {
-        session.eigh_with_options(&gpu_input, EighOptions::default().with_driver(EighDriver::Auto))
+        session.eigh_with_options(
+            &gpu_input,
+            EighOptions::default().with_driver(EighDriver::Auto),
+        )
     })
     .unwrap();
     for (default, auto) in default_outputs.iter().zip(&auto_outputs) {
@@ -1665,7 +1671,10 @@ fn test_cuda_rank_revealing_qr_f64_reconstructs_interspersed_rank_deficiency() {
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
     let outputs = with_cuda_linalg_session(&mut gpu, |session| {
-        session.rank_revealing_qr(&gpu_input, RankRevealingQrOptions::default().with_rtol(1.0e-12))
+        session.rank_revealing_qr(
+            &gpu_input,
+            RankRevealingQrOptions::default().with_rtol(1.0e-12),
+        )
     })
     .unwrap();
     assert_eq!(outputs.len(), 4);
@@ -1833,7 +1842,10 @@ fn test_cuda_rank_revealing_qr_f32_batched_and_scaled_ranks() {
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
     let outputs = with_cuda_linalg_session(&mut gpu, |session| {
-        session.rank_revealing_qr(&gpu_input, RankRevealingQrOptions::default().with_rtol(1.0e-5))
+        session.rank_revealing_qr(
+            &gpu_input,
+            RankRevealingQrOptions::default().with_rtol(1.0e-5),
+        )
     })
     .unwrap();
     let permutation = download(&gpu, &outputs[2]);
@@ -2619,7 +2631,9 @@ fn test_cuda_direct_inv_and_pinv_with_rtol_accept_internal_scalars() {
     let (inverse, pseudoinverse) = with_cuda_linalg_session(&mut gpu, |session| {
         (
             device_input.inv(session).unwrap(),
-            device_input.pinv_with_rtol(1.0e-5, session).unwrap(),
+            device_input
+                .pinv_with(&PinvOptions::default().with_rtol(1.0e-5), session)
+                .unwrap(),
         )
     });
     for (label, tensor) in [("inv", inverse), ("pinv_with_rtol", pseudoinverse)] {

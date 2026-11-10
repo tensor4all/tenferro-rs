@@ -224,14 +224,11 @@ fn traced_eigvals_uses_general_values_only_path() {
 fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
     let source = crate_source("src/tensor_ext.rs");
 
-    // Owned SVD values: values-only hook, not compute-and-discard via svd.
-    let owned_svdvals = source_section(
-        &source,
-        "fn svdvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
-        "fn svd_with_options(",
-    );
+    // The unified entry (#2552): values-only hook on the borrowed view, not
+    // compute-and-discard via svd.
+    let owned_svdvals = source_section(&source, "fn svdvals_with(&self", "\n    }\n");
     assert!(
-        owned_svdvals.contains("backend.svd_values(self)"),
+        owned_svdvals.contains("backend.svd_values_read(a)"),
         "svdvals should call the singular-values-only backend hook"
     );
     assert!(
@@ -250,13 +247,9 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
     );
 
     // Owned eigvalsh: values-only hook, not compute-and-discard via eigh.
-    let owned_eigvalsh = source_section(
-        &source,
-        "fn eigvalsh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
-        "fn eigvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
-    );
+    let owned_eigvalsh = source_section(&source, "fn eigvalsh_with(&self", "\n    }\n");
     assert!(
-        owned_eigvalsh.contains("backend.eigh_values(self)"),
+        owned_eigvalsh.contains("backend.eigh_values_read(a)"),
         "owned eigvalsh should call the Hermitian values-only backend hook"
     );
     assert!(
@@ -265,13 +258,9 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
     );
 
     // Owned eigvals already uses the general values-only hook (kept).
-    let owned_eigvals = source_section(
-        &source,
-        "fn eigvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
-        "fn pinv(",
-    );
+    let owned_eigvals = source_section(&source, "fn eigvals_with(&self", "\n    }\n");
     assert!(
-        owned_eigvals.contains("backend.eig_values(self)"),
+        owned_eigvals.contains("backend.eig_values_read(a)"),
         "owned eigvals should call the general values-only backend hook"
     );
     assert!(

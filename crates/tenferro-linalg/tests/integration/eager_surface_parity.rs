@@ -2,7 +2,9 @@
 
 use num_complex::Complex64;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
-use tenferro_linalg::{EagerSessionLinalgExt, TracedTensorLinalgExt};
+use tenferro_linalg::{
+    EagerSessionLinalgExt, KeepDims, NormOptions, PinvOptions, TracedTensorLinalgExt,
+};
 use tenferro_runtime::{DType, Error, ErrorPhase, TraceContext, TracedTensor, TypedTensor};
 use tenferro_tensor::Error as TensorError;
 
@@ -112,7 +114,18 @@ fn eager_norm(
     input
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.norm(input, ord, dim, keepdim)
+            let mut options = NormOptions::default();
+            if let Some(ord) = ord {
+                options = options.with_ord(ord);
+            }
+            if let Some(dim) = dim {
+                options =
+                    options.with_axes(dim.iter().map(|&axis| axis as isize).collect::<Vec<_>>());
+            }
+            if keepdim {
+                options = options.with_keep_dims(KeepDims::Keep);
+            }
+            session.norm_with(input, &options)
         })
 }
 
@@ -132,7 +145,7 @@ fn eager_composites_match_diagonal_matrix_values() {
                 session.eigvalsh(&a)?,
                 session.eigvals(&a)?,
                 session.pinv(&a)?,
-                session.pinv_with_rtol(&a, 1.0e-12)?,
+                session.pinv_with(&a, &PinvOptions::default().with_rtol(1.0e-12))?,
             ))
         })
         .unwrap();

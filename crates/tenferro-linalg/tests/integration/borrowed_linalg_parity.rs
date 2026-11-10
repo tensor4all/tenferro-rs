@@ -10,7 +10,9 @@
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TensorLinalgExt, TensorReadLinalgExt};
+use tenferro_linalg::{
+    Diagonal, Side, TensorLinalgExt, TensorReadLinalgExt, Transpose, TriangularSolveOptions, Uplo,
+};
 use tenferro_tensor::{
     DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor,
 };
@@ -367,7 +369,9 @@ fn borrowed_rank_revealing_qr_matches_the_owned_call() {
     for (provider, mut host) in providers() {
         let options = RankRevealingQrOptions::default().with_rtol(1.0e-12);
         {
-            let owned = expected.rank_revealing_qr(options, &mut host).unwrap();
+            let owned = expected
+                .rank_revealing_qr_with(&options, &mut host)
+                .unwrap();
             let view = base.as_view().transpose_view([1, 0]).unwrap();
             let borrowed = TensorRead::from_view(TensorView::F64(view))
                 .rank_revealing_qr_read(options, &mut host)
@@ -488,8 +492,21 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
             (true, false, true),
         ] {
             {
+                let solve_options = TriangularSolveOptions::default()
+                    .with_side(Side::Left)
+                    .with_uplo(if lower { Uplo::Lower } else { Uplo::Upper })
+                    .with_transpose(if transpose_a {
+                        Transpose::Transpose
+                    } else {
+                        Transpose::NoTranspose
+                    })
+                    .with_diagonal(if unit_diagonal {
+                        Diagonal::Unit
+                    } else {
+                        Diagonal::NonUnit
+                    });
                 let owned = a_owned
-                    .triangular_solve(&b_owned, true, lower, transpose_a, unit_diagonal, &mut host)
+                    .triangular_solve_with(&b_owned, &solve_options, &mut host)
                     .unwrap();
                 let b_view = b_base.as_view().transpose_view([1, 0]).unwrap();
                 let borrowed = TensorRead::from_tensor(&a_owned)
@@ -524,7 +541,11 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
                     .unwrap(),
             );
             let owned = a_owned
-                .triangular_solve(&rhs, false, true, false, false, &mut host)
+                .triangular_solve_with(
+                    &rhs,
+                    &TriangularSolveOptions::default().with_uplo(Uplo::Lower),
+                    &mut host,
+                )
                 .unwrap();
             let a_view = a_base.as_view().transpose_view([1, 0]).unwrap();
             let borrowed = TensorRead::from_view(TensorView::F64(a_view))
@@ -571,7 +592,13 @@ fn borrowed_triangular_solve_rejects_a_vector_right_hand_side_like_the_owned_cal
     for (provider, mut host) in providers() {
         {
             let owned = a
-                .triangular_solve(&b_owned, true, true, false, false, &mut host)
+                .triangular_solve_with(
+                    &b_owned,
+                    &TriangularSolveOptions::default()
+                        .with_side(Side::Left)
+                        .with_uplo(Uplo::Lower),
+                    &mut host,
+                )
                 .unwrap_err();
             let borrowed = TensorRead::from_tensor(&a)
                 .triangular_solve_read(

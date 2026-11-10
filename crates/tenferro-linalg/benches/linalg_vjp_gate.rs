@@ -4,7 +4,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt};
+use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt, Side, TriangularSolveOptions};
 
 const DEFAULT_SIZES: &[usize] = &[8, 16];
 
@@ -113,7 +113,11 @@ fn triangular_solve_fixture(n: usize, threads: usize) -> Fixture {
     let rhs = eager(&ctx, vec![n, 2], dense_matrix(n, 3)[0..(n * 2)].to_vec());
     let solution = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-            s.triangular_solve(&matrix, &rhs, true, false, false, false)
+            s.triangular_solve_with(
+                &matrix,
+                &rhs,
+                &TriangularSolveOptions::default().with_side(Side::Left),
+            )
         })
         .unwrap();
     let loss = reduce_all(&solution);

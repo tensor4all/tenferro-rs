@@ -16,7 +16,10 @@ fn svd_options_carry_shape_gauge_driver_and_derivative_eps() {
     assert_eq!(defaults.shape, SvdShape::Thin);
     assert_eq!(defaults.gauge, SvdGauge::Raw);
     assert_eq!(defaults.driver, SvdDriver::Auto);
-    assert_eq!(defaults.derivative_eps, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS);
+    assert_eq!(
+        defaults.derivative_eps,
+        DEFAULT_DECOMPOSITION_DERIVATIVE_EPS
+    );
 
     let options = SvdOptions::default()
         .with_shape(SvdShape::Full)
@@ -33,7 +36,9 @@ fn svd_options_carry_shape_gauge_driver_and_derivative_eps() {
 fn qr_family_options_use_with_setters() {
     assert_eq!(QrOptions::default().gauge, QrGauge::Raw);
     assert_eq!(
-        QrOptions::default().with_gauge(QrGauge::PositiveDiagonal).gauge,
+        QrOptions::default()
+            .with_gauge(QrGauge::PositiveDiagonal)
+            .gauge,
         QrGauge::PositiveDiagonal
     );
 

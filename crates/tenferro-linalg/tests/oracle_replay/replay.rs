@@ -8,7 +8,10 @@ use num_complex::{Complex32, Complex64};
 use serde_json::Value;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{HouseholderQr, QrGauge, QrOptions, TracedTensorLinalgExt};
+use tenferro_linalg::{
+    Diagonal, HouseholderQr, KeepDims, NormOptions, PinvOptions, QrGauge, QrOptions, Side,
+    TracedTensorLinalgExt, TriangularSolveOptions, Uplo,
+};
 use tenferro_runtime::{
     DType, DotGeneralConfig, GraphCompiler, Runtime, Tensor, TraceContext, TracedTensor,
 };
@@ -526,7 +529,17 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
             let b_tf = oracle_to_tenferro(b, rhs_core_rank)?;
             let b_solve = promote_vector_rhs_for_triangular_solve(&b_tf, rhs_core_rank, left_side)?;
             let solution = oracle_to_tenferro(a, 2)?
-                .triangular_solve(&b_solve, left_side, lower, false, unit_diagonal)
+                .triangular_solve_with(
+                    &b_solve,
+                    &TriangularSolveOptions::default()
+                        .with_side(if left_side { Side::Left } else { Side::Right })
+                        .with_uplo(if lower { Uplo::Lower } else { Uplo::Upper })
+                        .with_diagonal(if unit_diagonal {
+                            Diagonal::Unit
+                        } else {
+                            Diagonal::NonUnit
+                        }),
+                )
                 .map_err(to_string)?;
             let solution =
                 demote_vector_solution_after_triangular_solve(&solution, rhs_core_rank, left_side)?;
@@ -662,7 +675,9 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         "pinv" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
             let inverse = match optional_f64_kwarg(case, "rtol")? {
-                Some(rtol) => a_tf.pinv_with_rtol(rtol).map_err(to_string)?,
+                Some(rtol) => a_tf
+                    .pinv_with(&PinvOptions::default().with_rtol(rtol))
+                    .map_err(to_string)?,
                 None => a_tf.pinv().map_err(to_string)?,
             };
             single_output(inputs, "value", tenferro_to_oracle(&inverse, 2)?)
@@ -670,7 +685,18 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         "norm" | "vector_norm" | "matrix_norm" => {
             let (ord, dim, keepdim) = norm_arguments(case, a.rank())?;
             let dim_ref = dim.as_deref();
-            let value = a.norm(ord, dim_ref, keepdim).map_err(to_string)?;
+            let mut options = NormOptions::default();
+            if let Some(ord) = ord {
+                options = options.with_ord(ord);
+            }
+            if let Some(dim) = dim_ref {
+                options =
+                    options.with_axes(dim.iter().map(|&axis| axis as isize).collect::<Vec<_>>());
+            }
+            if keepdim {
+                options = options.with_keep_dims(KeepDims::Keep);
+            }
+            let value = a.norm_with(&options).map_err(to_string)?;
             single_output(inputs, "value", value)
         }
         "lstsq_grad_oriented" => {

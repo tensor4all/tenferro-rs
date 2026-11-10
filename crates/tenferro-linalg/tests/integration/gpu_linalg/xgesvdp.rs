@@ -74,7 +74,10 @@ fn test_cuda_svd_xgesvdp_rectangular_batched_and_values() {
         let factors: Vec<_> = outputs.iter().map(|x| download(&gpu, x)).collect();
         check_factors(&input, &factors);
         let baseline = with_cuda_linalg_session(&mut gpu, |s| {
-            s.svd_with_options(&device, SvdOptions::default().with_driver(SvdDriver::QrBased))
+            s.svd_with_options(
+                &device,
+                SvdOptions::default().with_driver(SvdDriver::QrBased),
+            )
         })
         .unwrap();
         assert_tensor_close(&factors[1], &download(&gpu, &baseline[1]), 1e-12);
@@ -101,13 +104,13 @@ fn test_cuda_svd_xgesvdp_traced_and_pruned() {
     let traced = trace
         .from_tensor_concrete_shape(complex_input(3, 7, 1))
         .unwrap();
-    let (u, s, vt) = traced.svd_with_options(options).unwrap();
+    let (u, s, vt) = traced.svd_with(&options).unwrap();
     // A separate identity forces an S-only op instead of reusing the full SVD.
     let (_, only_s, _) = traced
-        .svd_with_options(options.with_derivative_eps(2e-12))
+        .svd_with(&options.with_derivative_eps(2e-12))
         .unwrap();
     let (_, qr_s, _) = traced
-        .svd_with_options(SvdOptions::default().with_driver(SvdDriver::QrBased))
+        .svd_with(&SvdOptions::default().with_driver(SvdDriver::QrBased))
         .unwrap();
     let program = GraphCompiler::new()
         .compile_many(&[&u, &s, &vt, &only_s, &qr_s])
@@ -157,9 +160,7 @@ fn test_cuda_svd_xgesvdp_eager() {
         .with_eager_session(&mut gpu, |s| s.constant_from(device))
         .unwrap();
     let (u, s, vt) = runtime
-        .with_eager_session(&mut gpu, |session| {
-            session.svd_with_options(&eager, options)
-        })
+        .with_eager_session(&mut gpu, |session| session.svd_with(&eager, &options))
         .unwrap();
     let factors: Vec<_> = [&u, &s, &vt]
         .into_iter()

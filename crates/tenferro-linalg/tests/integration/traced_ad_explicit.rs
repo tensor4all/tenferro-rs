@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_ad::AdContext;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{NormOptions, Side, TracedTensorLinalgExt, TriangularSolveOptions, Uplo};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::{DType, Error, GraphCompiler, Tensor, TraceContext, TracedTensor};
 use tenferro_tensor::{Error as TensorError, TypedTensor};
@@ -258,7 +258,12 @@ fn triangular_solve_grad_rejects_rank1_operands_without_panic() {
         .unwrap();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        a.triangular_solve(&b, true, true, false, false)
+        a.triangular_solve_with(
+            &b,
+            &TriangularSolveOptions::default()
+                .with_side(Side::Left)
+                .with_uplo(Uplo::Lower),
+        )
     }));
 
     assert_traced_op_rank_mismatch(result, "tenferro-linalg.triangular_solve", 1);
@@ -298,7 +303,14 @@ fn triangular_solve_jvp_rejects_non_square_lhs_without_panic() {
     let da = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 3], vec![0.1, 0.0, 0.0, 0.0, 0.1, 0.0]))
         .unwrap();
-    let x = a.triangular_solve(&b, true, true, false, false).unwrap();
+    let x = a
+        .triangular_solve_with(
+            &b,
+            &TriangularSolveOptions::default()
+                .with_side(Side::Left)
+                .with_uplo(Uplo::Lower),
+        )
+        .unwrap();
     let loss = reduce_all(&x);
 
     let result = catch_unwind(AssertUnwindSafe(|| ad.jvp(&loss, &a, &da)));
@@ -424,7 +436,9 @@ fn frobenius_norm_jvp_matches_finite_diff_through_fused_sum_squares() {
         .from_tensor_concrete_shape(f64_tensor(vec![3, 2], tangent_data.clone()))
         .unwrap();
 
-    let norm = matrix.norm(None, Some(&[0, 1]), false).unwrap();
+    let norm = matrix
+        .norm_with(&NormOptions::default().with_axes([0, 1]))
+        .unwrap();
     assert!(
         graph_op_debugs(&norm)
             .iter()
@@ -441,7 +455,11 @@ fn frobenius_norm_jvp_matches_finite_diff_through_fused_sum_squares() {
                 let input = trace
                     .from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()))
                     .unwrap();
-                get_f64_data(&eval(&input.norm(None, Some(&[0, 1]), false).unwrap()))[0]
+                get_f64_data(&eval(
+                    &input
+                        .norm_with(&NormOptions::default().with_axes([0, 1]))
+                        .unwrap(),
+                ))[0]
             },
             &data,
             &tangent_data,
@@ -459,7 +477,9 @@ fn frobenius_norm_grad_matches_finite_diff_through_fused_sum_squares() {
     let matrix = trace
         .from_tensor_concrete_shape(f64_tensor(vec![3, 2], data.clone()))
         .unwrap();
-    let norm = matrix.norm(None, Some(&[0, 1]), false).unwrap();
+    let norm = matrix
+        .norm_with(&NormOptions::default().with_axes([0, 1]))
+        .unwrap();
     let actual = eval(&ad.grad(&norm, &matrix).unwrap());
 
     for (index, &value) in get_f64_data(&actual).iter().enumerate() {
@@ -468,7 +488,11 @@ fn frobenius_norm_grad_matches_finite_diff_through_fused_sum_squares() {
                 let input = trace
                     .from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()))
                     .unwrap();
-                get_f64_data(&eval(&input.norm(None, Some(&[0, 1]), false).unwrap()))[0]
+                get_f64_data(&eval(
+                    &input
+                        .norm_with(&NormOptions::default().with_axes([0, 1]))
+                        .unwrap(),
+                ))[0]
             },
             &data,
             index,
@@ -491,7 +515,9 @@ fn spectral_norm_jvp_matches_finite_diff_through_values_only_svd() {
         .from_tensor_concrete_shape(f64_tensor(vec![3, 2], tangent_data.clone()))
         .unwrap();
 
-    let norm = matrix.norm(Some(2.0), Some(&[0, 1]), false).unwrap();
+    let norm = matrix
+        .norm_with(&NormOptions::default().with_ord(2.0).with_axes([0, 1]))
+        .unwrap();
     // A traced value is a typed op layer over its context, so the snapshot AD
     // reads is already pruned to the values-only SVD; the full-factor residuals
     // live in the AD context rather than in the primal graph.
@@ -515,7 +541,9 @@ fn spectral_norm_jvp_matches_finite_diff_through_values_only_svd() {
                 let input = trace
                     .from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()))
                     .unwrap();
-                let norm = input.norm(Some(2.0), Some(&[0, 1]), false).unwrap();
+                let norm = input
+                    .norm_with(&NormOptions::default().with_ord(2.0).with_axes([0, 1]))
+                    .unwrap();
                 get_f64_data(&eval(&norm))[0]
             },
             &data,
@@ -577,7 +605,12 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
     let solve_tangent = ad.jvp(&solve_loss, &rhs, &drhs).unwrap();
     let triangular_loss = reduce_all(
         &general
-            .triangular_solve(&rhs, true, true, false, false)
+            .triangular_solve_with(
+                &rhs,
+                &TriangularSolveOptions::default()
+                    .with_side(Side::Left)
+                    .with_uplo(Uplo::Lower),
+            )
             .unwrap(),
     );
     let triangular_tangent = ad.jvp(&triangular_loss, &rhs, &drhs).unwrap();
@@ -698,7 +731,12 @@ fn remaining_linalg_ops_jvp_match_finite_diff_except_full_piv_lu() {
                     .unwrap();
                 let loss = reduce_all(
                     &general
-                        .triangular_solve(&rhs, true, true, false, false)
+                        .triangular_solve_with(
+                            &rhs,
+                            &TriangularSolveOptions::default()
+                                .with_side(Side::Left)
+                                .with_uplo(Uplo::Lower),
+                        )
                         .unwrap(),
                 );
                 get_f64_data(&eval(&loss))[0]
@@ -927,7 +965,12 @@ fn triangular_solve_matrix_operand_jvp_matches_finite_diff() {
 
     let loss = reduce_all(
         &matrix
-            .triangular_solve(&rhs, true, true, false, false)
+            .triangular_solve_with(
+                &rhs,
+                &TriangularSolveOptions::default()
+                    .with_side(Side::Left)
+                    .with_uplo(Uplo::Lower),
+            )
             .unwrap(),
     );
     let tangent = ad.jvp(&loss, &matrix, &matrix_tangent).unwrap();
@@ -946,7 +989,12 @@ fn triangular_solve_matrix_operand_jvp_matches_finite_diff() {
                     .unwrap();
                 let loss = reduce_all(
                     &matrix
-                        .triangular_solve(&rhs, true, true, false, false)
+                        .triangular_solve_with(
+                            &rhs,
+                            &TriangularSolveOptions::default()
+                                .with_side(Side::Left)
+                                .with_uplo(Uplo::Lower),
+                        )
                         .unwrap(),
                 );
                 get_f64_data(&eval(&loss))[0]
@@ -1059,7 +1107,15 @@ fn solve_and_triangular_solve_grad_use_extension_transpose_rules() {
     let solve_loss = reduce_all(&a.solve(&b).unwrap());
     let solve_grad_b = ad.grad(&solve_loss, &b).unwrap();
 
-    let triangular_loss = reduce_all(&a.triangular_solve(&b, true, true, false, false).unwrap());
+    let triangular_loss = reduce_all(
+        &a.triangular_solve_with(
+            &b,
+            &TriangularSolveOptions::default()
+                .with_side(Side::Left)
+                .with_uplo(Uplo::Lower),
+        )
+        .unwrap(),
+    );
     let triangular_grad_b = ad.grad(&triangular_loss, &b).unwrap();
 
     let results = eval_many(&[&solve_grad_b, &triangular_grad_b]);

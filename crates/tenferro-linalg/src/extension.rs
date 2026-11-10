@@ -1,5 +1,5 @@
-use std::any::Any;
 use crate::options::SvdShape;
+use std::any::Any;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 

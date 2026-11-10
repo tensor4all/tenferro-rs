@@ -383,3 +383,59 @@ empty_options! {
     /// Options for `lstsq`.
     LstsqOptions => "lstsq";
 }
+
+/// Reject a full-matrices SVD request that also asks for a gauge, driver or derivative
+/// epsilon other than the default.
+///
+/// The full-matrices kernels take no options (`LinalgOp::SvdFull` carries none), so a
+/// combination would otherwise be silently ignored. Unsupported combinations stay
+/// explicit errors until the full path implements them (OPEN-QUESTIONS-2552.md).
+pub(crate) fn ensure_full_svd_options(
+    op: &'static str,
+    options: &crate::SvdOptions,
+) -> tenferro_tensor::Result<()> {
+    let defaults = crate::SvdOptions::default();
+    if options.shape == SvdShape::Full
+        && (options.gauge != defaults.gauge
+            || options.driver != defaults.driver
+            || options.derivative_eps != defaults.derivative_eps)
+    {
+        return Err(tenferro_tensor::Error::unsupported(
+            op,
+            "SvdShape::Full does not combine with a non-default gauge, driver or derivative_eps",
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve the signed axes of [`NormOptions`] against the input rank.
+///
+/// `None` stays `None` (every axis). A negative axis counts from the end; a non-negative
+/// axis passes through unchanged, so the operation's own validation keeps reporting an
+/// out-of-range or repeated axis with the same typed error as before (`AxisOutOfBounds`,
+/// `DuplicateAxis`). A negative axis below `-rank` has no `usize` position and is an
+/// `InvalidArgument` validation error on the `axes` argument.
+pub(crate) fn resolve_norm_axes(
+    op: &'static str,
+    axes: Option<&[isize]>,
+    rank: usize,
+) -> tenferro_tensor::Result<Option<Vec<usize>>> {
+    axes.map(|axes| {
+        axes.iter()
+            .map(|&axis| {
+                if axis >= 0 {
+                    Ok(axis.unsigned_abs())
+                } else {
+                    rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
+                        tenferro_tensor::Error::invalid_argument(
+                            op,
+                            "axes",
+                            format!("axis {axis} is out of bounds for rank {rank}"),
+                        )
+                    })
+                }
+            })
+            .collect()
+    })
+    .transpose()
+}

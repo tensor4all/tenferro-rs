@@ -3,9 +3,9 @@
 pub use crate::{
     CholeskyOptions, DetOptions, Diagonal, EigOptions, EighOptions, EigvalsOptions,
     EigvalshOptions, FullPivLuOptions, FullPivLuSolveOptions, HouseholderQrOptions, InvOptions,
-    KeepDims, LstsqOptions, LuOptions, NormOptions, PinvOptions, QrOptions,
-    RankRevealingQrOptions, RankRevealingQrResult, Side, SlogdetOptions, SolveOptions,
-    SvdOptions, SvdShape, SvdvalsOptions, Transpose, TriangularSolveOptions, Uplo,
+    KeepDims, LstsqOptions, LuOptions, NormOptions, PinvOptions, QrOptions, RankRevealingQrOptions,
+    RankRevealingQrResult, Side, SlogdetOptions, SolveOptions, SvdOptions, SvdShape,
+    SvdvalsOptions, Transpose, TriangularSolveOptions, Uplo,
 };
 pub use crate::{
     LinalgBackend, LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TraceContextLinalgExt,

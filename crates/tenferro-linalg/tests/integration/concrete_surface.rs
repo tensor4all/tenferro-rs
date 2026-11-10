@@ -1,10 +1,25 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    EighOptions, LinalgBackend, QrOptions, RankRevealingQrOptions, SvdOptions, TensorLinalgExt,
-    TensorReadLinalgExt, TypedTensorLinalgExt,
+    EighOptions, KeepDims, LinalgBackend, NormOptions, PinvOptions, QrOptions,
+    RankRevealingQrOptions, SvdOptions, TensorLinalgExt, TensorReadLinalgExt, TypedTensorLinalgExt,
 };
 use tenferro_tensor::{Tensor, TensorRead, TensorScalar, TypedTensor};
+
+/// Builds the `NormOptions` equivalent of the former positional `(ord, dim, keepdim)` arguments.
+fn norm_opts(ord: Option<f64>, axes: Option<&[isize]>, keep: bool) -> NormOptions {
+    let mut options = NormOptions::default();
+    if let Some(ord) = ord {
+        options = options.with_ord(ord);
+    }
+    if let Some(axes) = axes {
+        options = options.with_axes(axes.to_vec());
+    }
+    if keep {
+        options = options.with_keep_dims(KeepDims::Keep);
+    }
+    options
+}
 
 #[test]
 fn cpu_execution_session_implements_linalg_backend() {
@@ -49,7 +64,10 @@ fn rank_revealing_qr_handles_interspersed_dependence() {
 
     {
         let result = input
-            .rank_revealing_qr(RankRevealingQrOptions::default().with_rtol(1.0e-12), &mut host)
+            .rank_revealing_qr_with(
+                &RankRevealingQrOptions::default().with_rtol(1.0e-12),
+                &mut host,
+            )
             .unwrap();
         assert_eq!(result.q.shape(), &[4, 3]);
         assert_eq!(result.r.shape(), &[3, 3]);
@@ -118,7 +136,10 @@ fn rank_revealing_qr_supports_all_float_and_complex_dtypes() {
     {
         for input in &inputs {
             let result = input
-                .rank_revealing_qr(RankRevealingQrOptions::default().with_rtol(1.0e-6), &mut host)
+                .rank_revealing_qr_with(
+                    &RankRevealingQrOptions::default().with_rtol(1.0e-6),
+                    &mut host,
+                )
                 .unwrap();
             assert_eq!(result.q.dtype(), input.dtype());
             assert_eq!(result.r.dtype(), input.dtype());
@@ -138,9 +159,7 @@ fn rank_revealing_qr_handles_empty_dimensions_and_empty_batches() {
     {
         for (shape, data) in inputs {
             let input = Tensor::from_vec_col_major(shape, data).unwrap();
-            let result = input
-                .rank_revealing_qr(RankRevealingQrOptions::default(), &mut host)
-                .unwrap();
+            let result = input.rank_revealing_qr(&mut host).unwrap();
             let ranks = result.rank.as_slice::<i64>().unwrap();
             if result.rank.shape().is_empty() {
                 assert_eq!(ranks, &[0]);
@@ -156,9 +175,7 @@ fn rank_revealing_qr_rejects_non_finite_input() {
     let input = Tensor::from_vec_col_major(vec![2, 1], vec![f64::NAN, 1.0]).unwrap();
     let mut host = tenferro_cpu::CpuEngine::serial();
     {
-        assert!(input
-            .rank_revealing_qr(RankRevealingQrOptions::default(), &mut host)
-            .is_err());
+        assert!(input.rank_revealing_qr(&mut host).is_err());
     };
 }
 
@@ -172,7 +189,7 @@ fn rank_revealing_qr_rejects_invalid_tolerances() {
             RankRevealingQrOptions::default().with_rtol(-1.0),
             RankRevealingQrOptions::default().with_atol(f64::INFINITY),
         ] {
-            assert!(input.rank_revealing_qr(options, &mut host).is_err());
+            assert!(input.rank_revealing_qr_with(&options, &mut host).is_err());
         }
     };
 }
@@ -182,9 +199,7 @@ fn rank_revealing_qr_zero_and_batched_metadata() {
     let input = Tensor::from_vec_col_major(vec![2, 2, 2], vec![0.0_f64; 8]).unwrap();
     let mut host = tenferro_cpu::CpuEngine::serial();
     {
-        let result = input
-            .rank_revealing_qr(RankRevealingQrOptions::default(), &mut host)
-            .unwrap();
+        let result = input.rank_revealing_qr(&mut host).unwrap();
         assert_eq!(result.q.shape(), &[2, 2, 2]);
         assert_eq!(result.r.shape(), &[2, 2, 2]);
         assert_eq!(result.column_permutation.shape(), &[2, 2]);
@@ -210,7 +225,10 @@ fn rank_revealing_qr_mixes_zero_and_nonzero_items_in_one_batch() {
     for mut host in rrqr_provider_backends() {
         {
             let result = input
-                .rank_revealing_qr(RankRevealingQrOptions::default().with_rtol(1.0e-12), &mut host)
+                .rank_revealing_qr_with(
+                    &RankRevealingQrOptions::default().with_rtol(1.0e-12),
+                    &mut host,
+                )
                 .unwrap();
             assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[2, 0, 1]);
             let q = result.q.as_slice::<f64>().unwrap();
@@ -234,9 +252,7 @@ fn rank_revealing_qr_reports_non_finite_input_first_on_every_route() {
     let input = Tensor::from_vec_col_major(vec![2, 2, 2], data).unwrap();
     for mut host in rrqr_provider_backends() {
         {
-            let error = input
-                .rank_revealing_qr(RankRevealingQrOptions::default(), &mut host)
-                .unwrap_err();
+            let error = input.rank_revealing_qr(&mut host).unwrap_err();
             assert!(error.to_string().contains("non-finite input"), "{error}");
         };
     }
@@ -303,7 +319,9 @@ fn dynamic_composites_cover_inverse_pseudoinverse_eigenvalues_and_norm() {
         let pinv = input.pinv(&mut host).unwrap();
         let eigvalsh = input.eigvalsh(&mut host).unwrap();
         let eigvals = input.eigvals(&mut host).unwrap();
-        let norm = input.norm(None, Some(&[0, 1]), true, &mut host).unwrap();
+        let norm = input
+            .norm_with(&norm_opts(None, Some(&[0, 1]), true), &mut host)
+            .unwrap();
 
         assert!((det.as_slice::<f64>().unwrap()[0] - 8.0).abs() < 1.0e-12);
         assert_eq!(inv.as_slice::<f64>().unwrap(), &[0.5, 0.0, 0.0, 0.25]);
@@ -388,15 +406,17 @@ fn concrete_norm_distinguishes_empty_axes_and_rejects_invalid_axes() {
     assert_eq!(host.num_threads(), 1);
 
     {
-        let identity = input.norm(Some(2.0), Some(&[]), false, &mut host).unwrap();
+        let identity = input
+            .norm_with(&norm_opts(Some(2.0), Some(&[]), false), &mut host)
+            .unwrap();
         let error = input
-            .norm(Some(2.0), Some(&[1]), false, &mut host)
+            .norm_with(&norm_opts(Some(2.0), Some(&[1]), false), &mut host)
             .unwrap_err();
         let duplicate_nonempty = input
-            .norm(Some(2.0), Some(&[0, 0]), false, &mut host)
+            .norm_with(&norm_opts(Some(2.0), Some(&[0, 0]), false), &mut host)
             .unwrap_err();
         let duplicate_empty = empty
-            .norm(None, Some(&[0, 0]), false, &mut host)
+            .norm_with(&norm_opts(None, Some(&[0, 0]), false), &mut host)
             .unwrap_err();
 
         assert_eq!(identity.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
@@ -582,13 +602,13 @@ fn concrete_spectral_norm_preserves_signed_and_complex_input_across_surfaces() {
         for order in [Some(2.0), Some(-2.0)] {
             for value in [
                 signed
-                    .norm(order, Some(&[0, 1]), false, &mut backend)
+                    .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut backend)
                     .unwrap(),
                 TensorRead::from_tensor(&signed)
                     .norm_read(order, Some(&[0, 1]), false, &mut backend)
                     .unwrap(),
                 complex
-                    .norm(order, Some(&[0, 1]), false, &mut backend)
+                    .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut backend)
                     .unwrap(),
                 TensorRead::from_tensor(&complex)
                     .norm_read(order, Some(&[0, 1]), false, &mut backend)
@@ -639,13 +659,23 @@ fn concrete_norm_covers_orders_axis_permutation_and_validation() {
             Some(f64::INFINITY),
             Some(f64::NEG_INFINITY),
         ] {
-            matrix.norm(order, Some(&[0, 1]), false, &mut host).unwrap();
+            matrix
+                .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut host)
+                .unwrap();
         }
-        tensor.norm(None, Some(&[2, 0]), true, &mut host).unwrap();
-        tensor.norm(Some(3.0), None, false, &mut host).unwrap();
+        tensor
+            .norm_with(&norm_opts(None, Some(&[2, 0]), true), &mut host)
+            .unwrap();
+        tensor
+            .norm_with(&norm_opts(Some(3.0), None, false), &mut host)
+            .unwrap();
 
-        assert!(tensor.norm(None, Some(&[0, 0]), false, &mut host).is_err());
-        assert!(tensor.norm(Some(0.0), None, false, &mut host).is_ok());
+        assert!(tensor
+            .norm_with(&norm_opts(None, Some(&[0, 0]), false), &mut host)
+            .is_err());
+        assert!(tensor
+            .norm_with(&norm_opts(Some(0.0), None, false), &mut host)
+            .is_ok());
     };
 }
 
@@ -685,7 +715,9 @@ fn complex_pinv_matches_the_moore_penrose_inverse() {
             );
         }
 
-        let with_rtol = input.pinv_with_rtol(1.0e-12, &mut host).unwrap();
+        let with_rtol = input
+            .pinv_with(&PinvOptions::default().with_rtol(1.0e-12), &mut host)
+            .unwrap();
         for (index, (actual, expected)) in with_rtol
             .as_slice::<Complex64>()
             .unwrap()
@@ -786,7 +818,7 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
     for (label, data, expected) in real_cases {
         let vector = Tensor::from_vec_col_major(vec![data.len()], data).unwrap();
         let count = vector
-            .norm(Some(0.0), Some(&[0]), false, &mut host)
+            .norm_with(&norm_opts(Some(0.0), Some(&[0]), false), &mut host)
             .unwrap();
         assert_eq!(count.as_slice::<f64>().unwrap(), &[expected], "{label}");
     }
@@ -826,7 +858,7 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
             TypedTensor::from_vec_col_major(vec![data.len()], data).unwrap(),
         );
         let count = vector
-            .norm(Some(0.0), Some(&[0]), false, &mut host)
+            .norm_with(&norm_opts(Some(0.0), Some(&[0]), false), &mut host)
             .unwrap();
         assert_eq!(count.as_slice::<f64>().unwrap(), &[expected], "{label}");
     }
@@ -848,10 +880,10 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
     );
     for count in [
         matrix
-            .norm(Some(0.0), Some(&[0, 1]), false, &mut host)
+            .norm_with(&norm_opts(Some(0.0), Some(&[0, 1]), false), &mut host)
             .unwrap(),
         complex_matrix
-            .norm(Some(0.0), Some(&[0, 1]), false, &mut host)
+            .norm_with(&norm_opts(Some(0.0), Some(&[0, 1]), false), &mut host)
             .unwrap(),
     ] {
         assert_eq!(count.as_slice::<f64>().unwrap(), &[2.0]);

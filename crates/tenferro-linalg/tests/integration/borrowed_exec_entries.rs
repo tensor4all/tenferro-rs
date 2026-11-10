@@ -13,7 +13,8 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine};
 use tenferro_linalg::{
     eig_values_with_exec, eigh_values_with_exec, eigh_with_exec, qr_with_exec,
-    svd_values_with_exec, svd_with_exec, LinalgScalar, TensorLinalgExt, TensorReadLinalgExt,
+    svd_values_with_exec, svd_with_exec, LinalgScalar, SvdOptions, SvdShape, TensorLinalgExt,
+    TensorReadLinalgExt,
 };
 use tenferro_tensor::{
     ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorScalar, TensorView, TypedTensor,
@@ -154,7 +155,12 @@ where
         let (u, s, vt) = borrowed(|exec, buffers| svd_with_exec(exec, buffers, view, full))
             .unwrap_or_else(|error| panic!("{label} svd(full={full}): {error}"));
         let (eu, es, evt) = if full {
-            owned.svd_full(&mut engine).unwrap()
+            owned
+                .svd_with(
+                    &SvdOptions::default().with_shape(SvdShape::Full),
+                    &mut engine,
+                )
+                .unwrap()
         } else {
             owned.svd(&mut engine).unwrap()
         };

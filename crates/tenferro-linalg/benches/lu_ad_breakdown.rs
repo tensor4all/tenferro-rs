@@ -4,7 +4,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::EagerSessionLinalgExt;
+use tenferro_linalg::{Diagonal, EagerSessionLinalgExt, Side, TriangularSolveOptions, Uplo};
 use tenferro_runtime::DotGeneralConfig;
 
 const DEFAULT_SIZES: &[usize] = &[256, 512];
@@ -211,13 +211,13 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                     let out = fixture
                         .ctx
                         .with_eager_session(&mut fixture.engine, |s| {
-                            s.triangular_solve(
+                            s.triangular_solve_with(
                                 black_box(&fixture.lower_unit),
                                 black_box(&fixture.rhs),
-                                true,
-                                true,
-                                false,
-                                true,
+                                &TriangularSolveOptions::default()
+                                    .with_side(Side::Left)
+                                    .with_uplo(Uplo::Lower)
+                                    .with_diagonal(Diagonal::Unit),
                             )
                         })
                         .unwrap();
@@ -233,13 +233,10 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                     let out = fixture
                         .ctx
                         .with_eager_session(&mut fixture.engine, |s| {
-                            s.triangular_solve(
+                            s.triangular_solve_with(
                                 black_box(&fixture.upper),
                                 black_box(&fixture.rhs),
-                                false,
-                                false,
-                                false,
-                                false,
+                                &TriangularSolveOptions::default(),
                             )
                         })
                         .unwrap();

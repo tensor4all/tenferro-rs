@@ -1,5 +1,5 @@
 use num_complex::Complex64;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{NormOptions, Side, TracedTensorLinalgExt, TriangularSolveOptions, Uplo};
 use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
 
 use super::support;
@@ -95,7 +95,14 @@ fn linalg_single_output_traced_tensor_functions_eval() {
 
     let chol = a.cholesky().unwrap();
     let solved = a.solve(&b).unwrap();
-    let triangular = a.triangular_solve(&b, true, true, false, false).unwrap();
+    let triangular = a
+        .triangular_solve_with(
+            &b,
+            &TriangularSolveOptions::default()
+                .with_side(Side::Left)
+                .with_uplo(Uplo::Lower),
+        )
+        .unwrap();
     let results = run_many(&[&chol, &solved, &triangular]);
 
     assert_eq!(get_f64_data(&results[0]), &[2.0, 0.0, 0.0, 3.0]);
@@ -228,7 +235,9 @@ fn pseudoinverse_and_norm_eval() {
         .unwrap();
 
     let pseudo_inverse = a.pinv().unwrap();
-    let frob = a.norm(None, Some(&[0, 1]), false).unwrap();
+    let frob = a
+        .norm_with(&NormOptions::default().with_axes([0, 1]))
+        .unwrap();
     let results = run_many(&[&pseudo_inverse, &frob]);
 
     assert_tensor_f64_eq(get_f64_data(&results[0]), &[0.5, 0.0, 0.0, 0.25]);
@@ -256,10 +265,18 @@ fn traced_spectral_norm_preserves_signed_and_complex_input() {
         ))
         .unwrap();
     let outputs = [
-        signed.norm(Some(2.0), Some(&[0, 1]), false).unwrap(),
-        signed.norm(Some(-2.0), Some(&[0, 1]), false).unwrap(),
-        complex.norm(Some(2.0), Some(&[0, 1]), false).unwrap(),
-        complex.norm(Some(-2.0), Some(&[0, 1]), false).unwrap(),
+        signed
+            .norm_with(&NormOptions::default().with_ord(2.0).with_axes([0, 1]))
+            .unwrap(),
+        signed
+            .norm_with(&NormOptions::default().with_ord(-2.0).with_axes([0, 1]))
+            .unwrap(),
+        complex
+            .norm_with(&NormOptions::default().with_ord(2.0).with_axes([0, 1]))
+            .unwrap(),
+        complex
+            .norm_with(&NormOptions::default().with_ord(-2.0).with_axes([0, 1]))
+            .unwrap(),
     ];
     let output_refs = outputs.iter().collect::<Vec<_>>();
     let mut backend = tenferro_cpu::CpuEngine::serial();
@@ -283,14 +300,28 @@ fn norm_supports_vector_zero_and_matrix_induced_orders() {
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]))
         .unwrap();
 
-    let zero_norm = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
-    let matrix_one = matrix.norm(Some(1.0), Some(&[0, 1]), false).unwrap();
-    let matrix_neg_one = matrix.norm(Some(-1.0), Some(&[0, 1]), false).unwrap();
+    let zero_norm = vector
+        .norm_with(&NormOptions::default().with_ord(0.0).with_axes([0]))
+        .unwrap();
+    let matrix_one = matrix
+        .norm_with(&NormOptions::default().with_ord(1.0).with_axes([0, 1]))
+        .unwrap();
+    let matrix_neg_one = matrix
+        .norm_with(&NormOptions::default().with_ord(-1.0).with_axes([0, 1]))
+        .unwrap();
     let matrix_inf = matrix
-        .norm(Some(f64::INFINITY), Some(&[0, 1]), false)
+        .norm_with(
+            &NormOptions::default()
+                .with_ord(f64::INFINITY)
+                .with_axes([0, 1]),
+        )
         .unwrap();
     let matrix_neg_inf = matrix
-        .norm(Some(f64::NEG_INFINITY), Some(&[0, 1]), false)
+        .norm_with(
+            &NormOptions::default()
+                .with_ord(f64::NEG_INFINITY)
+                .with_axes([0, 1]),
+        )
         .unwrap();
     let results = run_many(&[
         &zero_norm,
@@ -343,7 +374,9 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         let vector = trace
             .from_tensor_concrete_shape(f64_tensor(vec![data.len()], data))
             .unwrap();
-        let count = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
+        let count = vector
+            .norm_with(&NormOptions::default().with_ord(0.0).with_axes([0]))
+            .unwrap();
         assert_f64_eq(get_f64_data(&run_many(&[&count])[0])[0], expected);
     }
 
@@ -381,7 +414,9 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         let vector = trace
             .from_tensor_concrete_shape(c64_tensor(vec![data.len()], data))
             .unwrap();
-        let count = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
+        let count = vector
+            .norm_with(&NormOptions::default().with_ord(0.0).with_axes([0]))
+            .unwrap();
         assert_f64_eq(get_f64_data(&run_many(&[&count])[0])[0], expected);
     }
 
@@ -400,9 +435,11 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         ))
         .unwrap();
 
-    let matrix_count = matrix.norm(Some(0.0), Some(&[0, 1]), false).unwrap();
+    let matrix_count = matrix
+        .norm_with(&NormOptions::default().with_ord(0.0).with_axes([0, 1]))
+        .unwrap();
     let complex_matrix_count = complex_matrix
-        .norm(Some(0.0), Some(&[0, 1]), false)
+        .norm_with(&NormOptions::default().with_ord(0.0).with_axes([0, 1]))
         .unwrap();
     let results = run_many(&[&matrix_count, &complex_matrix_count]);
     assert_f64_eq(get_f64_data(&results[0])[0], 2.0);
