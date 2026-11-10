@@ -1,5 +1,11 @@
 # The #2552 convergence record
 
+> **Status (2026-11-10): superseded.** The materialization policy this record decided on was withdrawn
+> by the #2552 decision update
+> (https://github.com/tensor4all/tenferro-rs/issues/2552#issuecomment-6764423689). R8 in
+> `../api-consolidation-policy.md` now records the withdrawal, and R3 no longer refers to the policy.
+> The documents below are kept unchanged as the history of that decision.
+
 Four documents and the ruling that came out of them, kept together because the decision is only
 checkable against what the two models actually wrote. Nothing here is a specification; the rule the
 decision produced lives in `../api-consolidation-policy.md` as R8 (and the amended R3).
