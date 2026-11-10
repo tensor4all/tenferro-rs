@@ -563,6 +563,11 @@ def main() -> int:
         " receiver calls in files that name the owner type, so a same-named method on another"
         " type can still raise a count. Treat a count as a lead and the `evidence` column as"
         " the review.",
+        "- Evidence is a citation, not a verification: the script checks only that the cited file"
+        " exists and that the line field is numeric. It does not read the line, so a `(cited at ...)`"
+        " site shows where a reviewer looked, not that the code there is the item on the row -- a"
+        " same-named method on another receiver passes. A row whose caller evidence nobody could"
+        " confirm says so in its verdict reason instead of citing a site.",
         "",
     ]
     text = "\n".join(header) + body
@@ -602,7 +607,7 @@ def render(
         in_guides = ", ".join(guide_examples) if guide_examples else "—"
         entry = overlay[key]
         if entry.get("evidence"):
-            reason = "{} (verified at {})".format(
+            reason = "{} (cited at {})".format(
                 entry["reason"], ", ".join(f"`{site}`" for site in entry["evidence"])
             )
         else:

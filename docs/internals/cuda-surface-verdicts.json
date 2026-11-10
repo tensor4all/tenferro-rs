@@ -574,10 +574,7 @@
     },
     "cuda::raw::DeviceBytes::byte_len": {
       "verdict": "public",
-      "reason": "read by the extension crates on a raw device allocation",
-      "evidence": [
-        "crates/tenferro-linalg/src/gpu/linalg.rs:1433"
-      ]
+      "reason": "caller evidence unverified: no `byte_len` call on a `DeviceBytes` exists outside `cuda/`"
     },
     "cuda::raw::DeviceBytes::with_ptr": {
       "verdict": "public",
@@ -616,10 +613,10 @@
     },
     "cuda::raw::Session::alloc_output": {
       "verdict": "public",
-      "reason": "called by `tenferro-fft` and `tenferro-linalg` (`session.alloc_output`)",
+      "reason": "called by `tenferro-linalg` (`raw.alloc_output`)",
       "evidence": [
-        "crates/tenferro-fft/src/cuda/mod.rs:502",
-        "crates/tenferro-linalg/src/gpu/linalg.rs:827"
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1411",
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1426"
       ]
     },
     "cuda::raw::Session::copy_bytes": {
@@ -633,7 +630,7 @@
       "verdict": "public",
       "reason": "documented raw download",
       "evidence": [
-        "crates/tenferro-linalg/src/gpu/linalg.rs:1429"
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1509"
       ]
     },
     "cuda::raw::Session::resource": {
@@ -730,10 +727,7 @@
     },
     "cuda::raw::TensorMut::byte_len": {
       "verdict": "public",
-      "reason": "read by the extension crates on a raw tensor reference",
-      "evidence": [
-        "crates/tenferro-linalg/src/gpu/linalg.rs:1433"
-      ]
+      "reason": "caller evidence unverified: no `byte_len` call on a `TensorMut` exists outside `cuda/`"
     },
     "cuda::raw::TensorMut::raw_ptr": {
       "verdict": "public",
@@ -744,10 +738,7 @@
     },
     "cuda::raw::TensorMut::with_ptr": {
       "verdict": "public",
-      "reason": "called by the extension crates on a raw tensor reference",
-      "evidence": [
-        "crates/tenferro-fft/src/cuda/plan.rs:347"
-      ]
+      "reason": "caller evidence unverified: the `with_ptr` calls in the extension crates are `DeviceBytes::with_ptr`; no `TensorMut::with_ptr` call exists outside `cuda/`"
     },
     "cuda::raw::TensorRef": {
       "verdict": "public",
@@ -769,10 +760,7 @@
     },
     "cuda::raw::TensorRef::with_ptr": {
       "verdict": "public",
-      "reason": "called by the extension crates on a raw tensor reference",
-      "evidence": [
-        "crates/tenferro-fft/src/cuda/plan.rs:347"
-      ]
+      "reason": "caller evidence unverified: the `with_ptr` calls in the extension crates are `DeviceBytes::with_ptr`; no `TensorRef::with_ptr` call exists outside `cuda/`"
     },
     "cuda::raw::with_cuda_engine": {
       "verdict": "public",

@@ -272,7 +272,9 @@ recount at `90348dc0` (126 marks, +3 against the issue body, −1 against the la
 ## 10. Follow-up work, in order
 
 1. This change: the five `pub` removals in section 5.
-2. Drop `#[doc(hidden)]` from the 66 public items and check them against
+2. Drop `#[doc(hidden)]` from the **64** public items (not 66: the 66 hidden `public` rows of
+   section 2 minus `CudaEngine::vendor_resource_stats` and `CudaEngine::clear_vendor_resources`, which
+   are `public` and stay hidden by section 4) and check them against
    `scripts/check-public-error-docs.py`; make the guides agree (`devices-and-gpu.md`,
    `engines-and-transfers.md`, `tutorial-code/src/bin/cuda_*.rs`).
 3. Port or move the `seam_*` suite so the 32 test-read items in section 6 can lose `pub`, and gate the
