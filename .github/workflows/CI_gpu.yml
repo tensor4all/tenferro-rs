@@ -726,11 +726,20 @@ jobs:
             # starting. Retry within the tick and keep waiting instead.
             fetched=0
             attempt=1
+            # `filter` defaults to `latest`, which returns one run per name —
+            # and this workflow publishes a `CI GPU gate` run of its own, so the
+            # default returned *this* job and nothing else. Every entry then
+            # failed the `contains($current)` filter below, the jq selection came
+            # back empty, and the gate waited out its whole timeout and concluded
+            # red while the RunPod verdict it was waiting for was already on the
+            # commit. `filter=all` returns the publications too; the filters below
+            # are what pick the right one.
             while [ "${attempt}" -le 5 ]; do
               if gh api \
                    --method GET \
                    "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/check-runs" \
                    -f check_name="CI GPU gate" \
+                   -f filter=all \
                    --jq . > "${checks_file}" 2>/dev/null \
                  && jq -e 'has("check_runs")' "${checks_file}" >/dev/null 2>&1; then
                 fetched=1
