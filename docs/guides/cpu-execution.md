@@ -144,7 +144,8 @@ through threadteam's `TeamExec::external` and pins it again afterwards (two
 `sched_setaffinity` calls per vendor call on a placed leader, nothing on other
 threads). Without it, #2553 measured MKL's OpenMP team confined to one CPU: at
 4 threads with `MKL_NUM_THREADS=4`, Householder QR, full SVD and solve ran
-11-89x slower than with the widening, and with the count unset MKL saw one CPU
+6-73x slower on the public-API benchmark (up to 89x in a standalone
+reproducer) than with the widening; with the count unset MKL saw one CPU
 and ran single-threaded. The vendor GEMM inside `cpueinsum-blas` is not widened
 yet. A vendor library usually fixes its worker threads' placement and count on
 its first call, so a process whose first vendor call is that GEMM keeps the
