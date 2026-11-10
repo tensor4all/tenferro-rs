@@ -286,6 +286,38 @@ fn full_piv_lu_solve_jvp_rejects_non_square_lhs_without_panic() {
 }
 
 #[test]
+fn full_piv_lu_ad_refuses_a_rectangular_input() {
+    // The differentiation rule covers the square factorization only; a rectangular input must be
+    // refused instead of left inactive, so a caller never reads the refusal as "no derivative".
+    let ad = ad_context();
+    let trace = TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![2, 3], vec![1.0, 0.0, 0.0, 2.0, 0.0, 1.0]))
+        .unwrap();
+    let da = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![2, 3], vec![0.1, 0.0, 0.0, 0.0, 0.1, 0.0]))
+        .unwrap();
+    let (_p, l, _u, _q, _parity) = a.full_piv_lu().unwrap();
+    let loss = reduce_all(&l);
+
+    let jvp = catch_unwind(AssertUnwindSafe(|| ad.jvp(&loss, &a, &da)));
+    assert_invalid_ad_graph_build(
+        jvp,
+        "jvp",
+        "tenferro-linalg.linearize_full_piv_lu",
+        "square",
+    );
+
+    let grad = catch_unwind(AssertUnwindSafe(|| ad.grad(&loss, &a)));
+    assert_invalid_ad_graph_build(
+        grad,
+        "grad",
+        "tenferro-linalg.linearize_full_piv_lu",
+        "square",
+    );
+}
+
+#[test]
 fn triangular_solve_jvp_rejects_non_square_lhs_without_panic() {
     let ad = ad_context();
     let trace = TraceContext::new();

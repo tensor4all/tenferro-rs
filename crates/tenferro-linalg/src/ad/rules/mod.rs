@@ -458,16 +458,26 @@ pub(crate) fn linearize_full_piv_lu(
     };
     let input_shape = input_shape.as_slice();
     let (rows, cols, _batch_shape) = matrix_shape_parts(input_shape, "linearize_full_piv_lu");
-    let concrete_dims = concrete_rectangular_dims(rows, cols, ctx, "linearize_full_piv_lu")?;
-    if concrete_dims.is_none() && rows != cols {
-        return Err(ADRuleError::invalid_input(
-            "tenferro-linalg.linearize_full_piv_lu",
-            ADRuleKind::Jvp,
-            "full-pivot LU differentiation requires provably equal symbolic matrix dimensions",
-        ));
-    }
-    if concrete_dims.is_some_and(|(rows_size, cols_size)| rows_size != cols_size) {
-        return Ok(vec![None, None, None, None, None]);
+    // The rule differentiates the square factorization only. A rectangular input is refused here
+    // rather than answered with zero tangents, so a caller never reads a silently wrong derivative.
+    match concrete_rectangular_dims(rows, cols, ctx, "linearize_full_piv_lu")? {
+        Some((rows_size, cols_size)) if rows_size != cols_size => {
+            return Err(ADRuleError::invalid_input(
+                "tenferro-linalg.linearize_full_piv_lu",
+                ADRuleKind::Jvp,
+                format!(
+                    "full-pivot LU differentiation requires a square matrix, got {rows_size} x {cols_size}"
+                ),
+            ));
+        }
+        None if rows != cols => {
+            return Err(ADRuleError::invalid_input(
+                "tenferro-linalg.linearize_full_piv_lu",
+                ADRuleKind::Jvp,
+                "full-pivot LU differentiation requires provably equal symbolic matrix dimensions",
+            ));
+        }
+        _ => {}
     }
 
     let rank = input_shape.len();
