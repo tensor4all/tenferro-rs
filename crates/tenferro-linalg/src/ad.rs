@@ -606,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn full_piv_lu_jvp_returns_inactive_outputs_for_non_square_input() {
+    fn full_piv_lu_jvp_refuses_non_square_concrete_input() {
         let mut builder = GraphBuilder::<StdTensorOp>::new();
         let mut ctx = ShapeGuardContext::default();
         let primal = input_key(1);
@@ -621,7 +621,7 @@ mod tests {
         ];
         let op = LinalgExtensionOp::new(LinalgOp::FullPivLu);
 
-        let result = LinalgAdRule
+        let error = LinalgAdRule
             .linearize(
                 &op,
                 &mut builder,
@@ -630,9 +630,21 @@ mod tests {
                 &[Some(tangent)],
                 &mut ctx,
             )
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(result, vec![None, None, None, None, None]);
+        // A rectangular input is refused, not answered with five inactive outputs: a caller that
+        // reads the silence as "no derivative" would use a wrong result.
+        assert!(
+            matches!(
+                error,
+                ADRuleError::InvalidInput {
+                    rule: ADRuleKind::Jvp,
+                    ref message,
+                    ..
+                } if message.contains("square") && message.contains("2 x 3")
+            ),
+            "expected a square-only refusal, got {error:?}"
+        );
         assert!(builder.build().operations().is_empty());
     }
 
