@@ -1,6 +1,6 @@
 # Prototype findings
 
-One file per prototype (p1.md … p6.md): what was built, what passed, what the
+One file per prototype (p1.md … p7.md): what was built, what passed, what the
 grammar could not express, and what was not verified.
 
 Toolchain: `cargo +nightly` (rustc 1.93) with
@@ -9,8 +9,10 @@ because rustc 1.96 is not installed on the machine that ran them.
 
 ## Results (cb27284d + this branch)
 
-All 62 prototype tests pass (`cargo +nightly test --ignore-rust-version -p
-tenferro-api-grammar-proof`, flags above): P1 15, P2 13, P3 7, P4 10, P5 9, P6 8.
+All 79 prototype tests pass (`cargo +nightly test --ignore-rust-version -p
+tenferro-api-grammar-proof`, flags above): P1 15, P2 13, P3 7, P4 10, P5 9, P6 8, P7 17 (15 + 2 in the
+allocation binary) plus 2 `compile_fail` doctests. P7's hook also leaves the tenferro-cpu lib suite (347) and
+the tenferro-linalg lib suite (149) passing.
 P4's internal hooks also pass the tenferro-tensor error tests (28 + 7 doctests),
 the tenferro-linalg lib suite (149) and the tenferro-einsum lib suite (210).
 
@@ -26,6 +28,7 @@ the tenferro-linalg lib suite (149) and the tenferro-einsum lib suite (210).
 | P4 | Rank-3 strided SVD batches are refused under `Forbid` although a copy-free kernel exists (dispatch, not math) | p4.md |
 | P5 | `tenferro_ad::Error` is `tenferro_runtime::Error`: two outer error types, not three; einsum returns its own error on every layer; transparent wrappers hide `tenferro_tensor::Error` from `source()` walks; traced `kind()` can disagree with the reachable cause | p5.md |
 | P6 | `TraceContextEinsumExt` already owns `einsum`/`einsum_with` (with a vestigial `&mut self`), so the owner-receiver entry collides by name; `finish`+`compile_traced_graph` leaves `input_keys` empty while `compile_many` fills them; TracedTensor-path build costs 12-20% more allocations, time within noise at N=512 | p6.md |
+| P7 | The six `*_with_exec` functions can be replaced by grammar on a borrowed engine: lifetimes, zero-allocation parity (0 vs 0 on every case, rank 8 included), nested and concurrent sub-team use, and no retention (pool recycler is `Weak`) all verified. Costs: a carrier engine must implement 48 required `Engine` methods (all `Unsupported`), a typed view cannot have both the gather and the refuse rule for negative strides, and the borrowed route has no gauge. A `with_lanes` split API works on top; per-lane serial engines (design C) ignore the share | p7.md |
 | P3 | Session-receiver consuming FFT needs no hook (`EagerSession::engine()` is public); `?` drops the recoverable owner; in-place FFT has no length option, so its options diverge from out-of-place FFT | p3.md |
 
 ## Not verified

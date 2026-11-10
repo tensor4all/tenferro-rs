@@ -22,6 +22,8 @@ native = [
 
 [dependencies]
 num-complex = { workspace = true }
+tcontract-exec = { workspace = true }
+threadteam = { workspace = true }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
 tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }

@@ -14,3 +14,4 @@ pub mod p3_fft_consume;
 pub mod p4_plan_policy;
 pub mod p5_error_causes;
 pub mod p6_trace_einsum;
+pub mod p7_borrowed_engine;

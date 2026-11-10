@@ -102,6 +102,7 @@ mod dot_runtime;
 pub(crate) use tenferro_cpu_basic::PooledUninitOutput;
 pub(crate) use tenferro_cpu_basic::{erased_raw_strided_ref, erased_raw_strided_uninit_mut};
 pub(crate) use tenferro_internal_cpu_kernels::elementwise;
+mod borrowed_engine;
 mod contraction;
 mod engine;
 mod exec_session;
@@ -174,6 +175,7 @@ extern crate lapack_src as _;
 
 pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
 
+pub use borrowed_engine::{with_borrowed_cpu_engine, BorrowedCpuEngine};
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 #[doc(hidden)]
