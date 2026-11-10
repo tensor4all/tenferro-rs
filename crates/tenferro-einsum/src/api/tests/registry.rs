@@ -404,7 +404,7 @@ fn conjugation_mask_conjugates_the_selected_operands_on_every_layer() -> R<()> {
             want,
             "concrete {spec}"
         );
-        // `_into` (two operands: contraction flags; three: conjugated first)
+        // `_into`: the selected operands are conjugated first, as above (#2580)
         let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(0.0, 0.0); 4])?;
         inputs.einsum_into(spec, &o, &mut e, Dest::overwrite(&mut out))?;
         assert_eq!(bits(&out)?, want, "concrete into {spec}");
@@ -540,4 +540,76 @@ fn api_docs_are_current() {
         "docs/spec/generated/api-ops.md is stale; run \
          `UPDATE_API_DOCS=1 cargo test -p tenferro-einsum --features autodiff api_docs_are_current`"
     );
+}
+
+/// #2580: `einsum_into` with a conjugation mask gives the same bits as the
+/// owned entrance and as the explicitly conjugated inputs, for every
+/// destination mode. Exactly cancelling imaginary parts are where the former
+/// two-operand route (mask as contraction operand flags, evaluated as
+/// `conj(a b)`) wrote `-0.0` where the owned entrance writes `+0.0`.
+#[test]
+fn conjugation_mask_into_matches_owned_bit_for_bit_in_every_mode() -> R<()> {
+    let mut e = CpuEngine::serial();
+    let conj = |t: &Tensor, e: &mut CpuEngine| -> R<Tensor> {
+        Ok(tenferro_tensor::TensorElementwise::conj_read(
+            e,
+            TensorRead::from_tensor(t),
+        )?)
+    };
+    let neg_zero = Complex64::new(-0.0, -0.0);
+    let masks = [
+        [Conj::Yes, Conj::No, Conj::Yes],
+        [Conj::No, Conj::Yes, Conj::No],
+        [Conj::Yes; 3],
+    ];
+    for (m, k, n) in [(1, 2, 4), (1, 2, 5), (2, 3, 2), (3, 4, 3)] {
+        for seed in 0..6 {
+            let (a, b, c) = (
+                cints(&[m, k], seed)?,
+                cints(&[k, n], seed + 3)?,
+                cints(&[n, 2], seed + 5)?,
+            );
+            let (ca, cb, cc) = (conj(&a, &mut e)?, conj(&b, &mut e)?, conj(&c, &mut e)?);
+            for mask in masks {
+                let pick = |i: usize| mask[i].is_yes();
+                let ea = if pick(0) { &ca } else { &a };
+                let eb = if pick(1) { &cb } else { &b };
+                let ec = if pick(2) { &cc } else { &c };
+                for (spec, inputs, explicit, cols) in [
+                    ("ij,jk->ik", vec![&a, &b], vec![ea, eb], n),
+                    ("ij,jk,kl->il", vec![&a, &b, &c], vec![ea, eb, ec], 2),
+                ] {
+                    let o = EinsumOptions::default()
+                        .conj(ConjMask::new((0..inputs.len()).map(|i| mask[i])));
+                    let plain = EinsumOptions::default();
+                    let at = format!("{spec} m{m} k{k} n{n} seed {seed} {mask:?}");
+                    let owned = bits(&inputs.einsum_with(spec, &o, &mut e)?)?;
+                    assert_eq!(owned, bits(&explicit.einsum(spec, &mut e)?)?, "owned {at}");
+                    let fill = |v| Tensor::from_vec_col_major(vec![m, cols], vec![v; m * cols]);
+                    let mut out = fill(Complex64::new(0.0, 0.0))?;
+                    inputs.einsum_into(spec, &o, &mut e, Dest::overwrite(&mut out))?;
+                    assert_eq!(bits(&out)?, owned, "overwrite {at}");
+                    // accumulating modes: the same mode on the explicit inputs
+                    let (mut got, mut want) = (fill(neg_zero)?, fill(neg_zero)?);
+                    inputs.einsum_into(spec, &o, &mut e, Dest::accumulate(&mut got))?;
+                    explicit.einsum_into(spec, &plain, &mut e, Dest::accumulate(&mut want))?;
+                    assert_eq!(bits(&got)?, bits(&want)?, "accumulate {at}");
+                    let (alpha, beta) = (Complex64::new(2.0, 0.0), Complex64::new(0.5, 0.0));
+                    let (mut got, mut want) = (
+                        fill(Complex64::new(1.0, -1.0))?,
+                        fill(Complex64::new(1.0, -1.0))?,
+                    );
+                    inputs.einsum_into(spec, &o, &mut e, Dest::scaled(&mut got, alpha, beta))?;
+                    explicit.einsum_into(
+                        spec,
+                        &plain,
+                        &mut e,
+                        Dest::scaled(&mut want, alpha, beta),
+                    )?;
+                    assert_eq!(bits(&got)?, bits(&want)?, "scaled {at}");
+                }
+            }
+        }
+    }
+    Ok(())
 }

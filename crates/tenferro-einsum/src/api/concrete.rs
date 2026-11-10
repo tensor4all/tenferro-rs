@@ -218,10 +218,13 @@ pub(crate) fn plan_reads(
 
 /// Writes `plan` on borrowed reads into a destination of representation `R`.
 ///
-/// Overwrite without conjugation takes the former overwrite entries. Every
-/// other case is one accumulating contraction: with two operands the plan's
-/// conjugation travels as the contraction's operand flags (read in place);
-/// with any other operand count the selected operands are conjugated first.
+/// The selected operands are conjugated first, exactly as [`plan_reads`] and
+/// the owned entrance do, so `einsum` and `einsum_into` with the same options
+/// give bit-identical values. The conjugation never travels as contraction
+/// operand flags: the flagged kernel evaluates `conj(a) conj(b)` as
+/// `conj(a b)`, which turns an exactly cancelled zero into `-0.0` where the
+/// owned entrance yields `+0.0` (#2580). Overwrite then writes the read
+/// route; accumulation is one unconjugated accumulating contraction.
 pub(crate) fn plan_into_reads<R: Repr>(
     plan: &ConcreteEinsumPlan,
     reads: &[TensorRead<'_>],
@@ -237,6 +240,16 @@ pub(crate) fn plan_into_reads<R: Repr>(
         }
         .map_err(tensor_err);
     }
+    let conj = conjugate(reads, mask, exec)?;
+    let reads = substituted(reads, &conj);
+    if dest.mode() == DestMode::Overwrite {
+        // The read route on the conjugated reads, as `plan_reads` and the owned
+        // entrance (`einsum_erased`) take.
+        let out = R::erase_write(dest.into_target());
+        return plan
+            .run_reads_into(&reads[..], exec, out)
+            .map_err(tensor_err);
+    }
     let dtype = reads.first().map(TensorRead::dtype).ok_or_else(|| {
         tensor_err(Error::invalid_argument(
             OP,
@@ -244,15 +257,6 @@ pub(crate) fn plan_into_reads<R: Repr>(
             "einsum requires at least one input tensor",
         ))
     })?;
-    if reads.len() == 2 {
-        let (out, accumulation) = dest.into_accumulation(dtype, mask.get(0), mask.get(1))?;
-        let out = R::erase_write(out);
-        return plan
-            .run_reads_into_accum(reads, exec, accumulation, out)
-            .map_err(tensor_err);
-    }
-    let conj = conjugate(reads, mask, exec)?;
-    let reads = substituted(reads, &conj);
     let (out, accumulation) = dest.into_accumulation(dtype, Conj::No, Conj::No)?;
     let out = R::erase_write(out);
     plan.run_reads_into_accum(&reads[..], exec, accumulation, out)
