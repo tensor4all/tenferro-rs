@@ -94,6 +94,7 @@ mod analytic;
 pub mod backend;
 mod batch_policy;
 mod blas1;
+mod borrowed_engine;
 pub(crate) mod buffer_pool {
     pub use tenferro_cpu_basic::buffer_pool::*;
 }
@@ -133,7 +134,6 @@ use strided_kernel::col_major_strides as kernel_col_major_strides;
 #[cfg(test)]
 use strided_kernel::StridedArray;
 
-use crate::buffer_pool::BufferPool;
 pub(crate) use tenferro_tensor::*;
 use threadteam::Exec;
 
@@ -174,7 +174,8 @@ extern crate lapack_src as _;
 
 pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
 
-pub use buffer_pool::BufferPoolStats;
+pub use borrowed_engine::with_borrowed_cpu_engine;
+pub use buffer_pool::{BufferPool, BufferPoolStats};
 pub use capability::cpu_capabilities;
 #[doc(hidden)]
 pub use dot_runtime::{validate_cpu_host_read, validate_cpu_host_write};

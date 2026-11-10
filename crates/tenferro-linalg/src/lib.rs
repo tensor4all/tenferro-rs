@@ -163,6 +163,7 @@ mod flags;
 #[cfg(feature = "cuda")]
 mod gpu;
 mod householder;
+mod lane;
 pub mod prelude;
 mod rank_revealing_qr;
 mod results;

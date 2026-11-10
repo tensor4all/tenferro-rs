@@ -1,6 +1,7 @@
 pub mod tenferro_cpu
 pub use tenferro_cpu::AddOp
 pub use tenferro_cpu::BinaryScalarOp
+pub use tenferro_cpu::BufferPool
 pub use tenferro_cpu::BufferPoolStats
 pub use tenferro_cpu::CpuBatchPolicy
 pub use tenferro_cpu::CpuBatchStrategy
@@ -54,6 +55,8 @@ pub fn tenferro_cpu::CpuEngine::with_batch_policy(self, tcontract_exec::batch::B
 pub fn tenferro_cpu::CpuEngine::with_exec<R>(&mut self, impl core::ops::function::FnOnce(&mut tcontract_exec::exec::Exec<'_>) -> R) -> tenferro_tensor::error::Result<R>
 pub fn tenferro_cpu::CpuEngine::with_plan_cache(self, tenferro_cpu::CpuPlanCache) -> Self
 pub fn tenferro_cpu::CpuEngine::with_runtime_engine_id(self, tenferro_runtime::runtime::identity::EngineId) -> Self
+impl tenferro_cpu::CpuEngine
+pub fn tenferro_cpu::CpuEngine::with_lanes<R: core::marker::Send>(&mut self, &[usize], &mut [tenferro_cpu_basic::buffer_pool::BufferPool], impl core::ops::function::Fn(usize, &mut dyn tenferro_tensor::backend::Engine) -> R + core::marker::Sync) -> tenferro_tensor::error::Result<alloc::vec::Vec<R>>
 impl core::fmt::Debug for tenferro_cpu::CpuEngine
 pub fn tenferro_cpu::CpuEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl tenferro_runtime::runtime::engine::ExecutionEngine for tenferro_cpu::CpuEngine

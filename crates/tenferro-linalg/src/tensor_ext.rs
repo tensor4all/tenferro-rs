@@ -19,6 +19,7 @@ use tenferro_tensor::{
 };
 
 use crate::extension::{EighOptions, QrOptions, SvdOptions};
+use crate::lane;
 use crate::traced::real_values_dtype;
 use crate::validation::validate_square_matrix;
 use crate::{LinalgBackend, RankRevealingQrOptions, RankRevealingQrResult};
@@ -1976,9 +1977,17 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
 
 impl TensorLinalgExt for Tensor {
     fn svd(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
+        if let Some(result) =
+            lane::try_lane_svd(session, TensorRead::from_tensor(self), false, None)
+        {
+            return result;
+        }
         with_linalg_backend(session, "svd", |backend| three(backend.svd(self)?, "svd"))
     }
     fn svdvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        if let Some(result) = lane::try_lane_svdvals(session, TensorRead::from_tensor(self)) {
+            return result;
+        }
         with_linalg_backend(session, "svdvals", |backend| backend.svd_values(self))
     }
 
@@ -1987,6 +1996,14 @@ impl TensorLinalgExt for Tensor {
         options: SvdOptions,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_svd(
+            session,
+            TensorRead::from_tensor(self),
+            false,
+            Some(("svd_with_options", options)),
+        ) {
+            return result;
+        }
         with_linalg_backend(session, "svd_with_options", |backend| {
             three(backend.svd_with_options(self, options)?, "svd_with_options")
         })
@@ -1995,11 +2012,18 @@ impl TensorLinalgExt for Tensor {
         &self,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_svd(session, TensorRead::from_tensor(self), true, None)
+        {
+            return result;
+        }
         with_linalg_backend(session, "svd_full", |backend| {
             three(backend.svd_full(self)?, "svd_full")
         })
     }
     fn qr(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_qr(session, TensorRead::from_tensor(self)) {
+            return result;
+        }
         with_linalg_backend(session, "qr", |backend| two(backend.qr(self)?, "qr"))
     }
     fn householder_qr(
@@ -2060,6 +2084,9 @@ impl TensorLinalgExt for Tensor {
         with_linalg_backend(session, "cholesky", |backend| backend.cholesky(self))
     }
     fn eigh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_eigh(session, TensorRead::from_tensor(self), None) {
+            return result;
+        }
         with_linalg_backend(session, "eigh", |backend| two(backend.eigh(self)?, "eigh"))
     }
     fn eigh_with_options(
@@ -2067,6 +2094,13 @@ impl TensorLinalgExt for Tensor {
         options: EighOptions,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_eigh(
+            session,
+            TensorRead::from_tensor(self),
+            Some(("eigh_with_options", options)),
+        ) {
+            return result;
+        }
         with_linalg_backend(session, "eigh_with_options", |backend| {
             two(
                 backend.eigh_with_options(self, options)?,
@@ -2109,9 +2143,15 @@ impl TensorLinalgExt for Tensor {
         with_linalg_backend(session, "inv", |backend| inv_owned(self, backend))
     }
     fn eigvalsh(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        if let Some(result) = lane::try_lane_eigvalsh(session, TensorRead::from_tensor(self)) {
+            return result;
+        }
         with_linalg_backend(session, "eigvalsh", |backend| backend.eigh_values(self))
     }
     fn eigvals(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        if let Some(result) = lane::try_lane_eigvals(session, TensorRead::from_tensor(self)) {
+            return result;
+        }
         with_linalg_backend(session, "eigvals", |backend| backend.eig_values(self))
     }
     fn pinv(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
@@ -2144,11 +2184,17 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         self,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_svd(session, self.clone(), false, None) {
+            return result;
+        }
         with_linalg_backend(session, "svd_read", |backend| {
             three(backend.svd_read(self)?, "svd_read")
         })
     }
     fn svdvals_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        if let Some(result) = lane::try_lane_svdvals(session, self.clone()) {
+            return result;
+        }
         with_linalg_backend(session, "svdvals_read", |backend| {
             backend.svd_values_read(self)
         })
@@ -2159,6 +2205,14 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         options: SvdOptions,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_svd(
+            session,
+            self.clone(),
+            false,
+            Some(("svd_with_options_read", options)),
+        ) {
+            return result;
+        }
         with_linalg_backend(session, "svd_with_options_read", |backend| {
             three(
                 backend.svd_with_options_read(self, options)?,
@@ -2170,11 +2224,17 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         self,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_svd(session, self.clone(), true, None) {
+            return result;
+        }
         with_linalg_backend(session, "svd_full_read", |backend| {
             three(backend.svd_full_read(self)?, "svd_full_read")
         })
     }
     fn qr_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_qr(session, self.clone()) {
+            return result;
+        }
         with_linalg_backend(session, "qr_read", |backend| {
             two(backend.qr_read(self)?, "qr_read")
         })
@@ -2269,6 +2329,9 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         })
     }
     fn eigh_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_eigh(session, self.clone(), None) {
+            return result;
+        }
         with_linalg_backend(session, "eigh_read", |backend| {
             two(backend.eigh_read(self)?, "eigh_read")
         })
@@ -2278,6 +2341,13 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         options: EighOptions,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
+        if let Some(result) = lane::try_lane_eigh(
+            session,
+            self.clone(),
+            Some(("eigh_with_options_read", options)),
+        ) {
+            return result;
+        }
         with_linalg_backend(session, "eigh_with_options_read", |backend| {
             two(
                 backend.eigh_with_options_read(self, options)?,
@@ -2322,11 +2392,17 @@ impl TensorReadLinalgExt for TensorRead<'_> {
         with_linalg_backend(session, "inv_read", |backend| inv_read(self, backend))
     }
     fn eigvalsh_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        if let Some(result) = lane::try_lane_eigvalsh(session, self.clone()) {
+            return result;
+        }
         with_linalg_backend(session, "eigvalsh_read", |backend| {
             backend.eigh_values_read(self)
         })
     }
     fn eigvals_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {
+        if let Some(result) = lane::try_lane_eigvals(session, self.clone()) {
+            return result;
+        }
         with_linalg_backend(session, "eigvals_read", |backend| {
             backend.eig_values_read(self)
         })
@@ -2360,6 +2436,9 @@ impl TensorReadLinalgExt for TensorRead<'_> {
 
 impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
     fn svd(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedSvd<T>> {
+        if let Some(result) = lane::try_lane_svd(session, T::tensor_read(self), false, None) {
+            return typed_svd(result?);
+        }
         with_linalg_backend(session, "svd", |backend| {
             typed_svd(T::tensor_read(self).svd_read(backend)?)
         })
@@ -2369,6 +2448,9 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
         &self,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>> {
+        if let Some(result) = lane::try_lane_svdvals(session, T::tensor_read(self)) {
+            return typed_output::<<T as TensorScalar>::Real>(result?);
+        }
         with_linalg_backend(session, "svdvals", |backend| {
             typed_output::<<T as TensorScalar>::Real>(T::tensor_read(self).svdvals_read(backend)?)
         })
@@ -2379,12 +2461,23 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
         options: SvdOptions,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedSvd<T>> {
+        if let Some(result) = lane::try_lane_svd(
+            session,
+            T::tensor_read(self),
+            false,
+            Some(("svd_with_options", options)),
+        ) {
+            return typed_svd(result?);
+        }
         with_linalg_backend(session, "svd_with_options", |backend| {
             typed_svd(T::tensor_read(self).svd_with_options_read(options, backend)?)
         })
     }
 
     fn svd_full(&self, session: &mut dyn Engine) -> tenferro_tensor::Result<TypedSvd<T>> {
+        if let Some(result) = lane::try_lane_svd(session, T::tensor_read(self), true, None) {
+            return typed_svd(result?);
+        }
         with_linalg_backend(session, "svd_full", |backend| {
             typed_svd(T::tensor_read(self).svd_full_read(backend)?)
         })
@@ -2394,6 +2487,9 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
         &self,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
+        if let Some(result) = lane::try_lane_qr(session, T::tensor_read(self)) {
+            return typed_pair_same(result?);
+        }
         with_linalg_backend(session, "qr", |backend| {
             typed_pair_same(T::tensor_read(self).qr_read(backend)?)
         })
@@ -2482,6 +2578,9 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
         &self,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(TypedTensor<<T as TensorScalar>::Real>, TypedTensor<T>)> {
+        if let Some(result) = lane::try_lane_eigh(session, T::tensor_read(self), None) {
+            return typed_eigh(result?);
+        }
         with_linalg_backend(session, "eigh", |backend| {
             typed_eigh(T::tensor_read(self).eigh_read(backend)?)
         })
@@ -2492,6 +2591,13 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
         options: EighOptions,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<(TypedTensor<<T as TensorScalar>::Real>, TypedTensor<T>)> {
+        if let Some(result) = lane::try_lane_eigh(
+            session,
+            T::tensor_read(self),
+            Some(("eigh_with_options", options)),
+        ) {
+            return typed_eigh(result?);
+        }
         with_linalg_backend(session, "eigh_with_options", |backend| {
             typed_eigh(T::tensor_read(self).eigh_with_options_read(options, backend)?)
         })
@@ -2557,6 +2663,9 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
         &self,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>> {
+        if let Some(result) = lane::try_lane_eigvalsh(session, T::tensor_read(self)) {
+            return typed_output::<<T as TensorScalar>::Real>(result?);
+        }
         with_linalg_backend(session, "eigvalsh", |backend| {
             typed_output::<<T as TensorScalar>::Real>(T::tensor_read(self).eigvalsh_read(backend)?)
         })
@@ -2566,6 +2675,9 @@ impl<T: LinalgScalar> TypedTensorLinalgExt<T> for TypedTensor<T> {
         &self,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<TypedTensor<T::Complex>> {
+        if let Some(result) = lane::try_lane_eigvals(session, T::tensor_read(self)) {
+            return typed_output::<T::Complex>(result?);
+        }
         with_linalg_backend(session, "eigvals", |backend| {
             typed_output::<T::Complex>(T::tensor_read(self).eigvals_read(backend)?)
         })

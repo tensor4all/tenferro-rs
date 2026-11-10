@@ -42,6 +42,8 @@ mod incremental_qr_performance_contract;
 mod inject_dual_abi_tests;
 #[path = "integration/inject_tests.rs"]
 mod inject_tests;
+#[path = "integration/lane_entries.rs"]
+mod lane_entries;
 #[path = "integration/linalg_internal_path_contract.rs"]
 mod linalg_internal_path_contract;
 #[cfg(feature = "autodiff")]
