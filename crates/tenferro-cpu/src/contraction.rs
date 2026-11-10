@@ -201,10 +201,11 @@ impl LowerContractionError for cpueinsum_blas::BlasError {
 
 /// How an engine places its work.
 enum Placement {
-    /// No pool: every operation runs on the calling thread.
+    /// No pool: every operation runs on the calling thread. A caller-built pool
+    /// of one worker is dropped at construction and lands here too: its tokens
+    /// would have a budget of one and never dispatch, so the pool bought
+    /// nothing but a retained worker.
     Serial,
-    /// A one-worker pool: tokens have a budget of one and never dispatch.
-    Single(threadteam::Pool),
     /// A pool of two or more workers, moved into a [`threadteam::Team`]: the
     /// members stay reserved for the engine's lifetime, so every parallel
     /// region (the strided kernels, tcontract batches, faer's `Par::Team`) is a
@@ -264,9 +265,8 @@ impl ExecutionResources {
                 pool.dispatch_costs()
             });
         let placement = match pool {
-            None => Placement::Serial,
-            Some(pool) if pool.width().get() == 1 => Placement::Single(pool),
-            Some(pool) => Self::reserve_team(pool),
+            Some(pool) if pool.width().get() > 1 => Self::reserve_team(pool),
+            None | Some(_) => Placement::Serial,
         };
         Self {
             costs,
@@ -330,7 +330,7 @@ impl ExecutionResources {
     /// Number of participants of the engine's team (its pool width), or one.
     pub(crate) fn thread_budget(&self) -> std::num::NonZeroUsize {
         match &self.placement {
-            Placement::Serial | Placement::Single(_) => std::num::NonZeroUsize::MIN,
+            Placement::Serial => std::num::NonZeroUsize::MIN,
             Placement::Team(team) => team.size(),
         }
     }
@@ -346,8 +346,8 @@ impl ExecutionResources {
         matches!(self.placement, Placement::Team(_))
     }
     /// Mint the one provider bundle of an operation: every member of the team
-    /// as the budget, the workspace, and `policy`. A serial or one-worker
-    /// engine mints a budget-one token and never dispatches.
+    /// as the budget, the workspace, and `policy`. A serial engine mints a
+    /// budget-one token and never dispatches.
     ///
     /// A team has one leader at a time. A thread that asks while another thread
     /// leads waits for it (an engine is not meant to be shared, and a lock
@@ -358,12 +358,6 @@ impl ExecutionResources {
         #[cfg_attr(not(feature = "ledger"), allow(unused_mut))]
         let mut exec = match &self.placement {
             Placement::Serial => Exec::serial_with_workspace(&self.workspace),
-            Placement::Single(pool) => Exec::from_token(
-                // INVARIANT: a width-one budget is non-zero.
-                threadteam::Exec::new(pool, 1).unwrap_or_else(|_| threadteam::Exec::serial()),
-                Some(&self.workspace),
-                cpueinsum::BatchPolicy::default(),
-            ),
             Placement::Team(team) => match self.lead(team) {
                 Some(token) => Exec::from_token(
                     token,

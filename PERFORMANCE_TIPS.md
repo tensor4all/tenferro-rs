@@ -528,9 +528,11 @@ Audit hints:
 The bitwise-reproducibility promise this contract supports — identical bits at a fixed
 thread count, nothing across thread counts — is owned by `docs/spec/reproducibility.md`.
 
-- CPU placement is `Serial`, `Single`, or `Team`. `CpuEngine::serial()` owns no
-  pool; a caller-built one-worker `threadteam::Pool` stays `Single`, with no
-  dispatch. For a larger pool, construction attempts to reserve all workers as
+- CPU placement is `Serial` or `Team`. `CpuEngine::serial()` owns no pool, and
+  neither does an engine built from a caller-built one-worker `threadteam::Pool`:
+  such a pool is released at construction, because its tokens would have a
+  budget of one and never dispatch. For a larger pool, construction attempts to
+  reserve all workers as
   a `threadteam::Team` for the engine's lifetime. Reservation retries for a
   bounded interval (currently ten seconds); if it is still refused, the pool
   is dropped and the engine becomes `Serial`, not a Rayon execution path.
@@ -547,7 +549,7 @@ thread count, nothing across thread counts — is owned by `docs/spec/reproducib
   the budget, so the tasks running at once under one operation never exceed its
   budget at any nesting depth. tenferro has no raw Rayon call, no thread-local
   placement state and no second scheduler: a Team token is bounded by the
-  reserved team, and `Single` and `Serial` tokens have a budget of one.
+  reserved team, and a `Serial` token has a budget of one.
 - The caller chooses the pool width before construction; the engine's effective
   budget is fixed after the reservation attempt. Do not derive it from an
   ambient pool, build a second pool inside an operation, or install or restore
