@@ -20,11 +20,16 @@ convergence they do not actually share: `fable-crossread.md` §4 proposes the pl
 true here, and the ruling had to decide it. A later reader who reads only one of the two will think
 the question was settled by agreement.
 
-**The compile question decided it, not the argument.** `ruling.md` carries the four-file check:
-the wrapper as originally specified does not compile on `&mut dyn Engine` (invariant generic, default
-object lifetime `'static`); with `R: ?Sized = dyn Engine + 'a` it does, but a helper that holds
-`&mut dyn Engine` then needs `reborrow()` per call, while the plain argument compiles that helper
-untouched. And the wrapper's claimed advantage — that sugar cannot drop the policy — is a lint
+**The compile question decided it, not the argument.** `ruling.md` carries the four-file check, and
+the check is narrower than a first reading suggests: the wrapper **as Fable wrote it**
+(`fable-proposal.md:16`, `R: ?Sized = dyn Engine + 'a`) compiles. What does not compile is the naive
+form without that default — `dyn Engine` is invariant in `R` and its default object lifetime is
+`'static` — which is a pitfall a reader would meet if they wrote the type themselves, not a defect of
+the submitted proposal. The decision therefore rests on the second half of the check: with the
+correct default in place, a helper that holds `&mut dyn Engine` and calls twice needs `reborrow()` on
+all but the last call, while the plain argument compiles that helper untouched. The wrapper's other
+claimed advantage — that sugar cannot drop the policy — is a lint setting (`deny(unused_variables)`),
+not a type. And the wrapper's claimed advantage — that sugar cannot drop the policy — is a lint
 setting (`deny(unused_variables)`), not a type.
 
 **The scope sentence was wrong in all three documents.** Both proposals and the first ruling said
