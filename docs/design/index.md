@@ -9,6 +9,8 @@ migration notes live under [Plans](../plans/), not this active design index.
 
 | Document | Description |
 |----------|-------------|
+| [api-consolidation-policy.md](./api-consolidation-policy.md) | Rules R1–R8 for collapsing a duplicated public API surface: one fact one expression, `_into` as the primitive, placement/dtype and input-layout permissions, erasure at the FFI edge, no foreign types, checked transitions, and the per-invocation execution constraint |
+| [api-2552-convergence/](./api-2552-convergence/README.md) | The two independent designs for the materialization policy, both round-2 cross-reads, and the ruling — kept because the pair crossed and the decision rests on a compile check |
 | [api-and-convention-freeze.md](./api-and-convention-freeze.md) | Clean-break release posture for public API, API consistency detection, crate ownership, naming conventions, docs ownership, and audit/remediation workflow |
 | [supported-ops.md](./supported-ops.md) | Crate-by-crate inventory of supported primal and AD operations |
 | [tensor.md](./tensor.md) | Tensor representation, ownership model |
