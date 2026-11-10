@@ -19,7 +19,7 @@
 | 3 | `PERFORMANCE_TIPS.md` 全文 | 実行経路に触るため。特に「Materialization And Copies」 |
 | 4 | [`api-consolidation-policy.md`](../api-consolidation-policy.md) の R3 と R8 | レイアウト変換の扱い。実体化ポリシーは撤回済み |
 | 5 | #2552 の決定コメント群 | 下の §0.3 |
-| 6 | プロトタイプブランチ `prototype/2552-api-grammar` の `ext/api-grammar-proof/` | 各試作の実装と `findings/p1.md`〜`p6.md`。新しい形の動く見本 |
+| 6 | プロトタイプブランチ `prototype/2552-api-grammar` の `ext/api-grammar-proof/` | 各試作の実装と `findings/p1.md`〜`p7.md`。新しい形の動く見本。P7（借用エンジンとレーン）は `crates/tenferro-cpu/src/borrowed_engine.rs` にフックがある |
 
 ### 0.2 ツールチェーン
 
@@ -36,6 +36,7 @@
 | v0.1 への修正（policy の位置、`Svd<V, R>` など） | 6762266144（review of v0.1） |
 | 例外表 E01〜E09、エラー supertrait の見送り、プランとキャッシュ所有者 | 6762340249（inventory v0.2） |
 | プロトタイプの結果 | 6763055062 |
+| 借用エンジンとレーン（P7） | プロトタイプブランチの `ext/api-grammar-proof/findings/p7.md`（#2552 へはまだ投稿していない） |
 | 実体化ポリシーの撤回、公開カウンタを要件にしない | 6763124519、6764423689（後者が最終） |
 
 `MaterializationPolicy`、`InputMaterializationForbidden`、公開の正規化カウンタは **作りません**。設計資料やプロトタイプにこれらが出てきても、実装しないでください。
@@ -61,7 +62,8 @@
 | S0 | 現行の公開 API スナップショットを記録し、CI に入れる | §2 | なし。main への単独 PR にしてよい |
 | S1 | 共通の型を追加する（`Dest`、軸、制御用の列挙型、結果構造体） | §3 | S0 |
 | S2 | 演算レジストリと生成マクロ、例外表を作る | §4 | S1 |
-| S3 | linalg を移行する | §5 | S2 |
+| S2b | レーン（`CpuEngine::with_lanes`）と、レーン用の借用エンジンを入れる | §5.6 | S1 |
+| S3 | linalg を移行する（`*_with_exec` の削除を含む） | §5 | S2、S2b |
 | S4 | einsum を移行する | §6 | S2。#2565 の修正が main に入っていること |
 | S5 | FFT を移行する | §7.1 | S2 |
 | S6 | core 演算を移行する（runtime と ad） | §7.2 | S2 |
@@ -158,7 +160,7 @@ impl<W> Dest<W> {
 |---|---|
 | `triangular_solve(b, left_side, lower, transpose_a, unit_diagonal)` | `TriangularSolveOptions { side: Side, uplo: Uplo, op: MatOp, diag: Diag }`（linalg） |
 | `norm(ord, dim, keepdim)` | `NormOptions { ord: NormOrd, axes: Option<AxisVec>, keep_dims: KeepDims }`（linalg） |
-| `svd_with_exec(.., full: bool)` | E08 の対象なので今回は触らない（§5.6） |
+| `svd_with_exec(.., full: bool)` | 関数ごと削除し、レーンの中で `view.svd_with(&SvdOptions::default().shape(SvdShape::Full), lane)` を使う（§5.6） |
 | `dot_general_with_conj(rhs, config, lhs_conj, rhs_conj)` | `dot_general_with(&rhs, config, &DotGeneralOptions { lhs: Conj, rhs: Conj }, exec)`（tensor） |
 | `LinalgBackend::full_piv_lu_solve(.., transpose_a)` | バックエンド trait なので E10 として対象外 |
 
@@ -300,7 +302,7 @@ REPOSITORY_RULES.md「Wrapper DRY And Codegen」が求めることも守りま�
 | E05 | 記述子だけの操作とメタデータ問い合わせ（`shape`、`dtype`、`into_dynamic`、ビュー作成など） | 文法の対象外。データをコピーしないことをテストする |
 | E06 | 承認した外部型（`num_complex::Complex` など）と bridge | シンボル単位の許可リスト。`api/allowlist.txt` |
 | E07 | `TraceValue` の einsum 入口 | **退役**（§6.4）。表には履歴として残す |
-| E08 | `*_with_exec` 自由関数 6 本 | 今回は存続。§5.6 |
+| E08 | `*_with_exec` 自由関数 6 本 | **退役**。P7 で4条件を確かめた。レーンと借用エンジンに置き換える（§5.6）。表には履歴として残す |
 | E09 | パーサーとプランナーの領域エラー、所有権を返す失敗 | 存続 |
 | E10 | **[本書で決定・追加]** バックエンド trait（`Engine`、`TensorDot`、`LinalgBackend`、`FftBackend` など）と、その `*_read_into_accum` フック | op 文法の対象外。provider 向けの契約として別に扱う |
 
@@ -424,19 +426,85 @@ impl<T: LinalgScalar> AsView for TypedTensorView<'_, T> { type Repr = Typed<T>; 
 3. `#[error(transparent)]` の variant は、`source()` で包んだエラーそのものを返さず、その原因を返します。`tenferro_tensor::Error` そのものをたどって見つけたい場合のために、**[本書で決定]** runtime 側の `TensorRuntime(#[from] tenferro_tensor::Error)` から `#[error(transparent)]` を外し、`#[error("{0}")] TensorRuntime(#[from] tenferro_tensor::Error)` にします（`#[from]` が `#[source]` を兼ねる）。表示される文字列は変わりませんが、`source()` が包んだエラー自身を返すようになります。
 4. 新しい公開エラートレイト（`TensorError` など）は追加しません（v0.2）。
 
-### 5.6 `*_with_exec`（E08）
+### 5.6 `*_with_exec` の退役と、レーン（S2b）
 
-`svd_with_exec`、`svd_values_with_exec`、`qr_with_exec`、`eigh_with_exec`、`eigh_values_with_exec`、`eig_values_with_exec`（`with_exec.rs`）は、**今回は名前も形も変えません**。
+#### 背景
 
-v0.1 と v0.2 で、削除の条件は次のように決まっています。`Exec` と `BufferPool` を構築時に受け取る借用エンジンの試作で、次の4点を確かめること。
-- ライフタイム
-- バッファの再利用
-- 入れ子の実行
-- 非同期に保持される場合
+`svd_with_exec`、`svd_values_with_exec`、`qr_with_exec`、`eigh_with_exec`、`eigh_values_with_exec`、`eig_values_with_exec`（`with_exec.rs`）は、[#2462](https://github.com/tensor4all/tenferro-rs/issues/2462) の要望で足されたものです。1 つの Engine に入ったまま、スレッドをレーンに分け、レーンごとに別の分解を同時に走らせるための入口です。Engine の入口は Engine 全体を `&mut` で占有するので、この使い方ができませんでした。そこで、Engine が中で組み立てる部品（そのレーンのトークンの束 `Exec` と、そのレーン専用の `BufferPool`）を、直接引数で受け取る形になっています。
 
-この試作はまだありません。これらの関数は E08 として例外表に載せ、移行対象から外します。`full: bool` もそのままです。
+v0.1 と v0.2 は、これらを消す条件として、借用エンジンの試作で4点（ライフタイム、バッファの再利用、入れ子と並行の実行、呼び出し後に保持しないこと）を確かめることを求めていました。**P7 でこの4点をすべて確かめました**（`findings/p7.md`）。
 
-試作は別の Issue として起こします。その試作がこの作業の途中で終わった場合も、この作業ブランチには入れず、次のリリースで扱います。
+| 条件 | P7 の結果 |
+|---|---|
+| ライフタイム | 借用エンジンが、スタック上の `Exec` と `BufferPool` を借りたまま `&mut dyn Engine` として使える。`'static` は不要 |
+| 再利用と割り当て 0 | 定常状態の割り当てが、svd（thin と full）、svdvals、qr、eigh、eigvalsh、eigvals、complex64 の svd、rank 8 の qr のすべてで 0。`*_with_exec` と同じ。バッファはすべて呼び出し側のプールから出て、Engine のプールは増えない |
+| 入れ子と並行 | `with_exec` と `with_contraction_exec` の中で動く。4 スレッドのチームを `[3, 1]` と `[2, 2]` に分け、2 つの分解を同時に実行して、結果が基準と bit 一致した。デッドロックしない。レーンで panic すると、外側の Engine が `with_exec` のときと同じく broken になる |
+| 保持しない | プールを先に捨てる、`Exec` より長く生かす、の2つがコンパイルエラーになる（`compile_fail` の doctest）。出力が Engine とプールより長生きしても、ただの所有ストレージになるだけ |
+
+#### 作るもの（`tenferro-cpu`）
+
+1. **`CpuEngine::with_lanes`（公開）**
+
+   ```rust
+   pub fn with_lanes<R: Send>(
+       &mut self,
+       shares: &[usize],              // レーンごとのスレッドの取り分。合計は Engine の予算以下
+       pools: &mut [BufferPool],      // レーンごとのプール。呼び出し側が持ち、呼び出しをまたいで再利用する
+       f: impl Fn(usize, &mut dyn Engine) -> R + Sync,
+   ) -> Result<Vec<R>>;
+   ```
+
+   - 内部では `with_exec` に入ります。そこで `exec.token().fork_sized_slots(shares, ..)` によりトークンを分け、各レーンで `tcontract_exec::Exec::from_token` から束を作ります。
+   - 各レーンには、その束とプールを借りた借用エンジンを `&mut dyn Engine` として渡します。
+   - 次の3つは、実行前に検証エラーを返し、Engine を使える状態のまま残します。
+     - `shares` の合計が予算を超える
+     - `shares` に 0 がある
+     - `shares` と `pools` の長さが違う
+   - プールを呼び出し側に持たせるのは、プールを呼び出しをまたいで温めておくためです。割り当て 0 は、同じプールを使い続けることで成り立つ性質です（P7）。
+   - Rayon を直接使ってはいけません。分割は threadteam の fork だけで行います（`PERFORMANCE_TIPS.md`）。
+
+2. **`BorrowedCpuEngine<'a, 'e>`（非公開、`pub(crate)`）**
+   - `&'a mut Exec<'e>` と `&'a mut BufferPool` を持ち、`Engine` を実装します。
+   - `native_engine()` は、crate 内だけで使うマーカーで自分を指します。P7 の `crates/tenferro-cpu/src/borrowed_engine.rs` をそのまま出発点にしてください。
+   - **公開型にはしません。** この型は `Engine` の必須メソッド 48 個をすべて `Unsupported` で返すので、利用者に Engine として見せられる型ではありません（P7 の F3）。利用者が触れるのは、`with_lanes` の中で渡される `&mut dyn Engine` だけです。
+
+3. **`with_borrowed_cpu_engine(engine, |exec, pool| ..)`（`#[doc(hidden)] pub`、所有者は `tenferro-cpu`）**
+   - linalg の分岐（下の 4.）から呼ぶための橋です。所有者を明記した bridge として、例外表の E06 に、シンボル単位で載せます。
+   - 中に `unsafe` のキャストが 1 つあります。既存の `with_cpu_engine` と同じ形です。PR では、このキャストの安全性の説明をレビューに出し、Miri でテストを実行してください。P7 では Miri を実行していません。
+
+4. **linalg の分岐**
+   - `tensor_ext.rs` の `with_linalg_backend`（CPU と CUDA の分岐がある関数）に、借用エンジンのマーカーを見分ける分岐を足します。分岐の先では、今の `Sealed::*_with_exec` の型付き本体を呼びます。
+   - P7 ではこの振り分けをアダプタの側でやっていました。本実装では linalg の側に置きます。
+   - これで、レーンの中でも普通の文法（`view.svd_with(&opts, lane)`）が、今の `*_with_exec` と同じ本体に届きます。
+
+#### 消すもの
+
+- 公開関数 `*_with_exec` の6本、`lib.rs` の「Borrowed-`Exec` factorization entries」節、`with_exec.rs` の公開 re-export。
+- 型付き本体（`Sealed` トレイトの中にある `*_with_exec`）は、crate 内の実装として残します。
+- `docs/guides/cpu-execution.md` の「Lanes and the vendor provider」節は、手でトークンを fork して束を作る説明から、`with_lanes` の説明に書き換えます。BLAS プロバイダについての注意（BLAS はレーンの予算を守れない）はそのまま残します。
+
+#### 決めておくこと（P7 で見つかった点）
+
+- **F1 負ストライド：** §5.3 の決定どおり、すべての入口で負ストライドを受け付けて gather します。レーンの中でも同じです。gather のバッファはレーンのプールから借ります。割り当て 0 の保証は、負ストライドでない入力についてだけ約束します。レジストリの `layout` にも、そう書きます。gather がレーンのプールから出ることを、テストで確かめてください。
+- **F2 gauge：** 今の借用経路には gauge がありません。レーンでも Engine と同じ `SvdOptions` を受け付けるよう、linalg の分岐の中で `apply_svd_gauge`（`pub(crate)`）を適用します。実装するまでは、既定以外の gauge は `Unsupported` を返し、`omissions` に書きます。
+- **F4 レーンで使える演算：** レーンの中で使えるのは linalg の6演算（svd、svdvals、qr、eigh、eigvalsh、eigvals）だけです。それ以外の演算（einsum、core など）は `Unsupported` を返します。各演算のレジストリの `omissions` に「レーン（`with_lanes`）では未対応」と書き、`docs/guides/cpu-execution.md` にも書きます。
+
+#### この作業に含めないもの
+
+**[本書で決定]** レーンを完全な Engine にすること（P7 の設計 B）は、0.12 の範囲外とします。これは、`CpuEngine` の内部を「`Exec` と `BufferPool` をどこから得るか」について汎用にする変更で、次の規模になります。
+
+- `resources` と `parts()` の利用箇所、約 37 か所
+- `Engine` の実装 12 個
+- 借用した束を運ぶ型へのライフタイムの追加
+
+これが入れば、レーンで einsum や core も使えるようになり、`BorrowedCpuEngine` は不要になります。0.12 が出たら、別の Issue として起こしてください。`with_lanes` のシグネチャは、設計 B に移っても変わりません。
+
+#### 完了条件
+
+- [ ] P7 の `tests/p7.rs` と `tests/p7_allocation.rs` を、`tenferro-cpu` と `tenferro-linalg` のテストとして移植し、`*_with_exec` の代わりに `with_lanes` を通して通る。割り当てのテストは、カウンタ付きアロケータを使うので、別のテストバイナリにする。
+- [ ] 既存の `crates/tenferro-linalg/tests/integration/borrowed_exec_entries.rs` と `tests/cpu_linalg_allocation.rs` の `borrowed_entries_keep_their_steady_state_allocation_counts` を、レーン経由に書き換える。上限値（rank 8 で 0、rank 9 で 0 より大きい）は変えない。
+- [ ] `with_lanes` の不正な分割が検証エラーになり、Engine を使える状態のまま残す。
+- [ ] Miri で `with_borrowed_cpu_engine` を通るテストを実行する。
 
 ### 5.7 `EagerTensor::solve`
 
@@ -570,7 +638,7 @@ einsum は、現在どの層でも `tenferro_einsum::Error` を返していま�
 旧名が残っていないことは、次のコマンドが何も出力しないことで確かめます。
 
 ```bash
-rg -n 'TensorLinalgExt|TensorReadLinalgExt|TypedTensorLinalgExt|TraceContextLinalgExt|TraceContextFftExt|TraceContextEinsumExt|TensorEinsumIntoExt|TensorReadEinsum|TypedTensorReadEinsum|TensorFftExt|TensorReadFftExt|EagerTensorLinalgExt|EagerTensorFftExt|TensorSessionOpsExt|_into_accum\b|svd_full|_with_rtol|prepare_typed|execute_read' \
+rg -n 'TensorLinalgExt|TensorReadLinalgExt|TypedTensorLinalgExt|TraceContextLinalgExt|TraceContextFftExt|TraceContextEinsumExt|TensorEinsumIntoExt|TensorReadEinsum|TypedTensorReadEinsum|TensorFftExt|TensorReadFftExt|EagerTensorLinalgExt|EagerTensorFftExt|TensorSessionOpsExt|_into_accum\b|_with_exec\b|svd_full|_with_rtol|prepare_typed|execute_read' \
   --glob '!docs/plans/**' --glob '!docs/design/api-2552-convergence/**' --glob '!docs/worklogs/**' --glob '!api/**'
 ```
 
@@ -656,6 +724,8 @@ cargo doc --workspace --no-deps
 | `a.fft(None, -1, FftNorm::Backward, eng)` | `a.fft(eng)`、または `a.fft_with(&FftOptions::default().norm(..), eng)` |
 | `x.fft_in_place(engine, axis, norm)` | `sess.fft_in_place(x, &FftOptions::default().axis(axis).norm(norm))` |
 | `exec.fft(&input, n, axis, norm, eng)`（`FftExecutor`） | `exec.fft_with(&input, &opts, eng)` |
+| `engine.with_exec(\|exec\| svd_with_exec(exec, &mut pool, &view, false))` | `engine.with_lanes(&[n], &mut [pool], \|_, lane\| view.svd(lane))` |
+| レーンを手で作る（`exec.token().fork_sized(..)` と `Exec::from_token` と `*_with_exec`） | `engine.with_lanes(&shares, &mut pools, \|i, lane\| ..)` |
 | `a.dot_general_with_conj(&b, cfg, true, false, eng)` | `a.dot_general_with(&b, cfg, &DotGeneralOptions::default().lhs(Conj::Yes), eng)` |
 | `a.reduce_sum(Some(&[0usize]), eng)` | `a.reduce_sum(Some(&[0isize]), eng)`（`-1` も使える） |
 
