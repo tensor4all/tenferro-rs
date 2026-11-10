@@ -144,14 +144,17 @@ sys.exit(1)
 
 # BSD grep (macOS) has no `-P`, so the reporter must not depend on it. This shim
 # takes the place of `grep` on PATH and rejects the GNU-only options exactly the
-# way Apple's grep does.
+# way Apple's grep does. It delegates with `command -p`, i.e. through the
+# platform's default PATH, because the real grep is not at a fixed path (/bin/grep
+# on Linux, /usr/bin/grep on macOS).
 BSD_GREP_SHIM = """#!/usr/bin/env bash
 for arg in "$@"; do
   case "${arg}" in
     -P|--perl-regexp|-oP|-Po) echo "grep: invalid option -- P" >&2; exit 2 ;;
   esac
 done
-exec /bin/grep "$@"
+real_grep="$(command -p -v grep)" || { echo "shim grep: no grep on the default PATH" >&2; exit 127; }
+exec "${real_grep}" "$@"
 """
 
 RUN_URL = "https://example.invalid/tensor4all/tenferro-rs/actions/runs/1234"
@@ -178,6 +181,14 @@ class OracleNightlyReporterTests(unittest.TestCase):
         bsd_grep = self.tmp / "grep"
         bsd_grep.write_text(BSD_GREP_SHIM, encoding="utf-8")
         bsd_grep.chmod(0o755)
+        # Fail with the reason rather than with a confusing empty issue body when the
+        # shim cannot reach a real grep on this platform.
+        probe = subprocess.run(
+            [str(bsd_grep), "-qxF", "probe"], input="probe\n", text=True, capture_output=True
+        )
+        self.assertEqual(
+            probe.returncode, 0, f"the BSD-grep shim cannot delegate to a real grep: {probe.stderr}"
+        )
         self.calls_path = self.tmp / "gh-calls.txt"
         self.labels_state = self.tmp / "labels.txt"
 
@@ -503,6 +514,33 @@ class OracleNightlyReporterTests(unittest.TestCase):
         self.assertFalse(self.calls_starting_with("issue", "close"), self.calls())
         self.assertIn(
             "Recovery evidence is older than the tracked failure", self.body_of("issue", "comment", "17")
+        )
+
+    def test_a_later_failure_of_an_older_commit_does_not_reopen_recovery(self) -> None:
+        # The body records the newer failure B, the newest comment re-files an older
+        # commit A. Arrival order would pick A, and a successful replay of A would then
+        # close the still-unresolved B.
+        self.run_nightly(
+            "successful_replay",
+            "issues-labeled-out-of-order.json",
+            head_sha=self.older,
+            tracker_sha=self.head,
+            tracker_first_sha=self.older,
+        )
+
+        self.assertFalse(self.calls_starting_with("issue", "close"), self.calls())
+        body = self.body_of("issue", "comment", "17")
+        self.assertIn("Recovery evidence is older than the tracked failure", body)
+        self.assertIn(f"- Tracked failure commit: `{self.head}`", body)
+
+    def test_markers_that_cannot_be_ordered_do_not_close_the_issue(self) -> None:
+        # An unknown commit makes "the newest failure" undecidable; guessing would
+        # risk closing an unresolved failure.
+        self.run_nightly("successful_replay", "issues-labeled-unknown-commit.json")
+
+        self.assertFalse(self.calls_starting_with("issue", "close"), self.calls())
+        self.assertIn(
+            "cannot be related to the tracked failure", self.body_of("issue", "comment", "17")
         )
 
     def test_an_ambiguous_labelled_set_is_not_closed_on_recovery(self) -> None:

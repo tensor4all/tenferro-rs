@@ -143,6 +143,15 @@ stale_recovery_body() {
   printf 'descendant of it, so it does not show that the tracked failure is fixed.\n'
 }
 
+unrelatable_recovery_body() {
+  printf 'Recovery evidence cannot be related to the tracked failure, so this issue stays open.\n\n'
+  printf -- '- Recovering run: %s\n' "${RUN_URL}"
+  printf -- '- Recovering commit: `%s`\n\n' "${HEAD_SHA}"
+  printf 'The tracker records failures that cannot be ordered against this commit (a commit\n'
+  printf 'this checkout does not have, or unrelated history), so this run does not show\n'
+  printf 'that they are fixed.\n'
+}
+
 # `gh issue list --label` fails when the label does not exist yet (the first
 # failure ever). That one error means "absent", and the title search covers it.
 # Anything else (auth, HTTP, rate limit) must not look like "no tracker".
@@ -208,17 +217,37 @@ ensure_label() {
     --description "Oracle nightly replay is failing" --color B60205 >/dev/null
 }
 
-# The newest failure the tracker records: the issue body holds the first report
-# and every later one is a comment, so the last marker wins. `--paginate` keeps a
-# long tracker from hiding its newest failure behind a page boundary.
-tracker_failure_sha() {
+# Every `- Commit:` marker the tracker records, in arrival order: the issue body
+# holds the first report and each later one is a comment, fully paginated.
+tracker_failure_markers() {
   local number="$1"
   {
     gh api "repos/${GH_REPO}/issues/${number}" --jq '.body'
     gh api --paginate "repos/${GH_REPO}/issues/${number}/comments" --jq '.[].body'
   } 2>/dev/null \
-    | sed -n 's/^- Commit: `\([0-9a-f]\{7,40\}\)`$/\1/p' \
-    | tail -n 1
+    | sed -n 's/^- Commit: `\([0-9a-f]\{7,40\}\)`$/\1/p'
+}
+
+# The newest recorded failure, ordered by ancestry rather than by arrival: a
+# re-failure of an older commit is appended after a newer one, so "last comment
+# wins" would let a success on the older commit close an unresolved newer failure.
+# Fails when the markers cannot be ordered (unknown commit, unrelated history);
+# the caller then leaves the issue open.
+tracker_failure_sha() {
+  local number="$1" best="" candidate
+  while IFS= read -r candidate; do
+    [ -n "${candidate}" ] || continue
+    git cat-file -e "${candidate}^{commit}" 2>/dev/null || return 1
+    if [ -z "${best}" ] || [ "${candidate}" = "${best}" ]; then
+      best="${candidate}"
+    elif git merge-base --is-ancestor "${best}" "${candidate}" 2>/dev/null; then
+      best="${candidate}"
+    elif ! git merge-base --is-ancestor "${candidate}" "${best}" 2>/dev/null; then
+      return 1
+    fi
+  done < <(tracker_failure_markers "${number}")
+  [ -n "${best}" ] || return 1
+  printf '%s\n' "${best}"
 }
 
 # Recovery evidence must not be older than the failure it would close: the
@@ -227,7 +256,6 @@ recovery_covers() {
   local failure_sha="${1:-}"
   [ -n "${failure_sha}" ] || return 1
   [ "${failure_sha}" = "${HEAD_SHA}" ] && return 0
-  git cat-file -e "${failure_sha}^{commit}" 2>/dev/null || return 1
   git merge-base --is-ancestor "${failure_sha}" "${HEAD_SHA}" 2>/dev/null
 }
 
@@ -269,10 +297,14 @@ recover() {
     return 0
   fi
   local failure_sha
-  failure_sha="$(tracker_failure_sha "${TRACKER_NUMBER}")"
+  if ! failure_sha="$(tracker_failure_sha "${TRACKER_NUMBER}")"; then
+    gh issue comment "${TRACKER_NUMBER}" --body "$(unrelatable_recovery_body)"
+    log "the tracker's recorded failures cannot be ordered; issue left open"
+    return 0
+  fi
   if ! recovery_covers "${failure_sha}"; then
-    gh issue comment "${TRACKER_NUMBER}" --body "$(stale_recovery_body "${failure_sha:-unknown}")"
-    log "recovery evidence does not cover the tracked failure (${failure_sha:-unknown}); issue left open"
+    gh issue comment "${TRACKER_NUMBER}" --body "$(stale_recovery_body "${failure_sha}")"
+    log "recovery evidence does not cover the tracked failure (${failure_sha}); issue left open"
     return 0
   fi
   gh issue comment "${TRACKER_NUMBER}" --body "$(recovery_body)"

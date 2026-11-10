@@ -136,7 +136,7 @@ jobs:
           # artifact by design; a listing or download failure is a real problem
           # and must not be reported as "no log".
           if ! artifacts="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
-            --jq '.artifacts[].name')$'"; then
+            --jq '.artifacts[].name')"; then
             echo "could not list the artifacts of run ${GITHUB_RUN_ID}" >&2
             exit 1
           fi
