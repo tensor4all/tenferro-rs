@@ -18,7 +18,7 @@ use std::time::Duration;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt};
+use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt, Eigh, Svd};
 use tenferro_tensor::Tensor;
 
 fn runtime() -> Arc<EagerRuntime> {
@@ -106,7 +106,7 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let a = leaf(&rt, tracked, mat2(1.0, 0.0, 0.0, 2.0));
         group.bench_function(BenchmarkId::new("svd_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let (u, _s, _vt) = rt
+                let Svd { u, .. } = rt
                     .with_eager_session(&mut engine, |session| session.svd(black_box(&a)))
                     .expect("svd");
                 consume(&mut engine, u);
@@ -119,7 +119,7 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let a = leaf(&rt, tracked, mat2(4.0, 1.0, 1.0, 3.0));
         group.bench_function(BenchmarkId::new("eigh_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let (w, _v) = rt
+                let Eigh { values: w, .. } = rt
                     .with_eager_session(&mut engine, |session| session.eigh(black_box(&a)))
                     .expect("eigh");
                 consume(&mut engine, w);

@@ -1,5 +1,5 @@
 use super::*;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{Svd, TracedTensorLinalgExt};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime};
 
 fn complex_input(m: usize, n: usize, batches: usize) -> Tensor {
@@ -104,12 +104,12 @@ fn test_cuda_svd_xgesvdp_traced_and_pruned() {
     let traced = trace
         .from_tensor_concrete_shape(complex_input(3, 7, 1))
         .unwrap();
-    let (u, s, vt) = traced.svd_with(&options).unwrap();
+    let Svd { u, s, vh: vt } = traced.svd_with(&options).unwrap();
     // A separate identity forces an S-only op instead of reusing the full SVD.
-    let (_, only_s, _) = traced
+    let Svd { s: only_s, .. } = traced
         .svd_with(&options.with_derivative_eps(2e-12))
         .unwrap();
-    let (_, qr_s, _) = traced
+    let Svd { s: qr_s, .. } = traced
         .svd_with(&SvdOptions::default().with_driver(SvdDriver::QrBased))
         .unwrap();
     let program = GraphCompiler::new()
@@ -159,7 +159,7 @@ fn test_cuda_svd_xgesvdp_eager() {
     let eager = runtime
         .with_eager_session(&mut gpu, |s| s.constant_from(device))
         .unwrap();
-    let (u, s, vt) = runtime
+    let Svd { u, s, vh: vt } = runtime
         .with_eager_session(&mut gpu, |session| session.svd_with(&eager, &options))
         .unwrap();
     let factors: Vec<_> = [&u, &s, &vt]

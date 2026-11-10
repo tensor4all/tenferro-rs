@@ -8,8 +8,8 @@
 
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    Side, TensorLinalgExt, TensorReadLinalgExt, TracedTensorLinalgExt, TriangularSolveOptions,
-    TypedTensorLinalgExt,
+    Side, Slogdet, TensorLinalgExt, TensorReadLinalgExt, TracedTensorLinalgExt,
+    TriangularSolveOptions, TypedTensorLinalgExt,
 };
 use tenferro_runtime::{DType, Error, GraphCompiler, TracedTensor};
 use tenferro_tensor::{Tensor, TensorRead, TypedTensor, ValidationError};
@@ -167,7 +167,7 @@ fn empty_square_determinant_remains_one_and_zero() {
     let tensor = Tensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
     let typed = TypedTensor::<f64>::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
 
-    let (sign, logabsdet) = tensor.slogdet(&mut host).unwrap();
+    let Slogdet { sign, logabsdet } = tensor.slogdet(&mut host).unwrap();
     assert_eq!(sign.as_slice::<f64>().unwrap(), &[1.0]);
     assert_eq!(logabsdet.as_slice::<f64>().unwrap(), &[0.0]);
     let det = tensor.det(&mut host).unwrap();
@@ -189,7 +189,7 @@ fn empty_square_determinant_remains_one_and_zero() {
     {
         let runtime = eager_runtime();
         let eager = eager(&tensor);
-        let (sign, logabsdet) = runtime
+        let Slogdet { sign, logabsdet } = runtime
             .with_eager_session(&mut CpuEngine::serial(), |session| session.slogdet(&eager))
             .unwrap();
         let sign = sign.to_tensor(&mut CpuEngine::serial()).unwrap();
@@ -207,7 +207,7 @@ fn empty_square_determinant_remains_one_and_zero() {
     let traced = trace
         .from_vec_col_major(vec![0, 0], Vec::<f64>::new())
         .unwrap();
-    let (sign, logabsdet) = traced.slogdet().unwrap();
+    let Slogdet { sign, logabsdet } = traced.slogdet().unwrap();
     let det = traced.det().unwrap();
     let program = GraphCompiler::new()
         .compile_many(&[&sign, &logabsdet, &det])
@@ -222,7 +222,7 @@ fn empty_square_determinant_remains_one_and_zero() {
 fn symbolic_determinant_records_square_constraint_for_every_output() {
     let trace = tenferro_runtime::TraceContext::new();
     let input = trace.input_symbolic_shape(DType::F64, 2).unwrap();
-    let (sign, logabsdet) = input.slogdet().unwrap();
+    let Slogdet { sign, logabsdet } = input.slogdet().unwrap();
     let det = input.det().unwrap();
 
     for (label, output) in [("det", &det), ("sign", &sign), ("logabsdet", &logabsdet)] {
@@ -320,9 +320,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     );
                     assert_traced_error(
                         &label("traced"),
-                        traced_a
-                            .eigh()
-                            .map(|(values, vectors)| vec![values, vectors]),
+                        traced_a.eigh().map(|r| vec![r.values, r.vectors]),
                     );
                 }
                 "eigvalsh" => {
@@ -357,9 +355,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     );
                     assert_traced_error(
                         &label("traced"),
-                        traced_a
-                            .eig()
-                            .map(|(values, vectors)| vec![values, vectors]),
+                        traced_a.eig().map(|r| vec![r.values, r.vectors]),
                     );
                 }
                 "eigvals" => {
@@ -477,7 +473,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                         &label("traced"),
                         traced_a
                             .full_piv_lu()
-                            .map(|(p, l, u, q, parity)| vec![p, l, u, q, parity]),
+                            .map(|r| vec![r.p, r.l, r.u, r.q, r.parity]),
                     );
                 }
                 "full_piv_lu_solve" => {

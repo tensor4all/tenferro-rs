@@ -27,7 +27,7 @@ struct Standard;
 
 impl ScalarSupport for Standard {
     fn qr(&self, input: &TracedTensor) -> Result<(TracedTensor, TracedTensor), Error> {
-        input.qr()
+        input.qr().map(|tenferro_linalg::Qr { q, r }| (q, r))
     }
 
     fn to_f64(&self, input: &TracedTensor) -> Result<TracedTensor, Error> {

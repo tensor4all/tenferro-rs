@@ -4,6 +4,7 @@
 //! `TracedTensorLinalgExt` method-chaining surface, so the two paths must
 //! produce the same program for the same inputs.
 
+use tenferro_linalg::{Lu, Svd};
 use tenferro_linalg::{TraceContextLinalgExt, TracedTensorLinalgExt};
 use tenferro_runtime::{TraceContext, TracedTensor};
 
@@ -41,7 +42,11 @@ fn context_and_traced_tensor_agree_on_a_direct_decomposition() {
     let (trace, a) = trace_with_matrix();
     let (cu, cs, cvt) = trace.svd(a.trace_value()).unwrap();
     let context_path = fingerprint(&trace, &[cu, cs, cvt]);
-    let (tu, ts, tvt) = a.svd().unwrap();
+    let Svd {
+        u: tu,
+        s: ts,
+        vh: tvt,
+    } = a.svd().unwrap();
     let traced_path = fingerprint(&trace, &[tu, ts, tvt]);
     assert_eq!(context_path, traced_path);
 }
@@ -114,7 +119,7 @@ fn context_and_traced_tensor_agree_on_a_symbolic_input() {
         fingerprint(&trace, &[p, l, u, parity])
     };
     let traced_path = {
-        let (p, l, u, parity) = a.lu().unwrap();
+        let Lu { p, l, u, parity } = a.lu().unwrap();
         fingerprint(&trace, &[p, l, u, parity])
     };
     assert_eq!(context_path, traced_path);

@@ -13,11 +13,13 @@ use tenferro_linalg::{
     NormOptions, PinvOptions, QrGauge, QrOptions, RankRevealingQrOptions, Side, SvdGauge,
     SvdOptions, SvdShape, TriangularSolveOptions, Uplo,
 };
+use tenferro_linalg::{Eig, Eigh, FullPivLu, Lu, Qr, Slogdet, Svd};
 
 fn eager_svd(input: &EagerTensor) -> tenferro_ad::Result<(EagerTensor, EagerTensor, EagerTensor)> {
     input
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.svd(input))
+        .map(|Svd { u, s, vh }| (u, s, vh))
 }
 
 fn test_ctx() -> Arc<EagerRuntime> {
@@ -429,7 +431,7 @@ fn eager_decomposition_options_execute_and_return_expected_shapes() {
     )
     .unwrap();
 
-    let (u, s, vt) = a
+    let Svd { u, s, vh: vt } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.svd_with(
@@ -440,7 +442,10 @@ fn eager_decomposition_options_execute_and_return_expected_shapes() {
             )
         })
         .unwrap();
-    let (eigh_values, eigh_vectors) = a
+    let Eigh {
+        values: eigh_values,
+        vectors: eigh_vectors,
+    } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.eigh_with(
@@ -451,7 +456,7 @@ fn eager_decomposition_options_execute_and_return_expected_shapes() {
             )
         })
         .unwrap();
-    let (q, r) = a
+    let Qr { q, r } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             s.qr_with(
@@ -636,7 +641,7 @@ fn qr_returns_correct_shapes() {
         test_ctx(),
     )
     .unwrap();
-    let (q, r) = a
+    let Qr { q, r } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.qr(&a))
         .unwrap();
@@ -727,7 +732,10 @@ fn borrowed_lu_determinants_preserve_gradients_and_runtime() {
                 session.det(&foreign),
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
-            let (sign, logabs) = session.slogdet(&input)?;
+            let Slogdet {
+                sign,
+                logabsdet: logabs,
+            } = session.slogdet(&input)?;
             let det = session.det(&input)?;
             Ok::<_, tenferro_ad::Error>((sign, logabs, det))
         })
@@ -834,8 +842,12 @@ fn borrowed_qr_and_svd_preserve_values_gradients_and_runtime() {
                 session.qr(&foreign),
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
-            let (q, r) = session.qr(&input)?;
-            let (_, singular_values, _) = session.svd(&input)?;
+            let Qr { q, r } = session.qr(&input)?;
+            let Svd {
+                u: _,
+                s: singular_values,
+                vh: _,
+            } = session.svd(&input)?;
             let loss = session.reduce_sum(&singular_values, None)?;
             Ok::<_, tenferro_ad::Error>((q, r, singular_values, loss))
         })
@@ -1012,9 +1024,12 @@ fn borrowed_eigendecompositions_preserve_values_gradients_and_runtime() {
                 )
                 .unwrap_err();
             assert!(invalid.to_string().contains("derivative_eps"));
-            let (values, vectors) =
+            let Eigh { values, vectors } =
                 session.eigh_with(&input, &EighOptions::default().with_derivative_eps(1e-10))?;
-            let (general_values, general_vectors) = session.eig(&plain)?;
+            let Eig {
+                values: general_values,
+                vectors: general_vectors,
+            } = session.eig(&plain)?;
             let loss = session.reduce_sum(&values, None)?;
             Ok::<_, tenferro_ad::Error>((values, vectors, general_values, general_vectors, loss))
         })
@@ -1070,14 +1085,20 @@ fn borrowed_decomposition_options_and_full_svd_validate_in_session() {
                 .svd_with(&input, &SvdOptions::default().with_derivative_eps(f64::NAN))
                 .unwrap_err();
             assert!(invalid.to_string().contains("derivative_eps"));
-            let (_, values, _) =
-                session.svd_with(&input, &SvdOptions::default().with_derivative_eps(1.0e-10))?;
-            let (q, r) = session.qr_with(
+            let Svd {
+                u: _,
+                s: values,
+                vh: _,
+            } = session.svd_with(&input, &SvdOptions::default().with_derivative_eps(1.0e-10))?;
+            let Qr { q, r } = session.qr_with(
                 &input,
                 &QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
             )?;
-            let (full_u, full_s, full_vh) =
-                session.svd_with(&wide, &SvdOptions::default().with_shape(SvdShape::Full))?;
+            let Svd {
+                u: full_u,
+                s: full_s,
+                vh: full_vh,
+            } = session.svd_with(&wide, &SvdOptions::default().with_shape(SvdShape::Full))?;
             Ok::<_, tenferro_ad::Error>((values, q, r, full_u, full_s, full_vh))
         })
         .unwrap();
@@ -1201,7 +1222,7 @@ fn lu_returns_expected_factors_for_swap_matrix() {
         test_ctx(),
     )
     .unwrap();
-    let (p, l, u, parity) = a
+    let Lu { p, l, u, parity } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.lu(&a))
         .unwrap();
@@ -1317,7 +1338,7 @@ fn full_piv_lu_reconstructs_input() {
         test_ctx(),
     )
     .unwrap();
-    let (p, l, u, q, parity) = a
+    let FullPivLu { p, l, u, q, parity } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.full_piv_lu(&a)
@@ -2011,7 +2032,7 @@ fn eigh_returns_expected_values_for_diagonal_matrix() {
         test_ctx(),
     )
     .unwrap();
-    let (values, vectors) = a
+    let Eigh { values, vectors } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.eigh(&a))
         .unwrap();
@@ -2037,7 +2058,10 @@ fn eigh_vector_observable_backward_grad_is_finite() {
         ctx,
     )
     .unwrap();
-    let (_values, vectors) = a
+    let Eigh {
+        values: _values,
+        vectors,
+    } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.eigh(&a))
         .unwrap();
@@ -2082,7 +2106,10 @@ fn mixed_real_constant_and_tracked_complex_eigh_vector_backward() {
             s.add(&real, &complex)
         })
         .unwrap();
-    let (_values, vectors) = mixed
+    let Eigh {
+        values: _values,
+        vectors,
+    } = mixed
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.eigh(&mixed))
         .unwrap();
@@ -2105,7 +2132,7 @@ fn eig_returns_expected_complex_values_for_diagonal_matrix() {
         test_ctx(),
     )
     .unwrap();
-    let (values, vectors) = a
+    let Eig { values, vectors } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.eig(&a))
         .unwrap();
@@ -2223,10 +2250,17 @@ fn cuda_borrowed_qr_and_svd_options_preserve_values() {
         .unwrap();
     let (q, r, singular_values, full_values) = runtime
         .with_eager_session(&mut backend, |session| {
-            let (q, r) = session.qr_with(&input, &QrOptions::default())?;
-            let (_, singular_values, _) = session.svd_with(&input, &SvdOptions::default())?;
-            let (_, full_values, _) =
-                session.svd_with(&input, &SvdOptions::default().with_shape(SvdShape::Full))?;
+            let Qr { q, r } = session.qr_with(&input, &QrOptions::default())?;
+            let Svd {
+                u: _,
+                s: singular_values,
+                vh: _,
+            } = session.svd_with(&input, &SvdOptions::default())?;
+            let Svd {
+                u: _,
+                s: full_values,
+                vh: _,
+            } = session.svd_with(&input, &SvdOptions::default().with_shape(SvdShape::Full))?;
             Ok::<_, tenferro_ad::Error>((q, r, singular_values, full_values))
         })
         .unwrap();
@@ -2414,7 +2448,10 @@ fn cuda_borrowed_determinants_and_inverse_preserve_value() {
         .unwrap();
     let (sign, logabs, det, inverse) = runtime
         .with_eager_session(&mut backend, |session| {
-            let (sign, logabs) = session.slogdet(&input)?;
+            let Slogdet {
+                sign,
+                logabsdet: logabs,
+            } = session.slogdet(&input)?;
             let det = session.det(&input)?;
             let inverse = session.inv(&input)?;
             Ok::<_, tenferro_ad::Error>((sign, logabs, det, inverse))
@@ -2445,12 +2482,12 @@ fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
 
     let (q, r, rrqr, u, s, vt) = runtime
         .with_eager_session(&mut backend, |session| {
-            let (q, r) = session.qr(&input)?;
+            let Qr { q, r } = session.qr(&input)?;
             let rrqr = session.rank_revealing_qr_with(
                 &input,
                 &RankRevealingQrOptions::default().with_rtol(1.0e-12),
             )?;
-            let (u, s, vt) = session.svd(&input)?;
+            let Svd { u, s, vh: vt } = session.svd(&input)?;
             Ok::<_, tenferro_ad::Error>((q, r, rrqr, u, s, vt))
         })
         .unwrap();
@@ -2534,8 +2571,8 @@ fn cuda_eager_qr_and_svd_c64_stay_resident_and_reconstruct() {
 
     let (q, r, u, s, vt) = runtime
         .with_eager_session(&mut backend, |session| {
-            let (q, r) = session.qr(&input)?;
-            let (u, s, vt) = session.svd(&input)?;
+            let Qr { q, r } = session.qr(&input)?;
+            let Svd { u, s, vh: vt } = session.svd(&input)?;
             Ok::<_, tenferro_ad::Error>((q, r, u, s, vt))
         })
         .unwrap();

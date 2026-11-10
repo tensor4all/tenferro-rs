@@ -97,7 +97,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
 let mut engine = CpuEngine::serial();
-let (u, s, vt) = a.svd(&mut engine)?;
+let tenferro_linalg::Svd { u, s, vh: vt } = a.svd(&mut engine)?;
 
 assert_eq!(u.shape(), &[2, 2]);
 assert_eq!(vt.shape(), &[2, 2]);
@@ -133,7 +133,7 @@ let a = trace.from_vec_col_major(
         0.0, 0.0, 1.0,
     ],
 )?;
-let (u, s, vt) = a
+let tenferro_linalg::Svd { u, s, vh: vt } = a
     .svd_with(
         &SvdOptions::default()
             .with_gauge(SvdGauge::CanonicalPivot)
@@ -169,7 +169,7 @@ let a = trace.from_vec_col_major(
     ],
 )?;
 // Forces cuSOLVER `gesvd` on CUDA; CPU providers ignore the driver.
-let (u, s, vt) = a.svd_with(&SvdOptions::default().with_driver(SvdDriver::QrBased))?;
+let tenferro_linalg::Svd { u, s, vh: vt } = a.svd_with(&SvdOptions::default().with_driver(SvdDriver::QrBased))?;
 
 assert_eq!(u.concrete_shape()?, vec![3, 2]);
 assert_eq!(s.concrete_shape()?, vec![2]);
@@ -197,7 +197,7 @@ let a = trace.from_vec_col_major(
 )?;
 // On CUDA this reaches `syevjBatched`: one launch for the whole batch.
 // CPU providers ignore the driver.
-let (values, vectors) =
+let tenferro_linalg::Eigh { values, vectors } =
     a.eigh_with(&EighOptions::default().with_driver(EighDriver::Jacobi))?;
 
 assert_eq!(values.concrete_shape()?, vec![2, 2]);
@@ -223,7 +223,7 @@ let a = trace.from_vec_col_major(
         0.0, 0.0, 1.0,
     ],
 )?;
-let (_u, s, _vt) = a.svd()?;
+let tenferro_linalg::Svd { s, .. } = a.svd()?;
 let repeated = s.take_axis(0, &[0, 1, 0])?;
 
 assert_eq!(repeated.concrete_shape()?, vec![3]);
@@ -258,7 +258,7 @@ let a = Tensor::from_vec_col_major(
     ],
 )?;
 let mut engine = CpuEngine::serial();
-let (q, r) = a.qr_with(
+let tenferro_linalg::Qr { q, r } = a.qr_with(
     &QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
     &mut engine,
 )?;
@@ -339,7 +339,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])?;
 let mut engine = CpuEngine::serial();
-let (values, vectors) = a.eigh(&mut engine)?;
+let tenferro_linalg::Eigh { values, vectors } = a.eigh(&mut engine)?;
 
 assert_eq!(values.shape(), &[2]);
 assert_eq!(vectors.shape(), &[2, 2]);
@@ -458,7 +458,7 @@ let a = Tensor::from_vec_col_major(
 )?;
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 
-let (p, l, u, q, parity) = a.full_piv_lu(&mut engine)?;
+let tenferro_linalg::FullPivLu { p, l, u, q, parity } = a.full_piv_lu(&mut engine)?;
 let pt = p.transpose(&[1, 0], &mut engine)?;
 let pt_l = pt.matmul(&l, &mut engine)?;
 let pt_lu = pt_l.matmul(&u, &mut engine)?;

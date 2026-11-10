@@ -2,6 +2,7 @@
 
 use num_complex::Complex64;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
+use tenferro_linalg::Slogdet;
 use tenferro_linalg::{
     EagerSessionLinalgExt, KeepDims, NormOptions, PinvOptions, TracedTensorLinalgExt,
 };
@@ -136,7 +137,7 @@ fn eager_composites_match_diagonal_matrix_values() {
     let (sign, logabsdet, det, inv, eigvalsh, eigvals, inverse, inverse_with_rtol) = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            let (sign, logabsdet) = session.slogdet(&a)?;
+            let Slogdet { sign, logabsdet } = session.slogdet(&a)?;
             Ok::<_, tenferro_ad::Error>((
                 sign,
                 logabsdet,

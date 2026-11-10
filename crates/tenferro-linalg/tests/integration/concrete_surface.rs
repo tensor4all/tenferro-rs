@@ -1,8 +1,9 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    EighOptions, KeepDims, LinalgBackend, NormOptions, PinvOptions, QrOptions,
-    RankRevealingQrOptions, SvdOptions, TensorLinalgExt, TensorReadLinalgExt, TypedTensorLinalgExt,
+    Eig, EighOptions, KeepDims, LinalgBackend, NormOptions, PinvOptions, QrOptions,
+    RankRevealingQrOptions, Slogdet, Svd, SvdOptions, TensorLinalgExt, TensorReadLinalgExt,
+    TypedTensorLinalgExt,
 };
 use tenferro_tensor::{Tensor, TensorRead, TensorScalar, TypedTensor};
 
@@ -34,10 +35,10 @@ fn dynamic_and_read_surfaces_return_fixed_tuples() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let (_u, s, _vt) = input.svd(&mut host).unwrap();
+        let Svd { s, .. } = input.svd(&mut host).unwrap();
         let svdvals = input.svdvals(&mut host).unwrap();
         let (_q, r) = TensorRead::from_tensor(&input).qr_read(&mut host).unwrap();
-        let (sign, logabsdet) = input.slogdet(&mut host).unwrap();
+        let Slogdet { sign, logabsdet } = input.slogdet(&mut host).unwrap();
 
         assert_eq!(s.as_slice::<f64>().unwrap(), &[4.0, 2.0]);
         assert_eq!(svdvals.as_slice::<f64>().unwrap(), &[4.0, 2.0]);
@@ -761,7 +762,7 @@ fn eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones() {
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 0.0, 2.0]).unwrap();
     let mut host = tenferro_cpu::CpuEngine::serial();
     {
-        let (values, vectors) = diagonalizable.eig(&mut host).unwrap();
+        let Eig { values, vectors } = diagonalizable.eig(&mut host).unwrap();
         assert_eq!(values.shape(), &[2]);
         assert_eq!(vectors.shape(), &[2, 2]);
         assert_unit_norm_eigenvector_columns(&vectors);
@@ -773,7 +774,7 @@ fn eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones() {
     // norm contract on the `Ok` branch here too.
     let defective = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 0.0, 1.0]).unwrap();
     match defective.eig(&mut host) {
-        Ok((_, vectors)) => assert_unit_norm_eigenvector_columns(&vectors),
+        Ok(Eig { vectors, .. }) => assert_unit_norm_eigenvector_columns(&vectors),
         Err(error) => assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure),
     };
 }

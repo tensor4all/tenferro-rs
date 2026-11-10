@@ -7,6 +7,7 @@ pub use crate::{
     RankRevealingQrResult, Side, SlogdetOptions, SolveOptions, SvdOptions, SvdShape,
     SvdvalsOptions, Transpose, TriangularSolveOptions, Uplo,
 };
+pub use crate::{Eig, Eigh, FullPivLu, Lu, Qr, Slogdet, Svd};
 pub use crate::{
     LinalgBackend, LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TraceContextLinalgExt,
     TracedTensorLinalgExt, TypedEig, TypedFullPivLu, TypedLu, TypedRankRevealingQrResult, TypedSvd,

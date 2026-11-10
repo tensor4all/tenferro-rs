@@ -18,6 +18,7 @@ use tenferro_gpu::cuda::{
     cuda_runtime_engine_registration, download_tensor, gpu_available, upload_tensor, CudaDeviceId,
     CudaEngine,
 };
+use tenferro_linalg::Qr;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{
     DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TensorRead, TraceContext,
@@ -65,7 +66,7 @@ fn a_scheduled_run_defers_launch_completion_and_keeps_vendor_handles() {
     let x = trace
         .input_symbolic_shape(DType::F64, 2)
         .expect("symbolic input");
-    let (q, r) = x.qr().expect("qr");
+    let Qr { q, r } = x.qr().expect("qr");
     let scaled = (&q * &r).expect("multiply");
     let reduced = scaled.reduce_sum(None).expect("sum");
     let program = GraphCompiler::new()

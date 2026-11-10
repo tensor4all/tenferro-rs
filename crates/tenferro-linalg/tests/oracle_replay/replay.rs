@@ -12,6 +12,7 @@ use tenferro_linalg::{
     Diagonal, HouseholderQr, KeepDims, NormOptions, PinvOptions, QrGauge, QrOptions, Side,
     TracedTensorLinalgExt, TriangularSolveOptions, Uplo,
 };
+use tenferro_linalg::{Eig, Eigh, FullPivLu, Lu, Qr, Slogdet, Svd};
 use tenferro_runtime::{
     DType, DotGeneralConfig, GraphCompiler, Runtime, Tensor, TraceContext, TracedTensor,
 };
@@ -569,7 +570,7 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "qr" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (q_tf, r_tf) = a_tf.qr().map_err(to_string)?;
+            let Qr { q: q_tf, r: r_tf } = a_tf.qr().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -580,7 +581,10 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "slogdet" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (sign_tf, logabsdet_tf) = a_tf.slogdet().map_err(to_string)?;
+            let Slogdet {
+                sign: sign_tf,
+                logabsdet: logabsdet_tf,
+            } = a_tf.slogdet().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -618,7 +622,12 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
                 ));
             }
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (p_tf, l_tf, u_tf, _parity_tf) = a_tf.lu().map_err(to_string)?;
+            let Lu {
+                p: p_tf,
+                l: l_tf,
+                u: u_tf,
+                parity: _parity_tf,
+            } = a_tf.lu().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -630,7 +639,13 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "full_pivot_lu" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (_p_tf, l_tf, u_tf, _q_tf, _parity_tf) = a_tf.full_piv_lu().map_err(to_string)?;
+            let FullPivLu {
+                p: _p_tf,
+                l: l_tf,
+                u: u_tf,
+                q: _q_tf,
+                parity: _parity_tf,
+            } = a_tf.full_piv_lu().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -641,12 +656,19 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "svd" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (u_tf, s_tf, vh_tf) = a_tf.svd().map_err(to_string)?;
+            let Svd {
+                u: u_tf,
+                s: s_tf,
+                vh: vh_tf,
+            } = a_tf.svd().map_err(to_string)?;
             svd_observable_execution(case, inputs, &u_tf, &s_tf, &vh_tf)
         }
         "eigh" => {
             let a_tf = hermitian_wrapper_tenferro(&oracle_to_tenferro(a, 2)?)?;
-            let (values_tf, vectors_tf) = a_tf.eigh().map_err(to_string)?;
+            let Eigh {
+                values: values_tf,
+                vectors: vectors_tf,
+            } = a_tf.eigh().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -660,7 +682,10 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "eig" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (values_tf, vectors_tf) = a_tf.eig().map_err(to_string)?;
+            let Eig {
+                values: values_tf,
+                vectors: vectors_tf,
+            } = a_tf.eig().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![

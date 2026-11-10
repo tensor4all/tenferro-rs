@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{Qr, TracedTensorLinalgExt};
 use tenferro_runtime::{
     GraphCompiler, Prepared, Runtime, TensorSessionOpsExt, TraceContext, TracedTensor,
 };
@@ -300,7 +300,7 @@ fn main() {
         // and r, and the VJP with respect to the matrix.
         for n in [2usize, 4, 8] {
             let a = traced(&trace, &[n, n], well_conditioned_matrix(n, 4));
-            let (q, r) = a.qr().unwrap();
+            let Qr { q, r } = a.qr().unwrap();
             let loss = (&q.reduce_sum(Some(&[0, 1])).unwrap()
                 + &r.reduce_sum(Some(&[0, 1])).unwrap())
                 .unwrap();

@@ -19,6 +19,7 @@ use crate::{
     RankRevealingQrResult, Side, SlogdetOptions, SolveOptions, SvdShape, Transpose,
     TriangularSolveOptions, Uplo,
 };
+use crate::{Eig, Eigh, FullPivLu, Lu, Qr, Slogdet, Svd};
 
 /// Linear algebra extension methods for [`TracedTensor`].
 ///
@@ -41,17 +42,18 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{SvdOptions, SvdShape};
+    /// use tenferro_linalg::Svd;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (u, s, vh) = a.svd()?;
+    /// let Svd { u, s, vh } = a.svd()?;
     /// assert_eq!(u.rank(), 2);
     /// assert_eq!(s.rank(), 1);
     /// assert_eq!(vh.rank(), 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn svd(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
+    fn svd(&self) -> Result<Svd<TracedTensor>>;
 
     /// Build a traced SVD operation with explicit options.
     ///
@@ -75,16 +77,17 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{SvdOptions, SvdShape};
+    /// use tenferro_linalg::Svd;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (u, _s, vh) = a.svd_with(&SvdOptions::default().with_shape(SvdShape::Full))?;
+    /// let Svd { u, vh, .. } = a.svd_with(&SvdOptions::default().with_shape(SvdShape::Full))?;
     /// assert_eq!(u.rank(), 2);
     /// assert_eq!(vh.rank(), 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn svd_with(&self, options: &SvdOptions) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
+    fn svd_with(&self, options: &SvdOptions) -> Result<Svd<TracedTensor>>;
 
     /// Build a traced QR operation with default options.
     ///
@@ -101,16 +104,17 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{QrOptions};
+    /// use tenferro_linalg::Qr;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (q, r) = a.qr()?;
+    /// let Qr { q, r } = a.qr()?;
     /// assert_eq!(q.rank(), 2);
     /// assert_eq!(r.rank(), 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn qr(&self) -> Result<(TracedTensor, TracedTensor)>;
+    fn qr(&self) -> Result<Qr<TracedTensor>>;
 
     /// Build a traced QR operation with explicit options.
     ///
@@ -127,15 +131,16 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{QrOptions};
+    /// use tenferro_linalg::Qr;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (q, _r) = a.qr_with(&QrOptions::default())?;
+    /// let Qr { q, .. } = a.qr_with(&QrOptions::default())?;
     /// assert_eq!(q.rank(), 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn qr_with(&self, options: &QrOptions) -> Result<(TracedTensor, TracedTensor)>;
+    fn qr_with(&self, options: &QrOptions) -> Result<Qr<TracedTensor>>;
 
     /// Build a traced compact Householder QR state with default options.
     ///
@@ -260,15 +265,16 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{EighOptions};
+    /// use tenferro_linalg::Eigh;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (_values, vectors) = a.eigh()?;
+    /// let Eigh { vectors, .. } = a.eigh()?;
     /// assert_eq!(vectors.rank(), 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn eigh(&self) -> Result<(TracedTensor, TracedTensor)>;
+    fn eigh(&self) -> Result<Eigh<TracedTensor>>;
 
     /// Build a traced Hermitian eigendecomposition with explicit options.
     ///
@@ -285,15 +291,16 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{EighOptions};
+    /// use tenferro_linalg::Eigh;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (_values, vectors) = a.eigh_with(&EighOptions::default())?;
+    /// let Eigh { vectors, .. } = a.eigh_with(&EighOptions::default())?;
     /// assert_eq!(vectors.rank(), 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn eigh_with(&self, options: &EighOptions) -> Result<(TracedTensor, TracedTensor)>;
+    fn eigh_with(&self, options: &EighOptions) -> Result<Eigh<TracedTensor>>;
 
     /// Build a traced Cholesky factorization with default options.
     ///
@@ -367,7 +374,7 @@ pub trait TracedTensorLinalgExt {
     /// let _factors = a.lu()?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn lu(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)>;
+    fn lu(&self) -> Result<Lu<TracedTensor>>;
 
     /// Build a traced LU factorization with explicit options.
     ///
@@ -391,10 +398,7 @@ pub trait TracedTensorLinalgExt {
     /// let _factors = a.lu_with(&LuOptions::default())?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn lu_with(
-        &self,
-        options: &LuOptions,
-    ) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)>;
+    fn lu_with(&self, options: &LuOptions) -> Result<Lu<TracedTensor>>;
 
     /// Build a traced complete-pivot LU factorization with default options.
     ///
@@ -418,15 +422,7 @@ pub trait TracedTensorLinalgExt {
     /// let _factors = a.full_piv_lu()?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn full_piv_lu(
-        &self,
-    ) -> Result<(
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-    )>;
+    fn full_piv_lu(&self) -> Result<FullPivLu<TracedTensor>>;
 
     /// Build a traced complete-pivot LU factorization with explicit options.
     ///
@@ -450,16 +446,7 @@ pub trait TracedTensorLinalgExt {
     /// let _factors = a.full_piv_lu_with(&FullPivLuOptions::default())?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn full_piv_lu_with(
-        &self,
-        options: &FullPivLuOptions,
-    ) -> Result<(
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-    )>;
+    fn full_piv_lu_with(&self, options: &FullPivLuOptions) -> Result<FullPivLu<TracedTensor>>;
 
     /// Build a traced general eigendecomposition with default options.
     ///
@@ -476,15 +463,16 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{EigOptions};
+    /// use tenferro_linalg::Eig;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (_values, vectors) = a.eig()?;
+    /// let Eig { vectors, .. } = a.eig()?;
     /// assert_eq!(vectors.rank(), 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn eig(&self) -> Result<(TracedTensor, TracedTensor)>;
+    fn eig(&self) -> Result<Eig<TracedTensor>>;
 
     /// Build a traced general eigendecomposition with explicit options.
     ///
@@ -501,15 +489,16 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{EigOptions};
+    /// use tenferro_linalg::Eig;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (_values, vectors) = a.eig_with(&EigOptions::default())?;
+    /// let Eig { vectors, .. } = a.eig_with(&EigOptions::default())?;
     /// assert_eq!(vectors.rank(), 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn eig_with(&self, options: &EigOptions) -> Result<(TracedTensor, TracedTensor)>;
+    fn eig_with(&self, options: &EigOptions) -> Result<Eig<TracedTensor>>;
 
     /// Build a traced linear solve operation with default options.
     ///
@@ -753,16 +742,17 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{SlogdetOptions};
+    /// use tenferro_linalg::Slogdet;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (sign, logabsdet) = a.slogdet()?;
+    /// let Slogdet { sign, logabsdet } = a.slogdet()?;
     /// assert_eq!(sign.rank(), 0);
     /// assert_eq!(logabsdet.rank(), 0);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn slogdet(&self) -> Result<(TracedTensor, TracedTensor)>;
+    fn slogdet(&self) -> Result<Slogdet<TracedTensor>>;
 
     /// Build a traced sign/log-determinant operation with explicit options.
     ///
@@ -779,15 +769,16 @@ pub trait TracedTensorLinalgExt {
     /// ```rust
     /// use tenferro_linalg::TracedTensorLinalgExt;
     /// use tenferro_linalg::{SlogdetOptions};
+    /// use tenferro_linalg::Slogdet;
     /// use tenferro_runtime::TraceContext;
     ///
     /// let trace = TraceContext::new();
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
-    /// let (sign, _logabsdet) = a.slogdet_with(&SlogdetOptions::default())?;
+    /// let Slogdet { sign, .. } = a.slogdet_with(&SlogdetOptions::default())?;
     /// assert_eq!(sign.rank(), 0);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    fn slogdet_with(&self, options: &SlogdetOptions) -> Result<(TracedTensor, TracedTensor)>;
+    fn slogdet_with(&self, options: &SlogdetOptions) -> Result<Slogdet<TracedTensor>>;
 
     /// Build a traced determinant operation with default options.
     ///
@@ -2093,24 +2084,24 @@ impl TraceContextLinalgExt for TraceContext {
 }
 
 impl TracedTensorLinalgExt for TracedTensor {
-    fn svd(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+    fn svd(&self) -> Result<Svd<TracedTensor>> {
         self.svd_with(&SvdOptions::default())
     }
 
-    fn svd_with(&self, options: &SvdOptions) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+    fn svd_with(&self, options: &SvdOptions) -> Result<Svd<TracedTensor>> {
         crate::options::ensure_full_svd_options("svd", options)?;
         match options.shape {
-            SvdShape::Thin => svd_with_options(self, *options),
-            SvdShape::Full => svd_full(self),
+            SvdShape::Thin => svd_with_options(self, *options).map(|(u, s, vh)| Svd { u, s, vh }),
+            SvdShape::Full => svd_full(self).map(|(u, s, vh)| Svd { u, s, vh }),
         }
     }
 
-    fn qr(&self) -> Result<(TracedTensor, TracedTensor)> {
+    fn qr(&self) -> Result<Qr<TracedTensor>> {
         self.qr_with(&QrOptions::default())
     }
 
-    fn qr_with(&self, options: &QrOptions) -> Result<(TracedTensor, TracedTensor)> {
-        qr_with_options(self, *options)
+    fn qr_with(&self, options: &QrOptions) -> Result<Qr<TracedTensor>> {
+        qr_with_options(self, *options).map(|(q, r)| Qr { q, r })
     }
 
     fn householder_qr(&self) -> Result<crate::HouseholderQr<TracedTensor>> {
@@ -2136,12 +2127,12 @@ impl TracedTensorLinalgExt for TracedTensor {
         rank_revealing_qr(self, *options)
     }
 
-    fn eigh(&self) -> Result<(TracedTensor, TracedTensor)> {
+    fn eigh(&self) -> Result<Eigh<TracedTensor>> {
         self.eigh_with(&EighOptions::default())
     }
 
-    fn eigh_with(&self, options: &EighOptions) -> Result<(TracedTensor, TracedTensor)> {
-        eigh_with_options(self, *options)
+    fn eigh_with(&self, options: &EighOptions) -> Result<Eigh<TracedTensor>> {
+        eigh_with_options(self, *options).map(|(values, vectors)| Eigh { values, vectors })
     }
 
     fn cholesky(&self) -> Result<TracedTensor> {
@@ -2153,51 +2144,31 @@ impl TracedTensorLinalgExt for TracedTensor {
         cholesky(self)
     }
 
-    fn lu(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
+    fn lu(&self) -> Result<Lu<TracedTensor>> {
         self.lu_with(&LuOptions::default())
     }
 
-    fn lu_with(
-        &self,
-        options: &LuOptions,
-    ) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
+    fn lu_with(&self, options: &LuOptions) -> Result<Lu<TracedTensor>> {
         let _ = options;
-        lu(self)
+        lu(self).map(|(p, l, u, parity)| Lu { p, l, u, parity })
     }
 
-    fn full_piv_lu(
-        &self,
-    ) -> Result<(
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-    )> {
+    fn full_piv_lu(&self) -> Result<FullPivLu<TracedTensor>> {
         self.full_piv_lu_with(&FullPivLuOptions::default())
     }
 
-    fn full_piv_lu_with(
-        &self,
-        options: &FullPivLuOptions,
-    ) -> Result<(
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-        TracedTensor,
-    )> {
+    fn full_piv_lu_with(&self, options: &FullPivLuOptions) -> Result<FullPivLu<TracedTensor>> {
         let _ = options;
-        full_piv_lu(self)
+        full_piv_lu(self).map(|(p, l, u, q, parity)| FullPivLu { p, l, u, q, parity })
     }
 
-    fn eig(&self) -> Result<(TracedTensor, TracedTensor)> {
+    fn eig(&self) -> Result<Eig<TracedTensor>> {
         self.eig_with(&EigOptions::default())
     }
 
-    fn eig_with(&self, options: &EigOptions) -> Result<(TracedTensor, TracedTensor)> {
+    fn eig_with(&self, options: &EigOptions) -> Result<Eig<TracedTensor>> {
         let _ = options;
-        eig(self)
+        eig(self).map(|(values, vectors)| Eig { values, vectors })
     }
 
     fn solve(&self, b: &TracedTensor) -> Result<TracedTensor> {
@@ -2250,13 +2221,13 @@ impl TracedTensorLinalgExt for TracedTensor {
         )
     }
 
-    fn slogdet(&self) -> Result<(TracedTensor, TracedTensor)> {
+    fn slogdet(&self) -> Result<Slogdet<TracedTensor>> {
         self.slogdet_with(&SlogdetOptions::default())
     }
 
-    fn slogdet_with(&self, options: &SlogdetOptions) -> Result<(TracedTensor, TracedTensor)> {
+    fn slogdet_with(&self, options: &SlogdetOptions) -> Result<Slogdet<TracedTensor>> {
         let _ = options;
-        slogdet(self)
+        slogdet(self).map(|(sign, logabsdet)| Slogdet { sign, logabsdet })
     }
 
     fn det(&self) -> Result<TracedTensor> {

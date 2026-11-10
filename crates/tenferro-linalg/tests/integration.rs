@@ -10,6 +10,8 @@ mod borrowed_linalg_parity;
 mod call_grammar;
 #[path = "integration/call_grammar_entry.rs"]
 mod call_grammar_entry;
+#[path = "integration/call_grammar_results.rs"]
+mod call_grammar_results;
 #[path = "integration/concrete_surface.rs"]
 mod concrete_surface;
 #[path = "integration/cpu_linalg_source_contract.rs"]

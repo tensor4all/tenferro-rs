@@ -36,7 +36,7 @@ struct Standard;
 
 impl ScalarSupport for Standard {
     fn qr(&self, input: &TracedTensor) -> Result<(TracedTensor, TracedTensor), Error> {
-        input.qr()
+        input.qr().map(|tenferro_linalg::Qr { q, r }| (q, r))
     }
 
     fn to_f64(&self, input: &TracedTensor) -> Result<TracedTensor, Error> {
@@ -365,7 +365,7 @@ fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
             Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape matches data"),
         )
         .expect("traced input");
-    let (q, _r) = standard_input.qr().expect("traced QR");
+    let tenferro_linalg::Qr { q, .. } = standard_input.qr().expect("traced QR");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&q).expect("compiled the standard program");
     let produced = run_on_engine(&runtime, &mut standard_engine, &program, &[])

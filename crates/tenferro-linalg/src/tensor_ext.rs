@@ -24,10 +24,10 @@ use crate::options::{ensure_full_svd_options, resolve_norm_axes};
 use crate::traced::real_values_dtype;
 use crate::validation::validate_square_matrix;
 use crate::{
-    CholeskyOptions, DetOptions, Diagonal, EigOptions, EigvalsOptions, EigvalshOptions,
-    FullPivLuOptions, FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, KeepDims, LuOptions,
-    NormOptions, PinvOptions, Side, SlogdetOptions, SolveOptions, SvdShape, SvdvalsOptions,
-    Transpose, TriangularSolveOptions, Uplo,
+    CholeskyOptions, DetOptions, Diagonal, Eig, EigOptions, Eigh, EigvalsOptions, EigvalshOptions,
+    FullPivLu, FullPivLuOptions, FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, KeepDims,
+    Lu, LuOptions, NormOptions, PinvOptions, Qr, Side, Slogdet, SlogdetOptions, SolveOptions, Svd,
+    SvdShape, SvdvalsOptions, Transpose, TriangularSolveOptions, Uplo,
 };
 use crate::{LinalgBackend, RankRevealingQrOptions, RankRevealingQrResult};
 
@@ -360,9 +360,9 @@ pub type TypedEig<T> = (
 ///
 /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
 /// let mut host = tenferro_cpu::CpuEngine::serial();
-/// let (_u, singular_values, _vt) = a.svd(&mut host)?;
+/// let singular_values = a.svd(&mut host)?.s;
 /// assert_eq!(singular_values.as_slice::<f64>()?, &[4.0, 2.0]);
-/// let (u, _s, _vt) = a.svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)?;
+/// let u = a.svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)?.u;
 /// assert_eq!(u.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
@@ -384,11 +384,11 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.svd(&mut host)?;
-    /// let (_u, s, _vt) = r;
+    /// let s = r.s;
     /// assert_eq!(s.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn svd(&self, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Real, Self::Out)> {
+    fn svd(&self, exec: &mut dyn Engine) -> Res<Svd<Self::Out, Self::Real>> {
         self.svd_with(&SvdOptions::default(), exec)
     }
 
@@ -414,7 +414,7 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)?;
-    /// let (u, s, vt) = r;
+    /// let (u, s, vt) = (r.u, r.s, r.vh);
     /// assert_eq!(u.shape(), &[1, 1]);
     /// assert_eq!(s.shape(), &[1]);
     /// assert_eq!(vt.shape(), &[2, 2]);
@@ -424,7 +424,7 @@ pub trait TensorLinalgExt: LinalgInput {
         &self,
         options: &SvdOptions,
         exec: &mut dyn Engine,
-    ) -> Res<(Self::Out, Self::Real, Self::Out)> {
+    ) -> Res<Svd<Self::Out, Self::Real>> {
         ensure_full_svd_options("svd", options)?;
         let a = self.linalg_read();
         let outs = with_linalg_backend(exec, "svd", |backend| {
@@ -436,11 +436,11 @@ pub trait TensorLinalgExt: LinalgInput {
                 "svd",
             )
         })?;
-        Ok((
-            Self::linalg_out(outs.0)?,
-            Self::linalg_real(outs.1)?,
-            Self::linalg_out(outs.2)?,
-        ))
+        Ok(Svd {
+            u: Self::linalg_out(outs.0)?,
+            s: Self::linalg_real(outs.1)?,
+            vh: Self::linalg_out(outs.2)?,
+        })
     }
 
     /// Compute singular values without allocating singular-vector outputs.
@@ -510,12 +510,12 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.qr(&mut host)?;
-    /// let (q, r) = r;
+    /// let (q, r) = (r.q, r.r);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr(&self, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Out)> {
+    fn qr(&self, exec: &mut dyn Engine) -> Res<Qr<Self::Out>> {
         self.qr_with(&QrOptions::default(), exec)
     }
 
@@ -539,17 +539,20 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.qr_with(&QrOptions::default(), &mut host)?;
-    /// let (q, r) = r;
+    /// let (q, r) = (r.q, r.r);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(r.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn qr_with(&self, options: &QrOptions, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Out)> {
+    fn qr_with(&self, options: &QrOptions, exec: &mut dyn Engine) -> Res<Qr<Self::Out>> {
         let a = self.linalg_read();
         let outs = with_linalg_backend(exec, "qr", |backend| {
             two(backend.qr_with_options_read(a, *options)?, "qr")
         })?;
-        Ok((Self::linalg_out(outs.0)?, Self::linalg_out(outs.1)?))
+        Ok(Qr {
+            q: Self::linalg_out(outs.0)?,
+            r: Self::linalg_out(outs.1)?,
+        })
     }
 
     /// Initialize opaque compact Householder QR state.
@@ -700,13 +703,13 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.lu(&mut host)?;
-    /// let (_p, l, u, parity) = r;
+    /// let (l, u, parity) = (r.l, r.u, r.parity);
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn lu(&self, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Out, Self::Out, Self::Real)> {
+    fn lu(&self, exec: &mut dyn Engine) -> Res<Lu<Self::Out, Self::Real>> {
         self.lu_with(&LuOptions::default(), exec)
     }
 
@@ -726,7 +729,7 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.lu_with(&LuOptions::default(), &mut host)?;
-    /// let (_p, l, u, _parity) = r;
+    /// let (l, u) = (r.l, r.u);
     /// assert_eq!(l.shape(), &[2, 2]);
     /// assert_eq!(u.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -735,16 +738,16 @@ pub trait TensorLinalgExt: LinalgInput {
         &self,
         options: &LuOptions,
         exec: &mut dyn Engine,
-    ) -> Res<(Self::Out, Self::Out, Self::Out, Self::Real)> {
+    ) -> Res<Lu<Self::Out, Self::Real>> {
         let _ = options;
         let a = self.linalg_read();
         let outs = with_linalg_backend(exec, "lu", |backend| four(backend.lu_read(a)?, "lu"))?;
-        Ok((
-            Self::linalg_out(outs.0)?,
-            Self::linalg_out(outs.1)?,
-            Self::linalg_out(outs.2)?,
-            Self::linalg_real(outs.3)?,
-        ))
+        Ok(Lu {
+            p: Self::linalg_out(outs.0)?,
+            l: Self::linalg_out(outs.1)?,
+            u: Self::linalg_out(outs.2)?,
+            parity: Self::linalg_real(outs.3)?,
+        })
     }
 
     /// Compute the complete-pivot LU decomposition `(P, L, U, Q, parity)`.
@@ -764,16 +767,13 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.full_piv_lu(&mut host)?;
-    /// let (p, _l, _u, q, parity) = r;
+    /// let (p, q, parity) = (r.p, r.q, r.parity);
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// assert_eq!(parity.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn full_piv_lu(
-        &self,
-        exec: &mut dyn Engine,
-    ) -> Res<(Self::Out, Self::Out, Self::Out, Self::Out, Self::Real)> {
+    fn full_piv_lu(&self, exec: &mut dyn Engine) -> Res<FullPivLu<Self::Out, Self::Real>> {
         self.full_piv_lu_with(&FullPivLuOptions::default(), exec)
     }
 
@@ -793,7 +793,7 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.full_piv_lu_with(&FullPivLuOptions::default(), &mut host)?;
-    /// let (p, _l, _u, q, _parity) = r;
+    /// let (p, q) = (r.p, r.q);
     /// assert_eq!(p.shape(), &[2, 2]);
     /// assert_eq!(q.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -802,19 +802,19 @@ pub trait TensorLinalgExt: LinalgInput {
         &self,
         options: &FullPivLuOptions,
         exec: &mut dyn Engine,
-    ) -> Res<(Self::Out, Self::Out, Self::Out, Self::Out, Self::Real)> {
+    ) -> Res<FullPivLu<Self::Out, Self::Real>> {
         let _ = options;
         let a = self.linalg_read();
         let outs = with_linalg_backend(exec, "full_piv_lu", |backend| {
             five(backend.full_piv_lu_read(a)?, "full_piv_lu")
         })?;
-        Ok((
-            Self::linalg_out(outs.0)?,
-            Self::linalg_out(outs.1)?,
-            Self::linalg_out(outs.2)?,
-            Self::linalg_out(outs.3)?,
-            Self::linalg_real(outs.4)?,
-        ))
+        Ok(FullPivLu {
+            p: Self::linalg_out(outs.0)?,
+            l: Self::linalg_out(outs.1)?,
+            u: Self::linalg_out(outs.2)?,
+            q: Self::linalg_out(outs.3)?,
+            parity: Self::linalg_real(outs.4)?,
+        })
     }
 
     /// Solve `A X = B` through the complete-pivot LU decomposition.
@@ -1050,12 +1050,12 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.eigh(&mut host)?;
-    /// let (values, vectors) = r;
+    /// let (values, vectors) = (r.values, r.vectors);
     /// assert_eq!(values.as_slice::<f64>()?, &[1.0, 3.0]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eigh(&self, exec: &mut dyn Engine) -> Res<(Self::Real, Self::Out)> {
+    fn eigh(&self, exec: &mut dyn Engine) -> Res<Eigh<Self::Out, Self::Real>> {
         self.eigh_with(&EighOptions::default(), exec)
     }
 
@@ -1074,7 +1074,7 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.eigh_with(&EighOptions::default(), &mut host)?;
-    /// let (values, vectors) = r;
+    /// let (values, vectors) = (r.values, r.vectors);
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -1083,12 +1083,15 @@ pub trait TensorLinalgExt: LinalgInput {
         &self,
         options: &EighOptions,
         exec: &mut dyn Engine,
-    ) -> Res<(Self::Real, Self::Out)> {
+    ) -> Res<Eigh<Self::Out, Self::Real>> {
         let a = self.linalg_read();
         let outs = with_linalg_backend(exec, "eigh", |backend| {
             two(backend.eigh_with_options_read(a, *options)?, "eigh")
         })?;
-        Ok((Self::linalg_real(outs.0)?, Self::linalg_out(outs.1)?))
+        Ok(Eigh {
+            values: Self::linalg_real(outs.0)?,
+            vectors: Self::linalg_out(outs.1)?,
+        })
     }
 
     /// Compute the general eigendecomposition `(values, vectors)`.
@@ -1108,12 +1111,12 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.eig(&mut host)?;
-    /// let (values, vectors) = r;
+    /// let (values, vectors) = (r.values, r.vectors);
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eig(&self, exec: &mut dyn Engine) -> Res<(Self::Complex, Self::Complex)> {
+    fn eig(&self, exec: &mut dyn Engine) -> Res<Eig<Self::Complex>> {
         self.eig_with(&EigOptions::default(), exec)
     }
 
@@ -1136,20 +1139,19 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.eig_with(&EigOptions::default(), &mut host)?;
-    /// let (values, vectors) = r;
+    /// let (values, vectors) = (r.values, r.vectors);
     /// assert_eq!(values.shape(), &[2]);
     /// assert_eq!(vectors.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn eig_with(
-        &self,
-        options: &EigOptions,
-        exec: &mut dyn Engine,
-    ) -> Res<(Self::Complex, Self::Complex)> {
+    fn eig_with(&self, options: &EigOptions, exec: &mut dyn Engine) -> Res<Eig<Self::Complex>> {
         let _ = options;
         let a = self.linalg_read();
         let outs = with_linalg_backend(exec, "eig", |backend| two(backend.eig_read(a)?, "eig"))?;
-        Ok((Self::linalg_complex(outs.0)?, Self::linalg_complex(outs.1)?))
+        Ok(Eig {
+            values: Self::linalg_complex(outs.0)?,
+            vectors: Self::linalg_complex(outs.1)?,
+        })
     }
 
     /// Compute the eigenvalues of a general matrix.
@@ -1335,12 +1337,12 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.slogdet(&mut host)?;
-    /// let (sign, logabsdet) = r;
+    /// let (sign, logabsdet) = (r.sign, r.logabsdet);
     /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
     /// assert_eq!(logabsdet.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    fn slogdet(&self, exec: &mut dyn Engine) -> Res<(Self::Out, Self::Real)> {
+    fn slogdet(&self, exec: &mut dyn Engine) -> Res<Slogdet<Self::Out, Self::Real>> {
         self.slogdet_with(&SlogdetOptions::default(), exec)
     }
 
@@ -1360,7 +1362,7 @@ pub trait TensorLinalgExt: LinalgInput {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let r = a.slogdet_with(&SlogdetOptions::default(), &mut host)?;
-    /// let (sign, _logabsdet) = r;
+    /// let sign = r.sign;
     /// assert_eq!(sign.as_slice::<f64>()?, &[1.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -1368,11 +1370,14 @@ pub trait TensorLinalgExt: LinalgInput {
         &self,
         options: &SlogdetOptions,
         exec: &mut dyn Engine,
-    ) -> Res<(Self::Out, Self::Real)> {
+    ) -> Res<Slogdet<Self::Out, Self::Real>> {
         let _ = options;
         let a = self.linalg_read();
         let outs = slogdet_tensors(a, "slogdet", exec)?;
-        Ok((Self::linalg_out(outs.0)?, Self::linalg_real(outs.1)?))
+        Ok(Slogdet {
+            sign: Self::linalg_out(outs.0)?,
+            logabsdet: Self::linalg_real(outs.1)?,
+        })
     }
 
     /// Compute the determinant.

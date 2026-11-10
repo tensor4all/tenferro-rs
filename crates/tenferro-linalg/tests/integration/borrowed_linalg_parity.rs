@@ -11,7 +11,8 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    Diagonal, Side, TensorLinalgExt, TensorReadLinalgExt, Transpose, TriangularSolveOptions, Uplo,
+    Diagonal, Eig, Side, TensorLinalgExt, TensorReadLinalgExt, Transpose, TriangularSolveOptions,
+    Uplo,
 };
 use tenferro_tensor::{
     DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor,
@@ -134,7 +135,10 @@ fn borrowed_eig_and_eigvals_match_the_owned_call_for_every_dtype() {
             let tol = tolerance(dtype);
 
             {
-                let (owned_values, owned_vectors) = input.eig(&mut host).unwrap();
+                let Eig {
+                    values: owned_values,
+                    vectors: owned_vectors,
+                } = input.eig(&mut host).unwrap();
                 let (read_values, read_vectors) =
                     TensorRead::from_tensor(&input).eig_read(&mut host).unwrap();
                 assert_eq!(read_values.shape(), owned_values.shape());

@@ -13,8 +13,8 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine};
 use tenferro_linalg::{
     eig_values_with_exec, eigh_values_with_exec, eigh_with_exec, qr_with_exec,
-    svd_values_with_exec, svd_with_exec, LinalgScalar, SvdOptions, SvdShape, TensorLinalgExt,
-    TensorReadLinalgExt,
+    svd_values_with_exec, svd_with_exec, Eigh, LinalgScalar, Qr, Svd, SvdOptions, SvdShape,
+    TensorLinalgExt, TensorReadLinalgExt,
 };
 use tenferro_tensor::{
     ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorScalar, TensorView, TypedTensor,
@@ -154,7 +154,11 @@ where
     for full in [false, true] {
         let (u, s, vt) = borrowed(|exec, buffers| svd_with_exec(exec, buffers, view, full))
             .unwrap_or_else(|error| panic!("{label} svd(full={full}): {error}"));
-        let (eu, es, evt) = if full {
+        let Svd {
+            u: eu,
+            s: es,
+            vh: evt,
+        } = if full {
             owned
                 .svd_with(
                     &SvdOptions::default().with_shape(SvdShape::Full),
@@ -178,7 +182,7 @@ where
     );
 
     let (q, r) = borrowed(|exec, buffers| qr_with_exec(exec, buffers, view)).unwrap();
-    let (eq, er) = owned.qr(&mut engine).unwrap();
+    let Qr { q: eq, r: er } = owned.qr(&mut engine).unwrap();
     assert_same(&format!("{label} qr Q"), &q, &eq);
     assert_same(&format!("{label} qr R"), &r, &er);
 }
@@ -193,7 +197,10 @@ where
     let mut engine = CpuEngine::serial();
 
     let (values, vectors) = borrowed(|exec, buffers| eigh_with_exec(exec, buffers, view)).unwrap();
-    let (evalues, evectors) = owned.eigh(&mut engine).unwrap();
+    let Eigh {
+        values: evalues,
+        vectors: evectors,
+    } = owned.eigh(&mut engine).unwrap();
     assert_same(&format!("{label} eigh values"), &values, &evalues);
     assert_same(&format!("{label} eigh vectors"), &vectors, &evectors);
 

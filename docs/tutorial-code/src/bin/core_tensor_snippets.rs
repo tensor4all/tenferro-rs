@@ -159,11 +159,11 @@ let qr = a.qr(&mut engine)?;
 let chol = a.cholesky(&mut engine)?;
 let eigh = a.eigh(&mut engine)?;
 let x = a.solve(&b, &mut engine)?;
-assert_eq!(svd.1.shape(), &[3]);
-assert_eq!(qr.0.shape(), &[3, 3]);
+assert_eq!(svd.s.shape(), &[3]);
+assert_eq!(qr.q.shape(), &[3, 3]);
 assert_eq!(chol.shape(), &[3, 3]);
-assert_eq!(eigh.0.shape(), &[3]);
-assert_eq!(eigh.1.shape(), &[3, 3]);
+assert_eq!(eigh.values.shape(), &[3]);
+assert_eq!(eigh.vectors.shape(), &[3, 3]);
 assert_eq!(x.shape(), &[3]);
         // snippet-end:eager_operations_5
         Ok(())

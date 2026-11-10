@@ -166,6 +166,7 @@ mod input;
 mod options;
 pub mod prelude;
 mod rank_revealing_qr;
+mod results;
 mod tensor_ext;
 mod traced;
 mod validation;
@@ -206,6 +207,7 @@ pub use options::{
     SvdShape, SvdvalsOptions, Transpose, TriangularSolveOptions, Uplo,
 };
 pub use rank_revealing_qr::{RankRevealingQrOptions, RankRevealingQrResult};
+pub use results::{Eig, Eigh, FullPivLu, Lu, Qr, Slogdet, Svd};
 pub use tensor_ext::{
     LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TypedEig, TypedFullPivLu, TypedLu,
     TypedRankRevealingQrResult, TypedSvd, TypedTensorLinalgExt,

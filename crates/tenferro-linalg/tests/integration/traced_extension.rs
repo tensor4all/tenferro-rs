@@ -4,6 +4,7 @@ use tenferro_linalg::{
     PinvOptions, QrGauge, QrOptions, RankRevealingQrOptions, Side, SvdDriver, SvdGauge, SvdOptions,
     SvdShape, TracedTensorLinalgExt, Transpose, TriangularSolveOptions,
 };
+use tenferro_linalg::{Eig, Eigh, FullPivLu, Qr, Svd};
 use tenferro_runtime::{
     DType, Error, GraphCompiler, Runtime, Tensor, TraceContext, TracedTensor, TypedTensor,
 };
@@ -85,7 +86,7 @@ fn svd_executes_after_runtime_registration() {
             Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
         )
         .unwrap();
-    let (u, s, vt) = a.svd().unwrap();
+    let Svd { u, s, vh: vt } = a.svd().unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&u, &s, &vt]).unwrap();
@@ -146,21 +147,24 @@ fn traced_decomposition_options_execute_through_registered_runtime() {
             Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
         )
         .unwrap();
-    let (u, s, vt) = a
+    let Svd { u, s, vh: vt } = a
         .svd_with(
             &SvdOptions::default()
                 .with_gauge(SvdGauge::CanonicalPivot)
                 .with_derivative_eps(1.0e-10),
         )
         .unwrap();
-    let (eigh_values, eigh_vectors) = a
+    let Eigh {
+        values: eigh_values,
+        vectors: eigh_vectors,
+    } = a
         .eigh_with(
             &EighOptions::default()
                 .with_gauge(EighGauge::CanonicalPivot)
                 .with_derivative_eps(1.0e-10),
         )
         .unwrap();
-    let (q, r) = a
+    let Qr { q, r } = a
         .qr_with(&QrOptions::default().with_gauge(QrGauge::PositiveDiagonal))
         .unwrap();
 
@@ -233,12 +237,16 @@ fn check_cpu_ignores_svd_driver(trace: &TraceContext, driver: SvdDriver) {
     let traced = trace
         .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3, 2], data).unwrap())
         .unwrap();
-    let (u, s, vt) = traced
+    let Svd { u, s, vh: vt } = traced
         .svd_with(&SvdOptions::default().with_driver(driver))
         .unwrap();
     // Only `S` is live here, so the op prunes to a values-only op that keeps
     // the forced driver; the CPU runtime must still execute it.
-    let (_, s_only, _) = traced
+    let Svd {
+        u: _,
+        s: s_only,
+        vh: _,
+    } = traced
         .svd_with(
             &SvdOptions::default()
                 .with_driver(driver)
@@ -317,12 +325,18 @@ fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
     let traced = trace
         .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3, 3], data).unwrap())
         .unwrap();
-    let (w, v) = traced
+    let Eigh {
+        values: w,
+        vectors: v,
+    } = traced
         .eigh_with(&EighOptions::default().with_driver(EighDriver::Jacobi))
         .unwrap();
     // Only the eigenvalues are live here, so the op prunes to a values-only
     // op that keeps the forced driver; the CPU runtime must still execute it.
-    let (w_only, _) = traced
+    let Eigh {
+        values: w_only,
+        vectors: _,
+    } = traced
         .eigh_with(&EighOptions::default().with_driver(EighDriver::DivideAndConquer))
         .unwrap();
 
@@ -381,7 +395,7 @@ fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
             .unwrap(),
         ))
         .unwrap();
-    let (_u, s, _vt) = a.svd().unwrap();
+    let Svd { u: _u, s, vh: _vt } = a.svd().unwrap();
     assert_eq!(s.dtype(), DType::F64);
 
     let weights = trace
@@ -471,7 +485,7 @@ fn full_piv_lu_multi_output_slots_are_preserved() {
             Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
         )
         .unwrap();
-    let (p, l, u, q, parity) = a.full_piv_lu().unwrap();
+    let FullPivLu { p, l, u, q, parity } = a.full_piv_lu().unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&p, &l, &u, &q, &parity]).unwrap();
@@ -508,28 +522,34 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
         ))
         .unwrap();
 
-    let (u, s, vt) = rectangular.svd().unwrap();
+    let Svd { u, s, vh: vt } = rectangular.svd().unwrap();
     assert_eq!(u.concrete_shape().unwrap(), vec![3, 3, 2]);
     assert_eq!(s.concrete_shape().unwrap(), vec![3, 2]);
     assert_eq!(vt.concrete_shape().unwrap(), vec![3, 4, 2]);
 
-    let (q, r) = rectangular.qr().unwrap();
+    let Qr { q, r } = rectangular.qr().unwrap();
     assert_eq!(q.concrete_shape().unwrap(), vec![3, 3, 2]);
     assert_eq!(r.concrete_shape().unwrap(), vec![3, 4, 2]);
 
-    let (values, vectors) = ints.eig().unwrap();
+    let Eig { values, vectors } = ints.eig().unwrap();
     assert_eq!(values.dtype(), DType::C64);
     assert_eq!(vectors.dtype(), DType::C64);
 
-    let (eigh_values, eigh_vectors) = square.eigh().unwrap();
+    let Eigh {
+        values: eigh_values,
+        vectors: eigh_vectors,
+    } = square.eigh().unwrap();
     assert_eq!(eigh_values.concrete_shape().unwrap(), vec![3, 2]);
     assert_eq!(eigh_vectors.concrete_shape().unwrap(), vec![3, 3, 2]);
 
-    let (complex_eigh_values, complex_eigh_vectors) = complex_square.eigh().unwrap();
+    let Eigh {
+        values: complex_eigh_values,
+        vectors: complex_eigh_vectors,
+    } = complex_square.eigh().unwrap();
     assert_eq!(complex_eigh_values.dtype(), DType::F64);
     assert_eq!(complex_eigh_vectors.dtype(), DType::C64);
 
-    let (p, l, u, q, parity) = complex_square.full_piv_lu().unwrap();
+    let FullPivLu { p, l, u, q, parity } = complex_square.full_piv_lu().unwrap();
     assert_eq!(p.dtype(), DType::C64);
     assert_eq!(l.dtype(), DType::C64);
     assert_eq!(u.dtype(), DType::C64);
@@ -587,7 +607,7 @@ fn traced_metadata_covers_eig_output_dtype_rules() {
         (DType::Bool, DType::C64),
     ] {
         let a = traced_with_dtype(&trace, input_dtype, vec![2, 2]);
-        let (values, vectors) = a.eig().unwrap();
+        let Eig { values, vectors } = a.eig().unwrap();
         assert_eq!(values.dtype(), expected_dtype);
         assert_eq!(vectors.dtype(), expected_dtype);
         assert_eq!(values.concrete_shape().unwrap(), vec![2]);

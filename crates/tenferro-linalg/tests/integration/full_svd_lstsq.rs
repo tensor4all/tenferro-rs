@@ -7,7 +7,7 @@
 //! providers implement.
 
 use num_complex::Complex64;
-use tenferro_linalg::{SvdOptions, SvdShape, TracedTensorLinalgExt};
+use tenferro_linalg::{Svd, SvdOptions, SvdShape, TracedTensorLinalgExt};
 use tenferro_runtime::{GraphCompiler, Tensor, TraceContext, TracedTensor, TypedTensor};
 
 use super::support;
@@ -102,7 +102,7 @@ fn svd_full_tall_real_returns_square_factors_and_reconstructs() {
     let n = 2;
     let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 7.0];
     let a = f64_tensor(&trace, vec![m, n], data.clone());
-    let (u, s, vh) = a
+    let Svd { u, s, vh } = a
         .svd_with(&SvdOptions::default().with_shape(SvdShape::Full))
         .unwrap();
     let out = run_many(&[&u, &s, &vh]);
@@ -133,7 +133,7 @@ fn svd_full_wide_real_reconstructs_and_recovers_nullspace() {
     let n = 3;
     let data = vec![1.0_f64, 0.0, 0.0, 1.0, 1.0, 1.0];
     let a = f64_tensor(&trace, vec![m, n], data.clone());
-    let (u, s, vh) = a
+    let Svd { u, s, vh } = a
         .svd_with(&SvdOptions::default().with_shape(SvdShape::Full))
         .unwrap();
     let out = run_many(&[&u, &s, &vh]);
@@ -166,7 +166,7 @@ fn svd_full_1x2_recovers_one_dimensional_nullspace() {
     let trace = TraceContext::new();
     // Smallest wide system: thin SVD would drop the kernel row entirely.
     let a = f64_tensor(&trace, vec![1, 2], vec![1.0_f64, 1.0]);
-    let (u, s, vh) = a
+    let Svd { u, s, vh } = a
         .svd_with(&SvdOptions::default().with_shape(SvdShape::Full))
         .unwrap();
     let out = run_many(&[&u, &s, &vh]);
@@ -204,7 +204,7 @@ fn svd_full_random_wide_recovers_nullspace_dimension() {
         }
     }
     let a = f64_tensor(&trace, vec![m, n], data.clone());
-    let (_u, _s, vh) = a
+    let Svd { vh, .. } = a
         .svd_with(&SvdOptions::default().with_shape(SvdShape::Full))
         .unwrap();
     let out = run_many(&[&vh]);
@@ -237,7 +237,7 @@ fn svd_full_complex_tall_reconstructs() {
         Complex64::new(1.0, -2.0),
     ];
     let a = c64_tensor(&trace, vec![m, n], data.clone());
-    let (u, s, vh) = a
+    let Svd { u, s, vh } = a
         .svd_with(&SvdOptions::default().with_shape(SvdShape::Full))
         .unwrap();
     let out = run_many(&[&u, &s, &vh]);
@@ -274,7 +274,7 @@ fn svd_full_batch_returns_square_factor_shapes() {
         .map(|v| (v as f64) * 0.5 + 1.0)
         .collect();
     let a = f64_tensor(&trace, vec![m, n, batch], data);
-    let (u, s, vh) = a
+    let Svd { u, s, vh } = a
         .svd_with(&SvdOptions::default().with_shape(SvdShape::Full))
         .unwrap();
     let out = run_many(&[&u, &s, &vh]);
@@ -294,7 +294,7 @@ fn svd_full_lapack_provider_returns_square_unitary_factors() {
     let n = 2;
     let data = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 7.0];
     let a = f64_tensor(&trace, vec![m, n], data.clone());
-    let (u, s, vh) = a
+    let Svd { u, s, vh } = a
         .svd_with(&SvdOptions::default().with_shape(SvdShape::Full))
         .unwrap();
     let out = run_many(&[&u, &s, &vh]);

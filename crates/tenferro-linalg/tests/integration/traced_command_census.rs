@@ -11,6 +11,7 @@
 
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
+use tenferro_linalg::Qr;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{GraphCompiler, TraceContext, TracedTensor};
 use tenferro_tensor::{Tensor, TypedTensor};
@@ -68,7 +69,7 @@ fn well_conditioned_matrix(n: usize, seed: u64) -> Vec<f64> {
 /// sum(Q) + sum(R) of the QR factors of `a`, and its VJP with respect to `a`.
 fn loss_and_gradient(a: &TracedTensor, ad: &AdContext) -> (TracedTensor, TracedTensor) {
     let trace = TraceContext::new();
-    let (q, r) = a.qr().unwrap();
+    let Qr { q, r } = a.qr().unwrap();
     let loss =
         (&q.reduce_sum(Some(&[0, 1])).unwrap() + &r.reduce_sum(Some(&[0, 1])).unwrap()).unwrap();
     let seed = traced(&trace, &[], vec![1.0]);

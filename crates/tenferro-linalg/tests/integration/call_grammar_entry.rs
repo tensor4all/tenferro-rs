@@ -5,7 +5,7 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    KeepDims, NormOptions, PinvOptions, Side, SolveOptions, SvdGauge, SvdOptions, SvdShape,
+    KeepDims, NormOptions, PinvOptions, Side, SolveOptions, Svd, SvdGauge, SvdOptions, SvdShape,
     TensorLinalgExt, TracedTensorLinalgExt, TriangularSolveOptions, Uplo,
 };
 use tenferro_runtime::{GraphCompiler, TraceContext};
@@ -29,9 +29,9 @@ fn concrete_svd_has_one_entry_for_owned_borrowed_and_typed_input() {
     let mut engine = CpuEngine::serial();
     let a = matrix(3, 2, vec![3.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
 
-    let (_, owned_s, _) = a.svd(&mut engine).unwrap();
+    let Svd { s: owned_s, .. } = a.svd(&mut engine).unwrap();
     let read = TensorRead::from_tensor(&a);
-    let (_, read_s, _) = read.svd(&mut engine).unwrap();
+    let Svd { s: read_s, .. } = read.svd(&mut engine).unwrap();
     assert_close(owned_s.as_slice::<f64>().unwrap(), &[3.0, 2.0]);
     assert_close(read_s.as_slice::<f64>().unwrap(), &[3.0, 2.0]);
 
@@ -46,11 +46,8 @@ fn concrete_svd_has_one_entry_for_owned_borrowed_and_typed_input() {
         ],
     )
     .unwrap();
-    let (u, s, vh): (
-        TypedTensor<Complex64>,
-        TypedTensor<f64>,
-        TypedTensor<Complex64>,
-    ) = c.as_view().svd(&mut engine).unwrap();
+    let Svd { u, s, vh }: Svd<TypedTensor<Complex64>, TypedTensor<f64>> =
+        c.as_view().svd(&mut engine).unwrap();
     assert_close(s.host_data().unwrap(), &[4.0, 1.0]);
     assert_eq!((u.shape(), vh.shape()), (&[2, 2][..], &[2, 2][..]));
 }
@@ -59,7 +56,7 @@ fn concrete_svd_has_one_entry_for_owned_borrowed_and_typed_input() {
 fn concrete_svd_shape_selects_full_matrices() {
     let mut engine = CpuEngine::serial();
     let a = matrix(3, 2, vec![3.0, 0.0, 0.0, 0.0, 2.0, 0.0]);
-    let (u, s, vh) = a
+    let Svd { u, s, vh } = a
         .svd_with(
             &SvdOptions::default().with_shape(SvdShape::Full),
             &mut engine,
@@ -69,7 +66,7 @@ fn concrete_svd_shape_selects_full_matrices() {
     assert_eq!(s.shape(), &[2]);
     assert_eq!(vh.shape(), &[2, 2]);
 
-    let (thin_u, _, _) = a.svd_with(&SvdOptions::default(), &mut engine).unwrap();
+    let Svd { u: thin_u, .. } = a.svd_with(&SvdOptions::default(), &mut engine).unwrap();
     assert_eq!(thin_u.shape(), &[3, 2]);
 }
 
@@ -173,7 +170,7 @@ fn traced_svd_with_shape_full() {
     let a = trace
         .from_vec_col_major(vec![3, 2], vec![3.0_f64, 0.0, 0.0, 0.0, 2.0, 0.0])
         .unwrap();
-    let (u, s, vh) = a
+    let Svd { u, s, vh } = a
         .svd_with(&SvdOptions::default().with_shape(SvdShape::Full))
         .unwrap();
     let mut compiler = GraphCompiler::new();
@@ -205,7 +202,7 @@ fn eager_session_entries_take_options_by_reference() {
         runtime.clone(),
     )
     .unwrap();
-    let (u, s, vh) = runtime
+    let Svd { u, s, vh } = runtime
         .with_eager_session(&mut CpuEngine::serial(), |session| {
             session.svd_with(&a, &SvdOptions::default().with_shape(SvdShape::Full))
         })

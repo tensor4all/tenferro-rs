@@ -1,4 +1,5 @@
 use num_complex::Complex64;
+use tenferro_linalg::{Eig, Eigh, Lu, Qr, Slogdet, Svd};
 use tenferro_linalg::{NormOptions, Side, TracedTensorLinalgExt, TriangularSolveOptions, Uplo};
 use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
 
@@ -28,7 +29,7 @@ fn traced_tensor_linalg_ext_exposes_svd() {
     let a = trace
         .from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])
         .unwrap();
-    let (_u, s, _vt) = a.svd().unwrap();
+    let Svd { u: _u, s, vh: _vt } = a.svd().unwrap();
 
     assert_eq!(s.rank(), 1);
 }
@@ -39,7 +40,7 @@ fn svd_traced_tensor_returns_three_outputs() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]))
         .unwrap();
-    let (u, s, vt) = a.svd().unwrap();
+    let Svd { u, s, vh: vt } = a.svd().unwrap();
     let results = run_many(&[&u, &s, &vt]);
 
     assert_eq!(results[0].shape(), &[2, 2]);
@@ -57,7 +58,7 @@ fn qr_traced_tensor_returns_q_and_r() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]))
         .unwrap();
-    let (q, r) = a.qr().unwrap();
+    let Qr { q, r } = a.qr().unwrap();
     let results = run_many(&[&q, &r]);
 
     assert_eq!(results[0].shape(), &[2, 2]);
@@ -72,7 +73,7 @@ fn eigh_traced_tensor_returns_values_and_vectors() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
         .unwrap();
-    let (values, vectors) = a.eigh().unwrap();
+    let Eigh { values, vectors } = a.eigh().unwrap();
     let results = run_many(&[&values, &vectors]);
 
     assert_eq!(results[0].shape(), &[2]);
@@ -139,7 +140,7 @@ fn lu_traced_tensor_returns_four_outputs() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]))
         .unwrap();
-    let (p, l, u, parity) = a.lu().unwrap();
+    let Lu { p, l, u, parity } = a.lu().unwrap();
     let results = run_many(&[&p, &l, &u, &parity]);
 
     assert_eq!(results[0].shape(), &[2, 2]);
@@ -171,7 +172,7 @@ fn eig_traced_tensor_returns_complex_outputs() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
         .unwrap();
-    let (values, vectors) = a.eig().unwrap();
+    let Eig { values, vectors } = a.eig().unwrap();
     let results = run_many(&[&values, &vectors]);
 
     assert_eq!(results[0].shape(), &[2]);
@@ -194,7 +195,7 @@ fn determinant_inverse_and_eigenvalue_helpers_eval() {
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]))
         .unwrap();
 
-    let (sign, logabsdet) = a.slogdet().unwrap();
+    let Slogdet { sign, logabsdet } = a.slogdet().unwrap();
     let determinant = a.det().unwrap();
     let inverse = a.inv().unwrap();
     let eigvals = a.eigvals().unwrap();

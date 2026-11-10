@@ -7,7 +7,7 @@ use tenferro_runtime::ErrorPhase;
 use crate::eager_ext::EagerSessionLinalgExt;
 use crate::traced::real_values_dtype;
 use crate::validation::{ensure_float_or_complex, validate_lstsq, validate_square_matrix};
-use crate::{Diagonal, Side, Transpose, TriangularSolveOptions, Uplo};
+use crate::{Diagonal, Lu, Qr, Side, Svd, Transpose, TriangularSolveOptions, Uplo};
 
 pub(crate) fn slogdet(
     session: &mut EagerSession<'_>,
@@ -24,7 +24,7 @@ pub(crate) fn slogdet(
         let logabsdet = broadcast_scalar(session, &log_scalar, batch_shape)?;
         return Ok((sign, logabsdet));
     }
-    let (_p, _l, u, parity) = session.lu(a)?;
+    let Lu { u, parity, .. } = session.lu(a)?;
     let diag_u = session.extract_diag(&u, 0, 1)?;
     let sign_u = session.sign(&diag_u)?;
     let sign_u = session.reduce_prod(&sign_u, Some(&[0]))?;
@@ -62,7 +62,7 @@ pub(crate) fn lstsq(
     )?;
     // Least squares via thin QR: A = Q R (full column rank), so
     // argmin_x |A x - b| solves R x = Qᴴ b.
-    let (q, r) = session.qr(a)?;
+    let Qr { q, r } = session.qr(a)?;
     let q_conj = session.conj(&q)?;
     let qh = session.transpose(&q_conj, &matrix_transpose_perm(q.shape().len()))?;
     let qh_b = session.dot_general(&qh, b, trailing_batch_dot_config(qh.shape().len()))?;
@@ -93,7 +93,7 @@ pub(crate) fn pinv_with_rtol(
     rtol: f64,
 ) -> Result<EagerTensor> {
     ensure_float_or_complex("pinv_with_rtol", a.dtype())?;
-    let (u, s, vt) = session.svd(a)?;
+    let Svd { u, s, vh: vt } = session.svd(a)?;
     let abs_s = session.abs(&s)?;
     let s_max = session.reduce_max(&abs_s, Some(&[0]))?;
     let threshold_scalar =
@@ -337,7 +337,7 @@ fn matrix_norm(
 ) -> Result<EagerTensor> {
     let matrix = move_axes_to_front(session, a, axes)?;
     if matches!(ord, Some(2.0) | Some(-2.0)) {
-        let singular_values = session.svd(&matrix)?.1;
+        let singular_values = session.svd(&matrix)?.s;
         let singular_values = session.abs(&singular_values)?;
         return if ord == Some(2.0) {
             session.reduce_max(&singular_values, Some(&[0]))

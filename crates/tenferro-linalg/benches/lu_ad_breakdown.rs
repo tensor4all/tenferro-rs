@@ -4,7 +4,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{Diagonal, EagerSessionLinalgExt, Side, TriangularSolveOptions, Uplo};
+use tenferro_linalg::{Diagonal, EagerSessionLinalgExt, Lu, Side, TriangularSolveOptions, Uplo};
 use tenferro_runtime::DotGeneralConfig;
 
 const DEFAULT_SIZES: &[usize] = &[256, 512];
@@ -130,7 +130,7 @@ fn fixture(n: usize, threads: usize) -> Fixture {
     let rhs = eager(&ctx, vec![n, n], dense_matrix(n, 3));
     let scalar_one = eager(&ctx, vec![], vec![1.0]);
 
-    let (_p, l, u, _parity) = ctx
+    let Lu { l, u, .. } = ctx
         .with_eager_session(&mut engine, |s| s.lu(&matrix))
         .unwrap();
     let lu_loss = ctx
@@ -196,7 +196,7 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("lu_forward_unpack", n), |bench| {
             bench.iter(|| {
-                let (p, l, u, parity) = fixture
+                let Lu { p, l, u, parity } = fixture
                     .ctx
                     .with_eager_session(&mut fixture.engine, |s| s.lu(black_box(&fixture.matrix)))
                     .unwrap();
