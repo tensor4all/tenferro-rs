@@ -310,17 +310,31 @@ pub(crate) fn full_piv_lu<X: AsView + ?Sized>(
     a: &X,
     o: &FullPivLuOptions,
     e: &mut dyn Engine,
-) -> Res<FullPivLu<Val<X>>>
+) -> Res<FullPivLu<Val<X>, Re<X>>>
 where
     X::Repr: LinalgRepr,
 {
     let r = full_piv_lu_body(a.as_read(), o, e)?;
+    // The owned route returns `parity` in the real dtype, the borrowed route
+    // (which every typed input takes) in the input dtype for complex inputs
+    // (#2552 Q21). A typed complex call cannot be given a single static
+    // parity type until the routes agree, so it is a declared omission.
+    let parity = match re::<X>(r.parity) {
+        Ok(parity) => parity,
+        Err(_) if is_complex(&a.as_read()) => {
+            return Err(Error::unsupported(
+                "full_piv_lu",
+                "a typed Complex32/Complex64 full_piv_lu is not supported yet: the borrowed route returns parity in the input dtype while the result type declares it real (#2552 Q21); call it on an owned `Tensor`",
+            ));
+        }
+        Err(err) => return Err(err),
+    };
     Ok(FullPivLu {
         p: val::<X>(r.p)?,
         l: val::<X>(r.l)?,
         u: val::<X>(r.u)?,
         q: val::<X>(r.q)?,
-        parity: val::<X>(r.parity)?,
+        parity,
     })
 }
 

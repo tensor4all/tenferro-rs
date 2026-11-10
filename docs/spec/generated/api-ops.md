@@ -135,12 +135,13 @@ Partial-pivot LU `a = p l u`; `p` is a permutation matrix and `parity` is the re
 Complete-pivot LU `a = p l u q`; `p` and `q` are permutation matrices and `parity` is the real sign of the permutations.
 
 - Options: `FullPivLuOptions`
-- Output: `FullPivLu<V>`
-- Dtypes: `a`: f32, f64, Complex32 or Complex64. `p`, `l`, `u`, `q` and `parity` (+1 or -1) have the dtype of `a`.
+- Output: `FullPivLu<V, R>`
+- Dtypes: `a`: f32, f64, Complex32 or Complex64. `p`, `l`, `u` and `q` have the dtype of `a`; `parity` (+1 or -1) is real for an owned `Tensor` and has the dtype of `a` on the borrowed route (#2552 Q21).
 - Layout: A rank-2 matrix with non-negative strides is read in place by the faer route (every CPU build); a negative stride or a batched input (rank >= 3) is gathered once into a compact buffer of the same placement and dtype. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`
+  - typed Complex32/Complex64 input: returns `Unsupported`; the borrowed route returns `parity` in the input dtype while the owned route and the typed result type have it real (#2552 Q21); erased inputs keep the dtype their route returns
 
 ### full_piv_lu_solve
 

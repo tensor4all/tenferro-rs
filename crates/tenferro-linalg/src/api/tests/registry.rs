@@ -3,7 +3,9 @@
 
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_tensor::{AsView, Dest, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TypedTensor};
+use tenferro_tensor::{
+    AsView, Dest, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorScalar, TypedTensor,
+};
 
 use super::cases;
 use super::support::*;
@@ -351,5 +353,49 @@ fn eager_session_solve_honours_no_grad() -> TestResult<()> {
         })?;
         assert_eq!(x.tracks_grad(), !guarded, "no_grad = {guarded}");
     }
+    Ok(())
+}
+
+// ------------------------------------------------- typed LU parity dtypes (Q5)
+
+/// `lu` returns `parity` in the input dtype on every route, so the typed
+/// complex call equals the erased one bit for bit; typed complex
+/// `full_piv_lu` is the declared omission of Q21.
+#[test]
+fn typed_complex_lu_matches_erased_and_full_piv_lu_is_a_declared_omission() -> TestResult<()> {
+    let mut e = CpuEngine::serial();
+    let typed_a = typed::<Complex64>(sq::<Complex64>())?;
+    let erased = Tensor::from_typed::<Complex64>(typed_a.duplicate()?);
+
+    let t = typed_a.lu(&mut e)?;
+    let w = erased.lu(&mut e)?;
+    let tb = [
+        tensor_bits(&Tensor::from_typed(t.p))?,
+        tensor_bits(&Tensor::from_typed(t.l))?,
+        tensor_bits(&Tensor::from_typed(t.u))?,
+        tensor_bits(&Tensor::from_typed(t.parity))?,
+    ];
+    let wb = [
+        tensor_bits(&w.p)?,
+        tensor_bits(&w.l)?,
+        tensor_bits(&w.u)?,
+        tensor_bits(&w.parity)?,
+    ];
+    assert_eq!(tb, wb, "lu");
+
+    // full_piv_lu: the owned erased route returns a real parity; the borrowed
+    // route (typed inputs) returns it complex, so the typed call is a declared
+    // omission (Q21) and leaves nothing half-written.
+    let w = erased.full_piv_lu(&mut e)?;
+    assert_eq!(w.parity.dtype(), tenferro_tensor::DType::F64);
+    let read = typed_a.as_view();
+    let r = TensorRead::from_view(Complex64::tensor_view(read)).full_piv_lu(&mut e)?;
+    assert_eq!(r.parity.dtype(), tenferro_tensor::DType::C64);
+    let err = typed_a
+        .full_piv_lu(&mut e)
+        .expect_err("typed complex full_piv_lu");
+    assert_eq!(err.kind(), ErrorKind::Unsupported, "{err}");
+    let real = typed::<f64>(sq::<f64>())?.full_piv_lu(&mut e)?;
+    assert_eq!(real.parity.host_data()?.len(), 1);
     Ok(())
 }
