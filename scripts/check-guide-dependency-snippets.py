@@ -162,7 +162,7 @@ FFT_SOURCE = r"""
 use num_complex::Complex64;
 use tenferro_ad::AdContext;
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_fft::{FftNorm, TracedTensorFftExt};
+use tenferro_fft::TracedFftOps;
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -177,7 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Complex64::new(4.0, 0.0),
         ],
     )?;
-    let y = x.fft(None, -1, FftNorm::Backward)?;
+    let y = x.fft()?;
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;

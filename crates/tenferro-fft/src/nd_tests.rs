@@ -1,6 +1,7 @@
 //! Crate-internal n-dimensional FFT tests: borrowed strided views and the
 //! single axis loop shared by the eager and extension execution paths.
 
+use crate::FftnOptions;
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::Engine;
@@ -43,11 +44,9 @@ fn fftn_executes_on_a_transposed_non_contiguous_view() {
     let mut engine = CpuEngine::serial();
     let mut executor = FftExecutor::default();
     let expected = executor
-        .fftn(
+        .fftn_with(
             &expected_input,
-            None,
-            &[0, 1],
-            FftNorm::Backward,
+            &FftnOptions::default().axes(vec![0, 1]),
             &mut engine,
         )
         .unwrap();
@@ -97,7 +96,11 @@ fn eager_fftn_and_the_extension_path_execute_the_same_axis_loop() {
 
     let mut executor = FftExecutor::default();
     let eager = executor
-        .fftn(&input, None, &[2, 0], FftNorm::Backward, &mut engine)
+        .fftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![2, 0]),
+            &mut engine,
+        )
         .unwrap();
 
     let op = crate::validated_fft_op(

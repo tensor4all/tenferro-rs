@@ -16,7 +16,8 @@ mod support;
 
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftExecutor, FftNorm, FftPlanCache, TracedTensorFftExt};
+use tenferro_fft::{FftExecutor, FftNorm, FftPlanCache, TracedFftOps};
+use tenferro_fft::{FftOptions, FftnOptions};
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::TracedTensor;
 use tenferro_runtime::{GraphCompiler, TraceContext};
@@ -141,13 +142,17 @@ fn fftn_over_three_axes_matches_sequential_one_axis_fft() {
     let mut engine = CpuEngine::serial();
 
     let n_dimensional = executor
-        .fftn(&input, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+        .fftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
+            &mut engine,
+        )
         .unwrap();
 
     let mut sequential = Tensor::from_vec_col_major(shape.to_vec(), values).unwrap();
     for axis in 0..3 {
         sequential = executor
-            .fft(&sequential, None, axis, FftNorm::Backward, &mut engine)
+            .fft_with(&sequential, &FftOptions::default().axis(axis), &mut engine)
             .unwrap();
     }
 
@@ -167,12 +172,16 @@ fn fftn_real_input_matches_sequential_full_spectrum_fft() {
     let mut engine = CpuEngine::serial();
 
     let n_dimensional = executor
-        .fftn(&input, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+        .fftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
+            &mut engine,
+        )
         .unwrap();
     let mut sequential = Tensor::from_vec_col_major(shape.to_vec(), values).unwrap();
     for axis in 0..3 {
         sequential = executor
-            .fft(&sequential, None, axis, FftNorm::Backward, &mut engine)
+            .fft_with(&sequential, &FftOptions::default().axis(axis), &mut engine)
             .unwrap();
     }
 
@@ -192,7 +201,11 @@ fn fftn_matches_the_committed_golden_fixture() {
     let mut engine = CpuEngine::serial();
 
     let output = executor
-        .fftn(&input, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+        .fftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
+            &mut engine,
+        )
         .unwrap();
 
     assert_c64_close(
@@ -210,10 +223,18 @@ fn rfftn_matches_the_golden_fixture_and_the_onesided_half_of_fftn() {
     let mut engine = CpuEngine::serial();
 
     let onesided = executor
-        .rfftn(&input, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+        .rfftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
+            &mut engine,
+        )
         .unwrap();
     let full = executor
-        .fftn(&input, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+        .fftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
+            &mut engine,
+        )
         .unwrap();
 
     let [n0, n1, n2] = GOLDEN_3D_SHAPE;
@@ -253,12 +274,20 @@ fn rfftn_irfftn_round_trip_restores_the_real_grid() {
     let mut engine = CpuEngine::serial();
 
     let spectrum = executor
-        .rfftn(&input, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+        .rfftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
+            &mut engine,
+        )
         .unwrap();
     assert_eq!(spectrum.shape(), &[3, 5, 4]);
 
     let restored = executor
-        .irfftn(&spectrum, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+        .irfftn_with(
+            &spectrum,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
+            &mut engine,
+        )
         .unwrap();
     assert_eq!(restored.shape(), shape.as_slice());
     let restored = restored.as_slice::<f64>().unwrap();
@@ -271,11 +300,11 @@ fn rfftn_irfftn_round_trip_restores_the_real_grid() {
 
     // An explicit shape states the same output lengths as the input extents.
     let restored_with_shape = executor
-        .irfftn(
+        .irfftn_with(
             &spectrum,
-            Some(&shape),
-            &[0, 1, 2],
-            FftNorm::Backward,
+            &FftnOptions::default()
+                .shape(Some(shape.to_vec()))
+                .axes(vec![0, 1, 2]),
             &mut engine,
         )
         .unwrap();
@@ -295,10 +324,18 @@ fn fftn_with_one_axis_is_exactly_the_one_axis_fft() {
     let complex_input =
         Tensor::from_vec_col_major(shape.to_vec(), complex_grid(&shape, 4)).unwrap();
     let n_dimensional = executor
-        .fftn(&complex_input, None, &[1], FftNorm::Ortho, &mut engine)
+        .fftn_with(
+            &complex_input,
+            &FftnOptions::default().axes(vec![1]).norm(FftNorm::Ortho),
+            &mut engine,
+        )
         .unwrap();
     let one_axis = executor
-        .fft(&complex_input, None, 1, FftNorm::Ortho, &mut engine)
+        .fft_with(
+            &complex_input,
+            &FftOptions::default().axis(1).norm(FftNorm::Ortho),
+            &mut engine,
+        )
         .unwrap();
     assert_eq!(
         n_dimensional.as_slice::<Complex64>().unwrap(),
@@ -308,10 +345,14 @@ fn fftn_with_one_axis_is_exactly_the_one_axis_fft() {
 
     let real_input = Tensor::from_vec_col_major(shape.to_vec(), real_grid(&shape, 5)).unwrap();
     let n_dimensional = executor
-        .fftn(&real_input, None, &[-2], FftNorm::Backward, &mut engine)
+        .fftn_with(
+            &real_input,
+            &FftnOptions::default().axes(vec![-2]),
+            &mut engine,
+        )
         .unwrap();
     let one_axis = executor
-        .fft(&real_input, None, -2, FftNorm::Backward, &mut engine)
+        .fft_with(&real_input, &FftOptions::default().axis(-2), &mut engine)
         .unwrap();
     assert_eq!(
         n_dimensional.as_slice::<Complex64>().unwrap(),
@@ -321,10 +362,14 @@ fn fftn_with_one_axis_is_exactly_the_one_axis_fft() {
 
     let real_input = Tensor::from_vec_col_major(shape.to_vec(), real_grid(&shape, 6)).unwrap();
     let n_dimensional = executor
-        .rfftn(&real_input, None, &[0], FftNorm::Backward, &mut engine)
+        .rfftn_with(
+            &real_input,
+            &FftnOptions::default().axes(vec![0]),
+            &mut engine,
+        )
         .unwrap();
     let one_axis = executor
-        .rfft(&real_input, None, 0, FftNorm::Backward, &mut engine)
+        .rfft_with(&real_input, &FftOptions::default().axis(0), &mut engine)
         .unwrap();
     assert_eq!(
         n_dimensional.as_slice::<Complex64>().unwrap(),
@@ -344,13 +389,23 @@ fn fftn_normalization_is_applied_once_over_the_whole_transform() {
 
     // `Forward` leaves the inverse transform unscaled.
     let unscaled = executor
-        .ifftn(&input, None, &[0, 1], FftNorm::Forward, &mut engine)
+        .ifftn_with(
+            &input,
+            &FftnOptions::default()
+                .axes(vec![0, 1])
+                .norm(FftNorm::Forward),
+            &mut engine,
+        )
         .unwrap();
     let unscaled = unscaled.as_slice::<Complex64>().unwrap();
 
     // The one n-dimensional factor: 1 / prod(shape over axes).
     let once = executor
-        .ifftn(&input, None, &[0, 1], FftNorm::Backward, &mut engine)
+        .ifftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1]),
+            &mut engine,
+        )
         .unwrap();
     let once = once.as_slice::<Complex64>().unwrap();
     assert_c64_close(
@@ -363,7 +418,7 @@ fn fftn_normalization_is_applied_once_over_the_whole_transform() {
     let mut sequential = Tensor::from_vec_col_major(shape.to_vec(), values).unwrap();
     for axis in 0..2 {
         sequential = executor
-            .ifft(&sequential, None, axis, FftNorm::Backward, &mut engine)
+            .ifft_with(&sequential, &FftOptions::default().axis(axis), &mut engine)
             .unwrap();
     }
     assert_c64_close(
@@ -389,8 +444,9 @@ fn fftn_rejects_empty_repeated_and_mismatched_axes() {
     let mut engine = CpuEngine::serial();
     let input = Tensor::from_vec_col_major([2usize, 3], complex_grid(&[2, 3], 9)).unwrap();
 
+    // Empty `axes` is not an error any more: `FftnOptions` selects every axis
+    // (or the last `shape.len()` axes), as NumPy does (#2552 S5).
     for (axes, shape) in [
-        (vec![], None),
         (vec![0, 0], None),
         (vec![0, 1], Some(vec![2])),
         (vec![2], None),
@@ -398,7 +454,13 @@ fn fftn_rejects_empty_repeated_and_mismatched_axes() {
     ] {
         let shape = shape.as_deref();
         let error = executor
-            .fftn(&input, shape, &axes, FftNorm::Backward, &mut engine)
+            .fftn_with(
+                &input,
+                &FftnOptions::default()
+                    .shape(shape.map(<[usize]>::to_vec))
+                    .axes(axes.to_vec()),
+                &mut engine,
+            )
             .expect_err("invalid axes must be rejected");
         assert!(
             matches!(error, tenferro_tensor::Error::Validation { .. }),
@@ -415,7 +477,11 @@ fn fftn_reuses_one_plan_per_distinct_length_and_dtype() {
     let mut engine = CpuEngine::serial();
 
     executor
-        .fftn(&input, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+        .fftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
+            &mut engine,
+        )
         .unwrap();
     assert_eq!(
         executor.cache_stats().entries,
@@ -427,7 +493,11 @@ fn fftn_reuses_one_plan_per_distinct_length_and_dtype() {
     let input =
         Tensor::from_vec_col_major(non_square.to_vec(), complex_grid(&non_square, 11)).unwrap();
     executor
-        .fftn(&input, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+        .fftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
+            &mut engine,
+        )
         .unwrap();
     assert_eq!(
         executor.cache_stats().entries,
@@ -447,11 +517,9 @@ fn traced_fftn_family_matches_the_eager_executor() {
 
     let complex_input = Tensor::from_vec_col_major(shape.to_vec(), complex_values.clone()).unwrap();
     let eager_full = executor
-        .fftn(
+        .fftn_with(
             &complex_input,
-            None,
-            &[0, 1, 2],
-            FftNorm::Backward,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
             &mut engine,
         )
         .unwrap();
@@ -460,7 +528,7 @@ fn traced_fftn_family_matches_the_eager_executor() {
     let traced = trace
         .from_vec_col_major(shape.to_vec(), complex_values)
         .unwrap()
-        .fftn(None, &[0, 1, 2], FftNorm::Backward)
+        .fftn_with(&FftnOptions::default().axes(vec![0, 1, 2]))
         .unwrap();
     let program = compiler.compile(&traced).unwrap();
     let traced_full = support::run_one(&program, &[]).unwrap();
@@ -471,11 +539,9 @@ fn traced_fftn_family_matches_the_eager_executor() {
     );
 
     let eager_inverse = executor
-        .ifftn(
+        .ifftn_with(
             &eager_full,
-            None,
-            &[0, 1, 2],
-            FftNorm::Backward,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
             &mut engine,
         )
         .unwrap();
@@ -486,7 +552,7 @@ fn traced_fftn_family_matches_the_eager_executor() {
             eager_full.as_slice::<Complex64>().unwrap().to_vec(),
         )
         .unwrap()
-        .ifftn(None, &[0, 1, 2], FftNorm::Backward)
+        .ifftn_with(&FftnOptions::default().axes(vec![0, 1, 2]))
         .unwrap();
     let program = compiler.compile(&traced).unwrap();
     let traced_inverse = support::run_one(&program, &[]).unwrap();
@@ -498,11 +564,9 @@ fn traced_fftn_family_matches_the_eager_executor() {
 
     let real_input = Tensor::from_vec_col_major(shape.to_vec(), real_values.clone()).unwrap();
     let eager_rfftn = executor
-        .rfftn(
+        .rfftn_with(
             &real_input,
-            None,
-            &[0, 1, 2],
-            FftNorm::Backward,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
             &mut engine,
         )
         .unwrap();
@@ -510,7 +574,7 @@ fn traced_fftn_family_matches_the_eager_executor() {
     let traced = trace
         .from_vec_col_major(shape.to_vec(), real_values)
         .unwrap()
-        .rfftn(None, &[0, 1, 2], FftNorm::Backward)
+        .rfftn_with(&FftnOptions::default().axes(vec![0, 1, 2]))
         .unwrap();
     let program = compiler.compile(&traced).unwrap();
     let traced_rfftn = support::run_one(&program, &[]).unwrap();
@@ -521,11 +585,11 @@ fn traced_fftn_family_matches_the_eager_executor() {
     );
 
     let eager_irfftn = executor
-        .irfftn(
+        .irfftn_with(
             &eager_rfftn,
-            Some(&shape),
-            &[0, 1, 2],
-            FftNorm::Backward,
+            &FftnOptions::default()
+                .shape(Some(shape.to_vec()))
+                .axes(vec![0, 1, 2]),
             &mut engine,
         )
         .unwrap();
@@ -536,7 +600,11 @@ fn traced_fftn_family_matches_the_eager_executor() {
             eager_rfftn.as_slice::<Complex64>().unwrap().to_vec(),
         )
         .unwrap()
-        .irfftn(Some(&shape), &[0, 1, 2], FftNorm::Backward)
+        .irfftn_with(
+            &FftnOptions::default()
+                .shape(Some(shape.to_vec()))
+                .axes(vec![0, 1, 2]),
+        )
         .unwrap();
     let program = compiler.compile(&traced).unwrap();
     let traced_irfftn = support::run_one(&program, &[]).unwrap();
@@ -620,7 +688,9 @@ fn fftn_jvp_matches_finite_differences_and_the_transform_of_the_tangent() {
     let dx = trace
         .from_vec_col_major(shape.to_vec(), direction.clone())
         .unwrap();
-    let y = x.fftn(None, &[0, 1, 2], FftNorm::Backward).unwrap();
+    let y = x
+        .fftn_with(&FftnOptions::default().axes(vec![0, 1, 2]))
+        .unwrap();
     let dy = fft_ad_context().jvp(&y, &x, &dx).unwrap();
     let jvp = run_traced(&dy);
     let jvp = jvp.as_slice::<Complex64>().unwrap();
@@ -628,11 +698,9 @@ fn fftn_jvp_matches_finite_differences_and_the_transform_of_the_tangent() {
     // Closed form: an fft is complex-linear, so the tangent is the transform of
     // the tangent.
     let expected = executor
-        .fftn(
+        .fftn_with(
             &Tensor::from_vec_col_major(shape.to_vec(), direction.clone()).unwrap(),
-            None,
-            &[0, 1, 2],
-            FftNorm::Backward,
+            &FftnOptions::default().axes(vec![0, 1, 2]),
             &mut engine,
         )
         .unwrap();
@@ -644,7 +712,11 @@ fn fftn_jvp_matches_finite_differences_and_the_transform_of_the_tangent() {
 
     let finite = directional_finite_difference(
         &shape,
-        |input| input.fftn(None, &[0, 1, 2], FftNorm::Backward).unwrap(),
+        |input| {
+            input
+                .fftn_with(&FftnOptions::default().axes(vec![0, 1, 2]))
+                .unwrap()
+        },
         &base,
         &direction,
         1.0e-6,
@@ -667,7 +739,9 @@ fn fftn_vjp_matches_the_closed_form_adjoint_in_three_dimensions() {
     let g = trace
         .from_vec_col_major(shape.to_vec(), cotangent.clone())
         .unwrap();
-    let y = x.fftn(None, &[0, 1, 2], FftNorm::Backward).unwrap();
+    let y = x
+        .fftn_with(&FftnOptions::default().axes(vec![0, 1, 2]))
+        .unwrap();
     let dx = fft_ad_context().vjp(&y, &x, &g).unwrap();
     let vjp = run_traced(&dx);
     let vjp = vjp.as_slice::<Complex64>().unwrap();
@@ -675,11 +749,11 @@ fn fftn_vjp_matches_the_closed_form_adjoint_in_three_dimensions() {
     // Closed form: the unscaled forward F has adjoint F^H = P * F^-1, which is
     // exactly the inverse transform with `Forward` normalization left unscaled.
     let expected = executor
-        .ifftn(
+        .ifftn_with(
             &Tensor::from_vec_col_major(shape.to_vec(), cotangent).unwrap(),
-            None,
-            &[0, 1, 2],
-            FftNorm::Forward,
+            &FftnOptions::default()
+                .axes(vec![0, 1, 2])
+                .norm(FftNorm::Forward),
             &mut engine,
         )
         .unwrap();
@@ -711,11 +785,11 @@ fn fftn_vjp_restores_every_resized_axis() {
     let mut engine = CpuEngine::serial();
 
     let transformed = executor
-        .fftn(
+        .fftn_with(
             &Tensor::from_vec_col_major(shape.to_vec(), base.clone()).unwrap(),
-            Some(&lengths),
-            &[0, 1, 2],
-            FftNorm::Backward,
+            &FftnOptions::default()
+                .shape(Some(lengths.to_vec()))
+                .axes(vec![0, 1, 2]),
             &mut engine,
         )
         .unwrap();
@@ -729,7 +803,11 @@ fn fftn_vjp_restores_every_resized_axis() {
         .from_vec_col_major(transformed.shape().to_vec(), cotangent.clone())
         .unwrap();
     let y = x
-        .fftn(Some(&lengths), &[0, 1, 2], FftNorm::Backward)
+        .fftn_with(
+            &FftnOptions::default()
+                .shape(Some(lengths.to_vec()))
+                .axes(vec![0, 1, 2]),
+        )
         .unwrap();
     let dx = fft_ad_context().vjp(&y, &x, &g).unwrap();
     let vjp = run_traced(&dx);
@@ -764,15 +842,13 @@ fn fftn_with_one_axis_shares_the_ad_rule_of_the_one_axis_transform() {
     let dx = trace
         .from_vec_col_major(shape.to_vec(), direction.clone())
         .unwrap();
-    let y = x.fftn(None, &[1], FftNorm::Backward).unwrap();
+    let y = x.fftn_with(&FftnOptions::default().axes(vec![1])).unwrap();
     let dy = fft_ad_context().jvp(&y, &x, &dx).unwrap();
     let jvp = run_traced(&dy);
     let expected = executor
-        .fftn(
+        .fftn_with(
             &Tensor::from_vec_col_major(shape.to_vec(), direction).unwrap(),
-            None,
-            &[1],
-            FftNorm::Backward,
+            &FftnOptions::default().axes(vec![1]),
             &mut engine,
         )
         .unwrap();
@@ -788,15 +864,13 @@ fn fftn_with_one_axis_shares_the_ad_rule_of_the_one_axis_transform() {
     let g = trace
         .from_vec_col_major(shape.to_vec(), cotangent.clone())
         .unwrap();
-    let y = x.fftn(None, &[1], FftNorm::Backward).unwrap();
+    let y = x.fftn_with(&FftnOptions::default().axes(vec![1])).unwrap();
     let dx = fft_ad_context().vjp(&y, &x, &g).unwrap();
     let vjp = run_traced(&dx);
     let expected = executor
-        .ifftn(
+        .ifftn_with(
             &Tensor::from_vec_col_major(shape.to_vec(), cotangent).unwrap(),
-            None,
-            &[1],
-            FftNorm::Forward,
+            &FftnOptions::default().axes(vec![1]).norm(FftNorm::Forward),
             &mut engine,
         )
         .unwrap();
@@ -825,7 +899,7 @@ fn outer_product_of_a_truncated_fft_uses_the_truncated_length() {
         .expect("truncation length");
     let truncated = x.dynamic_truncate(&keep, 0).expect("truncate");
     let transformed = truncated
-        .fft(None, 0, FftNorm::Backward)
+        .fft_with(&FftOptions::default().axis(0))
         .expect("traced fft");
     let other = trace
         .from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0])

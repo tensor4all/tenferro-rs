@@ -837,6 +837,32 @@ assert_eq!(engine.num_threads(), 1);
         Ok(())
     }
 
+    snippet_cpu_execution_lanes()?;
+
+    // snippet source: docs/guides/cpu-execution.md (lanes)
+    fn snippet_cpu_execution_lanes() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:cpu_execution_lanes
+use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine, Pool};
+use tenferro_linalg::{LinalgOps, Svd};
+use tenferro_tensor::Tensor;
+
+let mut engine = CpuEngine::new(Pool::builder().threads(2).build()?);
+// One pool per lane, owned by the caller and reused across calls.
+let mut pools = [BufferPool::new(), BufferPool::new()];
+let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 1.0])?;
+let b = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 1.0])?;
+let results = engine.with_lanes(&[1, 1], &mut pools, |index, lane| {
+    let input = if index == 0 { &a } else { &b };
+    input.svd(lane)
+})?;
+for result in results {
+    let Svd { s, .. } = result?;
+    assert_eq!(s.shape(), &[2]);
+}
+        // snippet-end:cpu_execution_lanes
+        Ok(())
+    }
+
     snippet_cpu_execution_30()?;
 
     // snippet source: docs/guides/cpu-execution.md:160

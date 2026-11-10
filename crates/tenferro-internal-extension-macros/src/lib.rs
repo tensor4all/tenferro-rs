@@ -185,6 +185,8 @@ pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
 ///         types { V = Tensor, R = Tensor } // `S` maps an operand typed `S`
 ///         forward: crate::api::concrete;
 ///         cfg: feature = "autodiff";   // optional; gates the trait and impl
+///         extra_decls { /* hand-written trait items (exception entries) */ }
+///         extra_impls { /* their impls */ }
 ///     }
 ///     layer core_eager { describe_only; }
 ///     op svd {

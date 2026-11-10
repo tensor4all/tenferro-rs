@@ -167,6 +167,7 @@ nonzero and sum to at most the budget), pairs each lane with a caller-owned
 receives is a `&mut dyn Engine`, so the ordinary `tenferro_linalg::LinalgOps`
 grammar runs on it unchanged.
 
+<!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#cpu_execution_lanes -->
 ```rust
 use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine, Pool};
 use tenferro_linalg::{LinalgOps, Svd};
@@ -185,8 +186,8 @@ for result in results {
     let Svd { s, .. } = result?;
     assert_eq!(s.shape(), &[2]);
 }
-# Ok::<(), Box<dyn std::error::Error>>(())
 ```
+<!-- end-snippet-source -->
 
 Only `svd`, `svdvals`, `qr`, `eigh`, `eigvalsh` and `eigvals` run in a lane.
 Every other operation, linalg or not, returns `Unsupported` on a lane; use a

@@ -7,6 +7,21 @@ pub use tenferro_fft::prelude::Engine
 pub use tenferro_fft::prelude::Tensor
 pub use tenferro_fft::prelude::TensorRead
 pub use tenferro_fft::prelude::TracedTensor
+pub enum tenferro_fft::prelude::EagerFftInPlaceError
+pub tenferro_fft::prelude::EagerFftInPlaceError::Execution(tenferro_runtime::error::Error)
+pub tenferro_fft::prelude::EagerFftInPlaceError::Rejected
+pub tenferro_fft::prelude::EagerFftInPlaceError::Rejected::input: alloc::boxed::Box<tenferro_ad::eager::EagerTensor>
+pub tenferro_fft::prelude::EagerFftInPlaceError::Rejected::source: tenferro_runtime::error::Error
+impl core::convert::From<tenferro_fft::EagerFftInPlaceError> for tenferro_runtime::error::Error
+pub fn tenferro_runtime::error::Error::from(tenferro_fft::EagerFftInPlaceError) -> Self
+impl core::convert::From<tenferro_runtime::error::Error> for tenferro_fft::EagerFftInPlaceError
+pub fn tenferro_fft::EagerFftInPlaceError::from(tenferro_runtime::error::Error) -> Self
+impl core::error::Error for tenferro_fft::EagerFftInPlaceError
+pub fn tenferro_fft::EagerFftInPlaceError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_fft::EagerFftInPlaceError
+pub fn tenferro_fft::EagerFftInPlaceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_fft::EagerFftInPlaceError
+pub fn tenferro_fft::EagerFftInPlaceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum tenferro_fft::prelude::FftNorm
 pub tenferro_fft::prelude::FftNorm::Backward
 pub tenferro_fft::prelude::FftNorm::Forward
@@ -22,22 +37,98 @@ impl core::fmt::Debug for tenferro_fft::FftNorm
 pub fn tenferro_fft::FftNorm::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_fft::FftNorm
 impl core::marker::StructuralPartialEq for tenferro_fft::FftNorm
-pub trait tenferro_fft::prelude::EagerSessionFftExt
-pub fn tenferro_fft::prelude::EagerSessionFftExt::fft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_fft::prelude::EagerSessionFftExt::ifft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_fft::prelude::EagerSessionFftExt::irfft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_fft::prelude::EagerSessionFftExt::rfft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-impl tenferro_fft::EagerSessionFftExt for tenferro_ad::eager::EagerSession<'_>
-pub fn tenferro_ad::eager::EagerSession<'_>::fft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_ad::eager::EagerSession<'_>::ifft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_ad::eager::EagerSession<'_>::irfft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_ad::eager::EagerSession<'_>::rfft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub trait tenferro_fft::prelude::EagerTensorFftExt
-pub fn tenferro_fft::prelude::EagerTensorFftExt::fft_in_place(self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, isize, tenferro_fft::FftNorm) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
-pub fn tenferro_fft::prelude::EagerTensorFftExt::ifft_in_place(self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, isize, tenferro_fft::FftNorm) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
-impl tenferro_fft::EagerTensorFftExt for tenferro_ad::eager::EagerTensor
-pub fn tenferro_ad::eager::EagerTensor::fft_in_place(self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, isize, tenferro_fft::FftNorm) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
-pub fn tenferro_ad::eager::EagerTensor::ifft_in_place(self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, isize, tenferro_fft::FftNorm) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub struct tenferro_fft::prelude::FftExecutor
+impl tenferro_fft::FftExecutor
+pub fn tenferro_fft::FftExecutor::cache_stats(&self) -> tenferro_tensor::cache::CacheStats
+pub fn tenferro_fft::FftExecutor::clear_cache(&mut self)
+pub fn tenferro_fft::FftExecutor::fft_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::fftn_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::ifft_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::ifftn_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::irfft_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::irfftn_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::new(tenferro_fft::FftPlanCache) -> Self
+pub const fn tenferro_fft::FftExecutor::plan_cache(&self) -> &tenferro_fft::FftPlanCache
+pub fn tenferro_fft::FftExecutor::plan_cache_mut(&mut self) -> &mut tenferro_fft::FftPlanCache
+pub fn tenferro_fft::FftExecutor::rfft_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::rfftn_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl core::default::Default for tenferro_fft::FftExecutor
+pub fn tenferro_fft::FftExecutor::default() -> tenferro_fft::FftExecutor
+#[non_exhaustive] pub struct tenferro_fft::prelude::FftOptions
+pub tenferro_fft::prelude::FftOptions::axis: isize
+pub tenferro_fft::prelude::FftOptions::n: core::option::Option<usize>
+pub tenferro_fft::prelude::FftOptions::norm: tenferro_fft::FftNorm
+impl tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::axis(self, isize) -> Self
+pub fn tenferro_fft::FftOptions::n(self, core::option::Option<usize>) -> Self
+pub fn tenferro_fft::FftOptions::norm(self, tenferro_fft::FftNorm) -> Self
+impl core::clone::Clone for tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::clone(&self) -> tenferro_fft::FftOptions
+impl core::cmp::Eq for tenferro_fft::FftOptions
+impl core::cmp::PartialEq for tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::eq(&self, &tenferro_fft::FftOptions) -> bool
+impl core::default::Default for tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::default() -> Self
+impl core::fmt::Debug for tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_fft::FftOptions
+impl core::marker::StructuralPartialEq for tenferro_fft::FftOptions
+#[non_exhaustive] pub struct tenferro_fft::prelude::FftnOptions
+pub tenferro_fft::prelude::FftnOptions::axes: alloc::vec::Vec<isize>
+pub tenferro_fft::prelude::FftnOptions::norm: tenferro_fft::FftNorm
+pub tenferro_fft::prelude::FftnOptions::shape: core::option::Option<alloc::vec::Vec<usize>>
+impl tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::axes(self, alloc::vec::Vec<isize>) -> Self
+pub fn tenferro_fft::FftnOptions::norm(self, tenferro_fft::FftNorm) -> Self
+pub fn tenferro_fft::FftnOptions::shape(self, core::option::Option<alloc::vec::Vec<usize>>) -> Self
+impl core::clone::Clone for tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::clone(&self) -> tenferro_fft::FftnOptions
+impl core::cmp::Eq for tenferro_fft::FftnOptions
+impl core::cmp::PartialEq for tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::eq(&self, &tenferro_fft::FftnOptions) -> bool
+impl core::default::Default for tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::default() -> tenferro_fft::FftnOptions
+impl core::fmt::Debug for tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_fft::FftnOptions
+pub trait tenferro_fft::prelude::EagerFftOps
+pub fn tenferro_fft::prelude::EagerFftOps::fft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::fft_in_place(&mut self, tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub fn tenferro_fft::prelude::EagerFftOps::fft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::fftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::fftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::ifft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::ifft_in_place(&mut self, tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub fn tenferro_fft::prelude::EagerFftOps::ifft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::ifftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::ifftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::irfft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::irfft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::irfftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::irfftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::rfft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::rfft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::rfftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::prelude::EagerFftOps::rfftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+impl tenferro_fft::EagerFftOps for tenferro_ad::eager::EagerSession<'_>
+pub fn tenferro_ad::eager::EagerSession<'_>::fft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::fft_in_place(&mut self, tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub fn tenferro_ad::eager::EagerSession<'_>::fft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::fftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::fftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifft_in_place(&mut self, tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::irfft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::irfft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::irfftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::irfftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::rfft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::rfft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::rfftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::rfftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
 pub trait tenferro_fft::prelude::FftBackend: tenferro_tensor::backend::Engine
 pub fn tenferro_fft::prelude::FftBackend::execute_fft(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftPlanSpec, tenferro_fft::FftExecutionCache<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_fft::prelude::FftBackend::execute_fft_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &tenferro_fft::FftPlanSpec, tenferro_fft::FftExecutionCache<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
@@ -46,62 +137,74 @@ impl tenferro_fft::FftBackend for tenferro_cpu::engine::CpuEngine
 pub fn tenferro_cpu::engine::CpuEngine::execute_fft(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftPlanSpec, tenferro_fft::FftExecutionCache<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_cpu::engine::CpuEngine::execute_fft_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &tenferro_fft::FftPlanSpec, tenferro_fft::FftExecutionCache<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_cpu::engine::CpuEngine::validate_fft_read_input(&self, &'static str, &tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<()>
-pub trait tenferro_fft::prelude::TensorFftExt
-pub fn tenferro_fft::prelude::TensorFftExt::fft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::prelude::TensorFftExt::ifft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::prelude::TensorFftExt::irfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::prelude::TensorFftExt::rfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-impl tenferro_fft::TensorFftExt for tenferro_tensor::types::Tensor
-pub fn tenferro_tensor::types::Tensor::fft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::Tensor::ifft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::Tensor::irfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::Tensor::rfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_fft::prelude::TensorReadFftExt
-pub fn tenferro_fft::prelude::TensorReadFftExt::fft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::prelude::TensorReadFftExt::ifft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::prelude::TensorReadFftExt::irfft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::prelude::TensorReadFftExt::rfft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-impl tenferro_fft::TensorReadFftExt for tenferro_tensor::types::TensorRead<'_>
-pub fn tenferro_tensor::types::TensorRead<'_>::fft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::TensorRead<'_>::ifft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::TensorRead<'_>::irfft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::TensorRead<'_>::rfft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_fft::prelude::TraceContextFftExt
-pub fn tenferro_fft::prelude::TraceContextFftExt::fft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TraceContextFftExt::fftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TraceContextFftExt::ifft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TraceContextFftExt::ifftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TraceContextFftExt::irfft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TraceContextFftExt::irfftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TraceContextFftExt::rfft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TraceContextFftExt::rfftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-impl tenferro_fft::TraceContextFftExt for tenferro_runtime::trace::TraceContext
-pub fn tenferro_runtime::trace::TraceContext::fft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::fftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::ifft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::ifftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::irfft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::irfftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::rfft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::rfftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub trait tenferro_fft::prelude::TracedTensorFftExt
-pub fn tenferro_fft::prelude::TracedTensorFftExt::fft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TracedTensorFftExt::fftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TracedTensorFftExt::ifft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TracedTensorFftExt::ifftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TracedTensorFftExt::irfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TracedTensorFftExt::irfftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TracedTensorFftExt::rfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::prelude::TracedTensorFftExt::rfftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-impl tenferro_fft::TracedTensorFftExt for tenferro_runtime::traced::TracedTensor
-pub fn tenferro_runtime::traced::TracedTensor::fft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::fftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::ifft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::ifftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::irfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::irfftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::rfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::rfftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub trait tenferro_fft::prelude::FftOps: tenferro_tensor::view::AsView
+pub fn tenferro_fft::prelude::FftOps::fft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::fft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::fftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::fftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::ifft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::ifft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::ifftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::ifftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::irfft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::irfft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::irfftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::irfftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::rfft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::rfft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::rfftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::prelude::FftOps::rfftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_fft::FftOps for X
+pub fn X::fft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::fft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::fftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::fftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::ifft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::ifft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::ifftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::ifftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::irfft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::irfft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::irfftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::irfftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::rfft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::rfft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::rfftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::rfftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub trait tenferro_fft::prelude::TracedFftOps
+pub fn tenferro_fft::prelude::TracedFftOps::fft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::fft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::fftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::fftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::ifft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::ifft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::ifftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::ifftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::irfft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::irfft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::irfftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::irfftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::rfft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::rfft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::rfftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::prelude::TracedFftOps::rfftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_fft::TracedFftOps for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::fft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::fft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::fftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::fftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::ifft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::ifft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::ifftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::ifftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::irfft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::irfft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::irfftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::irfftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::rfft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::rfft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::rfftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::rfftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub enum tenferro_fft::EagerFftInPlaceError
 pub tenferro_fft::EagerFftInPlaceError::Execution(tenferro_runtime::error::Error)
 pub tenferro_fft::EagerFftInPlaceError::Rejected
@@ -161,19 +264,38 @@ pub struct tenferro_fft::FftExecutor
 impl tenferro_fft::FftExecutor
 pub fn tenferro_fft::FftExecutor::cache_stats(&self) -> tenferro_tensor::cache::CacheStats
 pub fn tenferro_fft::FftExecutor::clear_cache(&mut self)
-pub fn tenferro_fft::FftExecutor::fft(&mut self, &tenferro_tensor::types::Tensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::FftExecutor::fftn(&mut self, &tenferro_tensor::types::Tensor, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::FftExecutor::ifft(&mut self, &tenferro_tensor::types::Tensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::FftExecutor::ifftn(&mut self, &tenferro_tensor::types::Tensor, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::FftExecutor::irfft(&mut self, &tenferro_tensor::types::Tensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::FftExecutor::irfftn(&mut self, &tenferro_tensor::types::Tensor, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::fft_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::fftn_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::ifft_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::ifftn_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::irfft_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::irfftn_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_fft::FftExecutor::new(tenferro_fft::FftPlanCache) -> Self
 pub const fn tenferro_fft::FftExecutor::plan_cache(&self) -> &tenferro_fft::FftPlanCache
 pub fn tenferro_fft::FftExecutor::plan_cache_mut(&mut self) -> &mut tenferro_fft::FftPlanCache
-pub fn tenferro_fft::FftExecutor::rfft(&mut self, &tenferro_tensor::types::Tensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::FftExecutor::rfftn(&mut self, &tenferro_tensor::types::Tensor, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::rfft_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_fft::FftExecutor::rfftn_with(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 impl core::default::Default for tenferro_fft::FftExecutor
 pub fn tenferro_fft::FftExecutor::default() -> tenferro_fft::FftExecutor
+#[non_exhaustive] pub struct tenferro_fft::FftOptions
+pub tenferro_fft::FftOptions::axis: isize
+pub tenferro_fft::FftOptions::n: core::option::Option<usize>
+pub tenferro_fft::FftOptions::norm: tenferro_fft::FftNorm
+impl tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::axis(self, isize) -> Self
+pub fn tenferro_fft::FftOptions::n(self, core::option::Option<usize>) -> Self
+pub fn tenferro_fft::FftOptions::norm(self, tenferro_fft::FftNorm) -> Self
+impl core::clone::Clone for tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::clone(&self) -> tenferro_fft::FftOptions
+impl core::cmp::Eq for tenferro_fft::FftOptions
+impl core::cmp::PartialEq for tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::eq(&self, &tenferro_fft::FftOptions) -> bool
+impl core::default::Default for tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::default() -> Self
+impl core::fmt::Debug for tenferro_fft::FftOptions
+pub fn tenferro_fft::FftOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_fft::FftOptions
+impl core::marker::StructuralPartialEq for tenferro_fft::FftOptions
 pub struct tenferro_fft::FftPlanCache
 impl tenferro_fft::FftPlanCache
 pub fn tenferro_fft::FftPlanCache::capacity(&self) -> core::num::nonzero::NonZeroUsize
@@ -209,25 +331,65 @@ pub fn tenferro_fft::FftPlanSpec::eq(&self, &tenferro_fft::FftPlanSpec) -> bool
 impl core::fmt::Debug for tenferro_fft::FftPlanSpec
 pub fn tenferro_fft::FftPlanSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for tenferro_fft::FftPlanSpec
+#[non_exhaustive] pub struct tenferro_fft::FftnOptions
+pub tenferro_fft::FftnOptions::axes: alloc::vec::Vec<isize>
+pub tenferro_fft::FftnOptions::norm: tenferro_fft::FftNorm
+pub tenferro_fft::FftnOptions::shape: core::option::Option<alloc::vec::Vec<usize>>
+impl tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::axes(self, alloc::vec::Vec<isize>) -> Self
+pub fn tenferro_fft::FftnOptions::norm(self, tenferro_fft::FftNorm) -> Self
+pub fn tenferro_fft::FftnOptions::shape(self, core::option::Option<alloc::vec::Vec<usize>>) -> Self
+impl core::clone::Clone for tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::clone(&self) -> tenferro_fft::FftnOptions
+impl core::cmp::Eq for tenferro_fft::FftnOptions
+impl core::cmp::PartialEq for tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::eq(&self, &tenferro_fft::FftnOptions) -> bool
+impl core::default::Default for tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::default() -> tenferro_fft::FftnOptions
+impl core::fmt::Debug for tenferro_fft::FftnOptions
+pub fn tenferro_fft::FftnOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_fft::FftnOptions
 pub const tenferro_fft::DEFAULT_FFT_PLAN_CACHE_CAPACITY: usize
 pub const tenferro_fft::FFT_EXTENSION_FAMILY_ID: &str
 pub const tenferro_fft::FFT_PLAN_CACHE_NAME: &str
-pub trait tenferro_fft::EagerSessionFftExt
-pub fn tenferro_fft::EagerSessionFftExt::fft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_fft::EagerSessionFftExt::ifft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_fft::EagerSessionFftExt::irfft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_fft::EagerSessionFftExt::rfft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-impl tenferro_fft::EagerSessionFftExt for tenferro_ad::eager::EagerSession<'_>
-pub fn tenferro_ad::eager::EagerSession<'_>::fft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_ad::eager::EagerSession<'_>::ifft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_ad::eager::EagerSession<'_>::irfft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub fn tenferro_ad::eager::EagerSession<'_>::rfft(&mut self, &tenferro_ad::eager::EagerTensor, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
-pub trait tenferro_fft::EagerTensorFftExt
-pub fn tenferro_fft::EagerTensorFftExt::fft_in_place(self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, isize, tenferro_fft::FftNorm) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
-pub fn tenferro_fft::EagerTensorFftExt::ifft_in_place(self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, isize, tenferro_fft::FftNorm) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
-impl tenferro_fft::EagerTensorFftExt for tenferro_ad::eager::EagerTensor
-pub fn tenferro_ad::eager::EagerTensor::fft_in_place(self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, isize, tenferro_fft::FftNorm) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
-pub fn tenferro_ad::eager::EagerTensor::ifft_in_place(self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, isize, tenferro_fft::FftNorm) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub trait tenferro_fft::EagerFftOps
+pub fn tenferro_fft::EagerFftOps::fft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::fft_in_place(&mut self, tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub fn tenferro_fft::EagerFftOps::fft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::fftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::fftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::ifft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::ifft_in_place(&mut self, tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub fn tenferro_fft::EagerFftOps::ifft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::ifftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::ifftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::irfft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::irfft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::irfftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::irfftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::rfft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::rfft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::rfftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_fft::EagerFftOps::rfftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+impl tenferro_fft::EagerFftOps for tenferro_ad::eager::EagerSession<'_>
+pub fn tenferro_ad::eager::EagerSession<'_>::fft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::fft_in_place(&mut self, tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub fn tenferro_ad::eager::EagerSession<'_>::fft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::fftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::fftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifft_in_place(&mut self, tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> core::result::Result<tenferro_ad::eager::EagerTensor, tenferro_fft::EagerFftInPlaceError>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::ifftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::irfft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::irfft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::irfftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::irfftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::rfft(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::rfft_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::rfftn(&mut self, &tenferro_ad::eager::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
+pub fn tenferro_ad::eager::EagerSession<'_>::rfftn_with(&mut self, &tenferro_ad::eager::EagerTensor, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_ad::eager::EagerTensor>
 pub trait tenferro_fft::FftBackend: tenferro_tensor::backend::Engine
 pub fn tenferro_fft::FftBackend::execute_fft(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftPlanSpec, tenferro_fft::FftExecutionCache<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_fft::FftBackend::execute_fft_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &tenferro_fft::FftPlanSpec, tenferro_fft::FftExecutionCache<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
@@ -236,62 +398,99 @@ impl tenferro_fft::FftBackend for tenferro_cpu::engine::CpuEngine
 pub fn tenferro_cpu::engine::CpuEngine::execute_fft(&mut self, &tenferro_tensor::types::Tensor, &tenferro_fft::FftPlanSpec, tenferro_fft::FftExecutionCache<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_cpu::engine::CpuEngine::execute_fft_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &tenferro_fft::FftPlanSpec, tenferro_fft::FftExecutionCache<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_cpu::engine::CpuEngine::validate_fft_read_input(&self, &'static str, &tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<()>
-pub trait tenferro_fft::TensorFftExt
-pub fn tenferro_fft::TensorFftExt::fft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::TensorFftExt::ifft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::TensorFftExt::irfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::TensorFftExt::rfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-impl tenferro_fft::TensorFftExt for tenferro_tensor::types::Tensor
-pub fn tenferro_tensor::types::Tensor::fft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::Tensor::ifft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::Tensor::irfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::Tensor::rfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_fft::TensorReadFftExt
-pub fn tenferro_fft::TensorReadFftExt::fft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::TensorReadFftExt::ifft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::TensorReadFftExt::irfft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_fft::TensorReadFftExt::rfft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-impl tenferro_fft::TensorReadFftExt for tenferro_tensor::types::TensorRead<'_>
-pub fn tenferro_tensor::types::TensorRead<'_>::fft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::TensorRead<'_>::ifft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::TensorRead<'_>::irfft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_tensor::types::TensorRead<'_>::rfft_read(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
-pub trait tenferro_fft::TraceContextFftExt
-pub fn tenferro_fft::TraceContextFftExt::fft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TraceContextFftExt::fftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TraceContextFftExt::ifft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TraceContextFftExt::ifftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TraceContextFftExt::irfft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TraceContextFftExt::irfftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TraceContextFftExt::rfft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TraceContextFftExt::rfftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-impl tenferro_fft::TraceContextFftExt for tenferro_runtime::trace::TraceContext
-pub fn tenferro_runtime::trace::TraceContext::fft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::fftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::ifft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::ifftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::irfft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::irfftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::rfft(&self, tenferro_runtime::trace::TraceValue, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::trace::TraceContext::rfftn(&self, tenferro_runtime::trace::TraceValue, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub trait tenferro_fft::TracedTensorFftExt
-pub fn tenferro_fft::TracedTensorFftExt::fft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TracedTensorFftExt::fftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TracedTensorFftExt::ifft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TracedTensorFftExt::ifftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TracedTensorFftExt::irfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TracedTensorFftExt::irfftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TracedTensorFftExt::rfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_fft::TracedTensorFftExt::rfftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-impl tenferro_fft::TracedTensorFftExt for tenferro_runtime::traced::TracedTensor
-pub fn tenferro_runtime::traced::TracedTensor::fft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::fftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::ifft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::ifftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::irfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::irfftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::rfft(&self, core::option::Option<usize>, isize, tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::rfftn(&self, core::option::Option<&[usize]>, &[isize], tenferro_fft::FftNorm) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub trait tenferro_fft::FftOps: tenferro_tensor::view::AsView
+pub fn tenferro_fft::FftOps::fft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::fft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::fftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::fftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::ifft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::ifft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::ifftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::ifftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::irfft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::irfft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::irfftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::irfftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::rfft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::rfft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::rfftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn tenferro_fft::FftOps::rfftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_fft::FftOps for X
+pub fn X::fft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::fft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::fftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::fftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::ifft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::ifft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::ifftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::ifftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::irfft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::irfft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::irfftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::irfftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Real> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::rfft(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::rfft_with(&self, &tenferro_fft::FftOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::rfftn(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub fn X::rfftn_with(&self, &tenferro_fft::FftnOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_fft::FftRepr>::Complex> where Self::Repr: tenferro_fft::FftRepr
+pub trait tenferro_fft::FftRepr: tenferro_tensor::view::Repr
+pub type tenferro_fft::FftRepr::Complex
+pub type tenferro_fft::FftRepr::Real
+pub fn tenferro_fft::FftRepr::wrap_complex(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Complex>
+pub fn tenferro_fft::FftRepr::wrap_real(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Real>
+impl tenferro_fft::FftRepr for tenferro_tensor::view::Erased
+pub type tenferro_tensor::view::Erased::Complex = tenferro_tensor::types::Tensor
+pub type tenferro_tensor::view::Erased::Real = tenferro_tensor::types::Tensor
+pub fn tenferro_tensor::view::Erased::wrap_complex(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_tensor::view::Erased::wrap_real(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl<T: tenferro_fft::FftScalar> tenferro_fft::FftRepr for tenferro_tensor::view::Typed<T>
+pub type tenferro_tensor::view::Typed<T>::Complex = tenferro_tensor::types::TypedTensor<<T as tenferro_fft::FftScalar>::Complex>
+pub type tenferro_tensor::view::Typed<T>::Real = tenferro_tensor::types::TypedTensor<<T as tenferro_tensor::types::TensorScalar>::Real>
+pub fn tenferro_tensor::view::Typed<T>::wrap_complex(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Complex>
+pub fn tenferro_tensor::view::Typed<T>::wrap_real(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Real>
+pub trait tenferro_fft::FftScalar: tenferro_tensor::types::TensorScalar + tenferro_fft::api::repr::sealed::Sealed
+pub type tenferro_fft::FftScalar::Complex: tenferro_tensor::types::TensorScalar
+impl tenferro_fft::FftScalar for f32
+pub type f32::Complex = num_complex::Complex<f32>
+impl tenferro_fft::FftScalar for f64
+pub type f64::Complex = num_complex::Complex<f64>
+impl tenferro_fft::FftScalar for num_complex::Complex32
+pub type num_complex::Complex32::Complex = num_complex::Complex<f32>
+impl tenferro_fft::FftScalar for num_complex::Complex64
+pub type num_complex::Complex64::Complex = num_complex::Complex<f64>
+pub trait tenferro_fft::TracedFftOps
+pub fn tenferro_fft::TracedFftOps::fft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::fft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::fftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::fftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::ifft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::ifft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::ifftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::ifftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::irfft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::irfft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::irfftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::irfftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::rfft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::rfft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::rfftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_fft::TracedFftOps::rfftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_fft::TracedFftOps for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::fft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::fft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::fftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::fftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::ifft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::ifft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::ifftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::ifftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::irfft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::irfft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::irfftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::irfftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::rfft(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::rfft_with(&self, &tenferro_fft::FftOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::rfftn(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::rfftn_with(&self, &tenferro_fft::FftnOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub fn tenferro_fft::extension_module<B: tenferro_tensor::backend::Engine + 'static>(tenferro_runtime::runtime::identity::EngineId) -> core::result::Result<alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>, tenferro_runtime::runtime::error::RuntimeConfigError> where FftOp: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
 pub const fn tenferro_fft::fft_plan_cache_selector() -> tenferro_runtime::extension_cache::ExtensionCacheSelector
 pub fn tenferro_fft::semantic_ad_rules() -> core::result::Result<tenferro_ad::semantic_extension::SemanticExtensionRuleSet, tenferro_ad::semantic_extension::SemanticExtensionRegistryError>

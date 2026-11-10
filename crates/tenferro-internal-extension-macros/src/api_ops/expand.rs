@@ -253,6 +253,8 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
         ),
         None => (quote!(), quote!()),
     };
+    let extra_decls = &g.extra_decls;
+    let extra_impls = &g.extra_impls;
     Ok(quote! {
         #cfg_attr
         #cfg_doc_attr
@@ -260,10 +262,12 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
         #[doc = #doc_b]
         #trait_def {
             #(#decls)*
+            #extra_decls
         }
         #cfg_attr
         #impl_def {
             #(#impls)*
+            #extra_impls
         }
     })
 }

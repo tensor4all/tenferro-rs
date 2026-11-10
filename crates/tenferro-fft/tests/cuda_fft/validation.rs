@@ -117,17 +117,17 @@ fn cuda_validation_rejects_host_foreign_integer_bool_and_invalid_lengths() {
     let integer = Tensor::from_vec_col_major(vec![4], vec![1_i32, 2, 3, 4]).unwrap();
     assert_unsupported_dtype(
         Operation::Fft.execute_cuda(&mut cuda, &integer, None, -1, FftNorm::Backward),
-        "TensorFftExt::fft",
+        "fft",
     );
     let boolean = Tensor::from_vec_col_major(vec![4], vec![true, false, true, false]).unwrap();
     assert_unsupported_dtype(
         Operation::Fft.execute_cuda(&mut cuda, &boolean, None, -1, FftNorm::Backward),
-        "TensorFftExt::fft",
+        "fft",
     );
 
     assert_validation_error(
         Operation::Fft.execute_cuda(&mut cuda, &host, None, 4, FftNorm::Backward),
-        "TensorFftExt::fft",
+        "fft",
         ValidationKind::AxisOutOfBounds,
         |source| {
             assert!(matches!(
@@ -138,7 +138,7 @@ fn cuda_validation_rejects_host_foreign_integer_bool_and_invalid_lengths() {
     );
     assert_validation_error(
         Operation::Fft.execute_cuda(&mut cuda, &host, Some(0), -1, FftNorm::Backward),
-        "TensorFftExt::fft",
+        "fft",
         ValidationKind::InvalidArgument,
         |source| {
             assert!(matches!(

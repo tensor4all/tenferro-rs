@@ -1,7 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt};
+use tenferro_fft::FftOptions;
+use tenferro_fft::{FftExecutor, FftOps};
 use tenferro_tensor::Tensor;
 
 const CASES: &[(usize, usize)] = &[(256, 1), (1024, 16)];
@@ -38,7 +39,7 @@ fn bench_c64_fft_plan_cache(c: &mut Criterion) {
             bench.iter(|| {
                 let output = {
                     let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-                    black_box(&input).fft(None, 0, FftNorm::Backward, session)
+                    black_box(&input).fft_with(&FftOptions::default().axis(0), session)
                 };
                 black_box(output.unwrap());
             });
@@ -49,7 +50,7 @@ fn bench_c64_fft_plan_cache(c: &mut Criterion) {
             let mut executor = FftExecutor::default();
             {
                 let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-                executor.fft(&input, None, 0, FftNorm::Backward, session)
+                executor.fft_with(&input, &FftOptions::default().axis(0), session)
             }
             .unwrap();
             assert_eq!(executor.cache_stats().entries, 1);
@@ -57,7 +58,7 @@ fn bench_c64_fft_plan_cache(c: &mut Criterion) {
             bench.iter(|| {
                 let output = {
                     let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-                    executor.fft(black_box(&input), None, 0, FftNorm::Backward, session)
+                    executor.fft_with(black_box(&input), &FftOptions::default().axis(0), session)
                 };
                 black_box(output.unwrap());
             });
@@ -78,7 +79,7 @@ fn bench_f64_rfft_plan_cache(c: &mut Criterion) {
             bench.iter(|| {
                 let output = {
                     let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-                    black_box(&input).rfft(None, 0, FftNorm::Backward, session)
+                    black_box(&input).rfft_with(&FftOptions::default().axis(0), session)
                 };
                 black_box(output.unwrap());
             });
@@ -89,7 +90,7 @@ fn bench_f64_rfft_plan_cache(c: &mut Criterion) {
             let mut executor = FftExecutor::default();
             {
                 let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-                executor.rfft(&input, None, 0, FftNorm::Backward, session)
+                executor.rfft_with(&input, &FftOptions::default().axis(0), session)
             }
             .unwrap();
             assert_eq!(executor.cache_stats().entries, 1);
@@ -97,7 +98,7 @@ fn bench_f64_rfft_plan_cache(c: &mut Criterion) {
             bench.iter(|| {
                 let output = {
                     let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-                    executor.rfft(black_box(&input), None, 0, FftNorm::Backward, session)
+                    executor.rfft_with(black_box(&input), &FftOptions::default().axis(0), session)
                 };
                 black_box(output.unwrap());
             });

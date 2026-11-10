@@ -927,7 +927,7 @@ assert_eq!(
         // snippet-start:tenferro_fft_traced
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftNorm, TracedTensorFftExt};
+use tenferro_fft::TracedFftOps;
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn cpu_runtime_with_fft(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
@@ -951,7 +951,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
     )
     .unwrap();
-    let y = x.fft(None, -1, FftNorm::Backward)?;
+    let y = x.fft()?;
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;
@@ -985,20 +985,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // snippet-start:tenferro_fft_22
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
+use tenferro_fft::FftOps;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 let mut engine = CpuEngine::serial();
 let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-let full = x.fft(None, -1, FftNorm::Backward, &mut engine)?;
-let one_sided = x.rfft(None, -1, FftNorm::Backward, &mut engine)?;
+let full = x.fft(&mut engine)?;
+let one_sided = x.rfft(&mut engine)?;
 assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 assert_eq!(one_sided.shape(), &[3]);
 
 let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
 let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
 let read = TensorRead::from_view(TensorView::F64(view));
-let read_full = read.fft_read(None, -1, FftNorm::Backward, &mut engine)?;
+let read_full = read.fft(&mut engine)?;
 assert_eq!(
     read_full.as_slice::<Complex64>()?[0],
     Complex64::new(10.0, 0.0),

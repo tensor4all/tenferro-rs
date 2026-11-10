@@ -3,8 +3,58 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{EagerFftInPlaceError, EagerSessionFftExt, EagerTensorFftExt, FftNorm};
+use tenferro_fft::{EagerFftInPlaceError, EagerFftOps, FftNorm, FftOptions};
 use tenferro_tensor::Tensor;
+
+/// Test-local spelling: runs `sess.fft_in_place(x, &opts)` /
+/// `sess.ifft_in_place(x, &opts)` in a session on `engine`, so the assertions
+/// below keep their chained shape.
+trait InPlaceViaSession: Sized {
+    fn fft_in_place(
+        self,
+        engine: &mut CpuEngine,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor, EagerFftInPlaceError>;
+    fn ifft_in_place(
+        self,
+        engine: &mut CpuEngine,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor, EagerFftInPlaceError>;
+}
+
+impl InPlaceViaSession for EagerTensor {
+    fn fft_in_place(
+        self,
+        engine: &mut CpuEngine,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor, EagerFftInPlaceError> {
+        let runtime = self.runtime().clone();
+        let opts = FftOptions::default().axis(axis).norm(norm);
+        runtime
+            .with_eager_session(engine, |s| {
+                Ok::<_, tenferro_ad::Error>(s.fft_in_place(self, &opts))
+            })
+            .expect("opening an eager session")
+    }
+
+    fn ifft_in_place(
+        self,
+        engine: &mut CpuEngine,
+        axis: isize,
+        norm: FftNorm,
+    ) -> Result<EagerTensor, EagerFftInPlaceError> {
+        let runtime = self.runtime().clone();
+        let opts = FftOptions::default().axis(axis).norm(norm);
+        runtime
+            .with_eager_session(engine, |s| {
+                Ok::<_, tenferro_ad::Error>(s.ifft_in_place(self, &opts))
+            })
+            .expect("opening an eager session")
+    }
+}
 
 fn input(runtime: &std::sync::Arc<EagerRuntime>) -> EagerTensor {
     EagerTensor::from_tensor_in(
@@ -43,7 +93,9 @@ fn consuming_fft_preserves_allocation_and_matches_borrowed_fft_on_every_axis() {
                 .unwrap();
                 let x = EagerTensor::from_tensor_in(source, runtime.clone()).unwrap();
                 let expected = runtime
-                    .with_eager_session(&mut engine, |s| s.fft(&x, None, axis, norm))
+                    .with_eager_session(&mut engine, |s| {
+                        s.fft_with(&x, &FftOptions::default().axis(axis).norm(norm))
+                    })
                     .unwrap();
                 let pointer = x.value().unwrap().as_slice::<Complex64>().unwrap().as_ptr();
                 let y = x.fft_in_place(&mut engine, axis, norm).unwrap();
@@ -56,7 +108,9 @@ fn consuming_fft_preserves_allocation_and_matches_borrowed_fft_on_every_axis() {
                     expected.value().unwrap().as_slice::<Complex64>().unwrap()
                 );
                 let expected = runtime
-                    .with_eager_session(&mut engine, |s| s.ifft(&y, None, axis, norm))
+                    .with_eager_session(&mut engine, |s| {
+                        s.ifft_with(&y, &FftOptions::default().axis(axis).norm(norm))
+                    })
                     .unwrap();
                 let z = y.ifft_in_place(&mut engine, axis, norm).unwrap();
                 assert_eq!(
@@ -192,7 +246,8 @@ fn consuming_fft_rejects_noncompact_layout_before_ownership_extraction() {
     );
     assert_eq!(
         view.runtime()
-            .with_eager_session(&mut engine, |s| s.fft(&view, None, 0, FftNorm::Backward))
+            .with_eager_session(&mut engine, |s| s
+                .fft_with(&view, &FftOptions::default().axis(0)))
             .unwrap()
             .shape(),
         &[3, 2]
@@ -230,7 +285,9 @@ fn consuming_fft_preserves_values_needed_by_later_backward() {
     let runtime = EagerRuntime::new().unwrap();
     let input = input(&runtime);
     let coefficient = runtime
-        .with_eager_session(&mut engine, |s| s.fft(&input, None, 0, FftNorm::Backward))
+        .with_eager_session(&mut engine, |s| {
+            s.fft_with(&input, &FftOptions::default().axis(0))
+        })
         .unwrap();
     let variable = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2]).unwrap(),

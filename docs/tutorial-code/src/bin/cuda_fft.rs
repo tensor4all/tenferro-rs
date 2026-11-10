@@ -1,7 +1,8 @@
 //! Explicit CUDA cuFFT execution with host/device transfers at visible boundaries.
 
 use num_complex::Complex32;
-use tenferro_fft::{FftNorm, TensorFftExt};
+use tenferro_fft::FftOps;
+use tenferro_fft::FftOptions;
 use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
 use tenferro_tensor::{DType, MemoryKind, Tensor, TensorRead};
 
@@ -60,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("uploaded tensor has no CUDA allocation domain")?;
 
     // FFT execution consumes the already uploaded tensor; it does not transfer it.
-    let spectrum = gpu_input.rfft(None, 0, FftNorm::Backward, &mut engine)?;
+    let spectrum = gpu_input.rfft_with(&FftOptions::default().axis(0), &mut engine)?;
 
     // Check residency before crossing the explicit device-to-host boundary.
     let spectrum_read = TensorRead::from_tensor(&spectrum);

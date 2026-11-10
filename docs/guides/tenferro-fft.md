@@ -106,7 +106,8 @@ example is the source of truth for this guide:
 //! Explicit CUDA cuFFT execution with host/device transfers at visible boundaries.
 
 use num_complex::Complex32;
-use tenferro_fft::{FftNorm, TensorFftExt};
+use tenferro_fft::FftOps;
+use tenferro_fft::FftOptions;
 use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
 use tenferro_tensor::{DType, MemoryKind, Tensor, TensorRead};
 
@@ -165,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("uploaded tensor has no CUDA allocation domain")?;
 
     // FFT execution consumes the already uploaded tensor; it does not transfer it.
-    let spectrum = gpu_input.rfft(None, 0, FftNorm::Backward, &mut engine)?;
+    let spectrum = gpu_input.rfft_with(&FftOptions::default().axis(0), &mut engine)?;
 
     // Check residency before crossing the explicit device-to-host boundary.
     let spectrum_read = TensorRead::from_tensor(&spectrum);
@@ -265,20 +266,20 @@ names.
 ```rust
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
+use tenferro_fft::FftOps;
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 let mut engine = CpuEngine::serial();
 let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-let full = x.fft(None, -1, FftNorm::Backward, &mut engine)?;
-let one_sided = x.rfft(None, -1, FftNorm::Backward, &mut engine)?;
+let full = x.fft(&mut engine)?;
+let one_sided = x.rfft(&mut engine)?;
 assert_eq!(full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 assert_eq!(one_sided.shape(), &[3]);
 
 let data = [1.0_f64, 99.0, 2.0, 99.0, 3.0, 99.0, 4.0];
 let view = TypedTensorView::from_slice([4], [2], 0, &data)?;
 let read = TensorRead::from_view(TensorView::F64(view));
-let read_full = read.fft_read(None, -1, FftNorm::Backward, &mut engine)?;
+let read_full = read.fft(&mut engine)?;
 assert_eq!(
     read_full.as_slice::<Complex64>()?[0],
     Complex64::new(10.0, 0.0),
@@ -329,7 +330,7 @@ The `EagerTensorFftExt` rustdoc includes executable consuming-FFT examples.
 ```rust
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftNorm, TracedTensorFftExt};
+use tenferro_fft::TracedFftOps;
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 
 fn cpu_runtime_with_fft(engine: &CpuEngine) -> Result<Runtime, Box<dyn std::error::Error>> {
@@ -353,7 +354,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ],
     )
     .unwrap();
-    let y = x.fft(None, -1, FftNorm::Backward)?;
+    let y = x.fft()?;
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;

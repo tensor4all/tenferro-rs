@@ -42,6 +42,11 @@ pub(crate) struct GenLayer {
     pub forward: Path,
     /// Optional `cfg` predicate gating the generated trait and impl.
     pub cfg: Option<TokenStream>,
+    /// Hand-written trait items appended to the generated trait (an
+    /// exception-table entry, e.g. a consuming in-place method).
+    pub extra_decls: TokenStream,
+    /// Hand-written impl items matching `extra_decls`.
+    pub extra_impls: TokenStream,
 }
 
 pub(crate) enum LayerKind {

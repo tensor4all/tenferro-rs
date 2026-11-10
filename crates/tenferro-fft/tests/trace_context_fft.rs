@@ -1,11 +1,10 @@
-//! The `TraceContext` entry point of the FFT extension family.
+//! A traced FFT records exactly one extension node in its `TraceContext`.
 //!
-//! `TraceContextFftExt` records the same semantic operations as the
-//! `TracedTensorFftExt` method-chaining surface, so the two paths must produce
-//! the same program for the same input.
+//! The former `TraceContext` receiver of FFTs was removed (#2552 decision 4);
+//! `TracedFftOps` on a `TracedTensor` is the only traced spelling.
 
 use num_complex::Complex64;
-use tenferro_fft::{FftNorm, TraceContextFftExt, TracedTensorFftExt};
+use tenferro_fft::{FftnOptions, TracedFftOps};
 use tenferro_runtime::{TraceContext, TracedTensor};
 
 fn trace_with_spectrum() -> (TraceContext, TracedTensor) {
@@ -24,54 +23,20 @@ fn trace_with_spectrum() -> (TraceContext, TracedTensor) {
     (trace, x)
 }
 
-fn fingerprint(context: &TraceContext, output: &TracedTensor) -> Vec<u8> {
-    context
-        .finish(&[output.trace_value()])
-        .unwrap()
-        .program()
-        .semantic_fingerprint()
-        .as_bytes()
-        .to_vec()
-}
-
 #[test]
-fn context_trait_records_exactly_one_transform() {
+fn a_traced_one_axis_transform_records_exactly_one_node() {
     let (trace, x) = trace_with_spectrum();
-    let spectrum = trace
-        .fft(x.trace_value(), None, -1, FftNorm::Backward)
-        .unwrap();
+    let spectrum = x.fft().unwrap();
     let graph = trace.finish(&[spectrum.trace_value()]).unwrap();
     assert_eq!(graph.program().operations().count(), 1);
 }
 
 #[test]
-fn context_and_traced_tensor_agree_on_a_one_axis_transform() {
+fn a_traced_n_dimensional_transform_records_exactly_one_node() {
     let (trace, x) = trace_with_spectrum();
-    let context_path = {
-        let spectrum = trace
-            .fft(x.trace_value(), None, -1, FftNorm::Backward)
-            .unwrap();
-        fingerprint(&trace, &spectrum)
-    };
-    let traced_path = {
-        let spectrum = x.fft(None, -1, FftNorm::Backward).unwrap();
-        fingerprint(&trace, &spectrum)
-    };
-    assert_eq!(context_path, traced_path);
-}
-
-#[test]
-fn context_and_traced_tensor_agree_on_a_n_dimensional_transform() {
-    let (trace, x) = trace_with_spectrum();
-    let context_path = {
-        let spectrum = trace
-            .fftn(x.trace_value(), None, &[0, 1], FftNorm::Backward)
-            .unwrap();
-        fingerprint(&trace, &spectrum)
-    };
-    let traced_path = {
-        let spectrum = x.fftn(None, &[0, 1], FftNorm::Backward).unwrap();
-        fingerprint(&trace, &spectrum)
-    };
-    assert_eq!(context_path, traced_path);
+    let spectrum = x
+        .fftn_with(&FftnOptions::default().axes(vec![0, 1]))
+        .unwrap();
+    let graph = trace.finish(&[spectrum.trace_value()]).unwrap();
+    assert_eq!(graph.program().operations().count(), 1);
 }

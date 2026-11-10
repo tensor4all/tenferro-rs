@@ -136,7 +136,7 @@ impl<'a> FftExecutionCache<'a> {
 ///
 /// This is a backend SPI: third-party backend implementers implement this
 /// trait on their execution sessions to provide FFT capability. The concrete
-/// [`TensorFftExt`](crate::TensorFftExt)/[`TensorReadFftExt`](crate::TensorReadFftExt) methods and [`FftExecutor`](crate::FftExecutor) take an
+/// [`FftOps`](crate::FftOps)/[`FftOps`](crate::FftOps) methods and [`FftExecutor`](crate::FftExecutor) take an
 /// erased `&mut dyn Engine` and dispatch **internally** to the
 /// built-in CPU/CUDA/WebGPU execution sessions; a session without this
 /// capability returns a typed `Error::Unsupported` instead of being accepted
@@ -193,12 +193,12 @@ pub trait FftBackend: Engine {
     /// ```
     /// use num_complex::Complex64;
     /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_fft::{FftNorm, TensorReadFftExt};
+    /// use tenferro_fft::{FftOps, FftOptions};
     /// use tenferro_tensor::{Tensor, TensorRead};
     /// let input = Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2])?;
     /// let mut engine = CpuEngine::serial();
     /// let output =
-    ///     TensorRead::Tensor(&input).fft_read(None, 0, FftNorm::Backward, &mut engine)?;
+    ///     TensorRead::Tensor(&input).fft_with(&FftOptions::default().axis(0), &mut engine)?;
     /// assert_eq!(output.as_slice::<Complex64>()?, &[Complex64::new(2., 0.), Complex64::new(0., 0.)]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```

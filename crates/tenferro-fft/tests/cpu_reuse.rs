@@ -1,6 +1,7 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
+use tenferro_fft::FftOptions;
+use tenferro_fft::{FftNorm, FftOps};
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 #[test]
@@ -19,21 +20,21 @@ fn compact_real_reads_roundtrip_on_all_axes_and_thread_counts() {
                     for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {
                         {
  let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-                            let spectrum = read.rfft_read(None, axis as isize, norm, session).unwrap();
+                            let spectrum = read.rfft_with(&FftOptions::default().axis(axis as isize).norm(norm), session).unwrap();
                             let dims = spectrum.shape();
                             let spectrum_view = TensorRead::from_view(TensorView::$complex_variant(
                                 TypedTensorView::from_slice(dims,
                                     [1, dims[0] as isize, (dims[0] * dims[1]) as isize],
                                     0, spectrum.as_slice::<$complex>().unwrap()).unwrap()));
-                            let restored = spectrum_view.irfft_read(Some(length), axis as isize, norm, session).unwrap();
+                            let restored = spectrum_view.irfft_with(&FftOptions::default().n(Some(length)).axis(axis as isize).norm(norm), session).unwrap();
                             let error = restored.as_slice::<$real>().unwrap().iter().zip(&data)
                                 .map(|(a, b)| (*a - *b).abs()).fold(0.0 as $real, <$real>::max);
                             assert!(error < $tolerance, "real roundtrip threads={threads} axis={axis} norm={norm:?} max_error={error}");
-                            let full = read.fft_read(None, axis as isize, norm, session).unwrap();
+                            let full = read.fft_with(&FftOptions::default().axis(axis as isize).norm(norm), session).unwrap();
                             let full_view = TensorRead::from_view(TensorView::$complex_variant(
                                 TypedTensorView::from_slice(shape, [1, 64, 2048], 0,
                                     full.as_slice::<$complex>().unwrap()).unwrap()));
-                            let restored = full_view.ifft_read(None, axis as isize, norm, session).unwrap();
+                            let restored = full_view.ifft_with(&FftOptions::default().axis(axis as isize).norm(norm), session).unwrap();
                             let error = restored.as_slice::<$complex>().unwrap().iter().zip(&data)
                                 .map(|(a, b)| (a.re - *b).abs().max(a.im.abs()))
                                 .fold(0.0 as $real, <$real>::max);
@@ -55,7 +56,7 @@ fn explicit_reclaim_to_another_backend_does_not_also_return_to_origin() {
     let mut destination = CpuEngine::serial();
     let output = {
         let s: &mut dyn tenferro_tensor::Engine = &mut origin;
-        input.fft(None, 0, FftNorm::Backward, s)
+        input.fft_with(&FftOptions::default().axis(0), s)
     }
     .unwrap();
     let pointer = output.as_slice::<Complex64>().unwrap().as_ptr();
@@ -71,7 +72,7 @@ fn explicit_reclaim_to_another_backend_does_not_also_return_to_origin() {
     assert_eq!(destination.buffer_pool_stats().buffers, 1);
     let reused = {
         let s: &mut dyn tenferro_tensor::Engine = &mut destination;
-        input.fft(None, 0, FftNorm::Backward, s)
+        input.fft_with(&FftOptions::default().axis(0), s)
     }
     .unwrap();
     assert_eq!(reused.as_slice::<Complex64>().unwrap().as_ptr(), pointer);
@@ -89,15 +90,21 @@ fn output_drop_recycles_while_session_remains_active() {
     let mut backend = CpuEngine::serial();
     {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-        let first = input.fft(None, 0, FftNorm::Backward, session).unwrap();
+        let first = input
+            .fft_with(&FftOptions::default().axis(0), session)
+            .unwrap();
         let first_pointer = first.as_slice::<Complex64>().unwrap().as_ptr();
-        let second = input.fft(None, 0, FftNorm::Backward, session).unwrap();
+        let second = input
+            .fft_with(&FftOptions::default().axis(0), session)
+            .unwrap();
         assert_ne!(
             second.as_slice::<Complex64>().unwrap().as_ptr(),
             first_pointer
         );
         drop(first);
-        let third = input.fft(None, 0, FftNorm::Backward, session).unwrap();
+        let third = input
+            .fft_with(&FftOptions::default().axis(0), session)
+            .unwrap();
         assert_eq!(
             third.as_slice::<Complex64>().unwrap().as_ptr(),
             first_pointer
@@ -124,12 +131,12 @@ fn uneven_parallel_lane_partition_matches_serial() {
     let mut parallel = CpuEngine::new(tenferro_cpu::Pool::builder().threads(8).build().unwrap());
     let expected = {
         let s: &mut dyn tenferro_tensor::Engine = &mut serial;
-        input.fft(None, 2, FftNorm::Backward, s)
+        input.fft_with(&FftOptions::default().axis(2), s)
     }
     .unwrap();
     let actual = {
         let s: &mut dyn tenferro_tensor::Engine = &mut parallel;
-        input.fft(None, 2, FftNorm::Backward, s)
+        input.fft_with(&FftOptions::default().axis(2), s)
     }
     .unwrap();
     assert_eq!(
@@ -158,12 +165,18 @@ fn parallel_lanes_match_serial_on_every_axis_with_padding_and_truncation() {
             for norm in [FftNorm::Backward, FftNorm::Forward, FftNorm::Ortho] {
                 let expected = {
                     let s: &mut dyn tenferro_tensor::Engine = &mut serial;
-                    input.fft(n, axis as isize, norm, s)
+                    input.fft_with(
+                        &FftOptions::default().n(n).axis(axis as isize).norm(norm),
+                        s,
+                    )
                 }
                 .unwrap();
                 let actual = {
                     let s: &mut dyn tenferro_tensor::Engine = &mut parallel;
-                    input.fft(n, axis as isize, norm, s)
+                    input.fft_with(
+                        &FftOptions::default().n(n).axis(axis as isize).norm(norm),
+                        s,
+                    )
                 }
                 .unwrap();
                 assert_eq!(
@@ -173,12 +186,18 @@ fn parallel_lanes_match_serial_on_every_axis_with_padding_and_truncation() {
                 );
                 let expected = {
                     let s: &mut dyn tenferro_tensor::Engine = &mut serial;
-                    input.ifft(n, axis as isize, norm, s)
+                    input.ifft_with(
+                        &FftOptions::default().n(n).axis(axis as isize).norm(norm),
+                        s,
+                    )
                 }
                 .unwrap();
                 let actual = {
                     let s: &mut dyn tenferro_tensor::Engine = &mut parallel;
-                    input.ifft(n, axis as isize, norm, s)
+                    input.ifft_with(
+                        &FftOptions::default().n(n).axis(axis as isize).norm(norm),
+                        s,
+                    )
                 }
                 .unwrap();
                 assert_eq!(

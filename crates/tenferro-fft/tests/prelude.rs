@@ -8,7 +8,7 @@ fn prelude_calls_concrete_fft_operation() {
     let mut backend = CpuEngine::serial();
     let spectrum = {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-        input.fft(None, -1, FftNorm::Backward, session)
+        input.fft(session)
     }
     .unwrap();
     assert_eq!(
@@ -28,9 +28,7 @@ fn prelude_calls_eager_fft_operation() {
     )
     .unwrap();
     let spectrum = runtime
-        .with_eager_session(&mut engine, |session| {
-            session.rfft(&input, None, -1, FftNorm::Backward)
-        })
+        .with_eager_session(&mut engine, |session| session.rfft(&input))
         .unwrap();
     assert_eq!(spectrum.shape(), &[3]);
 }

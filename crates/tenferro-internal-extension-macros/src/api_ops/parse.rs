@@ -133,6 +133,8 @@ fn parse_layer(input: ParseStream<'_>) -> syn::Result<Layer> {
     let mut types = None;
     let mut forward = None;
     let mut cfg = None;
+    let mut extra_decls = None;
+    let mut extra_impls = None;
     let mut any_other = false;
 
     while !input.is_empty() {
@@ -144,6 +146,19 @@ fn parse_layer(input: ParseStream<'_>) -> syn::Result<Layer> {
             continue;
         }
         any_other = true;
+        if k == "extra_decls" || k == "extra_impls" {
+            let body;
+            braced!(body in input);
+            let ts: TokenStream = body.parse()?;
+            let slot = if k == "extra_decls" {
+                &mut extra_decls
+            } else {
+                &mut extra_impls
+            };
+            set(slot, &key, ts)?;
+            let _ = input.parse::<Option<Token![;]>>()?;
+            continue;
+        }
         if k == "types" {
             let body;
             braced!(body in input);
@@ -240,6 +255,8 @@ fn parse_layer(input: ParseStream<'_>) -> syn::Result<Layer> {
             types: types.unwrap_or_default(),
             forward: need(forward, &name, "forward")?,
             cfg,
+            extra_decls: extra_decls.unwrap_or_default(),
+            extra_impls: extra_impls.unwrap_or_default(),
         })),
         name,
     })

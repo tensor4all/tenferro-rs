@@ -420,6 +420,15 @@ mod gated {
             types { V = u32 }
             forward: self::forward_on;
             cfg: all();
+            extra_decls {
+                /// A hand-written item (exception-table entry).
+                fn pong(self) -> u32;
+            }
+            extra_impls {
+                fn pong(self) -> u32 {
+                    9
+                }
+            }
         }
         layer off {
             trait_doc: "Disabled layer; its forward module does not exist.";
@@ -457,6 +466,8 @@ fn cfg_key_gates_generated_trait_and_impl() {
     let mut s = gated::On;
     assert_eq!(s.ping(()).unwrap(), 7);
     assert_eq!(s.ping_with((), &gated::PingOptions).unwrap(), 7);
+    // `extra_decls` / `extra_impls` are appended to the generated trait.
+    assert_eq!(gated::On.pong(), 9);
     // Metadata is unaffected by `cfg`.
     assert_eq!(gated::API_LAYERS, &[("on", "OnOps"), ("off", "OffOps")]);
     assert_eq!(gated::API_OPS[0].layers, ["on", "off"]);
