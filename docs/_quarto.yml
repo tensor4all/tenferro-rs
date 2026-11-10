@@ -4,6 +4,7 @@ project:
   resources:
     - llms.txt
     - performance/rayon-install-probe/*.txt
+    - design/api-grammar/*.html
   render:
     - index.md
     - storage-ownership.md
@@ -100,6 +101,7 @@ website:
           - section: "Design Notes"
             contents:
               - design/index.md
+              - design/api-grammar.md
               - design/api-and-convention-freeze.md
               - design/supported-ops.md
               - design/tensor.md
