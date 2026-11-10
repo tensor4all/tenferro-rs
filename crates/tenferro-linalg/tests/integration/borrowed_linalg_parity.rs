@@ -365,7 +365,7 @@ fn borrowed_rank_revealing_qr_matches_the_owned_call() {
     let expected = transposed_pair(&base, rows, cols);
 
     for (provider, mut host) in providers() {
-        let options = RankRevealingQrOptions::default().rtol(1.0e-12);
+        let options = RankRevealingQrOptions::default().with_rtol(1.0e-12);
         {
             let owned = expected.rank_revealing_qr(options, &mut host).unwrap();
             let view = base.as_view().transpose_view([1, 0]).unwrap();

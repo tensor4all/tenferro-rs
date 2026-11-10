@@ -6,6 +6,8 @@ mod backend_errors;
 mod borrowed_exec_entries;
 #[path = "integration/borrowed_linalg_parity.rs"]
 mod borrowed_linalg_parity;
+#[path = "integration/call_grammar.rs"]
+mod call_grammar;
 #[path = "integration/concrete_surface.rs"]
 mod concrete_surface;
 #[path = "integration/cpu_linalg_source_contract.rs"]

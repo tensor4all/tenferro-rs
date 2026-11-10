@@ -515,7 +515,7 @@ pub trait TensorLinalgExt {
     /// # let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])?;
     /// # let mut host = tenferro_cpu::CpuEngine::serial();
     /// let result = {
-    ///     a.rank_revealing_qr(RankRevealingQrOptions::default().rtol(1e-12), &mut host)
+    ///     a.rank_revealing_qr(RankRevealingQrOptions::default().with_rtol(1e-12), &mut host)
     /// }?;
     /// assert_eq!(result.column_permutation.shape(), &[2]);
     /// assert_eq!(result.rank.shape(), &[] as &[usize]);

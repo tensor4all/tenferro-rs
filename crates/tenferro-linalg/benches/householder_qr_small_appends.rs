@@ -531,7 +531,7 @@ fn pinned_cpu_frequency_mhz() -> Option<f64> {
 }
 
 fn raw_options() -> QrOptions {
-    QrOptions::default().gauge(QrGauge::Raw)
+    QrOptions::default().with_gauge(QrGauge::Raw)
 }
 
 fn to_string(error: impl std::fmt::Display) -> String {

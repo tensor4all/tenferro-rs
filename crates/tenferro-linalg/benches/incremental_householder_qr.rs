@@ -330,7 +330,7 @@ fn run_session_outputs<B: BenchSession>(
     let reference = session
         .qr_with_options(
             accumulated,
-            QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+            QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
         )
         .map_err(|error| error.to_string())?;
     let reference_r = reference
@@ -479,7 +479,7 @@ fn canonical_factors<B: BenchSession>(
     session: &mut B,
     prepared: Prepared,
 ) -> Result<(Tensor, Tensor), String> {
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     match prepared {
         Prepared::Compact(state) => Ok((
             state

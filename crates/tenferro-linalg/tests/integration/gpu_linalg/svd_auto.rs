@@ -267,11 +267,11 @@ fn cuda_svd_auto_keeps_the_accurate_driver_across_the_1024_boundary() {
         let input = dense_input(DType::F64, &[order, order], 0x2182_1000 + order as u64);
         let device = upload(&gpu, &input);
         let auto = with_cuda_linalg_session(&mut gpu, |session| {
-            session.svd_with_options(&device, SvdOptions::default().driver(SvdDriver::Auto))
+            session.svd_with_options(&device, SvdOptions::default().with_driver(SvdDriver::Auto))
         })
         .unwrap();
         let explicit = with_cuda_linalg_session(&mut gpu, |session| {
-            session.svd_with_options(&device, SvdOptions::default().driver(expected))
+            session.svd_with_options(&device, SvdOptions::default().with_driver(expected))
         })
         .unwrap();
         for (actual, expected) in auto.iter().zip(&explicit) {
@@ -459,7 +459,7 @@ fn cuda_svd_xgesvdp_rejects_unreliable_single_precision_factorization() {
     let mut gpu = gpu_backend();
     let device = upload(&gpu, &input);
     let error = with_cuda_linalg_session(&mut gpu, |session| {
-        session.svd_with_options(&device, SvdOptions::default().driver(SvdDriver::Polar))
+        session.svd_with_options(&device, SvdOptions::default().with_driver(SvdDriver::Polar))
     })
     .unwrap_err();
     assert!(
@@ -498,7 +498,7 @@ fn cuda_svd_xgesvdp_rejects_a_bad_batch_member_beside_a_large_one() {
     let mut gpu = gpu_backend();
     let device = upload(&gpu, &input);
     let error = with_cuda_linalg_session(&mut gpu, |session| {
-        session.svd_with_options(&device, SvdOptions::default().driver(SvdDriver::Polar))
+        session.svd_with_options(&device, SvdOptions::default().with_driver(SvdDriver::Polar))
     })
     .unwrap_err();
     assert!(

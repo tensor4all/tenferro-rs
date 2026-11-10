@@ -136,8 +136,8 @@ let a = trace.from_vec_col_major(
 let (u, s, vt) = a
     .svd_with_options(
         SvdOptions::default()
-            .gauge(SvdGauge::CanonicalPivot)
-            .derivative_eps(1.0e-10),
+            .with_gauge(SvdGauge::CanonicalPivot)
+            .with_derivative_eps(1.0e-10),
     )?;
 
 let rank = 2;
@@ -169,7 +169,7 @@ let a = trace.from_vec_col_major(
     ],
 )?;
 // Forces cuSOLVER `gesvd` on CUDA; CPU providers ignore the driver.
-let (u, s, vt) = a.svd_with_options(SvdOptions::default().driver(SvdDriver::QrBased))?;
+let (u, s, vt) = a.svd_with_options(SvdOptions::default().with_driver(SvdDriver::QrBased))?;
 
 assert_eq!(u.concrete_shape()?, vec![3, 2]);
 assert_eq!(s.concrete_shape()?, vec![2]);
@@ -198,7 +198,7 @@ let a = trace.from_vec_col_major(
 // On CUDA this reaches `syevjBatched`: one launch for the whole batch.
 // CPU providers ignore the driver.
 let (values, vectors) =
-    a.eigh_with_options(EighOptions::default().driver(EighDriver::Jacobi))?;
+    a.eigh_with_options(EighOptions::default().with_driver(EighDriver::Jacobi))?;
 
 assert_eq!(values.concrete_shape()?, vec![2, 2]);
 assert_eq!(vectors.concrete_shape()?, vec![2, 2, 2]);
@@ -259,7 +259,7 @@ let a = Tensor::from_vec_col_major(
 )?;
 let mut engine = CpuEngine::serial();
 let (q, r) = a.qr_with_options(
-    QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+    QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
     &mut engine,
 )?;
 
@@ -297,7 +297,7 @@ let accumulated = Tensor::from_vec_col_major(
     vec![3, 3],
     vec![1.0_f64, 2.0, 0.5, -1.0, 0.2, 2.0, 0.5, 1.0, -2.0],
 )?;
-let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
 let mut engine = CpuEngine::serial();
 let state = initial
     .householder_qr(&mut engine)?

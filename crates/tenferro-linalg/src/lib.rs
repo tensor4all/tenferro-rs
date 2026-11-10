@@ -162,6 +162,7 @@ mod extension;
 #[cfg(feature = "cuda")]
 mod gpu;
 mod householder;
+mod options;
 pub mod prelude;
 mod rank_revealing_qr;
 mod tensor_ext;
@@ -196,6 +197,12 @@ pub use extension::{
     SvdOptions, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,
 };
 pub use householder::HouseholderQr;
+pub use options::{
+    CholeskyOptions, DetOptions, Diagonal, EigOptions, EigvalsOptions, EigvalshOptions,
+    FullPivLuOptions, FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, KeepDims,
+    LstsqOptions, LuOptions, NormOptions, PinvOptions, Side, SlogdetOptions, SolveOptions,
+    SvdShape, SvdvalsOptions, Transpose, TriangularSolveOptions, Uplo,
+};
 pub use rank_revealing_qr::{RankRevealingQrOptions, RankRevealingQrResult};
 pub use tensor_ext::{
     LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TypedEig, TypedFullPivLu, TypedLu,

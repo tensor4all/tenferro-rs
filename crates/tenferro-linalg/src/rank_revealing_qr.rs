@@ -48,13 +48,14 @@ pub struct RankRevealingQrResult<T, M = T> {
 /// use tenferro_linalg::{QrGauge, RankRevealingQrOptions};
 ///
 /// let options = RankRevealingQrOptions::default()
-///     .gauge(QrGauge::PositiveDiagonal)
-///     .rtol(1.0e-10)
-///     .atol(1.0e-14);
+///     .with_gauge(QrGauge::PositiveDiagonal)
+///     .with_rtol(1.0e-10)
+///     .with_atol(1.0e-14);
 /// assert_eq!(options.rtol, 1.0e-10);
 /// assert_eq!(options.atol, 1.0e-14);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct RankRevealingQrOptions {
     /// QR sign or phase convention. The default is [`QrGauge::Raw`].
     pub gauge: QrGauge,
@@ -82,10 +83,10 @@ impl RankRevealingQrOptions {
     /// ```rust
     /// use tenferro_linalg::{QrGauge, RankRevealingQrOptions};
     ///
-    /// let options = RankRevealingQrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    /// let options = RankRevealingQrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     /// assert_eq!(options.gauge, QrGauge::PositiveDiagonal);
     /// ```
-    pub fn gauge(mut self, gauge: QrGauge) -> Self {
+    pub fn with_gauge(mut self, gauge: QrGauge) -> Self {
         self.gauge = gauge;
         self
     }
@@ -97,10 +98,10 @@ impl RankRevealingQrOptions {
     /// ```rust
     /// use tenferro_linalg::RankRevealingQrOptions;
     ///
-    /// let options = RankRevealingQrOptions::default().rtol(1.0e-8);
+    /// let options = RankRevealingQrOptions::default().with_rtol(1.0e-8);
     /// assert_eq!(options.rtol, 1.0e-8);
     /// ```
-    pub fn rtol(mut self, rtol: f64) -> Self {
+    pub fn with_rtol(mut self, rtol: f64) -> Self {
         self.rtol = rtol;
         self
     }
@@ -112,10 +113,10 @@ impl RankRevealingQrOptions {
     /// ```rust
     /// use tenferro_linalg::RankRevealingQrOptions;
     ///
-    /// let options = RankRevealingQrOptions::default().atol(1.0e-12);
+    /// let options = RankRevealingQrOptions::default().with_atol(1.0e-12);
     /// assert_eq!(options.atol, 1.0e-12);
     /// ```
-    pub fn atol(mut self, atol: f64) -> Self {
+    pub fn with_atol(mut self, atol: f64) -> Self {
         self.atol = atol;
         self
     }

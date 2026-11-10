@@ -327,7 +327,7 @@ fn householder_qr_two_appends_produce_all_input_gradients() {
     let c = trace
         .from_vec_col_major(vec![4, 1], vec![2.0_f64, -1.0, 1.0, 0.5])
         .unwrap();
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     let state = a
         .householder_qr()
         .unwrap()
@@ -549,7 +549,7 @@ fn full_q_positive_diagonal_gauge_fixes_only_the_thin_columns() {
             let gauged = state
                 .q_columns(
                     0..m,
-                    QrOptions::default().gauge(tenferro_linalg::QrGauge::PositiveDiagonal),
+                    QrOptions::default().with_gauge(tenferro_linalg::QrGauge::PositiveDiagonal),
                     &mut host,
                 )
                 .unwrap();

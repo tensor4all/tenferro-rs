@@ -53,10 +53,10 @@ fn eager_rank_revealing_qr_keeps_metadata_in_runtime() {
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
             let invalid = session
-                .rank_revealing_qr(&input, RankRevealingQrOptions::default().rtol(-1.0))
+                .rank_revealing_qr(&input, RankRevealingQrOptions::default().with_rtol(-1.0))
                 .unwrap_err();
             assert!(invalid.to_string().contains("rtol"));
-            session.rank_revealing_qr(&input, RankRevealingQrOptions::default().rtol(1.0e-12))
+            session.rank_revealing_qr(&input, RankRevealingQrOptions::default().with_rtol(1.0e-12))
         })
         .unwrap();
     assert!(Arc::ptr_eq(result.q.runtime(), &runtime));
@@ -431,8 +431,8 @@ fn eager_decomposition_options_execute_and_return_expected_shapes() {
             session.svd_with_options(
                 &a,
                 SvdOptions::default()
-                    .gauge(SvdGauge::CanonicalPivot)
-                    .derivative_eps(1.0e-10),
+                    .with_gauge(SvdGauge::CanonicalPivot)
+                    .with_derivative_eps(1.0e-10),
             )
         })
         .unwrap();
@@ -442,15 +442,15 @@ fn eager_decomposition_options_execute_and_return_expected_shapes() {
             session.eigh_with_options(
                 &a,
                 EighOptions::default()
-                    .gauge(EighGauge::CanonicalPivot)
-                    .derivative_eps(1.0e-10),
+                    .with_gauge(EighGauge::CanonicalPivot)
+                    .with_derivative_eps(1.0e-10),
             )
         })
         .unwrap();
     let (q, r) = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-            s.qr_with_options(&a, QrOptions::default().gauge(QrGauge::PositiveDiagonal))
+            s.qr_with_options(&a, QrOptions::default().with_gauge(QrGauge::PositiveDiagonal))
         })
         .unwrap();
 
@@ -601,7 +601,7 @@ fn incremental_householder_qr_backward_runs_eagerly() {
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let state = session.householder_qr(&a)?;
-            let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+            let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
             let q = state.q_columns(0..2, options, session)?;
             let r = state.r(options, session)?;
             let q_sum = session.reduce_sum(&q, Some(&[0, 1]))?;
@@ -988,11 +988,11 @@ fn borrowed_eigendecompositions_preserve_values_gradients_and_runtime() {
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
             let invalid = session
-                .eigh_with_options(&input, EighOptions::default().derivative_eps(f64::NAN))
+                .eigh_with_options(&input, EighOptions::default().with_derivative_eps(f64::NAN))
                 .unwrap_err();
             assert!(invalid.to_string().contains("derivative_eps"));
             let (values, vectors) =
-                session.eigh_with_options(&input, EighOptions::default().derivative_eps(1e-10))?;
+                session.eigh_with_options(&input, EighOptions::default().with_derivative_eps(1e-10))?;
             let (general_values, general_vectors) = session.eig(&plain)?;
             let loss = session.reduce_sum(&values, None)?;
             Ok::<_, tenferro_ad::Error>((values, vectors, general_values, general_vectors, loss))
@@ -1046,14 +1046,14 @@ fn borrowed_decomposition_options_and_full_svd_validate_in_session() {
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
             let invalid = session
-                .svd_with_options(&input, SvdOptions::default().derivative_eps(f64::NAN))
+                .svd_with_options(&input, SvdOptions::default().with_derivative_eps(f64::NAN))
                 .unwrap_err();
             assert!(invalid.to_string().contains("derivative_eps"));
             let (_, values, _) =
-                session.svd_with_options(&input, SvdOptions::default().derivative_eps(1.0e-10))?;
+                session.svd_with_options(&input, SvdOptions::default().with_derivative_eps(1.0e-10))?;
             let (q, r) = session.qr_with_options(
                 &input,
-                QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+                QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
             )?;
             let (full_u, full_s, full_vh) = session.svd_full(&wide)?;
             Ok::<_, tenferro_ad::Error>((values, q, r, full_u, full_s, full_vh))
@@ -2417,7 +2417,7 @@ fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
         .with_eager_session(&mut backend, |session| {
             let (q, r) = session.qr(&input)?;
             let rrqr = session
-                .rank_revealing_qr(&input, RankRevealingQrOptions::default().rtol(1.0e-12))?;
+                .rank_revealing_qr(&input, RankRevealingQrOptions::default().with_rtol(1.0e-12))?;
             let (u, s, vt) = session.svd(&input)?;
             Ok::<_, tenferro_ad::Error>((q, r, rrqr, u, s, vt))
         })

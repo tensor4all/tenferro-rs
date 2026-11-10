@@ -202,7 +202,7 @@ pub trait LinalgBackend: Engine {
     ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.svd_with_options(
     ///             &input,
-    ///             SvdOptions::default().gauge(SvdGauge::CanonicalPivot),
+    ///             SvdOptions::default().with_gauge(SvdGauge::CanonicalPivot),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
@@ -390,7 +390,7 @@ pub trait LinalgBackend: Engine {
     ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.svd_with_options_read(
     ///             TensorRead::from_view(TensorView::F64(input.as_view())),
-    ///             SvdOptions::default().driver(SvdDriver::QrBased),
+    ///             SvdOptions::default().with_driver(SvdDriver::QrBased),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
@@ -476,7 +476,7 @@ pub trait LinalgBackend: Engine {
     ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.qr_with_options(
     ///             &input,
-    ///             QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+    ///             QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
@@ -566,7 +566,7 @@ pub trait LinalgBackend: Engine {
     ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.qr_with_options_read(
     ///             TensorRead::from_tensor(&input),
-    ///             QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+    ///             QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
@@ -712,8 +712,8 @@ pub trait LinalgBackend: Engine {
     ///         backend.eigh_with_options(
     ///             &input,
     ///             EighOptions::default()
-    ///                 .gauge(EighGauge::CanonicalPivot)
-    ///                 .derivative_eps(1.0e-10),
+    ///                 .with_gauge(EighGauge::CanonicalPivot)
+    ///                 .with_derivative_eps(1.0e-10),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")
@@ -774,7 +774,7 @@ pub trait LinalgBackend: Engine {
     ///     with_cpu_engine(&mut host, |backend| {
     ///         backend.eigh_with_options_read(
     ///             TensorRead::from_view(TensorView::F64(input.as_view())),
-    ///             EighOptions::default().driver(EighDriver::Jacobi),
+    ///             EighOptions::default().with_driver(EighDriver::Jacobi),
     ///         )
     ///     })
     ///     .expect("CpuEngine must expose a CpuEngine")

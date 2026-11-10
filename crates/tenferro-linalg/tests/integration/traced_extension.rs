@@ -56,7 +56,7 @@ fn rank_revealing_qr_traced_fixed_outputs_execute() {
         )
         .unwrap();
     let result = a
-        .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12))
+        .rank_revealing_qr(RankRevealingQrOptions::default().with_rtol(1.0e-12))
         .unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -107,20 +107,20 @@ fn concrete_decomposition_options_execute_through_backend_defaults() {
                 .svd_with_options(
                     &a,
                     SvdOptions::default()
-                        .gauge(SvdGauge::CanonicalPivot)
-                        .derivative_eps(1.0e-10),
+                        .with_gauge(SvdGauge::CanonicalPivot)
+                        .with_derivative_eps(1.0e-10),
                 )
                 .unwrap();
             let eigh_outputs = backend
                 .eigh_with_options(
                     &a,
                     EighOptions::default()
-                        .gauge(EighGauge::CanonicalPivot)
-                        .derivative_eps(1.0e-10),
+                        .with_gauge(EighGauge::CanonicalPivot)
+                        .with_derivative_eps(1.0e-10),
                 )
                 .unwrap();
             let qr_outputs = backend
-                .qr_with_options(&a, QrOptions::default().gauge(QrGauge::PositiveDiagonal))
+                .qr_with_options(&a, QrOptions::default().with_gauge(QrGauge::PositiveDiagonal))
                 .unwrap();
             (svd_outputs, eigh_outputs, qr_outputs)
         });
@@ -145,19 +145,19 @@ fn traced_decomposition_options_execute_through_registered_runtime() {
     let (u, s, vt) = a
         .svd_with_options(
             SvdOptions::default()
-                .gauge(SvdGauge::CanonicalPivot)
-                .derivative_eps(1.0e-10),
+                .with_gauge(SvdGauge::CanonicalPivot)
+                .with_derivative_eps(1.0e-10),
         )
         .unwrap();
     let (eigh_values, eigh_vectors) = a
         .eigh_with_options(
             EighOptions::default()
-                .gauge(EighGauge::CanonicalPivot)
-                .derivative_eps(1.0e-10),
+                .with_gauge(EighGauge::CanonicalPivot)
+                .with_derivative_eps(1.0e-10),
         )
         .unwrap();
     let (q, r) = a
-        .qr_with_options(QrOptions::default().gauge(QrGauge::PositiveDiagonal))
+        .qr_with_options(QrOptions::default().with_gauge(QrGauge::PositiveDiagonal))
         .unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -195,7 +195,7 @@ fn check_cpu_ignores_svd_driver(trace: &TraceContext, driver: SvdDriver) {
         support::with_cpu_linalg(&mut backend, |backend| {
             let default_outputs = backend.svd_with_options(&a, SvdOptions::default()).unwrap();
             let forced_outputs = backend
-                .svd_with_options(&a, SvdOptions::default().driver(driver))
+                .svd_with_options(&a, SvdOptions::default().with_driver(driver))
                 .unwrap();
             let default_values = backend.svd_values(&a).unwrap();
             let forced_values = backend.svd_values_with_driver(&a, driver).unwrap();
@@ -230,12 +230,12 @@ fn check_cpu_ignores_svd_driver(trace: &TraceContext, driver: SvdDriver) {
         .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3, 2], data).unwrap())
         .unwrap();
     let (u, s, vt) = traced
-        .svd_with_options(SvdOptions::default().driver(driver))
+        .svd_with_options(SvdOptions::default().with_driver(driver))
         .unwrap();
     // Only `S` is live here, so the op prunes to a values-only op that keeps
     // the forced driver; the CPU runtime must still execute it.
     let (_, s_only, _) = traced
-        .svd_with_options(SvdOptions::default().driver(driver).derivative_eps(2.0e-12))
+        .svd_with_options(SvdOptions::default().with_driver(driver).with_derivative_eps(2.0e-12))
         .unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -278,7 +278,7 @@ fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
                 .eigh_with_options(&a, EighOptions::default())
                 .unwrap();
             let forced_outputs = backend
-                .eigh_with_options(&a, EighOptions::default().driver(EighDriver::Jacobi))
+                .eigh_with_options(&a, EighOptions::default().with_driver(EighDriver::Jacobi))
                 .unwrap();
             let default_values = backend.eigh_values(&a).unwrap();
             let forced_values = backend
@@ -310,12 +310,12 @@ fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
         .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3, 3], data).unwrap())
         .unwrap();
     let (w, v) = traced
-        .eigh_with_options(EighOptions::default().driver(EighDriver::Jacobi))
+        .eigh_with_options(EighOptions::default().with_driver(EighDriver::Jacobi))
         .unwrap();
     // Only the eigenvalues are live here, so the op prunes to a values-only
     // op that keeps the forced driver; the CPU runtime must still execute it.
     let (w_only, _) = traced
-        .eigh_with_options(EighOptions::default().driver(EighDriver::DivideAndConquer))
+        .eigh_with_options(EighOptions::default().with_driver(EighDriver::DivideAndConquer))
         .unwrap();
 
     let mut compiler = GraphCompiler::new();

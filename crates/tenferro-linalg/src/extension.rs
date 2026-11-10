@@ -1,4 +1,5 @@
 use std::any::Any;
+use crate::options::SvdShape;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -48,7 +49,7 @@ pub const DEFAULT_DECOMPOSITION_DERIVATIVE_EPS: f64 = 1e-12;
 /// ```rust
 /// use tenferro_linalg::{SvdGauge, SvdOptions};
 ///
-/// let options = SvdOptions::default().gauge(SvdGauge::CanonicalPivot);
+/// let options = SvdOptions::default().with_gauge(SvdGauge::CanonicalPivot);
 /// assert_eq!(options.gauge, SvdGauge::CanonicalPivot);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +68,7 @@ pub enum SvdGauge {
 /// ```rust
 /// use tenferro_linalg::{EighGauge, EighOptions};
 ///
-/// let options = EighOptions::default().gauge(EighGauge::CanonicalPivot);
+/// let options = EighOptions::default().with_gauge(EighGauge::CanonicalPivot);
 /// assert_eq!(options.gauge, EighGauge::CanonicalPivot);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,7 +86,7 @@ pub enum EighGauge {
 /// ```rust
 /// use tenferro_linalg::{QrGauge, QrOptions};
 ///
-/// let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+/// let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
 /// assert_eq!(options.gauge, QrGauge::PositiveDiagonal);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,7 +111,7 @@ pub enum QrGauge {
 /// ```rust
 /// use tenferro_linalg::{SvdDriver, SvdOptions};
 ///
-/// let options = SvdOptions::default().driver(SvdDriver::QrBased);
+/// let options = SvdOptions::default().with_driver(SvdDriver::QrBased);
 /// assert_eq!(options.driver, SvdDriver::QrBased);
 /// assert_eq!(SvdOptions::default().driver, SvdDriver::Auto);
 /// ```
@@ -168,15 +169,19 @@ pub enum SvdDriver {
 /// use tenferro_linalg::{SvdDriver, SvdGauge, SvdOptions};
 ///
 /// let options = SvdOptions::default()
-///     .gauge(SvdGauge::CanonicalPivot)
-///     .derivative_eps(1.0e-10)
-///     .driver(SvdDriver::QrBased);
+///     .with_gauge(SvdGauge::CanonicalPivot)
+///     .with_derivative_eps(1.0e-10)
+///     .with_driver(SvdDriver::QrBased);
 /// assert_eq!(options.gauge, SvdGauge::CanonicalPivot);
 /// assert_eq!(options.derivative_eps, 1.0e-10);
 /// assert_eq!(options.driver, SvdDriver::QrBased);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SvdOptions {
+    /// Thin or full singular vectors. Only [`SvdShape::Thin`] combines with a non-default
+    /// gauge, driver or derivative epsilon; see the operation docs.
+    pub shape: SvdShape,
     /// Singular-vector gauge convention.
     pub gauge: SvdGauge,
     /// AD derivative regularization for repeated or nearly repeated singular values.
@@ -188,6 +193,7 @@ pub struct SvdOptions {
 impl Default for SvdOptions {
     fn default() -> Self {
         Self {
+            shape: SvdShape::Thin,
             gauge: SvdGauge::Raw,
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             driver: SvdDriver::Auto,
@@ -196,6 +202,21 @@ impl Default for SvdOptions {
 }
 
 impl SvdOptions {
+    /// Return options with the requested singular-vector shape.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::{SvdOptions, SvdShape};
+    ///
+    /// let options = SvdOptions::default().with_shape(SvdShape::Full);
+    /// assert_eq!(options.shape, SvdShape::Full);
+    /// ```
+    pub fn with_shape(mut self, shape: SvdShape) -> Self {
+        self.shape = shape;
+        self
+    }
+
     /// Return options with the requested singular-vector gauge.
     ///
     /// # Examples
@@ -203,10 +224,10 @@ impl SvdOptions {
     /// ```rust
     /// use tenferro_linalg::{SvdGauge, SvdOptions};
     ///
-    /// let options = SvdOptions::default().gauge(SvdGauge::CanonicalPivot);
+    /// let options = SvdOptions::default().with_gauge(SvdGauge::CanonicalPivot);
     /// assert_eq!(options.gauge, SvdGauge::CanonicalPivot);
     /// ```
-    pub fn gauge(mut self, gauge: SvdGauge) -> Self {
+    pub fn with_gauge(mut self, gauge: SvdGauge) -> Self {
         self.gauge = gauge;
         self
     }
@@ -218,10 +239,10 @@ impl SvdOptions {
     /// ```rust
     /// use tenferro_linalg::SvdOptions;
     ///
-    /// let options = SvdOptions::default().derivative_eps(1.0e-9);
+    /// let options = SvdOptions::default().with_derivative_eps(1.0e-9);
     /// assert_eq!(options.derivative_eps, 1.0e-9);
     /// ```
-    pub fn derivative_eps(mut self, derivative_eps: f64) -> Self {
+    pub fn with_derivative_eps(mut self, derivative_eps: f64) -> Self {
         self.derivative_eps = derivative_eps;
         self
     }
@@ -233,10 +254,10 @@ impl SvdOptions {
     /// ```rust
     /// use tenferro_linalg::{SvdDriver, SvdOptions};
     ///
-    /// let options = SvdOptions::default().driver(SvdDriver::Jacobi);
+    /// let options = SvdOptions::default().with_driver(SvdDriver::Jacobi);
     /// assert_eq!(options.driver, SvdDriver::Jacobi);
     /// ```
-    pub fn driver(mut self, driver: SvdDriver) -> Self {
+    pub fn with_driver(mut self, driver: SvdDriver) -> Self {
         self.driver = driver;
         self
     }
@@ -254,7 +275,7 @@ impl SvdOptions {
 /// ```rust
 /// use tenferro_linalg::{EighDriver, EighOptions};
 ///
-/// let options = EighOptions::default().driver(EighDriver::Jacobi);
+/// let options = EighOptions::default().with_driver(EighDriver::Jacobi);
 /// assert_eq!(options.driver, EighDriver::Jacobi);
 /// assert_eq!(EighOptions::default().driver, EighDriver::Auto);
 /// ```
@@ -292,12 +313,13 @@ pub enum EighDriver {
 /// use tenferro_linalg::{EighDriver, EighOptions};
 ///
 /// let options = EighOptions::default()
-///     .derivative_eps(1.0e-10)
-///     .driver(EighDriver::Jacobi);
+///     .with_derivative_eps(1.0e-10)
+///     .with_driver(EighDriver::Jacobi);
 /// assert_eq!(options.derivative_eps, 1.0e-10);
 /// assert_eq!(options.driver, EighDriver::Jacobi);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct EighOptions {
     /// Eigenvector gauge convention.
     pub gauge: EighGauge,
@@ -325,10 +347,10 @@ impl EighOptions {
     /// ```rust
     /// use tenferro_linalg::{EighGauge, EighOptions};
     ///
-    /// let options = EighOptions::default().gauge(EighGauge::CanonicalPivot);
+    /// let options = EighOptions::default().with_gauge(EighGauge::CanonicalPivot);
     /// assert_eq!(options.gauge, EighGauge::CanonicalPivot);
     /// ```
-    pub fn gauge(mut self, gauge: EighGauge) -> Self {
+    pub fn with_gauge(mut self, gauge: EighGauge) -> Self {
         self.gauge = gauge;
         self
     }
@@ -340,10 +362,10 @@ impl EighOptions {
     /// ```rust
     /// use tenferro_linalg::EighOptions;
     ///
-    /// let options = EighOptions::default().derivative_eps(1.0e-9);
+    /// let options = EighOptions::default().with_derivative_eps(1.0e-9);
     /// assert_eq!(options.derivative_eps, 1.0e-9);
     /// ```
-    pub fn derivative_eps(mut self, derivative_eps: f64) -> Self {
+    pub fn with_derivative_eps(mut self, derivative_eps: f64) -> Self {
         self.derivative_eps = derivative_eps;
         self
     }
@@ -355,10 +377,10 @@ impl EighOptions {
     /// ```rust
     /// use tenferro_linalg::{EighDriver, EighOptions};
     ///
-    /// let options = EighOptions::default().driver(EighDriver::DivideAndConquer);
+    /// let options = EighOptions::default().with_driver(EighDriver::DivideAndConquer);
     /// assert_eq!(options.driver, EighDriver::DivideAndConquer);
     /// ```
-    pub fn driver(mut self, driver: EighDriver) -> Self {
+    pub fn with_driver(mut self, driver: EighDriver) -> Self {
         self.driver = driver;
         self
     }
@@ -371,10 +393,11 @@ impl EighOptions {
 /// ```rust
 /// use tenferro_linalg::{QrGauge, QrOptions};
 ///
-/// let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+/// let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
 /// assert_eq!(options.gauge, QrGauge::PositiveDiagonal);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct QrOptions {
     /// QR sign or phase convention.
     pub gauge: QrGauge,
@@ -396,10 +419,10 @@ impl QrOptions {
     /// ```rust
     /// use tenferro_linalg::{QrGauge, QrOptions};
     ///
-    /// let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    /// let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     /// assert_eq!(options.gauge, QrGauge::PositiveDiagonal);
     /// ```
-    pub fn gauge(mut self, gauge: QrGauge) -> Self {
+    pub fn with_gauge(mut self, gauge: QrGauge) -> Self {
         self.gauge = gauge;
         self
     }
@@ -978,6 +1001,7 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
             return session.svd_with_options_read(
                 inputs[0].clone(),
                 SvdOptions {
+                    shape: SvdShape::Thin,
                     derivative_eps,
                     gauge,
                     driver,
@@ -1168,6 +1192,7 @@ fn execute_linalg<B: LinalgBackend>(
         } => backend.svd_with_options(
             inputs[0],
             SvdOptions {
+                shape: SvdShape::Thin,
                 derivative_eps,
                 gauge,
                 driver,

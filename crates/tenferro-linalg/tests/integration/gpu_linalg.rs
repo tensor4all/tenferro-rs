@@ -740,7 +740,7 @@ fn patterned_f64_matrix(m: usize, n: usize) -> Tensor {
 fn check_forced_svd_driver(m: usize, n: usize, driver: SvdDriver) {
     let input = patterned_f64_matrix(m, n);
     let k = m.min(n);
-    let options = SvdOptions::default().driver(driver);
+    let options = SvdOptions::default().with_driver(driver);
 
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
@@ -818,7 +818,7 @@ fn test_cuda_svd_auto_driver_matches_default_svd() {
     let default_outputs =
         with_cuda_linalg_session(&mut gpu, |session| session.svd(&gpu_input)).unwrap();
     let auto_outputs = with_cuda_linalg_session(&mut gpu, |session| {
-        session.svd_with_options(&gpu_input, SvdOptions::default().driver(SvdDriver::Auto))
+        session.svd_with_options(&gpu_input, SvdOptions::default().with_driver(SvdDriver::Auto))
     })
     .unwrap();
     for (default, auto) in default_outputs.iter().zip(&auto_outputs) {
@@ -833,7 +833,7 @@ fn test_cuda_compact_householder_qr_f64_reconstructs_input() {
     let input = tensor_f64(vec![4, 2], vec![1.0, 2.0, 3.0, 4.0, 2.0, -1.0, 0.5, 3.0]);
     let mut gpu = gpu_backend();
     let device_input = upload(&gpu, &input);
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     let (q, r) = with_cuda_linalg_session(&mut gpu, |session| {
         let state = device_input.householder_qr(session).unwrap();
         (
@@ -870,7 +870,7 @@ fn test_cuda_compact_householder_qr_append_and_from_factors_f64() {
     let q_gpu = upload(&gpu, &q_factor);
     let r_gpu = upload(&gpu, &r_factor);
     let invalid_r_gpu = upload(&gpu, &invalid_r);
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     let (append_q, append_r, factor_q, factor_r) = with_cuda_linalg_session(&mut gpu, |session| {
         let appended = a_gpu
             .householder_qr(session)
@@ -950,7 +950,7 @@ fn test_cuda_compact_householder_qr_complex64_append_reconstructs() {
     let mut gpu = gpu_backend();
     let a_gpu = upload(&gpu, &a);
     let b_gpu = upload(&gpu, &b);
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     let (q, selected, r) = with_cuda_linalg_session(&mut gpu, |session| {
         let state = a_gpu
             .householder_qr(session)
@@ -1017,7 +1017,7 @@ fn test_cuda_compact_householder_qr_f32_and_c32_reconstruct() {
     let b_gpu = upload(&gpu, &b);
     let complex_gpu = upload(&gpu, &complex);
     let complex_r_gpu = upload(&gpu, &complex_r);
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     let (q, r, cq, cr, imported_q, imported_r) = with_cuda_linalg_session(&mut gpu, |session| {
         let state = a_gpu
             .householder_qr(session)
@@ -1094,7 +1094,7 @@ fn test_cuda_compact_householder_qr_rank_deficient_zero_append_and_placement() {
     let mut gpu = gpu_backend();
     let input_gpu = upload(&gpu, &input);
     let empty_gpu = upload(&gpu, &empty);
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     let (q, selected, r) = with_cuda_linalg_session(&mut gpu, |session| {
         let placement_error = input.householder_qr(session).unwrap_err();
         assert!(matches!(placement_error, Error::RuntimeState { .. }));
@@ -1139,7 +1139,7 @@ fn test_cuda_qr_positive_diagonal_owned_and_read_paths_stay_on_device() {
     );
     let mut gpu = gpu_backend();
     let input_gpu = upload(&gpu, &input);
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     let (owned, read) = with_cuda_linalg_session(&mut gpu, |session| {
         (
             session.qr_with_options(&input_gpu, options).unwrap(),
@@ -1266,7 +1266,7 @@ fn test_cuda_compact_householder_qr_wide_empty_range_and_rank_deficient_import()
     let wide_gpu = upload(&gpu, &wide);
     let rank_q_gpu = upload(&gpu, &rank_q);
     let rank_r_gpu = upload(&gpu, &rank_r);
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     let (q, empty_q, r, imported_q, imported_r) = with_cuda_linalg_session(&mut gpu, |session| {
         let state = wide_gpu.householder_qr(session).unwrap();
         let imported =
@@ -1368,7 +1368,7 @@ fn patterned_symmetric_f64(n: usize, batch: usize) -> Tensor {
 /// the CPU provider.
 fn check_forced_eigh_driver(n: usize, batch: usize, driver: EighDriver) {
     let input = patterned_symmetric_f64(n, batch);
-    let options = EighOptions::default().driver(driver);
+    let options = EighOptions::default().with_driver(driver);
     let batch_total = batch.max(1);
 
     let mut gpu = gpu_backend();
@@ -1564,7 +1564,7 @@ fn test_cuda_eigh_auto_driver_matches_default_eigh() {
     let default_outputs =
         with_cuda_linalg_session(&mut gpu, |session| session.eigh(&gpu_input)).unwrap();
     let auto_outputs = with_cuda_linalg_session(&mut gpu, |session| {
-        session.eigh_with_options(&gpu_input, EighOptions::default().driver(EighDriver::Auto))
+        session.eigh_with_options(&gpu_input, EighOptions::default().with_driver(EighDriver::Auto))
     })
     .unwrap();
     for (default, auto) in default_outputs.iter().zip(&auto_outputs) {
@@ -1665,7 +1665,7 @@ fn test_cuda_rank_revealing_qr_f64_reconstructs_interspersed_rank_deficiency() {
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
     let outputs = with_cuda_linalg_session(&mut gpu, |session| {
-        session.rank_revealing_qr(&gpu_input, RankRevealingQrOptions::default().rtol(1.0e-12))
+        session.rank_revealing_qr(&gpu_input, RankRevealingQrOptions::default().with_rtol(1.0e-12))
     })
     .unwrap();
     assert_eq!(outputs.len(), 4);
@@ -1737,8 +1737,8 @@ fn test_cuda_rank_revealing_qr_complex_dtypes_reconstruct() {
         session.rank_revealing_qr(
             &gpu_input,
             RankRevealingQrOptions::default()
-                .gauge(tenferro_linalg::QrGauge::PositiveDiagonal)
-                .rtol(1.0e-5),
+                .with_gauge(tenferro_linalg::QrGauge::PositiveDiagonal)
+                .with_rtol(1.0e-5),
         )
     })
     .unwrap();
@@ -1785,8 +1785,8 @@ fn test_cuda_rank_revealing_qr_complex_dtypes_reconstruct() {
         session.rank_revealing_qr(
             &gpu_input,
             RankRevealingQrOptions::default()
-                .gauge(tenferro_linalg::QrGauge::PositiveDiagonal)
-                .rtol(1.0e-12),
+                .with_gauge(tenferro_linalg::QrGauge::PositiveDiagonal)
+                .with_rtol(1.0e-12),
         )
     })
     .unwrap();
@@ -1833,7 +1833,7 @@ fn test_cuda_rank_revealing_qr_f32_batched_and_scaled_ranks() {
     let mut gpu = gpu_backend();
     let gpu_input = upload(&gpu, &input);
     let outputs = with_cuda_linalg_session(&mut gpu, |session| {
-        session.rank_revealing_qr(&gpu_input, RankRevealingQrOptions::default().rtol(1.0e-5))
+        session.rank_revealing_qr(&gpu_input, RankRevealingQrOptions::default().with_rtol(1.0e-5))
     })
     .unwrap();
     let permutation = download(&gpu, &outputs[2]);
@@ -2558,7 +2558,7 @@ fn cuda_full_q_positive_diagonal_gauge_leaves_complement_columns_alone() {
             state
                 .q_columns(
                     0..m,
-                    QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+                    QrOptions::default().with_gauge(QrGauge::PositiveDiagonal),
                     session,
                 )
                 .unwrap(),

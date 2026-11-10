@@ -1,7 +1,11 @@
 //! Linear algebra extension traits and their method-resolution types.
 
 pub use crate::{
-    EighOptions, QrOptions, RankRevealingQrOptions, RankRevealingQrResult, SvdOptions,
+    CholeskyOptions, DetOptions, Diagonal, EigOptions, EighOptions, EigvalsOptions,
+    EigvalshOptions, FullPivLuOptions, FullPivLuSolveOptions, HouseholderQrOptions, InvOptions,
+    KeepDims, LstsqOptions, LuOptions, NormOptions, PinvOptions, QrOptions,
+    RankRevealingQrOptions, RankRevealingQrResult, Side, SlogdetOptions, SolveOptions,
+    SvdOptions, SvdShape, SvdvalsOptions, Transpose, TriangularSolveOptions, Uplo,
 };
 pub use crate::{
     LinalgBackend, LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TraceContextLinalgExt,

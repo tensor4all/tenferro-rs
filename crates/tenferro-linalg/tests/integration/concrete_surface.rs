@@ -49,7 +49,7 @@ fn rank_revealing_qr_handles_interspersed_dependence() {
 
     {
         let result = input
-            .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12), &mut host)
+            .rank_revealing_qr(RankRevealingQrOptions::default().with_rtol(1.0e-12), &mut host)
             .unwrap();
         assert_eq!(result.q.shape(), &[4, 3]);
         assert_eq!(result.r.shape(), &[3, 3]);
@@ -118,7 +118,7 @@ fn rank_revealing_qr_supports_all_float_and_complex_dtypes() {
     {
         for input in &inputs {
             let result = input
-                .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-6), &mut host)
+                .rank_revealing_qr(RankRevealingQrOptions::default().with_rtol(1.0e-6), &mut host)
                 .unwrap();
             assert_eq!(result.q.dtype(), input.dtype());
             assert_eq!(result.r.dtype(), input.dtype());
@@ -168,9 +168,9 @@ fn rank_revealing_qr_rejects_invalid_tolerances() {
     let mut host = tenferro_cpu::CpuEngine::serial();
     {
         for options in [
-            RankRevealingQrOptions::default().rtol(f64::NAN),
-            RankRevealingQrOptions::default().rtol(-1.0),
-            RankRevealingQrOptions::default().atol(f64::INFINITY),
+            RankRevealingQrOptions::default().with_rtol(f64::NAN),
+            RankRevealingQrOptions::default().with_rtol(-1.0),
+            RankRevealingQrOptions::default().with_atol(f64::INFINITY),
         ] {
             assert!(input.rank_revealing_qr(options, &mut host).is_err());
         }
@@ -210,7 +210,7 @@ fn rank_revealing_qr_mixes_zero_and_nonzero_items_in_one_batch() {
     for mut host in rrqr_provider_backends() {
         {
             let result = input
-                .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12), &mut host)
+                .rank_revealing_qr(RankRevealingQrOptions::default().with_rtol(1.0e-12), &mut host)
                 .unwrap();
             assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[2, 0, 1]);
             let q = result.q.as_slice::<f64>().unwrap();

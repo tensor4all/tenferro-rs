@@ -702,7 +702,7 @@ fn dispatch_incremental_householder_qr(
     case: &CaseRecord,
     inputs: BTreeMap<String, TracedTensor>,
 ) -> Result<CaseExecution, String> {
-    let options = QrOptions::default().gauge(QrGauge::PositiveDiagonal);
+    let options = QrOptions::default().with_gauge(QrGauge::PositiveDiagonal);
     let state = match case.family.as_str() {
         "factor_qr" | "selected_q_columns" | "r" => {
             let a = oracle_to_tenferro(required_input(&inputs, "a", case)?, 2)?;

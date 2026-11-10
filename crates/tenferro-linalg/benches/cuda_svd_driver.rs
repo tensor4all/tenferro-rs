@@ -387,7 +387,7 @@ fn bench_svd_driver(c: &mut Criterion) {
     let mut timings = Vec::new();
     for (index, matrix) in matrices.iter().enumerate() {
         for &driver in DRIVERS {
-            let options = SvdOptions::default().driver(driver);
+            let options = SvdOptions::default().with_driver(driver);
             let label = case_label(matrix.dtype, matrix.n, driver);
             match accuracy_row(
                 &mut backend,
@@ -416,7 +416,7 @@ fn bench_svd_driver(c: &mut Criterion) {
     let mut group = c.benchmark_group("cuda_svd_driver");
     for timing in &timings {
         let matrix = &matrices[timing.matrix];
-        let options = SvdOptions::default().driver(timing.driver);
+        let options = SvdOptions::default().with_driver(timing.driver);
         let label = case_label(matrix.dtype, matrix.n, timing.driver);
         group.bench_function(&label, |bencher| {
             bencher.iter(|| time_svd(&mut backend, &matrix.device, options));

@@ -479,8 +479,8 @@ pub trait TraceContextLinalgExt {
     ///
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
     /// let options = SvdOptions::default()
-    ///     .gauge(SvdGauge::CanonicalPivot)
-    ///     .derivative_eps(1e-10);
+    ///     .with_gauge(SvdGauge::CanonicalPivot)
+    ///     .with_derivative_eps(1e-10);
     /// let (_u, s, _vt) = trace.svd_with_options(a.trace_value(), options).unwrap();
     /// assert_eq!(s.rank(), 1);
     /// ```
@@ -611,7 +611,7 @@ pub trait TraceContextLinalgExt {
     /// let trace = TraceContext::new();
     ///
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap();
-    /// let (q, r) = trace.qr_with_options(a.trace_value(), QrOptions::default().gauge(QrGauge::PositiveDiagonal)).unwrap();
+    /// let (q, r) = trace.qr_with_options(a.trace_value(), QrOptions::default().with_gauge(QrGauge::PositiveDiagonal)).unwrap();
     /// assert_eq!(q.rank(), 2);
     /// assert_eq!(r.rank(), 2);
     /// ```
@@ -704,8 +704,8 @@ pub trait TraceContextLinalgExt {
     ///
     /// let a = trace.from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0]).unwrap();
     /// let options = EighOptions::default()
-    ///     .gauge(EighGauge::CanonicalPivot)
-    ///     .derivative_eps(1e-10);
+    ///     .with_gauge(EighGauge::CanonicalPivot)
+    ///     .with_derivative_eps(1e-10);
     /// let (values, _vectors) = trace.eigh_with_options(a.trace_value(), options).unwrap();
     /// assert_eq!(values.rank(), 1);
     /// ```
