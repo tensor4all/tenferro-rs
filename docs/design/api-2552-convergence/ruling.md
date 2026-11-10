@@ -203,7 +203,7 @@ pub fn helper(s: &mut dyn Engine) {
 fn main() {}
 ```
 
-### `t7.rs`
+### `t6.rs`
 ```rust
 pub trait Engine {}
 #[derive(Clone, Copy)] pub enum MaterializationPolicy { Allow, Forbid }

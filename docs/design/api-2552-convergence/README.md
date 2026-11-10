@@ -20,7 +20,7 @@ convergence they do not actually share: `fable-crossread.md` §4 proposes the pl
 true here, and the ruling had to decide it. A later reader who reads only one of the two will think
 the question was settled by agreement.
 
-**The compile question decided it, not the argument.** `ruling.md` carries the four-file check, and
+**The compile question decided it, not the argument.** `ruling.md` carries the five-file check, and
 the check is narrower than a first reading suggests: the wrapper **as Fable wrote it**
 (`fable-proposal.md:16`, `R: ?Sized = dyn Engine + 'a`) compiles. What does not compile is the naive
 form without that default — `dyn Engine` is invariant in `R` and its default object lifetime is
