@@ -59,11 +59,31 @@ items below.
    more surface than one `Copy` enum in one more position. Migration in either direction changes
    downstream signatures, so this decision is not free later; it is simply the smaller thing to
    carry today.
-2. **A lifetime pitfall exists in the uncorrected wrapper, not in the submitted one.** A four-file
-   check with `rustc 1.96.0` shows `struct ExecutionRequest<'a, R: ?Sized>(&'a mut R)` with
-   `impl<'a> ExecutionRequest<'a>` failing for a plain `&mut dyn Engine` (`dyn Engine` is invariant
-   in `R`, the default object lifetime is `'static`), and `R: ?Sized = dyn Engine + 'a` fixing it —
-   which the submitted wrapper already carries. The same helper compiles untouched with the plain
+2. **A lifetime pitfall exists in the naive wrapper, not in the submitted one.** A four-file check
+   with `rustc 1.96.0` shows the naive form failing for a plain `&mut dyn Engine`, and the fix is the
+   default the submitted wrapper already carries. The failing form is exactly this — note the
+   `impl<'a> Req<'a, dyn Engine>` that names the object type without a lifetime:
+
+   ```rust
+   pub struct Req<'a, R: ?Sized>(&'a mut R);
+   impl<'a> Req<'a, dyn Engine> {
+       pub fn new(e: &'a mut dyn Engine) -> Self { Req(e) }
+   }
+   ```
+
+   and the compiler answers
+
+   ```
+   error: lifetime may not live long enough
+     | impl<'a> Req<'a, dyn Engine> { pub fn new(e: &'a mut dyn Engine) -> Self { Req(e) } }
+     |                                   -                       ^^^^^^ returning this value requires
+     |                                   |                              that `'a` must outlive `'static`
+     = note: requirement occurs because of the type `Req<'_, dyn Engine>`, which makes the generic
+             argument `dyn Engine` invariant
+   ```
+
+   Writing `R: ?Sized = dyn Engine + 'a` fixes it, which is what the submitted wrapper does; see the
+   appendix for the four files and all four outcomes. The same helper compiles untouched with the plain
    argument: `fn helper(s: &mut dyn Engine, m: MaterializationPolicy) { einsum(.., s, m); einsum(.., s, m); }`.
    The sources, the rustc invocation, and both diagnostics are attached to this issue as a comment.
 3. **Neither carrier keeps a policy from being dropped, and no lint does either.** A wrapper can log
@@ -110,3 +130,86 @@ implementation that copies silently and returns `Ok` satisfies it.
    where an eager backward pass receives its constraint — all undecided here.
 4. The landing order: R3's amendment, the shared rule in `tensor4all-agent-rules`, and the
    implementation have to move together, or the repository spends a day contradicting its own rules.
+
+---
+
+## Appendix: the four-file check (rustc 1.96.0, macOS arm64)
+
+Each file is compiled with
+`rustc --edition 2021 --crate-type lib -o /tmp/<name>.rlib /tmp/<name>.rs`.
+
+### `t1.rs`
+```rust
+#![deny(unused_variables)]
+#[derive(Clone, Copy, Default)]
+pub enum MaterializationPolicy { #[default] Allow, Forbid }
+
+pub struct Svd;
+pub trait Engine {}
+
+// 主張 A: 位置引数にすると「sugar が policy を落とす」のをコンパイラが止めるか
+pub fn svd_into(_a: &[f64], _s: &mut dyn Engine, _m: MaterializationPolicy) -> Result<Svd, ()> { Ok(Svd) }
+
+pub fn svd(a: &[f64], s: &mut dyn Engine, materialization: MaterializationPolicy) -> Result<Svd, ()> {
+    svd_into(a, s, Default::default())   // ← 呼び出し元の policy を落としている
+}
+fn main() {}
+```
+
+### `t2.rs`
+```rust
+pub trait Engine {}
+pub struct Exec<'a>(&'a ());
+pub struct Req<'a, R: ?Sized>(&'a mut R);
+impl<'a> Req<'a, dyn Engine> { pub fn new(e: &'a mut dyn Engine) -> Self { Req(e) } }
+impl<'a> From<&'a mut dyn Engine> for Req<'a, dyn Engine> { fn from(e: &'a mut dyn Engine) -> Self { Req(e) } }
+
+// 汎用 Into で受ける版（Fable が「壊れる」と言った形）
+pub fn einsum_generic<'a, I: Into<Req<'a, dyn Engine>>>(_i: I) {}
+// 具体型で受ける版
+pub fn einsum_concrete<'a>(_i: Req<'a, dyn Engine>) {}
+
+pub fn helper(s: &mut dyn Engine) {
+    einsum_concrete(Req::from(&mut *s));   // 具体型なら再borrowで 2 回呼べる
+    einsum_concrete(Req::from(&mut *s));
+}
+fn main() {}
+```
+
+### `t4.rs`
+```rust
+pub trait Engine {}
+pub struct Req<'a, R: ?Sized>(&'a mut R);
+impl<'a> Req<'a, dyn Engine + 'a> { pub fn new(e: &'a mut (dyn Engine + 'a)) -> Self { Req(e) } }
+pub fn einsum_concrete<'a>(_i: Req<'a, dyn Engine + 'a>) {}
+
+pub fn helper(s: &mut dyn Engine) {
+    einsum_concrete(Req::new(&mut *s));   // 1 回目（再borrow）
+    einsum_concrete(Req::new(&mut *s));   // 2 回目
+}
+fn main() {}
+```
+
+### `t6.rs`
+```rust
+pub trait Engine {}
+#[derive(Clone, Copy)] pub enum MaterializationPolicy { Allow, Forbid }
+pub fn einsum(_s: &str, _e: &mut dyn Engine, _m: MaterializationPolicy) {}
+pub fn helper(s: &mut dyn Engine, m: MaterializationPolicy) {
+    einsum("ij->i", s, m);
+    einsum("ij->i", s, m);
+}
+fn main() {}
+```
+
+Observed outcomes:
+
+| file | what it asks | outcome |
+|---|---|---|
+| `t1` | does a lint catch a sugar that drops the policy? | `error: unused variable: \`materialization\`` under `#![deny(unused_variables)]` — yes, and only for the unused case |
+| `t2` | the wrapper as a reader would naively write it, used from a helper | `error: lifetime may not live long enough` (invariant `dyn Engine`, default object lifetime `'static`) |
+| `t4` | the same wrapper with `R: ?Sized = dyn Engine + 'a` | compiles; the helper calls it twice |
+| `t6` | the plain argument, `Copy` enum, same helper | compiles; the helper calls it twice with no `reborrow` |
+
+`t3` (the same naive wrapper behind a generic `Into`) fails for the same lifetime reason as `t2`
+before the move error matters, which is why the wrapper does not rescue the reborrow problem.
