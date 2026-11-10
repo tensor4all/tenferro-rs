@@ -61,7 +61,8 @@ stays unparameterized, like `TensorRead`: its `Tensor(&mut Tensor)` arm holds an
 policy is its first instance: one `Copy` enum, `tenferro_tensor::MaterializationPolicy`, added as the last parameter of every public entry that
 executes numerical work (`*_with_exec`, the einsum trait methods, `FftExecutor` transforms). Graph-building entries do not take it. A provider
 selects the same dispatch under both values — `Forbid` is a gate on input normalization, never a selector of a different kernel — so the
-assertion cannot change a number, and a call that could only succeed through a second numerical path must refuse instead. No `*Options` field,
+assertion cannot route a call to a different numerical path (it does not promise numerical identity: two runs of one parallel reduction may
+differ, and two different paths may agree bit for bit), and a call that could only succeed through a second numerical path must refuse instead. No `*Options` field,
 no engine setter, no `svd_no_copy` twin: the value is per invocation, and one `Copy` parameter repeated is cheaper than a request wrapper with a
 lifetime, a generic parameter and a `reborrow` at every multi-call helper (see #2552 for the two proposals and the four-file compile check that
 decided between them). A second execution constraint may later justify the wrapper; that migration is signature-local and is not built now.
