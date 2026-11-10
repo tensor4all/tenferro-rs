@@ -19,10 +19,21 @@ use super::support;
 
 /// Scheduled commands of the 2x2 reproducer after the metadata view fold.
 ///
-/// 21 rather than the pre-cut-over 20: the traced-over-context AD path emits one
-/// extra `Extension` and two extra `Transpose` nodes, of which the schedule folds
-/// all but one command (#2429).
+/// 21 rather than the pre-cut-over 20 (#2429). The extra command is a second
+/// `Qr` extension: `vjp_many_impl` builds a standalone derivative program that
+/// recomputes the primal `Qr`, and `import_derivative`
+/// (`tenferro-ad/src/traced.rs`, `TraceContext::import_values`) maps only the
+/// program inputs onto the trace, so the replayed `Qr` is appended next to the
+/// one the loss already traced. The pre-cut-over graph materializer merged the
+/// two by structural hash-consing; the `TraceContext` path has no such merge.
 const REPRODUCER_COMMANDS: usize = 21;
+
+/// Semantic operations of the compiled 2x2 reproducer program.
+///
+/// 30 before #2429: the semantic linear transpose emitted `R^T` and `Q^T` twice
+/// each (once as rule fixed ops, once as matmul-pullback adjoints) plus
+/// `(Q^H)^H`. Those three are gone; the duplicate `Qr` above remains.
+const REPRODUCER_PROGRAM_OPS: usize = 27;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -77,7 +88,7 @@ fn evaluate(
     engine: &mut CpuEngine,
     runtime: &tenferro_runtime::Runtime,
     data: Vec<f64>,
-) -> (f64, Vec<f64>, usize) {
+) -> (f64, Vec<f64>, usize, usize) {
     let trace = TraceContext::new();
     let a = traced(&trace, &[2, 2], data);
     let (loss, gradient) = loss_and_gradient(&a, &ad_context());
@@ -92,10 +103,11 @@ fn evaluate(
         )
         .unwrap();
     let commands = prepared.execution_command_count();
+    let program_ops = program.program().operations().len();
     let outputs = support::run_program(runtime, engine, &program, &[]).unwrap();
     let loss = outputs[0].as_slice::<f64>().unwrap()[0];
     let gradient = outputs[1].as_slice::<f64>().unwrap().to_vec();
-    (loss, gradient, commands)
+    (loss, gradient, commands, program_ops)
 }
 
 #[test]
@@ -104,8 +116,9 @@ fn grad_sum_qr_vjp_2x2_census_and_finite_differences() {
     let runtime = support::cpu_runtime_with_linalg(&engine).unwrap();
     let base = well_conditioned_matrix(2, 4);
 
-    let (_, gradient, commands) = evaluate(&mut engine, &runtime, base.clone());
+    let (_, gradient, commands, program_ops) = evaluate(&mut engine, &runtime, base.clone());
     assert_eq!(commands, REPRODUCER_COMMANDS);
+    assert_eq!(program_ops, REPRODUCER_PROGRAM_OPS);
 
     let step = 1e-6;
     for entry in 0..4 {
@@ -113,8 +126,8 @@ fn grad_sum_qr_vjp_2x2_census_and_finite_differences() {
         plus[entry] += step;
         let mut minus = base.clone();
         minus[entry] -= step;
-        let (loss_plus, _, _) = evaluate(&mut engine, &runtime, plus);
-        let (loss_minus, _, _) = evaluate(&mut engine, &runtime, minus);
+        let (loss_plus, ..) = evaluate(&mut engine, &runtime, plus);
+        let (loss_minus, ..) = evaluate(&mut engine, &runtime, minus);
         let central = (loss_plus - loss_minus) / (2.0 * step);
         assert!(
             (central - gradient[entry]).abs() < 1e-6,
