@@ -175,9 +175,9 @@ pub(crate) struct Detached {
 
 /// The runtime configuration this build opens with.
 ///
-/// The artifact directory and the allocation pool's retention budget are read from the
-/// environment on every open: `TENFERRO_CUDA_ARTIFACT_CACHE` and
-/// `TENFERRO_CUDA_POOL_RELEASE_MIB`.
+/// The artifact directory, its bound and the allocation pool's retention budget are read from
+/// the environment on every open: `TENFERRO_CUDA_ARTIFACT_CACHE`,
+/// `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` and `TENFERRO_CUDA_POOL_RELEASE_MIB`.
 ///
 /// `TENFERRO_CUDA_ARTIFACT_CACHE` names the directory that persists compiled kernel images, so a
 /// later process reads them back instead of paying NVRTC again: a whole module is about 8 s per
@@ -187,6 +187,13 @@ pub(crate) struct Detached {
 /// (`%LOCALAPPDATA%\tenferro\t4a-cuda-artifacts` on Windows), and falls back to the in-memory
 /// cache when no absolute per-user root is set or the directory cannot be created. A newly created
 /// directory is mode 0700 on Unix.
+///
+/// The directory is bounded, never unlimited: at most [`artifact_cache_max_bytes`] bytes of
+/// images, 256 MiB unless `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` says otherwise. Publishing past the
+/// bound removes the least recently used images first, best effort: a removal that fails is
+/// dropped, so the directory can stay above its bound. [`CudaRuntime::artifact_dir_evictions`]
+/// counts what was actually removed, and [`CudaRuntime::artifact_dir_stats`] and
+/// [`CudaRuntime::clear_artifact_dir`] read and empty it.
 ///
 /// `TENFERRO_CUDA_POOL_RELEASE_MIB` overrides the allocation pool's retention budget, the idle
 /// device memory the pool keeps mapped instead of handing back to the driver. See
@@ -237,6 +244,51 @@ fn pool_release_threshold_from(override_mib: Option<u64>, total_memory_bytes: u6
     }
     let share = usize::try_from(total_memory_bytes / POOL_RELEASE_SHARE).unwrap_or(usize::MAX);
     share.clamp(MIN_POOL_RELEASE_BYTES, MAX_POOL_RELEASE_BYTES)
+}
+
+/// The bound on the persistent artifact directory, in bytes.
+///
+/// `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` (`value`) sets it in MiB. `0` is a bound like any other, not
+/// a read-only mode: the runtime applies a bound through
+/// [`t4a_cuda_runtime::Runtime::set_artifact_dir_max_bytes`], which trims the directory as it
+/// records the bound. That trim is best effort — a removal that fails is dropped — so `0` stops
+/// new images being published and does not guarantee the directory is empty; an image a failed
+/// trim left behind is still served. A process that wants no persistent directory asks for that
+/// with `TENFERRO_CUDA_ARTIFACT_CACHE=none`. Unset, or a value that is not a whole number of MiB,
+/// keeps [`t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES`] (256 MiB, the in-memory artifact
+/// budget): there is no spelling of "unlimited".
+fn artifact_cache_max_bytes(value: Option<&std::ffi::OsStr>) -> u64 {
+    value
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map_or(t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES, |mib| {
+            mib.saturating_mul(1 << 20)
+        })
+}
+
+/// The one operation opening a runtime performs on its artifact cache.
+///
+/// The cache lives behind a device, so the open applies the bound through this trait and a test
+/// drives a fake instead: a compile of the decision alone would not show that it is applied.
+trait ArtifactDirBound {
+    fn set_artifact_dir_max_bytes(&mut self, max_bytes: u64);
+}
+
+impl ArtifactDirBound for t4a_cuda_runtime::Runtime {
+    fn set_artifact_dir_max_bytes(&mut self, max_bytes: u64) {
+        // The dependency's own method, not this trait's: no recursion.
+        t4a_cuda_runtime::Runtime::set_artifact_dir_max_bytes(self, max_bytes);
+    }
+}
+
+/// Apply `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` to `cache`, the open's only cache mutation.
+fn apply_artifact_cache_bound(
+    cache: &mut dyn ArtifactDirBound,
+    read: impl Fn(&str) -> Option<std::ffi::OsString>,
+) {
+    cache.set_artifact_dir_max_bytes(artifact_cache_max_bytes(
+        read("TENFERRO_CUDA_ARTIFACT_CACHE_MIB").as_deref(),
+    ));
 }
 
 /// `tenferro`'s directory under the user's cache root, which holds compiled kernel images.
@@ -293,15 +345,29 @@ fn usable_artifact_cache_dir(dir: std::path::PathBuf) -> Option<std::path::PathB
         Ok(()) => Some(dir),
         Err(error) => {
             ARTIFACT_CACHE_WARNING.call_once(|| {
-                eprintln!(
-                    "tenferro-gpu: cannot create the artifact cache directory {}: {error}; \
-                     compiled kernels stay in memory for this process",
-                    dir.display()
+                write_best_effort_warning(
+                    &mut std::io::stderr(),
+                    format_args!(
+                        "tenferro-gpu: cannot create the artifact cache directory {}: {error}; \
+                         compiled kernels stay in memory for this process",
+                        dir.display()
+                    ),
                 );
             });
             None
         }
     }
+}
+
+/// Write one warning line to `sink`, dropping it if the write fails.
+///
+/// `eprintln!` panics when stderr is closed, and a diagnostic on a best-effort path must never
+/// turn into a panic in the library.
+pub(crate) fn write_best_effort_warning(
+    sink: &mut impl std::io::Write,
+    message: std::fmt::Arguments<'_>,
+) {
+    let _ = writeln!(sink, "{message}");
 }
 
 /// One warning per process, however many runtimes open against an unusable directory.
@@ -345,7 +411,9 @@ impl CudaRuntime {
             .find(|info| info.id() == device_id)
             .map(crate::cuda::CudaDeviceInfo::total_memory_bytes)
             .unwrap_or(0);
-        Self::with_config(device_id, default_config(total_memory))
+        let runtime = Self::with_config(device_id, default_config(total_memory))?;
+        apply_artifact_cache_bound(&mut *runtime.submit(), |name| std::env::var_os(name));
+        Ok(runtime)
     }
 
     /// Open the CUDA runtime on `device_id` with an explicit configuration.
@@ -441,6 +509,44 @@ impl CudaRuntime {
     /// Artifact-cache hits this runtime served.
     pub fn artifact_cache_hits(&self) -> u64 {
         self.submit().artifact_cache_hits()
+    }
+
+    /// Images and bytes in the persistent artifact directory; empty for an in-memory cache.
+    ///
+    /// # Errors
+    ///
+    /// The [`std::io::Error`] from listing a directory that exists but cannot be read, such as
+    /// `ErrorKind::PermissionDenied`. A directory that does not exist yet is not an error; it
+    /// reports zero entries.
+    pub fn artifact_dir_stats(&self) -> std::io::Result<t4a_cuda_runtime::ArtifactDirStats> {
+        self.submit().artifact_dir_stats()
+    }
+
+    /// The bound on the persistent artifact directory, in bytes.
+    pub fn artifact_dir_max_bytes(&self) -> u64 {
+        self.submit().artifact_dir_max_bytes()
+    }
+
+    /// Remove every compiled image from the persistent artifact directory and return what went.
+    ///
+    /// Images already loaded by this process stay usable; only later processes recompile.
+    ///
+    /// # Errors
+    ///
+    /// The [`std::io::Error`] from listing the directory or removing an entry, such as
+    /// `ErrorKind::PermissionDenied` on a read-only cache. An entry another process removed
+    /// first (`ErrorKind::NotFound`) is not an error.
+    pub fn clear_artifact_dir(&self) -> std::io::Result<t4a_cuda_runtime::ArtifactDirStats> {
+        self.submit().clear_artifact_dir()
+    }
+
+    /// Images this runtime actually removed from the persistent artifact directory to stay within
+    /// its bound, least recently used first.
+    ///
+    /// Trimming is best effort, so a removal that failed is not counted here and the directory can
+    /// stay above its bound; [`CudaRuntime::artifact_dir_stats`] reports what is really there.
+    pub fn artifact_dir_evictions(&self) -> u64 {
+        self.submit().artifact_dir_evictions()
     }
 
     /// Run `closure` inside a raw scope on this runtime's stream, under the submission

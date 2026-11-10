@@ -186,9 +186,12 @@ impl Drop for StreamEventDomainRun {
         retire_pending(&mut self.state, || {
             best_effort_retirement(|| {
                 if let Err(error) = self.runtime.synchronize() {
-                    eprintln!(
-                        "tenferro-gpu: failed to drain the CUDA event-domain run during Drop: \
-                         {error}"
+                    crate::cuda::runtime::write_best_effort_warning(
+                        &mut std::io::stderr(),
+                        format_args!(
+                            "tenferro-gpu: failed to drain the CUDA event-domain run during \
+                             Drop: {error}"
+                        ),
                     );
                 }
             });

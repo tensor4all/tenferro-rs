@@ -162,3 +162,90 @@ fn the_environment_overrides_the_budget_in_mib() {
         MAX_POOL_RELEASE_BYTES
     );
 }
+
+// The persistent artifact directory's bound (#2475).
+use super::{
+    apply_artifact_cache_bound, artifact_cache_max_bytes, write_best_effort_warning,
+    ArtifactDirBound,
+};
+
+#[test]
+fn the_persistent_artifact_directory_is_bounded_by_default() {
+    // Unset keeps the runtime's finite default; persistence is never unbounded.
+    assert_eq!(
+        artifact_cache_max_bytes(None),
+        t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES
+    );
+    assert_eq!(artifact_cache_max_bytes(None), 256 * MIB);
+    // A value that is not a size is not "no limit": it falls back to the default too.
+    for unusable in ["", " ", "unlimited", "-1", "1.5", "none"] {
+        assert_eq!(
+            artifact_cache_max_bytes(Some(OsStr::new(unusable))),
+            t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES,
+            "{unusable:?}"
+        );
+    }
+}
+
+#[test]
+fn the_environment_sets_the_artifact_directory_bound_in_mib() {
+    assert_eq!(artifact_cache_max_bytes(Some(OsStr::new("1024"))), GIB);
+    assert_eq!(
+        artifact_cache_max_bytes(Some(OsStr::new(" 64\n"))),
+        64 * MIB
+    );
+    // Zero is not a read-only mode: it stops publishing and trims the directory towards zero.
+    assert_eq!(artifact_cache_max_bytes(Some(OsStr::new("0"))), 0);
+    // An absurd value saturates rather than wrapping to a small bound.
+    assert_eq!(
+        artifact_cache_max_bytes(Some(OsStr::new("18446744073709551615"))),
+        u64::MAX
+    );
+}
+
+#[test]
+fn an_open_applies_the_environment_bound_to_the_runtime_cache() {
+    // Stands in for the artifact cache behind a device, which a test without one cannot open:
+    // the test records what an open applies, not only what the decision returns.
+    struct Fake {
+        max_bytes: u64,
+    }
+    impl ArtifactDirBound for Fake {
+        fn set_artifact_dir_max_bytes(&mut self, max_bytes: u64) {
+            self.max_bytes = max_bytes;
+        }
+    }
+    let mut cache = Fake {
+        max_bytes: t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES,
+    };
+    apply_artifact_cache_bound(
+        &mut cache,
+        environment(&[("TENFERRO_CUDA_ARTIFACT_CACHE_MIB", "64")]),
+    );
+    assert_eq!(cache.max_bytes, 64 * MIB);
+    // Unset leaves the finite default in force rather than lifting the bound.
+    apply_artifact_cache_bound(&mut cache, no_variables);
+    assert_eq!(
+        cache.max_bytes,
+        t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES
+    );
+}
+
+#[test]
+fn a_warning_to_a_closed_stderr_is_dropped_not_a_panic() {
+    /// Stands in for a closed stderr: every write fails.
+    struct Closed;
+    impl std::io::Write for Closed {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+        }
+    }
+    write_best_effort_warning(&mut Closed, format_args!("tenferro-gpu: {}", "dropped"));
+
+    let mut captured = Vec::new();
+    write_best_effort_warning(&mut captured, format_args!("tenferro-gpu: {}", "kept"));
+    assert_eq!(captured, b"tenferro-gpu: kept\n");
+}
