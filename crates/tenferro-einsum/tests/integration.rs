@@ -1,3 +1,5 @@
+#[path = "integration/broadcast_vjp.rs"]
+mod broadcast_vjp;
 #[path = "integration/cuda_eager_tensor.rs"]
 mod cuda_eager_tensor;
 #[path = "integration/deterministic_path.rs"]
