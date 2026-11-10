@@ -326,9 +326,9 @@ CI: 差分あり かつ 未更新 → fail</pre></div>
 
     <article class="rule"><div class="num">7</div><div class="body">
       <h3>仕組みで守れないルールはルールにしない</h3>
-      <p class="why">ルールは「生成・型・凍結」のどれかで守る。守り方が決まらないものは提案止まりにする。規約文書は人が書かず、演算レジストリとスナップショットから生成する（演算 × 層の表、接尾辞の一覧、例外表）。例外はレジストリ内に理由付きで書く。</p>
+      <p class="why">ルールは「生成・型・凍結」のどれかで守る。守り方が決まらないものは提案止まりにする。規約文書は人が書かず、演算レジストリとスナップショットから生成する（演算 × 層の表、接尾辞の一覧、例外表）。例外はレジストリ内に理由付きで書く。生成できない規約ファイル（<code>REPOSITORY_RULES.md</code>、<code>PERFORMANCE_TIPS.md</code>、tensor4all-agent-rules）は、文法を変える PR と同じ PR で書き換え、<code>repository-rules-review.py</code> が新旧どちらの文法も認める期間を作らない。</p>
       <div class="held"><span class="chip c-gen">生成</span><span class="chip c-type">型</span><span class="chip c-freeze">凍結</span></div>
-      <div class="kills">消えるもの：手で保守している規約の本文（<code>api-conventions.md</code> 命名規則 3、形状規則 4、consolidation policy R2/R3）</div>
+      <div class="kills">消えるもの：手で保守している規約の本文（<code>api-conventions.md</code> 命名規則 3、形状規則 4、consolidation policy R2/R3）。<code>REPOSITORY_RULES.md</code>「Public API Convention」の接尾辞体系と旧トレイト一覧は書き換える</div>
     </div></article>
   </div>
 </section>
@@ -392,8 +392,8 @@ CI: git diff --exit-code api/</pre></div>
 <div class="flow">
   <div class="step"><div class="sn">STEP 1</div><h3>現行を基準として記録</h3><p>全公開クレートの public-api スナップショットを、feature とツールチェーンを明示してコミットする。新設計の承認ではないので、プロトタイプを待たずに取れる。</p></div>
   <div class="step"><div class="sn">STEP 2</div><h3>6つの縦断プロトタイプ</h3><p>複素 SVD、係数付き einsum、消費型 FFT、レイアウトを変えたときのプラン再利用、エラー原因の保持、TraceContext 縮約木。新しい目標 API はこれが通ってから固定する。</p></div>
-  <div class="step"><div class="sn">STEP 3</div><h3>レジストリ生成と削除</h3><p>レジストリから 3 層を生成して旧 API を置き換え、削除する。スナップショットの差分がそのまま退役リストになる。</p></div>
-  <div class="step"><div class="sn">STEP 4</div><h3>隠れたコピーの削減と規約の同期</h3><p>eager einsum の毎回コピー、rank 3 SVD のギャザー、CUDA の転置ギャザーを減らし、それぞれに回帰・性能テストを置く。公開カウンタは入れない。agent-rules と生成文書は同じ PR 群で更新する。</p></div>
+  <div class="step"><div class="sn">STEP 3</div><h3>レジストリ生成と削除</h3><p>レジストリから 3 層を生成して旧 API を置き換え、削除する。スナップショットの差分がそのまま退役リストになる。<b>同じ PR で <code>REPOSITORY_RULES.md</code> の「Public API Convention」（engine を第1引数にする形、<code>_read</code> / <code>_add_to</code> / <code>_into_accum</code> の接尾辞体系、正規トレイトの一覧、<code>solve</code> と in-place FFT の例外）と「Wrapper DRY And Codegen」を新しい文法に書き換える。</b>旧規約のままでは <code>repository-rules-review.py</code> と規約に沿った差分レビューが新しい文法を違反と判定し、旧規約に合わせれば文法が割れる。</p></div>
+  <div class="step"><div class="sn">STEP 4</div><h3>隠れたコピーの削減と規約の同期</h3><p>eager einsum の毎回コピー、rank 3 SVD のギャザー、CUDA の転置ギャザーを減らし、それぞれに回帰・性能テストを置く。公開カウンタは入れない。<code>PERFORMANCE_TIPS.md</code> の「Materialization And Copies」を新しい R3（op ごとに文書化したレイアウト変換）と照らし合わせ、食い違いがあれば同じ PR で直す。tensor4all-agent-rules と生成文書も同じ PR 群で更新する。</p></div>
 </div>
 
 <section class="col">
