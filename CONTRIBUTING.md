@@ -1,3 +1,4 @@
+<!-- unified contribution policy: ../../docs/contributing/rust-repositories.md in tensor4all/tensor4all-meta -->
 # Contributing
 
 Thanks for helping improve tenferro-rs. This file describes the external
