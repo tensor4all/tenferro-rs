@@ -41,6 +41,18 @@ pub trait LinalgRepr: Repr {
     ///
     /// Returns `Error::Internal` when a typed representation receives a tensor
     /// of another dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_linalg::LinalgRepr;
+    /// use tenferro_tensor::{Tensor, Typed};
+    ///
+    /// let s = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// assert!(<Typed<f64> as LinalgRepr>::wrap_real(s.duplicate()?).is_ok());
+    /// assert!(<Typed<f32> as LinalgRepr>::wrap_real(s).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn wrap_real(t: Tensor) -> tenferro_tensor::Result<Self::Real>;
 
     /// Wrap an erased complex-valued result. Typed representations perform a
@@ -50,6 +62,19 @@ pub trait LinalgRepr: Repr {
     ///
     /// Returns `Error::Internal` when a typed representation receives a tensor
     /// of another dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_linalg::LinalgRepr;
+    /// use tenferro_tensor::{Tensor, Typed};
+    ///
+    /// let c = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)])?;
+    /// assert!(<Typed<f64> as LinalgRepr>::wrap_complex(c.duplicate()?).is_ok());
+    /// assert!(<Typed<f32> as LinalgRepr>::wrap_complex(c).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn wrap_complex(t: Tensor) -> tenferro_tensor::Result<Self::Complex>;
 
     /// Wrap an erased index result. Typed representations perform a checked
@@ -59,6 +84,19 @@ pub trait LinalgRepr: Repr {
     ///
     /// Returns `Error::Internal` when a typed representation receives a tensor
     /// of another dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_linalg::LinalgRepr;
+    /// use tenferro_tensor::{Tensor, Typed};
+    ///
+    /// let idx = Tensor::from_vec_col_major(vec![2], vec![0_i64, 1])?;
+    /// assert!(<Typed<f64> as LinalgRepr>::wrap_index(idx).is_ok());
+    /// let real = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(<Typed<f64> as LinalgRepr>::wrap_index(real).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn wrap_index(t: Tensor) -> tenferro_tensor::Result<Self::Index>;
 }
 

@@ -37,6 +37,18 @@ pub trait CoreRepr: Repr {
     ///
     /// Returns `Error::Validation` with `ValidationError::DTypeMismatch` (op
     /// `op`) when a typed representation receives a tensor of another dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::CoreRepr;
+    /// use tenferro_tensor::{Tensor, Typed};
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(<Typed<f64> as CoreRepr>::wrap_value_of("add", t.duplicate()?).is_ok());
+    /// assert!(<Typed<f32> as CoreRepr>::wrap_value_of("add", t).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn wrap_value_of(op: &'static str, t: Tensor) -> tenferro_tensor::Result<Self::Value>;
 
     /// Wrap the erased real-valued result of `op`; typed representations
@@ -46,6 +58,18 @@ pub trait CoreRepr: Repr {
     ///
     /// Returns `Error::Validation` with `ValidationError::DTypeMismatch` when a
     /// typed representation receives a tensor of another dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::CoreRepr;
+    /// use tenferro_tensor::{Tensor, Typed};
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(<Typed<f64> as CoreRepr>::wrap_real("abs", t.duplicate()?).is_ok());
+    /// assert!(<Typed<f32> as CoreRepr>::wrap_real("abs", t).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn wrap_real(op: &'static str, t: Tensor) -> tenferro_tensor::Result<Self::Real>;
 
     /// Wrap the erased predicate result of `op`; typed representations check
@@ -55,6 +79,19 @@ pub trait CoreRepr: Repr {
     ///
     /// Returns `Error::Validation` with `ValidationError::DTypeMismatch` when a
     /// typed representation receives a tensor of another dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::CoreRepr;
+    /// use tenferro_tensor::{Tensor, Typed};
+    ///
+    /// let flags = Tensor::from_vec_col_major(vec![2], vec![true, false])?;
+    /// assert!(<Typed<f64> as CoreRepr>::wrap_bool("compare", flags).is_ok());
+    /// let real = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(<Typed<f64> as CoreRepr>::wrap_bool("compare", real).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn wrap_bool(op: &'static str, t: Tensor) -> tenferro_tensor::Result<Self::Bool>;
 }
 

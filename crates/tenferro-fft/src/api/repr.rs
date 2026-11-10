@@ -78,6 +78,20 @@ pub trait FftRepr: Repr {
     ///
     /// Returns `Error::Internal` when a typed representation receives a
     /// tensor of another dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_fft::FftRepr;
+    /// use tenferro_tensor::{Tensor, Typed};
+    ///
+    /// let c = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 0.0)])?;
+    /// assert!(<Typed<f64> as FftRepr>::wrap_complex(c).is_ok());
+    /// let r = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(<Typed<f64> as FftRepr>::wrap_complex(r).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn wrap_complex(t: Tensor) -> tenferro_tensor::Result<Self::Complex>;
 
     /// Wrap an erased real result; typed representations downcast with a
@@ -87,6 +101,18 @@ pub trait FftRepr: Repr {
     ///
     /// Returns `Error::Internal` when a typed representation receives a
     /// tensor of another dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_fft::FftRepr;
+    /// use tenferro_tensor::{Tensor, Typed};
+    ///
+    /// let r = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(<Typed<f64> as FftRepr>::wrap_real(r.duplicate()?).is_ok());
+    /// assert!(<Typed<f32> as FftRepr>::wrap_real(r).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn wrap_real(t: Tensor) -> tenferro_tensor::Result<Self::Real>;
 }
 

@@ -2257,6 +2257,34 @@ impl TracedTensor {
 
     /// Reverse the order of elements along the requested axes.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    /// let y = x.reverse(&[-1])?;
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let mut engine = CpuEngine::serial();
+    /// let mut builder = Runtime::builder();
+    /// builder
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
+    ///     .unwrap();
+    /// let runtime = builder.build().unwrap();
+    /// let prepared = runtime
+    ///     .prepare(&program, &[], &[engine.target()])
+    ///     .unwrap();
+    /// let mut outputs = runtime
+    ///     .run(&mut [&mut engine], &prepared, &[])
+    ///     .unwrap();
+    /// let out = outputs.remove(0).into_tensor(&mut engine).unwrap();
+    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 2.0, 1.0]);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when an axis is

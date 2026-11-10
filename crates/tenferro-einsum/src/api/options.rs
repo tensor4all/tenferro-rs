@@ -75,6 +75,15 @@ impl<'a> From<&'a EinsumSubscripts> for Spec<'a> {
 /// ```
 pub trait EinsumSpec {
     /// The spec this value denotes; never fails and never parses.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::{EinsumSpec, Spec};
+    ///
+    /// let owned = String::from("ij,jk->ik");
+    /// assert!(matches!(owned.spec(), Spec::Text("ij,jk->ik")));
+    /// ```
     fn spec(&self) -> Spec<'_>;
 }
 
@@ -307,6 +316,21 @@ pub trait EinsumInputs: sealed::Sealed {
     type Repr: Repr;
 
     /// Borrow every input; metadata only, never copies element data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_einsum::EinsumInputs;
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
+    /// let inputs = vec![a, b];
+    /// let reads = inputs.reads();
+    /// assert_eq!(reads[0].shape(), &[2]);
+    /// assert_eq!(reads[1].shape(), &[3]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn reads(&self) -> Vec<TensorRead<'_>>;
 }
 

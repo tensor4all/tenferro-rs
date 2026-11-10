@@ -42,9 +42,32 @@ pub trait Repr: sealed::Sealed {
     ///
     /// Returns [`Error::Internal`] when a typed representation receives a
     /// tensor of another dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Repr, Tensor, Typed};
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// assert!(<Typed<f64> as Repr>::wrap_value(t.duplicate()?).is_ok());
+    /// assert!(<Typed<f32> as Repr>::wrap_value(t).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn wrap_value(t: Tensor) -> crate::Result<Self::Value>;
 
     /// Erase a writable target to [`TensorWrite`]. Metadata only.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Erased, Repr, Tensor, TensorWrite};
+    ///
+    /// let mut t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let write = TensorWrite::from_tensor(&mut t);
+    /// let erased = <Erased as Repr>::erase_write(write);
+    /// assert_eq!(erased.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn erase_write<'a>(w: Self::Write<'a>) -> TensorWrite<'a>;
 }
 
@@ -53,9 +76,12 @@ pub trait Repr: sealed::Sealed {
 /// # Examples
 ///
 /// ```
-/// use tenferro_tensor::Erased;
+/// use tenferro_tensor::{Erased, Repr, Tensor};
 ///
-/// let _ = Erased;
+/// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+/// let same = <Erased as Repr>::wrap_value(t)?;
+/// assert_eq!(same.shape(), &[1]);
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Erased;
@@ -65,9 +91,12 @@ pub struct Erased;
 /// # Examples
 ///
 /// ```
-/// use tenferro_tensor::Typed;
+/// use tenferro_tensor::{Repr, Tensor, Typed};
 ///
-/// let _ = Typed::<f64>::default();
+/// let t = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+/// let typed = <Typed<f64> as Repr>::wrap_value(t)?;
+/// assert_eq!(typed.shape(), &[1]);
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 pub struct Typed<T>(PhantomData<fn() -> T>);
 
@@ -163,6 +192,18 @@ pub trait AsView: sealed::Sealed {
 
     /// Borrow this input as a [`TensorRead`]. Metadata only; never copies
     /// element data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{AsView, Tensor};
+    ///
+    /// let t = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let read = t.as_read();
+    /// assert_eq!(read.shape(), &[2]);
+    /// assert_eq!(read.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn as_read(&self) -> TensorRead<'_>;
 }
 
