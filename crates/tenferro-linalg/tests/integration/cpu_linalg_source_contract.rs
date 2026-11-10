@@ -393,8 +393,8 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
         ("svd_values_read", "svd_values_faer_view_entered"),
         ("qr_read", "qr_faer_view_entered"),
         ("eigh_read", "eigh_faer_view_entered"),
-        ("eig_read", "linalg::faer::eig_view"),
-        ("eig_values_read", "linalg::faer::eig_values_view"),
+        ("eig_read", "linalg::faer::eig"),
+        ("eig_values_read", "linalg::faer::eig_values"),
         (
             "rank_revealing_qr_read",
             "rank_revealing_qr_faer_view_entered",

@@ -43,7 +43,8 @@ pub enum CpuEngineError {
 
 /// A caller-held CPU execution engine.
 ///
-/// The engine owns one [`threadteam::Pool`] (or none for [`CpuEngine::serial`]) and the
+/// The engine owns one [`threadteam::Pool`] (or none for [`CpuEngine::serial`], and
+/// for a caller-built pool of one worker, which it releases at construction) and the
 /// workspace operations write: the buffer pool that recycles outputs, the
 /// contraction scratch, and a handle to a [`CpuPlanCache`]. It implements
 /// [`tenferro_tensor::Engine`], so every operation takes it as `&mut`.

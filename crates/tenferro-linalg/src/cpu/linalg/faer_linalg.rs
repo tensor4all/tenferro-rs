@@ -559,15 +559,6 @@ pub(crate) fn cholesky<T: FaerLinalg>(
     cholesky_impl(exec, buffers, &input.clone().into_dynamic())
 }
 
-pub(crate) fn cholesky_view<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<TypedTensor<T>> {
-    square_matrix_dim_view(&view, "cholesky")?;
-    cholesky_impl(exec, buffers, &view)
-}
-
 /// Lower Cholesky factor of one compact `n x n` matrix, for the managed (prepared) route.
 ///
 /// The factor stays a pooled tensor, so the host's staging copy into the managed domain returns its
@@ -672,15 +663,6 @@ pub(crate) fn lu<T: FaerLinalg>(
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     lu_impl(exec, buffers, &input.clone().into_dynamic())
-}
-
-pub(crate) fn lu_view<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    matrix_dims_view(&view, "lu")?;
-    lu_impl(exec, buffers, &view)
 }
 
 pub(crate) fn lu_factor<T: FaerLinalg>(
@@ -803,15 +785,6 @@ pub(crate) fn full_piv_lu<T: FaerLinalg>(
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     full_piv_lu_impl(exec, buffers, &input.clone().into_dynamic())
-}
-
-pub(crate) fn full_piv_lu_view<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
-    square_matrix_dim_view(&view, "full_piv_lu")?;
-    full_piv_lu_impl(exec, buffers, &view)
 }
 
 /// Validate a batched binary solve: square `A`, an `n`-row matrix RHS, and equal batch shapes.
@@ -1146,40 +1119,6 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
     )
 }
 
-/// Triangular solve with a borrowed coefficient matrix and right-hand side.
-///
-/// Both reach the provider as strided descriptors with no host copy; the provider makes the
-/// single copy of `b` the destructive solve needs, straight into the output.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn triangular_solve_view<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    a: TypedTensorView<'_, T>,
-    b: TypedTensorView<'_, T>,
-    left_side: bool,
-    lower: bool,
-    transpose_a: bool,
-    unit_diagonal: bool,
-) -> tenferro_tensor::Result<TypedTensor<T>> {
-    const OP: &str = "triangular_solve";
-    square_matrix_dim_view(&a, OP)?;
-    // Triangular solve takes a matrix right-hand side on every provider; the borrowed route must
-    // not accept a rank the owned route rejects.
-    matrix_dims_view(&b, OP)?;
-    triangular_solve_impl(
-        exec,
-        buffers,
-        &a,
-        &b,
-        tlinalg::triangular_solve::TriangularSolveFlags {
-            left_side,
-            lower,
-            transpose_a,
-            unit_diagonal,
-        },
-    )
-}
-
 // ---------------------------------------------------------------------------------------------
 // SVD
 // ---------------------------------------------------------------------------------------------
@@ -1203,42 +1142,12 @@ pub(crate) fn svd_full<T: crate::LinalgScalar>(
 }
 
 #[cfg(feature = "native")]
-pub(crate) fn svd_view<T: crate::LinalgScalar>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<PublicSvd<T>> {
-    matrix_dims_view(&view, "svd")?;
-    crate::svd_with_exec(exec, buffers, &view, false)
-}
-
-#[cfg(feature = "native")]
-pub(crate) fn svd_full_view<T: crate::LinalgScalar>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<PublicSvd<T>> {
-    matrix_dims_view(&view, "svd_full")?;
-    crate::svd_with_exec(exec, buffers, &view, true)
-}
-
-#[cfg(feature = "native")]
 pub(crate) fn svd_values<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
     crate::svd_values_with_exec(exec, buffers, &input.clone().into_dynamic())
-}
-
-#[cfg(feature = "native")]
-pub(crate) fn svd_values_view<T: crate::LinalgScalar>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    matrix_dims_view(&view, "svd_values")?;
-    crate::svd_values_with_exec(exec, buffers, &view)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1252,16 +1161,6 @@ pub(crate) fn qr<T: crate::LinalgScalar>(
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
     crate::qr_with_exec(exec, buffers, &input.clone().into_dynamic())
-}
-
-#[cfg(feature = "native")]
-pub(crate) fn qr_view<T: crate::LinalgScalar>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
-    matrix_dims_view(&view, "qr")?;
-    crate::qr_with_exec(exec, buffers, &view)
 }
 
 /// Column-pivoted QR with the host's rank decision.
@@ -1334,18 +1233,6 @@ pub(crate) fn rank_revealing_qr<T: FaerLinalg>(
     rank_revealing_qr_impl(exec, buffers, &input.clone().into_dynamic(), options)
 }
 
-/// Column-pivoted QR of a borrowed 2-D host view, read in place by the provider.
-pub(crate) fn rank_revealing_qr_view<T: FaerLinalg>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-    options: crate::RankRevealingQrOptions,
-) -> tenferro_tensor::Result<super::rank_revealing_qr::TypedRrqr<T>> {
-    crate::rank_revealing_qr::validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
-    matrix_dims_view(&view, "rank_revealing_qr")?;
-    rank_revealing_qr_impl(exec, buffers, &view, options)
-}
-
 // ---------------------------------------------------------------------------------------------
 // Hermitian eigendecomposition
 // ---------------------------------------------------------------------------------------------
@@ -1360,32 +1247,12 @@ pub(crate) fn eigh<T: crate::LinalgScalar>(
 }
 
 #[cfg(feature = "native")]
-pub(crate) fn eigh_view<T: crate::LinalgScalar>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<(TypedTensor<T::RealScalar>, TypedTensor<T>)> {
-    square_matrix_dim_view(&view, "eigh")?;
-    crate::eigh_with_exec(exec, buffers, &view)
-}
-
-#[cfg(feature = "native")]
 pub(crate) fn eigh_values<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
     crate::eigh_values_with_exec(exec, buffers, &input.clone().into_dynamic())
-}
-
-#[cfg(feature = "native")]
-pub(crate) fn eigh_values_view<T: crate::LinalgScalar>(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TypedTensorView<'_, T>,
-) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    square_matrix_dim_view(&view, "eigh_values")?;
-    crate::eigh_values_with_exec(exec, buffers, &view)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1487,44 +1354,6 @@ where
         Tensor::from_typed(values),
         Tensor::from_typed(vectors),
     ])
-}
-
-/// Dispatch an erased eig over the four supported dtypes.
-macro_rules! eig_dispatch {
-    ($tensor:expr, $op:literal, |$typed:ident| $body:expr) => {
-        match $tensor {
-            TensorView::F32($typed) => $body,
-            TensorView::F64($typed) => $body,
-            TensorView::C32($typed) => $body,
-            TensorView::C64($typed) => $body,
-            unsupported => Err(crate::error::unsupported_dtype($op, unsupported.dtype())),
-        }
-    };
-}
-
-/// General eigendecomposition of a borrowed 2-D host view.
-pub(crate) fn eig_view(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TensorView<'_>,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    eig_dispatch!(view, "eig", |typed| {
-        square_matrix_dim_view(&typed, "eig")?;
-        eig_erased(exec, buffers, &typed)
-    })
-}
-
-/// Eigenvalues of a borrowed 2-D host view, without the eigenvector solve.
-#[cfg(feature = "native")]
-pub(crate) fn eig_values_view(
-    exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
-    view: TensorView<'_>,
-) -> tenferro_tensor::Result<Tensor> {
-    eig_dispatch!(view, "eig_values", |typed| {
-        square_matrix_dim_view(&typed, "eig_values")?;
-        crate::eig_values_with_exec(exec, buffers, &typed).map(Tensor::from_typed)
-    })
 }
 
 /// Dispatch a host operand over the four supported dtypes as a typed view.

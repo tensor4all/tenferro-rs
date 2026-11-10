@@ -693,7 +693,7 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_host_ok(&input) {
-                return linalg::faer::eig_view(exec, buffers, input.into_dynamic());
+                return linalg::faer::eig(exec, buffers, &input);
             }
             with_owned_layout(exec, buffers, "eig", input, |input, buffers, exec| {
                 eig_entered(exec, buffers, input)
@@ -707,7 +707,7 @@ impl LinalgBackend for CpuEngine {
         self.with_linalg_pool_checked(move |exec, buffers| {
             #[cfg(feature = "native")]
             if faer_strided_host_ok(&input) {
-                return linalg::faer::eig_values_view(exec, buffers, input.into_dynamic());
+                return linalg::faer::eig_values(exec, buffers, &input);
             }
             with_owned_layout(
                 exec,
@@ -1277,7 +1277,6 @@ fn solve_from_views_entered(
     a: HostOperand<'_>,
     b: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
     let a = a.into_dynamic();
     let b = b.into_dynamic();
     {
@@ -1350,7 +1349,6 @@ fn solve_read_into_entered(
     b: HostOperand<'_>,
     out: TensorViewMut<'_, Host>,
 ) -> tenferro_tensor::Result<()> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
     let a = a.into_dynamic();
     let b = b.into_dynamic();
     let out = out.into_dynamic();
@@ -2774,11 +2772,9 @@ fn rank_revealing_qr_faer_view_entered(
     input: HostOperand<'_>,
     options: crate::RankRevealingQrOptions,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     macro_rules! factor {
         ($view:expr, $scalar:ty) => {
-            linalg::faer::rank_revealing_qr_view(exec, buffers, $view, options).map(|result| {
+            linalg::faer::rank_revealing_qr(exec, buffers, &$view, options).map(|result| {
                 vec![
                     Tensor::from_typed::<$scalar>(result.q),
                     Tensor::from_typed::<$scalar>(result.r),
@@ -2807,9 +2803,6 @@ fn triangular_solve_faer_view_entered(
     b: HostOperand<'_>,
     options: TriangularSolveOptions,
 ) -> tenferro_tensor::Result<Tensor> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let a = a.into_dynamic();
-    let b = b.into_dynamic();
     let TriangularSolveOptions {
         left_side,
         lower,
@@ -2818,11 +2811,11 @@ fn triangular_solve_faer_view_entered(
     } = options;
     macro_rules! solve {
         ($a:expr, $b:expr, $scalar:ty) => {
-            linalg::faer::triangular_solve_view(
+            linalg::faer::triangular_solve(
                 exec,
                 buffers,
-                $a,
-                $b,
+                &$a,
+                &$b,
                 left_side,
                 lower,
                 transpose_a,
@@ -2850,13 +2843,11 @@ fn svd_faer_view_entered(
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     match input {
-        TensorView::F32(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
-        TensorView::F64(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
-        TensorView::C32(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
-        TensorView::C64(view) => linalg::faer::svd_view(exec, buffers, view).map(svd_erased),
+        TensorView::F32(view) => linalg::faer::svd(exec, buffers, &view).map(svd_erased),
+        TensorView::F64(view) => linalg::faer::svd(exec, buffers, &view).map(svd_erased),
+        TensorView::C32(view) => linalg::faer::svd(exec, buffers, &view).map(svd_erased),
+        TensorView::C64(view) => linalg::faer::svd(exec, buffers, &view).map(svd_erased),
         unsupported => Err(unsupported_dtype("svd", unsupported.dtype())),
     }
 }
@@ -2867,13 +2858,11 @@ fn svd_full_faer_view_entered(
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     match input {
-        TensorView::F32(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
-        TensorView::F64(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
-        TensorView::C32(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
-        TensorView::C64(view) => linalg::faer::svd_full_view(exec, buffers, view).map(svd_erased),
+        TensorView::F32(view) => linalg::faer::svd_full(exec, buffers, &view).map(svd_erased),
+        TensorView::F64(view) => linalg::faer::svd_full(exec, buffers, &view).map(svd_erased),
+        TensorView::C32(view) => linalg::faer::svd_full(exec, buffers, &view).map(svd_erased),
+        TensorView::C64(view) => linalg::faer::svd_full(exec, buffers, &view).map(svd_erased),
         unsupported => Err(unsupported_dtype("svd_full", unsupported.dtype())),
     }
 }
@@ -2884,20 +2873,18 @@ fn svd_values_faer_view_entered(
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => {
-            linalg::faer::svd_values_view(exec, buffers, view).map(Tensor::from_typed::<f32>)
+            linalg::faer::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::F64(view) => {
-            linalg::faer::svd_values_view(exec, buffers, view).map(Tensor::from_typed::<f64>)
+            linalg::faer::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         TensorView::C32(view) => {
-            linalg::faer::svd_values_view(exec, buffers, view).map(Tensor::from_typed::<f32>)
+            linalg::faer::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::C64(view) => {
-            linalg::faer::svd_values_view(exec, buffers, view).map(Tensor::from_typed::<f64>)
+            linalg::faer::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         unsupported => Err(unsupported_dtype("svd_values", unsupported.dtype())),
     }
@@ -2909,13 +2896,11 @@ fn qr_faer_view_entered(
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     match input {
-        TensorView::F32(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
-        TensorView::F64(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
-        TensorView::C32(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
-        TensorView::C64(view) => linalg::faer::qr_view(exec, buffers, view).map(pair_erased),
+        TensorView::F32(view) => linalg::faer::qr(exec, buffers, &view).map(pair_erased),
+        TensorView::F64(view) => linalg::faer::qr(exec, buffers, &view).map(pair_erased),
+        TensorView::C32(view) => linalg::faer::qr(exec, buffers, &view).map(pair_erased),
+        TensorView::C64(view) => linalg::faer::qr(exec, buffers, &view).map(pair_erased),
         unsupported => Err(unsupported_dtype("qr", unsupported.dtype())),
     }
 }
@@ -2926,13 +2911,11 @@ fn eigh_faer_view_entered(
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     match input {
-        TensorView::F32(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
-        TensorView::F64(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
-        TensorView::C32(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
-        TensorView::C64(view) => linalg::faer::eigh_view(exec, buffers, view).map(pair_erased),
+        TensorView::F32(view) => linalg::faer::eigh(exec, buffers, &view).map(pair_erased),
+        TensorView::F64(view) => linalg::faer::eigh(exec, buffers, &view).map(pair_erased),
+        TensorView::C32(view) => linalg::faer::eigh(exec, buffers, &view).map(pair_erased),
+        TensorView::C64(view) => linalg::faer::eigh(exec, buffers, &view).map(pair_erased),
         unsupported => Err(unsupported_dtype("eigh", unsupported.dtype())),
     }
 }
@@ -2943,20 +2926,18 @@ fn eigh_values_faer_view_entered(
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => {
-            linalg::faer::eigh_values_view(exec, buffers, view).map(Tensor::from_typed::<f32>)
+            linalg::faer::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::F64(view) => {
-            linalg::faer::eigh_values_view(exec, buffers, view).map(Tensor::from_typed::<f64>)
+            linalg::faer::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         TensorView::C32(view) => {
-            linalg::faer::eigh_values_view(exec, buffers, view).map(Tensor::from_typed::<f32>)
+            linalg::faer::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::C64(view) => {
-            linalg::faer::eigh_values_view(exec, buffers, view).map(Tensor::from_typed::<f64>)
+            linalg::faer::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         unsupported => Err(unsupported_dtype("eigh_values", unsupported.dtype())),
     }
@@ -2968,20 +2949,18 @@ fn cholesky_faer_view_entered(
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     match input {
         TensorView::F32(view) => {
-            linalg::faer::cholesky_view(exec, buffers, view).map(Tensor::from_typed::<f32>)
+            linalg::faer::cholesky(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::F64(view) => {
-            linalg::faer::cholesky_view(exec, buffers, view).map(Tensor::from_typed::<f64>)
+            linalg::faer::cholesky(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         TensorView::C32(view) => {
-            linalg::faer::cholesky_view(exec, buffers, view).map(Tensor::from_typed::<Complex32>)
+            linalg::faer::cholesky(exec, buffers, &view).map(Tensor::from_typed::<Complex32>)
         }
         TensorView::C64(view) => {
-            linalg::faer::cholesky_view(exec, buffers, view).map(Tensor::from_typed::<Complex64>)
+            linalg::faer::cholesky(exec, buffers, &view).map(Tensor::from_typed::<Complex64>)
         }
         unsupported => Err(unsupported_dtype("cholesky", unsupported.dtype())),
     }
@@ -2993,20 +2972,18 @@ fn lu_faer_view_entered(
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     match input {
-        TensorView::F32(view) => linalg::faer::lu_view(exec, buffers, view)
+        TensorView::F32(view) => linalg::faer::lu(exec, buffers, &view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-        TensorView::F64(view) => linalg::faer::lu_view(exec, buffers, view)
+        TensorView::F64(view) => linalg::faer::lu(exec, buffers, &view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-        TensorView::C32(view) => linalg::faer::lu_view(exec, buffers, view).map(|outputs| {
+        TensorView::C32(view) => linalg::faer::lu(exec, buffers, &view).map(|outputs| {
             outputs
                 .into_iter()
                 .map(Tensor::from_typed::<Complex32>)
                 .collect()
         }),
-        TensorView::C64(view) => linalg::faer::lu_view(exec, buffers, view).map(|outputs| {
+        TensorView::C64(view) => linalg::faer::lu(exec, buffers, &view).map(|outputs| {
             outputs
                 .into_iter()
                 .map(Tensor::from_typed::<Complex64>)
@@ -3021,29 +2998,23 @@ fn full_piv_lu_faer_view_entered(
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    // The provider's view kernels are shared with the dynamic `with_exec` entries.
-    let input = input.into_dynamic();
     match input {
-        TensorView::F32(view) => linalg::faer::full_piv_lu_view(exec, buffers, view)
+        TensorView::F32(view) => linalg::faer::full_piv_lu(exec, buffers, &view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-        TensorView::F64(view) => linalg::faer::full_piv_lu_view(exec, buffers, view)
+        TensorView::F64(view) => linalg::faer::full_piv_lu(exec, buffers, &view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-        TensorView::C32(view) => {
-            linalg::faer::full_piv_lu_view(exec, buffers, view).map(|outputs| {
-                outputs
-                    .into_iter()
-                    .map(Tensor::from_typed::<Complex32>)
-                    .collect()
-            })
-        }
-        TensorView::C64(view) => {
-            linalg::faer::full_piv_lu_view(exec, buffers, view).map(|outputs| {
-                outputs
-                    .into_iter()
-                    .map(Tensor::from_typed::<Complex64>)
-                    .collect()
-            })
-        }
+        TensorView::C32(view) => linalg::faer::full_piv_lu(exec, buffers, &view).map(|outputs| {
+            outputs
+                .into_iter()
+                .map(Tensor::from_typed::<Complex32>)
+                .collect()
+        }),
+        TensorView::C64(view) => linalg::faer::full_piv_lu(exec, buffers, &view).map(|outputs| {
+            outputs
+                .into_iter()
+                .map(Tensor::from_typed::<Complex64>)
+                .collect()
+        }),
         unsupported => Err(unsupported_dtype("full_piv_lu", unsupported.dtype())),
     }
 }
