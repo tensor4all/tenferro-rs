@@ -13,7 +13,7 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 use tlinalg_blas::{Op, Result as BlasResult};
 
-use crate::cpu::tlinalg_blas::workspace;
+use crate::cpu::tlinalg_blas::{vendor_call, workspace};
 
 #[cfg(test)]
 #[path = "helpers/tests.rs"]
@@ -144,7 +144,9 @@ macro_rules! forward_lapack_families {
             a: RawStridedRef<'_, Self>,
             out: &mut Vec<Self>,
         ) -> BlasResult<()> {
-            tlinalg_blas::cholesky::cholesky(Op::Cholesky, a, out, &mut workspace(pool))
+            vendor_call(|| {
+                tlinalg_blas::cholesky::cholesky(Op::Cholesky, a, out, &mut workspace(pool))
+            })
         }
 
         fn triangular_solve(
@@ -154,14 +156,16 @@ macro_rules! forward_lapack_families {
             b: RawStridedRef<'_, Self>,
             out: &mut Vec<Self>,
         ) -> BlasResult<()> {
-            tlinalg_blas::triangular_solve::triangular_solve(
-                Op::TriangularSolve,
-                options,
-                a,
-                b,
-                out,
-                &mut workspace(pool),
-            )
+            vendor_call(|| {
+                tlinalg_blas::triangular_solve::triangular_solve(
+                    Op::TriangularSolve,
+                    options,
+                    a,
+                    b,
+                    out,
+                    &mut workspace(pool),
+                )
+            })
         }
 
         fn lu(
@@ -169,7 +173,7 @@ macro_rules! forward_lapack_families {
             a: RawStridedRef<'_, Self>,
             outputs: tlinalg_blas::lu::LuOutputs<'_, Self>,
         ) -> BlasResult<()> {
-            tlinalg_blas::lu::lu(Op::Lu, a, outputs, &mut workspace(pool))
+            vendor_call(|| tlinalg_blas::lu::lu(Op::Lu, a, outputs, &mut workspace(pool)))
         }
 
         fn solve(
@@ -179,7 +183,9 @@ macro_rules! forward_lapack_families {
             b: RawStridedRef<'_, Self>,
             out: &mut Vec<Self>,
         ) -> BlasResult<()> {
-            tlinalg_blas::solve::solve(Op::Solve, transpose_a, a, b, out, &mut workspace(pool))
+            vendor_call(|| {
+                tlinalg_blas::solve::solve(Op::Solve, transpose_a, a, b, out, &mut workspace(pool))
+            })
         }
 
         fn solve_into(
@@ -189,7 +195,16 @@ macro_rules! forward_lapack_families {
             b: RawStridedRef<'_, Self>,
             out: RawStridedMut<'_, Self>,
         ) -> BlasResult<()> {
-            tlinalg_blas::solve::solve_into(Op::Solve, transpose_a, a, b, out, &mut workspace(pool))
+            vendor_call(|| {
+                tlinalg_blas::solve::solve_into(
+                    Op::Solve,
+                    transpose_a,
+                    a,
+                    b,
+                    out,
+                    &mut workspace(pool),
+                )
+            })
         }
 
         fn householder_factor(
@@ -199,14 +214,16 @@ macro_rules! forward_lapack_families {
             data: &mut [Self],
             tau: &mut Vec<Self>,
         ) -> BlasResult<()> {
-            tlinalg_blas::householder::factor(
-                Op::HouseholderFactor,
-                rows,
-                cols,
-                data,
-                tau,
-                &mut workspace(pool),
-            )
+            vendor_call(|| {
+                tlinalg_blas::householder::factor(
+                    Op::HouseholderFactor,
+                    rows,
+                    cols,
+                    data,
+                    tau,
+                    &mut workspace(pool),
+                )
+            })
         }
 
         fn apply_reflectors(
@@ -220,18 +237,20 @@ macro_rules! forward_lapack_families {
             tau: &[Self],
             c: &mut [Self],
         ) -> BlasResult<()> {
-            tlinalg_blas::householder::apply_reflectors(
-                Op::HouseholderApply,
-                m,
-                a_cols,
-                p,
-                k,
-                transpose,
-                a,
-                tau,
-                c,
-                &mut workspace(pool),
-            )
+            vendor_call(|| {
+                tlinalg_blas::householder::apply_reflectors(
+                    Op::HouseholderApply,
+                    m,
+                    a_cols,
+                    p,
+                    k,
+                    transpose,
+                    a,
+                    tau,
+                    c,
+                    &mut workspace(pool),
+                )
+            })
         }
 
         fn qr(
@@ -240,7 +259,7 @@ macro_rules! forward_lapack_families {
             q: &mut Vec<Self>,
             r: &mut Vec<Self>,
         ) -> BlasResult<()> {
-            tlinalg_blas::qr::qr(Op::Qr, a, q, r, &mut workspace(pool))
+            vendor_call(|| tlinalg_blas::qr::qr(Op::Qr, a, q, r, &mut workspace(pool)))
         }
 
         fn rank_revealing_qr(
@@ -248,12 +267,14 @@ macro_rules! forward_lapack_families {
             a: RawStridedRef<'_, Self>,
             outputs: tlinalg_blas::qr::RankRevealingQrOutputs<'_, Self>,
         ) -> BlasResult<()> {
-            tlinalg_blas::qr::rank_revealing_qr(
-                Op::RankRevealingQr,
-                a,
-                outputs,
-                &mut workspace(pool),
-            )
+            vendor_call(|| {
+                tlinalg_blas::qr::rank_revealing_qr(
+                    Op::RankRevealingQr,
+                    a,
+                    outputs,
+                    &mut workspace(pool),
+                )
+            })
         }
 
         fn eigh(
@@ -263,7 +284,7 @@ macro_rules! forward_lapack_families {
             values: &mut Vec<$real>,
             vectors: Option<&mut Vec<Self>>,
         ) -> BlasResult<()> {
-            tlinalg_blas::eigh::eigh(op, a, values, vectors, &mut workspace(pool))
+            vendor_call(|| tlinalg_blas::eigh::eigh(op, a, values, vectors, &mut workspace(pool)))
         }
 
         fn svd(
@@ -273,7 +294,7 @@ macro_rules! forward_lapack_families {
             a: RawStridedRef<'_, Self>,
             outputs: tlinalg_blas::svd::SvdOutputs<'_, Self, $real>,
         ) -> BlasResult<()> {
-            tlinalg_blas::svd::svd(op, mode, a, outputs, &mut workspace(pool))
+            vendor_call(|| tlinalg_blas::svd::svd(op, mode, a, outputs, &mut workspace(pool)))
         }
 
         fn eig(
@@ -283,7 +304,7 @@ macro_rules! forward_lapack_families {
             values: &mut Vec<$complex>,
             vectors: Option<&mut Vec<$complex>>,
         ) -> BlasResult<()> {
-            tlinalg_blas::eig::eig(op, a, values, vectors, &mut workspace(pool))
+            vendor_call(|| tlinalg_blas::eig::eig(op, a, values, vectors, &mut workspace(pool)))
         }
     };
 }
@@ -368,7 +389,7 @@ macro_rules! impl_real_lapack {
                     validate_gemm_operands(a.len(), b.len(), c.len(), a_rows, a_cols, b_cols)?;
                 // SAFETY: the checked slice lengths cover m*k, k*n, and m*n column-major
                 // elements; dimensions and leading dimensions fit LP64 i32.
-                unsafe {
+                vendor_call(|| unsafe {
                     $gemm(
                         cblas_sys::CBLAS_LAYOUT::CblasColMajor,
                         cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
@@ -385,7 +406,7 @@ macro_rules! impl_real_lapack {
                         c.as_mut_ptr(),
                         m,
                     );
-                }
+                });
                 Ok(())
             }
 
@@ -449,7 +470,7 @@ macro_rules! impl_complex_lapack {
                 // SAFETY: the checked slice lengths cover m*k, k*n, and m*n column-major
                 // elements; dimensions and leading dimensions fit LP64 i32, and `alpha`/`beta`
                 // live for the call.
-                unsafe {
+                vendor_call(|| unsafe {
                     $gemm(
                         cblas_sys::CBLAS_LAYOUT::CblasColMajor,
                         cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
@@ -466,7 +487,7 @@ macro_rules! impl_complex_lapack {
                         c.as_mut_ptr().cast(),
                         m,
                     );
-                }
+                });
                 Ok(())
             }
 

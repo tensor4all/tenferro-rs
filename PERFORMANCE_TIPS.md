@@ -574,16 +574,26 @@ thread count, nothing across thread counts — is owned by `docs/spec/reproducib
   worker of the engine's own pool (the entry runs in place) and from a worker of
   a different pool. A kernel that needs every worker at once (a barrier team)
   asks `Exec::can_broadcast` and takes a barrier-free path when it is refused.
-- threadteam places the team; tenferro does not narrow or restore masks and
+- threadteam places the team; tenferro makes no `sched_setaffinity` call and
   has no affinity setting of its own. Placement of a root team scope is on by
-  default (threadteam 0.4): member `k` gets one CPU of the calling thread's
-  affinity set `S`, the CPU `S[k]`, while the leader keeps all of `S` between
-  sections and is moved back to `S[0]` immediately before each one, so a vendor
-  team created from the leader inherits the full mask and not one CPU. Nothing
-  wraps: when `S` has fewer CPUs than participants nobody is placed and
+  default (threadteam 0.5): member `k` gets one CPU of the calling thread's
+  affinity set `S`, the CPU `S[k]`, and the thread that builds the team (the
+  engine's leader) stays pinned to `{S[0]}` for the team's life, between
+  operations too. A vendor library builds its own thread team from the calling
+  thread, so a vendor call made directly from that leader confines the whole
+  vendor team to `S[0]` (#2553: with `MKL_NUM_THREADS=4`, MKL's OpenMP threads
+  shared one CPU and 4-thread QR, SVD and solve ran 11-89x slower). Every
+  BLAS/LAPACK call of the LAPACK linalg route therefore runs through
+  `tenferro-linalg`'s `vendor_call`, which asks threadteam
+  (`TeamExec::external`) to widen the leader to `S` for the call and pin it
+  again afterwards: two `sched_setaffinity` calls per vendor call on a placed
+  leader, nothing elsewhere. The vendor GEMM inside `cpueinsum-blas` is not
+  widened yet; because a vendor's first call fixes where its worker threads
+  live, a process whose first vendor call is that GEMM keeps the confinement.
+  Nothing wraps: when `S` has fewer CPUs than participants nobody is placed and
   `Pool::pin_skips()` counts those scopes. A caller that does not want this
   builds its own pool with `Pool::builder().pin_participants(false)`. A member
-  that calls a vendor library directly is the one case confined to its single
+  that calls a vendor library directly is likewise confined to its single
   CPU, so such a call goes through `Exec::external`, which restores the
   member's mask first. Provider thread counts remain controlled by the
   provider variables below, not by worker affinity.

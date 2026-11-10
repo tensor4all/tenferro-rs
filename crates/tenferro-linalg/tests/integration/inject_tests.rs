@@ -17,6 +17,8 @@ static DGEMM_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGESC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETRF_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// CPUs the thread that entered the registered `dgetrf` may run on (0 = unknown).
+static DGETRF_CALLER_CPUS: AtomicUsize = AtomicUsize::new(0);
 static DGETRS_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGESVD_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DSYEVD_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -150,6 +152,7 @@ unsafe extern "C" fn test_dgetrf(
     info: *mut lapack_inject::lapackint,
 ) {
     DGETRF_CALLS.fetch_add(1, Ordering::SeqCst);
+    DGETRF_CALLER_CPUS.store(allowed_cpus().unwrap_or(0), Ordering::SeqCst);
     let k = unsafe { (*m).min(*n) as usize };
     for index in 0..k {
         unsafe {
@@ -233,6 +236,107 @@ unsafe extern "C" fn test_dgesvd(
     unsafe {
         *info = 0;
     }
+}
+
+/// Number of CPUs in the calling thread's affinity mask, from `/proc/thread-self/status`.
+///
+/// `None` where that file is unavailable (non-Linux targets).
+fn allowed_cpus() -> Option<usize> {
+    let status = std::fs::read_to_string("/proc/thread-self/status").ok()?;
+    let list = status
+        .lines()
+        .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))?
+        .trim();
+    list.split(',')
+        .map(|range| match range.split_once('-') {
+            Some((lo, hi)) => Some(hi.parse::<usize>().ok()? - lo.parse::<usize>().ok()? + 1),
+            None => range.parse::<usize>().ok().map(|_| 1),
+        })
+        .sum()
+}
+
+// #2553: threadteam 0.5 pins the thread that builds a `Team` (the engine's leader) to `{S[0]}`
+// for the team's life. A vendor library creates its own thread team from the calling thread, so a
+// LAPACK call made from that one-CPU leader confined MKL's whole OpenMP team to one CPU (an 11-89x
+// collapse at 4 threads). Every LAPACK call must run with the leader widened back to `S`.
+// Deterministic: it reads the caller's mask inside the registered `dgetrf`, no timing.
+#[test]
+fn provider_inject_lapack_call_runs_on_the_team_leaders_full_cpu_set() {
+    // Observe under the lock, assert after releasing it, so a failure here cannot poison the
+    // lock for the other provider-inject tests.
+    let observed = {
+        let _guard = TEST_LOCK
+            .lock()
+            .expect("provider-inject test lock poisoned");
+        register_test_ptrs_once();
+        let Some(wide) = allowed_cpus() else {
+            eprintln!("skipped: no /proc/thread-self/status on this target");
+            return;
+        };
+        if wide < 2 {
+            eprintln!(
+                "skipped: the caller's mask has {wide} CPU, so a 2-member team is not placed"
+            );
+            return;
+        }
+        // The thread that builds the engine's team is its placed leader, so build it here.
+        let pool = tenferro_cpu::Pool::builder()
+            .threads(2)
+            .build()
+            .expect("two-worker pool");
+        let mut backend = tenferro_cpu::CpuEngine::new(pool);
+        let has_team = backend.has_team();
+        let pinned_before = allowed_cpus();
+
+        let a = Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
+        );
+        let b = Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![2, 1], vec![4.0, 8.0]).unwrap(),
+        );
+        DGETRF_CALLS.store(0, Ordering::SeqCst);
+        DGETRF_CALLER_CPUS.store(0, Ordering::SeqCst);
+        let solved = backend.solve(&a, &b).is_ok();
+        let calls = DGETRF_CALLS.load(Ordering::SeqCst);
+        let inside = DGETRF_CALLER_CPUS.load(Ordering::SeqCst);
+        let pinned_after = allowed_cpus();
+        drop(backend);
+        let released = allowed_cpus();
+        (
+            wide,
+            has_team,
+            pinned_before,
+            solved,
+            calls,
+            inside,
+            pinned_after,
+            released,
+        )
+    };
+    let (wide, has_team, pinned_before, solved, calls, inside, pinned_after, released) = observed;
+
+    assert!(has_team, "a two-worker engine holds a team");
+    assert_eq!(
+        pinned_before,
+        Some(1),
+        "precondition: the team's creator is pinned to one CPU between operations"
+    );
+    assert!(solved, "solve through the registered provider");
+    assert_eq!(calls, 1);
+    assert_eq!(
+        inside, wide,
+        "the LAPACK call must see the leader's full CPU set, not its one pinned CPU"
+    );
+    assert_eq!(
+        pinned_after,
+        Some(1),
+        "the leader is pinned again once the vendor call returns"
+    );
+    assert_eq!(
+        released,
+        Some(wide),
+        "dropping the team gives the mask back"
+    );
 }
 
 // Complete-pivoting LU runs on the shared tlinalg kernel in every build, so a registered
