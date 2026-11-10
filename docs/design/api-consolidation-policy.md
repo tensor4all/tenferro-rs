@@ -68,6 +68,8 @@ request wrapper. A public copy or normalization counter is neither required nor 
 and a precise accounting contract. Until then, distinguish whole-input temporary copies, packing, and workspace allocation and reuse
 with internal or test instrumentation and benchmarks, and do not equate allocation counts with copy counts.
 
+For an illustrated overview of the call grammar these rules feed into, see [api-grammar.md](./api-grammar.md).
+
 ## 2. Withdrawn — do not re-propose without new evidence
 
 Recording these matters more than the rules, because each one is plausible and each one was wrong:
