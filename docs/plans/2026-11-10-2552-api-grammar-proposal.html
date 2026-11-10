@@ -1,0 +1,420 @@
+<title>tenferro API Grammar</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: one reading column (~860px); wide figures (grammar strip, matrices) break out to 1100px and scroll inside themselves. */
+:root{
+  --bg:#f6f7f8; --surface:#ffffff; --ink:#16202a; --muted:#5b6876; --line:#d9dee4;
+  --accent:#0e7c86; --accent-soft:#e1f2f3;
+  --retire:#b4442e; --retire-soft:#fbe9e5;
+  --slot-recv:#3756c9; --slot-op:#0e7c86; --slot-opt:#8a5a00; --slot-exec:#7a3fb0; --slot-pol:#b4442e; --slot-out:#4b5a68;
+  --code-bg:#eef1f4;
+  --f-display:"Space Grotesk","IBM Plex Sans JP",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans JP","Hiragino Sans","Noto Sans JP",system-ui,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#11161b; --surface:#182028; --ink:#e4e9ee; --muted:#9aa7b4; --line:#2b3540;
+  --accent:#4cc3cc; --accent-soft:#16343a; --retire:#f08a72; --retire-soft:#3a201b;
+  --slot-recv:#8ea6ff; --slot-op:#4cc3cc; --slot-opt:#e0b04a; --slot-exec:#c597f2; --slot-pol:#f08a72; --slot-out:#a9b6c3;
+  --code-bg:#1d2730; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#11161b; --surface:#182028; --ink:#e4e9ee; --muted:#9aa7b4; --line:#2b3540;
+  --accent:#4cc3cc; --accent-soft:#16343a; --retire:#f08a72; --retire-soft:#3a201b;
+  --slot-recv:#8ea6ff; --slot-op:#4cc3cc; --slot-opt:#e0b04a; --slot-exec:#c597f2; --slot-pol:#f08a72; --slot-out:#a9b6c3;
+  --code-bg:#1d2730; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:16px;line-height:1.75;margin:0}
+.wrap{max-width:1100px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:40px 80px}
+.col{max-width:860px}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;line-height:1.3;margin:0}
+h1{font-size:clamp(28px,4.4vw,44px);letter-spacing:-.01em}
+h2{font-size:clamp(22px,3vw,28px);margin-bottom:12px}
+h3{font-size:18px}
+p{margin:0}
+.eyebrow{font-family:var(--f-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.lead{font-size:18px;color:var(--muted);margin-top:14px}
+section{margin-top:64px;display:flex;flex-direction:column;gap:16px}
+code,.mono{font-family:var(--f-mono);font-size:.88em}
+p code,li code,td code{background:var(--code-bg);padding:1px 5px;border-radius:4px}
+pre{font-family:var(--f-mono);font-size:13.5px;line-height:1.6;background:var(--code-bg);border-radius:8px;padding:14px 16px;margin:0;overflow-x:auto}
+.muted{color:var(--muted)}
+.scroll{overflow-x:auto}
+a{color:var(--accent)}
+
+/* hero numbers */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:28px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.stat .n{font-family:var(--f-display);font-size:30px;font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.stat .n s{color:var(--retire);text-decoration-thickness:2px}
+.stat .n b{color:var(--accent)}
+.stat .l{font-size:13px;color:var(--muted)}
+
+/* grammar strip */
+.grammar{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:24px 20px}
+.gline{font-family:var(--f-mono);font-size:clamp(15px,2.2vw,22px);white-space:nowrap;display:flex;align-items:flex-end;gap:2px;padding-bottom:6px}
+.slot{display:inline-flex;flex-direction:column;align-items:center;gap:6px}
+.slot .tok{padding:4px 8px;border-radius:6px;border:2px solid currentColor;font-weight:600}
+.slot .cap{font-family:var(--f-body);font-size:12px;font-weight:500;white-space:nowrap}
+.punct{color:var(--muted);padding:0 2px 8px}
+.s-recv{color:var(--slot-recv)} .s-op{color:var(--slot-op)} .s-opt{color:var(--slot-opt)}
+.s-exec{color:var(--slot-exec)} .s-pol{color:var(--slot-pol)} .s-out{color:var(--slot-out)}
+.layers{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:18px}
+.layer{border-top:3px solid var(--line);padding-top:10px;min-width:0}
+.layer h3{font-size:15px}
+.layer pre{font-size:12.5px;margin-top:8px}
+
+/* rules */
+.rules{display:flex;flex-direction:column;gap:14px}
+.rule{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px;display:grid;grid-template-columns:56px 1fr;gap:4px 16px}
+.rule .num{font-family:var(--f-display);font-size:34px;color:var(--accent);line-height:1}
+.rule .body{min-width:0;display:flex;flex-direction:column;gap:10px}
+.rule h3{font-size:19px}
+.rule .why{color:var(--muted);font-size:14.5px}
+.ba{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ba > div{min-width:0}
+.ba .tag{font-size:12px;font-weight:700;letter-spacing:.06em;margin-bottom:4px}
+.ba .before .tag{color:var(--retire)} .ba .after .tag{color:var(--accent)}
+.ba .before pre{background:var(--retire-soft)} .ba .after pre{background:var(--accent-soft)}
+.held{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:13px}
+.chip{font-family:var(--f-mono);font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+.c-gen{color:var(--slot-recv)} .c-type{color:var(--slot-exec)} .c-freeze{color:var(--slot-opt)}
+.kills{font-size:13px;color:var(--muted)}
+.kills code{text-decoration:line-through;text-decoration-color:var(--retire);color:var(--retire);background:var(--retire-soft)}
+
+/* mechanism diagram */
+.mech{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.m{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.m h3{display:flex;gap:8px;align-items:center}
+.m .k{font-family:var(--f-mono);font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid currentColor}
+.m p{font-size:14.5px}
+.m pre{font-size:12px}
+
+/* matrix */
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{font-size:12px;letter-spacing:.05em;color:var(--muted);font-weight:600}
+.mx td{font-family:var(--f-mono);font-size:12px}
+.mx td.empty{color:var(--line)}
+.mx td.hit{color:var(--retire)}
+.mx td.keep{color:var(--accent);font-weight:600}
+.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.step{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
+.step .sn{font-family:var(--f-mono);font-size:12px;color:var(--accent)}
+.step h3{font-size:15px;margin:4px 0 6px}
+.step p{font-size:13.5px;color:var(--muted)}
+.decide{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.q{border:1px dashed var(--accent);border-radius:10px;padding:14px;background:var(--surface)}
+.q h3{font-size:15px}
+.q p{font-size:14px;margin-top:6px}
+.q .rec{color:var(--accent);font-weight:600}
+.note{font-size:13px;color:var(--muted)}
+.callout{border-left:4px solid var(--accent);background:var(--accent-soft);padding:14px 16px;border-radius:0 8px 8px 0}
+@media (max-width:760px){
+  .ba,.mech,.flow{grid-template-columns:1fr}
+  .rule{grid-template-columns:1fr}
+  .rule .num{font-size:26px}
+}
+</style>
+
+<div class="wrap">
+<header class="col">
+  <div class="eyebrow">tensor4all/tenferro-rs · issue #2552 への提案 · 2026-11-10 · API 一覧案 v0.2 まで反映</div>
+  <h1 style="margin-top:10px">tenferro API の文法</h1>
+  <p class="lead">演算ごと・層ごとに名前を増やす今のやり方をやめて、全クレート共通の「呼び出しの文法」を1つ決めます。ルールは7つで、どれも文章ではなく生成・型・スナップショットのどれかで守ります。</p>
+  <div class="stats">
+    <div class="stat"><div class="n"><s>14</s><span class="muted">→</span><b>4</b></div><div class="l">SVD 系の公開名<br>(<code>svd</code> <code>svd_with</code> <code>svdvals</code> <code>svdvals_with</code>)</div></div>
+    <div class="stat"><div class="n"><s>31</s><span class="muted">→</span><b>12</b></div><div class="l">公開拡張トレイト<br>(4 ファミリー × 3 層)</div></div>
+    <div class="stat"><div class="n"><s>~20</s><span class="muted">→</span><b>3</b></div><div class="l">einsum の入口名<br>(<code>einsum</code> <code>einsum_with</code> <code>einsum_into</code>)</div></div>
+  </div>
+  <p class="note" style="margin-top:10px">数値は origin/main <span class="mono">62b9f7b8</span> の静的カウント（<code>pub trait *Ext</code> と演算名の grep）。内部クレートとテストは除外。</p>
+</header>
+
+<section class="col">
+  <div class="eyebrow">いま何が起きているか</div>
+  <h2>名前が掛け算で増えている</h2>
+  <p>1つの演算の名前に、入力の種類・パラメータの違い・出力の受け取り方・層がすべて織り込まれています。新しい軸が1つ増えるたびに、全演算の名前が倍に増えます。</p>
+  <div class="scroll">
+  <table class="mx" style="min-width:640px">
+    <thead><tr><th>入力の種類</th><th>×</th><th>パラメータの違い</th><th>×</th><th>出力モード</th><th>×</th><th>層</th></tr></thead>
+    <tbody><tr>
+      <td class="hit">(なし)<br>_read<br>typed<br>typed + _read</td><td class="empty">×</td>
+      <td class="hit">(なし)<br>_full<br>_with_options<br>_with_rtol / _with_driver</td><td class="empty">×</td>
+      <td class="hit">(なし)<br>_into<br>_into_accum</td><td class="empty">×</td>
+      <td class="hit">Tensor 拡張<br>_with_exec 自由関数<br>TracedTensor / TraceContext<br>EagerTensor / EagerSession</td>
+    </tr></tbody>
+  </table>
+  </div>
+  <p>しかも現行の <a href="https://github.com/tensor4all/tenferro-rs/blob/main/docs/spec/api-conventions.md">api-conventions.md</a> は、命名規則 3 で <code>_read</code> 接尾辞を要求し、形状規則 4 で einsum の 8 トレイトを列挙しています。規約そのものが掛け算を固定してしまっています。さらに、同じビューでも入口によってレイアウトの扱いが違います（コピーする / 拒否する / そのまま読む）。#2552 の監査で見つかった食い違いの根はここにあります。</p>
+  <div class="callout">ルールを文章で足しても、すでに古くなり始めています。
+    <ul style="margin:8px 0 0;padding-left:1.2em">
+      <li><span class="mono">REPOSITORY_RULES.md:921</span> は「engine は第1引数」と書いているが、コードでは最後の引数になっている（runtime の 89 メソッドすべて）。</li>
+      <li>チェッカーの対応表は存在しない「命名規則 10」を参照しており、<code>try_</code> の許可リストは存在しないファイルを指している。</li>
+      <li><span class="mono">check-api-consistency.py</span> は main で 18 件の指摘を出して落ちている。また、行頭が <code>pub</code> の行しか見ないため、<code>*Ext</code> トレイトのメソッドは一度も検査されていない。</li>
+      <li>チェッカーは <span class="mono">scripts/check-*.py</span> だけで 32 本、約 6,400 行ある。</li>
+    </ul>
+    <p style="margin-top:8px">この提案では、ルールの数を減らしたうえで、各ルールを文章ではない仕組みに担わせます。</p></div>
+</section>
+
+<section>
+  <div class="col">
+    <div class="eyebrow">核心</div>
+    <h2>呼び出しの文法は1つだけ</h2>
+    <p>tenferro のあらゆる演算呼び出しは次の形に収まります。色付きの枠がスロットで、名前に入ってよいのは <span style="color:var(--slot-op);font-weight:600">op</span> と2種類の接尾辞だけです。</p>
+  </div>
+  <div class="grammar">
+    <div class="scroll">
+    <div class="gline">
+      <span class="slot s-recv"><span class="tok">x</span><span class="cap">受け手＝入力</span></span>
+      <span class="punct">.</span>
+      <span class="slot s-op"><span class="tok">svd</span><span class="cap">演算名</span></span>
+      <span class="slot s-op"><span class="tok">[_with|_into]</span><span class="cap">許される接尾辞</span></span>
+      <span class="punct">(</span>
+      <span class="slot s-recv"><span class="tok">operands…</span><span class="cap">必須の追加入力</span></span>
+      <span class="punct">,</span>
+      <span class="slot s-opt"><span class="tok">&amp;opts</span><span class="cap">意味オプション</span></span>
+      <span class="punct">,</span>
+      <span class="slot s-exec"><span class="tok">exec</span><span class="cap">実行器</span></span>
+      <span class="punct">,</span>
+      <span class="slot s-pol"><span class="tok">policy</span><span class="cap">実体化ポリシー</span></span>
+      <span class="punct">,</span>
+      <span class="slot s-out"><span class="tok">out</span><span class="cap">_into のみ・Dest</span></span>
+      <span class="punct">)</span>
+    </div>
+    </div>
+    <div class="layers">
+      <div class="layer" style="border-color:var(--slot-recv)">
+        <h3>concrete（即時計算）</h3>
+        <p class="note">exec = <code>&amp;mut dyn Engine</code>。<code>Tensor</code>・<code>TensorRead</code>・<code>TypedTensor&lt;T&gt;</code>・ビューのどれでも同じメソッドが呼べる</p>
+<pre>a.svd(&amp;mut eng)?
+a.svd_with(&amp;opts, &amp;mut eng, Allow)?
+a.solve_into(&amp;b, &amp;opts, &amp;mut eng, Forbid, &amp;mut x)?</pre>
+      </div>
+      <div class="layer" style="border-color:var(--slot-exec)">
+        <h3>eager（自動微分つき即時）</h3>
+        <p class="note">実行器 <code>EagerSession</code> が受け手の位置に来て、入力 <code>x</code> は第1引数に移る。それ以外の名前・引数順・結果型は concrete と同じ（決定 3）</p>
+<pre>sess.svd(&amp;x)?
+sess.svd_with(&amp;x, &amp;opts, Allow)?</pre>
+      </div>
+      <div class="layer" style="border-color:var(--slot-opt)">
+        <h3>traced（グラフ構築）</h3>
+        <p class="note">演算の呼び出しには exec も policy も出てこない。policy は実行するときに渡し、プランは policy に依存しない（#2552 の裁定 9）</p>
+<pre>t.svd()?
+t.svd_with(&amp;opts)?
+trace.einsum_with(&amp;[a, b], spec, &amp;opts)?
+prepared.execute_with(inputs, &amp;mut eng, Forbid)?</pre>
+      </div>
+    </div>
+    <p class="note" style="margin-top:14px"><b>入力の個数が決まっていない演算</b>（einsum）は、所有者を受け手にします。eager では <code>sess.einsum(&amp;[x, y], spec)</code>、traced では <code>trace.einsum(&amp;[a, b], spec)</code> です。concrete にはそのような所有者がないので、入力のスライス <code>[&amp;a, &amp;b].einsum(spec, eng)</code> を受け手にします（決定 4）。</p>
+    <p class="note" style="margin-top:6px">短い形 <code>op(..., exec)</code> は「オプションも policy もすべて既定値（<code>Allow</code>）」の糖衣構文です。何か1つでも指定したいときは <code>op_with</code> を使います。</p>
+  </div>
+</section>
+
+<section class="col">
+  <div class="eyebrow">ルール</div>
+  <h2>7つのルール</h2>
+  <p>各ルールには、それを守る仕組みを1つ以上付けています。<span class="chip c-gen">生成</span> は演算レジストリからマクロで作るので手書きの余地がないもの、<span class="chip c-type">型</span> はコンパイラが拒否するもの、<span class="chip c-freeze">凍結</span> は公開 API のスナップショットとの差分で CI が落ちるものです。</p>
+
+  <div class="rules">
+    <article class="rule"><div class="num">1</div><div class="body">
+      <h3>名前は「何を計算するか」だけを表す</h3>
+      <p class="why">層・入力の型・パラメータ・実行器の違いは名前に入れない。許される接尾辞は <code>_with</code>（オプションを指定する）と <code>_into</code>（出力先を渡す）の2つだけ。同じ演算はどの層・どのクレートでも同じ名前。</p>
+      <div class="ba">
+        <div class="before"><div class="tag">いま</div><pre>a.svd_full_read(s)
+svd_values_with_exec(e, b, v)
+t.svdvals()   // 層で名前が違う</pre></div>
+        <div class="after"><div class="tag">ルール後</div><pre>a.svd_with(&amp;full, s, Allow)
+v.svdvals(e)
+t.svdvals()   // どの層でも同じ</pre></div>
+      </div>
+      <div class="held"><span class="chip c-gen">生成</span><span class="chip c-freeze">凍結</span></div>
+      <div class="kills">消えるもの：<code>_read</code> <code>_full</code> <code>_with_options</code> <code>_with_rtol</code> <code>_with_driver</code> <code>_with_exec</code> <code>_values</code> <code>_notation</code> <code>_subscripts</code> <code>_typed</code> <code>_into_accum</code></div>
+    </div></article>
+
+    <article class="rule"><div class="num">2</div><div class="body">
+      <h3>入力は借用ビューの1種類だけ</h3>
+      <p class="why">実装は借用ビュー上に1つだけ書く。所有テンソル・型付きテンソル・<code>TensorRead</code> は、メタデータの付け替えだけでそのビューになる（コピーは起きない）。入口が1つになるので、同じ入力ならレイアウトの扱いも必ず同じになる。typed で渡せば typed で返る。表現は typed と erased の2つで、typed を erased にしてから型を戻すようなことはしない。出力の型は演算ごとに決まる（複素 SVD の <code>s</code> は実数）ので、関連型1つでは表せない（v0.1 の指摘）。</p>
+      <div class="ba">
+        <div class="before"><div class="tag">いま</div><pre>TensorLinalgExt       (owned)
+TensorReadLinalgExt   (borrowed)
+TypedTensorLinalgExt  (typed)
++ svd_with_exec 自由関数
+→ 負ストライドで 3 通りの挙動</pre></div>
+        <div class="after"><div class="tag">ルール後</div><pre>// どの入力型もメタデータ変換で
+// 同じ実装に入る（AsView、要試作）
+let r = a.svd(e)?;  // a: Tensor / TensorRead
+let r = v.svd(e)?;  // v: TypedTensorView&lt;C64&gt;
+// r: Svd&lt;TypedTensor&lt;C64&gt;, TypedTensor&lt;f64&gt;&gt;</pre></div>
+      </div>
+      <div class="held"><span class="chip c-type">型</span><span class="chip c-gen">生成</span></div>
+      <div class="kills">消えるもの：<code>TensorRead*Ext</code> <code>TypedTensorRead*Ext</code> <code>*IntoExt</code> 系トレイト、<code>with_exec.rs</code> の自由関数と <code>Sealed</code></div>
+    </div></article>
+
+    <article class="rule"><div class="num">3</div><div class="body">
+      <h3>違いは名前ではなく、型付きの引数で表す</h3>
+      <p class="why">意味に関わる指定は、すべての演算に1つずつある <code>XxxOptions</code>（<code>#[non_exhaustive]</code>、<code>Default</code>、<code>with_*</code> セッター）に入れる。制御フラグとしての <code>bool</code> は公開シグネチャに置かない（取り違えてもコンパイルが通り、数値が黙って変わるため）。真偽値のデータや述語は対象外。軸はすべて <code>isize</code>（NumPy 流の負数インデックス）。長さ・次元・IR の識別子は対象外。文字列か解析済み記法か、のような入力表現の違いは1つの spec 引数で受ける。文字列の解析は失敗しうるので、検証は演算の中で行ってエラーを返す（<code>From&lt;&amp;str&gt;</code> で検証済みのように見せない）。</p>
+      <div class="ba">
+        <div class="before"><div class="tag">いま</div><pre>a.triangular_solve(b, true, false,
+                   true, false, s)
+plan::prepare_typed_notation(..)
+norm(dim: Option&lt;&amp;[usize]&gt;)  // fft は isize</pre></div>
+        <div class="after"><div class="tag">ルール後</div><pre>a.triangular_solve_with(&amp;b,
+  &amp;TriSolveOptions::default()
+     .side(Side::Left).uplo(Uplo::Lower), s, Allow)
+EinsumPlan::prepare(inputs, spec /* &amp;str でも可 */)</pre></div>
+      </div>
+      <div class="held"><span class="chip c-type">型</span><span class="chip c-gen">生成</span></div>
+      <div class="kills">消えるもの：公開引数の <code>bool</code>、<code>prepare_*</code> 9 種、<code>execute_*</code> 7 種（<code>prepare</code> と <code>execute</code> / <code>execute_with</code> / <code>execute_into</code> に整理する）</div>
+    </div></article>
+
+    <article class="rule"><div class="num">4</div><div class="body">
+      <h3>「誰が・どう実行するか」は呼び出しごとの引数</h3>
+      <p class="why">実行器（Engine / EagerSession）は引数で渡す。<code>MaterializationPolicy</code> は Options とも Engine の状態とも分けた、独立した <code>Copy</code> 引数にする（#2552 の裁定どおり）。<code>Allow</code> は同じデバイス・同じ dtype の入力レイアウト正規化だけを許可するもので、デバイス転送や dtype 変換は許可しない。traced でも policy は実行時に渡す。物理的なディスパッチは policy に依存させず、プランは正規化が要るかどうかを記録しておき、実行時に実際のレイアウトで再検査する（裁定 9）。</p>
+      <div class="ba">
+        <div class="before"><div class="tag">いま</div><pre>a.svd(session)            // 最後
+x.solve(engine, b)        // 2番目
+svd_with_exec(exec, ..)   // 最初
+einsum_into(s, sess, out) vs
+solve_read_into(b, out, sess)</pre></div>
+        <div class="after"><div class="tag">ルール後</div><pre>// どの演算も …, &amp;opts, exec, policy, out
+a.svd_with(&amp;o, e, Allow)
+sess.solve_with(&amp;x, &amp;b, &amp;o, Allow)
+a.einsum_into(spec, &amp;o, e, Allow,
+              Dest::accumulate(&amp;mut c))</pre></div>
+      </div>
+      <div class="held"><span class="chip c-gen">生成</span><span class="chip c-type">型</span></div>
+      <div class="kills">消えるもの：エンジン位置の3流派、公開シグネチャに出ている <code>tcontract_exec::Exec</code> / <code>BufferPool</code>（Exec を包む Engine 型のコンストラクタ1か所に寄せる。置き換えられることを試作で示してから削除する。例外 E08）</div>
+    </div></article>
+
+    <article class="rule"><div class="num">5</div><div class="body">
+      <h3>結果は名前付き構造体。エラーは外側を層ごとに1型にし、原因は残す</h3>
+      <p class="why">出力が複数ある演算は名前付き構造体で返す。値の型と実数の型は分ける。たとえば <code>Svd&lt;V, R = V&gt; { u: V, s: R, vh: V }</code> で、複素 SVD の <code>s</code> は実数、実数行列の <code>eig</code> の結果は複素になる。外側のエラー型は層ごとに1つ（concrete は <code>tenferro_tensor::Error</code>、traced は <code>tenferro_runtime::Error</code>、eager は <code>tenferro_ad::Error</code>）で、すべて <code>#[non_exhaustive]</code>。ファミリー固有のエラー（linalg の特異・非収束など）は残し、外側のエラーの <code>source()</code> から <code>downcast_ref</code> で取り出せるようにする。構造化された原因を文字列に変えることはしない。共通の検査用トレイト（<code>TensorError</code> など）は、それを必要とする利用者が示されるまで追加しない（v0.2）。分類 <code>kind</code> と原因が食い違わないことは、当面はテストと監査で確かめる。<code>Error::Extension</code> は各フィールドを公開した variant なので、コンストラクタを足すだけでは食い違いを防げない。</p>
+      <div class="ba">
+        <div class="before"><div class="tag">いま</div><pre>(Tensor, Tensor, Tensor)   // 順序は型に出ない
+TypedSvd&lt;T&gt; = (..)         // タプル別名
+LinalgBackend → Vec&lt;Tensor&gt;
+einsum だけ einsum::Error</pre></div>
+        <div class="after"><div class="tag">ルール後</div><pre>let Svd { u, s, vh } = a.svd(e)?;
+// 複素入力なら Svd&lt;TypedTensor&lt;C64&gt;, TypedTensor&lt;f64&gt;&gt;
+Lu&lt;V,R&gt;, Qr&lt;V&gt;, Eigh&lt;V,R&gt;, Eig&lt;C&gt;, Slogdet&lt;V,R&gt;
+err.source() → tenferro_linalg::Error</pre></div>
+      </div>
+      <div class="held"><span class="chip c-type">型</span><span class="chip c-gen">生成</span></div>
+      <div class="kills">消えるもの：結果タプル別名、公開の <code>Vec&lt;Tensor&gt;</code> 返り値。ファミリー固有のエラーは退役しない（v0.1）</div>
+    </div></article>
+
+    <article class="rule"><div class="num">6</div><div class="body">
+      <h3>公開するのは宣言したものだけ</h3>
+      <p class="why">公開項目は Release・owner-scoped bridge・experimental のどれかで、どれにも当たらないものは非公開にする。<code>#[doc(hidden)] pub</code> は所有者を明記した bridge にだけ許す。意図せず他クレートの型を公開シグネチャに出さない。承認済みの数値型や bridge は、シンボル単位の許可リストに載せる（例外 E06）。公開 API は <code>cargo public-api</code> のスナップショットとしてリポジトリに置き、差分のある PR は必ずレビューに出す。</p>
+      <div class="ba">
+        <div class="before"><div class="tag">いま</div><pre>#[doc(hidden)] pub  // gpu で 136 項目
+CudaEngine::open が hidden なのに
+CudaBackend は pub
+map_error(tlinalg::Op, ..) が公開</pre></div>
+        <div class="after"><div class="tag">ルール後</div><pre>api/tenferro-linalg.txt  (スナップショット)
+api/tenferro-gpu.txt
+CI: 差分あり かつ 未更新 → fail</pre></div>
+      </div>
+      <div class="held"><span class="chip c-freeze">凍結</span></div>
+      <div class="kills">消えるもの：正規表現で公開面を推測するチェッカーの大半</div>
+    </div></article>
+
+    <article class="rule"><div class="num">7</div><div class="body">
+      <h3>仕組みで守れないルールはルールにしない</h3>
+      <p class="why">ルールは「生成・型・凍結」のどれかで守る。守り方が決まらないものは提案止まりにする。規約文書は人が書かず、演算レジストリとスナップショットから生成する（演算 × 層の表、接尾辞の一覧、例外表）。例外はレジストリ内に理由付きで書く。</p>
+      <div class="held"><span class="chip c-gen">生成</span><span class="chip c-type">型</span><span class="chip c-freeze">凍結</span></div>
+      <div class="kills">消えるもの：手で保守している規約の本文（<code>api-conventions.md</code> 命名規則 3、形状規則 4、consolidation policy R2/R3）</div>
+    </div></article>
+  </div>
+</section>
+
+<section class="col">
+  <div class="eyebrow">文章が古くならない理由</div>
+  <h2>ルールを担う3つの仕組み</h2>
+  <p>規約文書が古くなるのは、コードと文書が別々に書かれているからです。そこで、公開面のほうを1か所の宣言から生成し、残った部分は型とスナップショットで固定します。</p>
+</section>
+<div class="mech">
+  <div class="m"><h3><span class="k c-gen">生成</span>演算レジストリ</h3>
+    <p>演算ごとに1行の宣言を書き、マクロが 3 層ぶんのトレイトメソッド・<code>_with</code>/<code>_into</code>・ドキュメント表を生成します。ルール 1・3・4・5 は「手で書かない」ことで守られます。core には既に <span class="mono">primitive_ops!</span>（<span class="mono">catalog.rs:81</span>）という種があります。</p>
+<pre>tenferro_ops! {
+  op svd(a) -&gt; Svd {
+    options: SvdOptions,
+    layers: [concrete, eager, traced],
+  }
+  op solve(a, b) -&gt; Tensor {
+    options: SolveOptions,
+    into: true,
+  }
+}</pre></div>
+  <div class="m"><h3><span class="k c-type">型</span>コンパイラ</h3>
+    <p><code>#[non_exhaustive]</code> の Options、<code>bool</code> の代わりの列挙型、<code>Svd&lt;V, R&gt;</code>、<code>AsView</code> アダプタ、<code>MaterializationPolicy</code>。違反するとコンパイルが通りません。</p>
+<pre>// 取り違えはコンパイルエラー
+Uplo::Lower, Side::Left
+// 構造体リテラルで固定できない
+SvdOptions::default()
+    .full_matrices(true)</pre></div>
+  <div class="m"><h3><span class="k c-freeze">凍結</span>公開 API スナップショット</h3>
+    <p><code>cargo public-api</code> の出力をクレートごとにコミットします。CI では既に <span class="mono">check-no-public-rayon.sh</span> がこのツールを使っています。公開面が変わる PR は差分として必ず目に入ります。ただし、スナップショットはレビューの証拠であって、意味が一貫していることの証明ではありません。policy の受け渡し、正規化の回数、エイリアス、所有権、数値結果といった振る舞いは、別途テストで確かめます（v0.2 D）。</p>
+<pre>$ cargo public-api -p tenferro-linalg \
+    &gt; api/tenferro-linalg.txt
+CI: git diff --exit-code api/</pre></div>
+</div>
+
+<section class="col">
+  <div class="eyebrow">全体像</div>
+  <h2>トレイトは 31 から 12 へ</h2>
+  <p>受け手の種類ごとに作っていたトレイトを、層ごとに1つへまとめます。赤が退役するもの、緑が残る形です。</p>
+</section>
+<div class="scroll">
+<table class="mx" style="min-width:760px">
+  <thead><tr><th>受け手（いま）</th><th>core</th><th>linalg</th><th>einsum</th><th>fft</th><th>→ ルール後</th></tr></thead>
+  <tbody>
+    <tr><td>Tensor</td><td class="hit">TensorSessionOpsExt</td><td class="hit">TensorLinalgExt</td><td class="hit">TensorEinsumExt<br>TensorEinsumIntoExt<br>TensorTensordotExt</td><td class="hit">TensorFftExt</td><td rowspan="4" class="keep">concrete 層<br>CoreOps / LinalgOps /<br>EinsumOps / FftOps</td></tr>
+    <tr><td>TensorRead</td><td class="empty">–</td><td class="hit">TensorReadLinalgExt</td><td class="hit">TensorReadEinsumExt<br>TensorReadEinsumIntoExt</td><td class="hit">TensorReadFftExt</td></tr>
+    <tr><td>TypedTensor&lt;T&gt;</td><td class="hit">TypedTensorSessionOpsExt<br>TypedTensorMaskSessionOpsExt</td><td class="hit">TypedTensorLinalgExt</td><td class="hit">TypedTensorEinsumExt<br>TypedTensorEinsumIntoExt<br>TypedTensorTensordotExt</td><td class="empty">–</td></tr>
+    <tr><td>typed 借用 / 自由関数</td><td class="empty">–</td><td class="hit">svd_with_exec ほか</td><td class="hit">TypedTensorReadEinsumExt<br>TypedTensorReadEinsumIntoExt</td><td class="keep">FftExecutor<br>（キャッシュ所有者として存続・E02）</td></tr>
+    <tr><td>TracedTensor / TraceContext</td><td class="empty">inherent</td><td class="hit">TracedTensorLinalgExt<br>TraceContextLinalgExt</td><td class="hit">TracedTensorEinsumExt<br>TraceContextEinsumExt</td><td class="hit">TracedTensorFftExt<br>TraceContextFftExt</td><td class="keep">traced 層（各ファミリー1つ）<br>+ TraceContext は einsum と IR ビルダ核のみ</td></tr>
+    <tr><td>EagerTensor / EagerSession</td><td class="empty">inherent</td><td class="hit">EagerTensorLinalgExt<br>EagerSessionLinalgExt</td><td class="hit">EagerSessionEinsumExt</td><td class="hit">EagerTensorFftExt<br>EagerSessionFftExt</td><td class="keep">eager 層（各ファミリー1つ）</td></tr>
+  </tbody>
+</table>
+</div>
+
+<section class="col">
+  <div class="eyebrow">退役の進め方</div>
+  <h2>破壊的変更は 0.12 で1回だけ</h2>
+  <p>早期開発中のリポジトリでは互換シムを置かない、という共有ルールに従い、旧 API は非推奨期間を設けずに削除します。順序は「先に仕組み、後で中身」です。</p>
+</section>
+<div class="flow">
+  <div class="step"><div class="sn">STEP 1</div><h3>現行を基準として記録</h3><p>全公開クレートの public-api スナップショットを、feature とツールチェーンを明示してコミットする。新設計の承認ではないので、プロトタイプを待たずに取れる。</p></div>
+  <div class="step"><div class="sn">STEP 2</div><h3>6つの縦断プロトタイプ</h3><p>複素 SVD、係数付き einsum、消費型 FFT、Allow→Forbid の再利用、エラー原因の保持、TraceContext 縮約木。新しい目標 API はこれが通ってから固定する。</p></div>
+  <div class="step"><div class="sn">STEP 3</div><h3>レジストリ生成と削除</h3><p>レジストリから 3 層を生成して旧 API を置き換え、削除する。スナップショットの差分がそのまま退役リストになる。</p></div>
+  <div class="step"><div class="sn">STEP 4</div><h3>policy と規約の同期</h3><p>統一された入口に <code>MaterializationPolicy</code> を付ける。agent-rules と生成文書を同じ PR 群で更新する。</p></div>
+</div>
+
+<section class="col">
+  <div class="eyebrow">決定事項 · 2026-11-10</div>
+  <h2>判断事項の結論</h2>
+  <p>6つの判断事項はすべて決まりました。</p>
+</section>
+<div class="decide">
+  <div class="q"><h3>1. 軸の型</h3><p><span class="rec">決定：isize</span>。NumPy と同じく負数で末尾から数える。runtime（usize 109 件）と linalg（33 件）の usize を移行する。</p></div>
+  <div class="q"><h3>2. 空の Options</h3><p><span class="rec">決定：全演算に置く</span>。<code>DetOptions</code> のような空の構造体も作り、どの演算にも <code>op</code> と <code>op_with</code> がそろう。</p></div>
+  <div class="q"><h3>3. eager の受け手</h3><p><span class="rec">決定：<code>sess.op(&amp;x, ..)</code> を維持</span>。eager では実行器が受け手の位置に来る、と文法に明記する。<code>EagerSession</code> は別ランタイムのテンソルを拒否し、境界の外へ出られないので、受け手にしておく意味がある。<code>EagerTensor</code> 側の <code>solve</code> は退役する。in-place FFT 2つは入力を消費する演算として session 側に移す（<code>session.fft_in_place(input, ..)</code>）。その接尾辞 <code>_in_place</code> は、理由を添えてレジストリの例外表に登録する（v0.1 とそのレビュー）。</p></div>
+  <div class="q"><h3>4. TraceContext 拡張</h3><p><span class="rec">決定：案 C（核だけ残す）</span>。linalg と fft の拡張は退役する。einsum は <code>trace.einsum_with(&amp;[TracedTensor], spec, &amp;opts)</code> の1形にまとめる。<code>input</code> / <code>finish</code> / <code>add_op</code> / <code>add_extension</code> と <code>TraceValue</code> は IR ビルダ層として別枠で凍結する。<code>finish</code> と <code>compile_many</code> はどちらも <code>snapshot_pruned</code> を通るので、刈り込みのずれは見つかっていない（v0.2）。残る確認は、入力キーの対応づけとノードごとのコストで、プロトタイプ 6 で決める（例外 E07）。</p><p style="margin-top:8px;color:var(--muted)">検討の経緯：</p><p class="muted" style="margin-top:2px">39 メソッドあり、39 メソッドあり、linalg と fft の実装は <code>derive_tensor</code> してから <code>TracedTensor</code> 版を呼ぶだけ（例：<span class="mono">traced.rs:1257</span>）。einsum のような複数入力の受け方と合わせて検討する。</p><p><b>下流での利用：</b>yao-rs（GiggleLiu/yao-rs、<span class="mono">src/tenferro.rs:128-238</span>）が使っている。<code>TraceContext::new()</code> → <code>trace.input(..)</code> で <code>Copy</code> な <code>TraceValue</code> ハンドルを作り、縮約木を再帰的にたどりながら <code>trace.einsum_subscripts_with(&amp;children, &amp;subs, ..)</code> を呼んで、最後に <code>trace.finish</code> している。つまり「ハンドルで組み立てるグラフ構築 API」として使われている。なお yao-rs は tenferro <span class="mono">=0.4.0</span> に固定されている。また、実行に使っている <code>execute_scoped_read_only</code> は現行のソースに見つからないので、0.12 を待たずに書き換えが必要になる。</p>
+  <p><b>Fable 5.2 への相談結果（推奨案 C、未決定）：</b>TraceContext は核の部分だけ残す。</p>
+  <ul style="margin:4px 0 0;padding-left:1.2em;font-size:14px">
+    <li><code>TraceContextLinalgExt</code> と <code>TraceContextFftExt</code> の 33 メソッドは純粋な重複なので退役する。</li>
+    <li>einsum は事情が違う。traced の einsum は今 TraceContext 側にしかない（<code>TracedTensorEinsumExt</code> は <code>tensordot</code> だけ）。そこで <code>trace.einsum_with(&amp;[TracedTensor], spec, &amp;opts) -&gt; TracedTensor</code> の1形にまとめ、<code>_notation</code> と <code>_subscripts</code> は <code>impl Into&lt;Spec&gt;</code> に吸収する。</li>
+    <li><code>input</code> / <code>finish</code> / <code>add_op</code> / <code>add_extension</code> と <code>TraceValue</code> は、演算の文法の外にある IR ビルダ層として別枠で凍結する。</li>
+  </ul>
+  <p style="margin-top:6px">あわせて文法に1行足す必要がある：<b>「入力の個数が決まっていない演算は、所有者（<code>EagerSession</code> / <code>TraceContext</code>）を受け手にする」</b>。eager の <code>sess.einsum(..)</code> と対になる。</p>
+  <p style="margin-top:6px">残る懸念：大きな縮約木でノードごとに <code>TracedTensor</code> を作るコストは未計測。また、<code>finish</code> と <code>compile_many</code> で入力の順序が一致するかも未確認。</p></div>
+  <div class="q"><h3>5. <code>_into</code> の範囲</h3><p><span class="rec">決定：演算ごとに宣言</span>。レジストリに <code>into: true</code> と書いた演算だけ生成する。どこにあるかは生成される表でわかり、必要になった演算から足していく。</p></div>
+  <div class="q"><h3>6. 累積出力</h3><p><span class="rec">決定：出力先引数で表す</span>。<code>Dest::overwrite(&amp;mut t)</code> / <code>Dest::accumulate(&amp;mut t)</code>。加えて、v0.1 の指摘を受けて alpha・beta 付きの更新を用意し、beta = 0 のときは出力を読まないことを保証する。共役は出力先ではなく、演算のオプションに置く。<code>_into_accum</code>、使われていない <code>_add_to</code> 語彙、<code>DotGeneralAccumulation</code> 引数は退役し、接尾辞は <code>_with</code> と <code>_into</code> の2つだけになる。</p></div>
+</div>
+
+<section class="col">
+  <p class="note">根拠：#2552 本文、独立監査コメント（2026-11-09）、裁定コメント（2026-11-10）、origin/main <span class="mono">62b9f7b8</span> の静的調査。コードのビルドやテストは実行していません。数値は grep による概数です。</p>
+</section>
+</div>
