@@ -19,20 +19,40 @@ use super::support;
 
 /// Scheduled commands of the 2x2 reproducer after the metadata view fold.
 ///
-/// 21 rather than the pre-cut-over 20 (#2429). The extra command is a second
-/// `Qr` extension: `vjp_many_impl` builds a standalone derivative program that
-/// recomputes the primal `Qr`, and `import_derivative`
-/// (`tenferro-ad/src/traced.rs`, `TraceContext::import_values`) maps only the
-/// program inputs onto the trace, so the replayed `Qr` is appended next to the
-/// one the loss already traced. The pre-cut-over graph materializer merged the
-/// two by structural hash-consing; the `TraceContext` path has no such merge.
+/// The comparison that means something here is with the pre-cut-over path, not
+/// a lower count to chase: this program schedules the *same commands* as the
+/// pre-cut-over path, **plus one replayed source op** (#2429). That op is a
+/// second `Qr` extension reading the same operand as the first and writing
+/// different slots, so the pre-cut-over 20 is not reachable without removing a
+/// whole operation from the program.
+///
+/// No op in the QR rule emits it. `import_source`
+/// (`tenferro-ad/src/semantic_transform.rs`) imports the entire source program
+/// into the derivative builder, so the derivative program's first operation is
+/// a verbatim copy of the source program's `Qr` node; the QR rule itself reads
+/// `primal_out` (`rules::linearize_qr`) and never recomputes the factors.
+/// `import_derivative` (`tenferro-ad/src/traced.rs`) then replays that copy
+/// through `TraceContext::import_values`, which remaps only the program inputs
+/// and has no structural merge, so the copy lands next to the `Qr` the loss
+/// already traced. The pre-cut-over graph materializer
+/// (`AliasAwareMaterializer::materialize_produced`) keyed operations by
+/// `(op, inputs, role)` and collapsed the two.
+///
+/// Removing the copy means restoring that kind of reuse inside
+/// `ImportTransaction::prepare`, which changes the public import contract
+/// (payload, inputs, effects, aliases, shape guards) for every importer. That
+/// is a design change, not a perf-pin change, so this pin stays exact: a
+/// regression or an accidental third replay still shows.
 const REPRODUCER_COMMANDS: usize = 21;
 
 /// Semantic operations of the compiled 2x2 reproducer program.
 ///
 /// 30 before #2429: the semantic linear transpose emitted `R^T` and `Q^T` twice
 /// each (once as rule fixed ops, once as matmul-pullback adjoints) plus
-/// `(Q^H)^H`. Those three are gone; the duplicate `Qr` above remains.
+/// `(Q^H)^H`. Those three are gone. The replayed source `Qr` described above is
+/// a real program node and remains one of these operations; only the scheduled
+/// command count differs from the pre-cut-over path, because the old
+/// materializer collapsed that node into the loss's `Qr`.
 const REPRODUCER_PROGRAM_OPS: usize = 27;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
