@@ -67,9 +67,10 @@ inventory of the whole surface is a migration plan, not a rule. A provider
 selects the same dispatch under both values — `Forbid` is a gate on input normalization, never a selector of a different kernel — so the
 assertion cannot route a call to a different numerical path (it does not promise numerical identity: two runs of one parallel reduction may
 differ, and two different paths may agree bit for bit), and a call that could only succeed through a second numerical path must refuse instead. No `*Options` field,
-no engine setter, no `svd_no_copy` twin: the value is per invocation, and one `Copy` parameter repeated is cheaper than a request wrapper with a
-lifetime, a generic parameter and a `reborrow` at every multi-call helper (see #2552 for the two proposals and the four-file compile check that
-decided between them). A second execution constraint may later justify the wrapper; that migration is signature-local and is not built now.
+no engine setter, no `svd_no_copy` twin: the value is per invocation, and one `Copy` parameter repeated is cheaper surface than a request wrapper with a
+lifetime and a generic parameter whose correct default is not obvious (see #2552 for the two proposals and the
+five-file compile check that decided between them; the check does **not** claim an ergonomic penalty for the
+wrapper — with each request scoped to its call, both carriers compile a twice-calling helper). A second execution constraint may later justify the wrapper; that migration is signature-local and is not built now.
 What counts as the copy `Forbid` refuses is a counterfactual: a copy is input materialization if it would not happen had the same operand
 arrived in the layout the provider consumes directly, at the same placement and dtype. Copies every layout needs are intrinsic workspace and are
 never refused, whatever they are called.
