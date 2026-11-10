@@ -1370,8 +1370,9 @@ fn tiled_transpose_geometry_selects_only_a_compact_pair_swap() {
     );
     assert_eq!(tiled.batch_stride(), 15);
 
-    // The `[2, 0, 1]` rotation of `transpose_3d_1024_1024_512_201` moves the source's slowest
-    // axis to the front, so the source's fastest axis is not the destination's second one.
+    // The `[2, 0, 1]` rotation of `transpose_3d_1024_1024_512_201`, before its trailing axes are
+    // merged: the source's fastest axis is not yet one run with the next one. The selector itself
+    // does not merge; `materialize_storage` hands it the coalesced view.
     assert_eq!(geometry(&[512, 1024, 1024], &[1048576, 1, 1024], 0), None);
     // A batch axis that is not the next stride of the source's run.
     assert_eq!(geometry(&[4, 3, 2], &[3, 1, 8], 0), None);
@@ -1480,23 +1481,27 @@ fn an_offset_pair_swap_reads_the_view_through_the_tiled_transpose() {
 /// A view the tiled entry does not address keeps the generic materialization, with its values.
 #[test]
 #[ignore = "requires CUDA"]
-fn a_three_axis_rotation_stays_on_the_generic_materialization() {
+fn a_three_axis_reversal_stays_on_the_generic_materialization() {
     let Some(mut engine) = engine() else { return };
     let data: Vec<f64> = (0..24).map(|index| index as f64).collect();
     let source = device(&engine, vec![2, 3, 4], data.clone());
 
+    // `[2, 1, 0]` of a compact `2 x 3 x 4`: no two destination axes merge (strides `6, 2, 1`),
+    // and the source's fastest axis is the destination's slowest one, so no pair swap exists.
+    // (The `[2, 0, 1]` rotation this test used to hold is a pair swap once its trailing axes
+    // merge, and now takes the tiled entry.)
     let before = engine.tiled_transposes();
     let copy = engine
-        .to_contiguous_read(region(&source, vec![4, 2, 3], vec![6, 1, 2], 0))
-        .expect("materialize the rotation");
+        .to_contiguous_read(region(&source, vec![4, 3, 2], vec![6, 2, 1], 0))
+        .expect("materialize the reversal");
     assert_eq!(
         engine.tiled_transposes(),
         before,
-        "a three-axis rotation keeps the generic path"
+        "a three-axis reversal keeps the generic path"
     );
     assert_eq!(
         read(&engine, &copy),
-        host_compact(&data, &[4, 2, 3], &[6, 1, 2], 0)
+        host_compact(&data, &[4, 3, 2], &[6, 2, 1], 0)
     );
 }
 
@@ -1507,8 +1512,14 @@ fn a_batched_pair_swap_plans_one_grid_axis_per_batch() {
     // seven independent `17 x 19` transposes, two tiles wide on each of x and y.
     let geometry = super::tiled_transpose_geometry(&[17, 19, 7], &[19, 1, 323], 0)
         .expect("the tiled geometry");
-    let plan = super::tiled_transpose_plan(t4a_cuda_kernels::DType::F64, geometry, 2261, 2261)
-        .expect("the catalogue plans the launch");
+    let (config, plan) =
+        super::tiled_transpose_plan(t4a_cuda_kernels::DType::F64, geometry, 2261, 2261)
+            .expect("the catalogue plans the launch");
+    assert_eq!(
+        config,
+        t4a_cuda_kernels::TransposeConfig::DEFAULT,
+        "a geometry the default tile launches keeps it"
+    );
 
     // Every batch is its own grid block on z; the tile rows are block.y, and the tile itself is
     // the launch's dynamic shared memory. A launch keeping `grid[0]` alone would carry
@@ -1516,4 +1527,338 @@ fn a_batched_pair_swap_plans_one_grid_axis_per_batch() {
     assert_eq!(plan.grid, [2, 2, 7], "tile columns, tile rows, batches");
     assert_eq!(plan.block, [16, 8, 1], "tile lanes, tile row groups");
     assert_eq!(plan.shared_bytes, 16 * 17 * 8, "a 16 x 16 f64 tile, padded");
+}
+
+/// Merging the axes a compact destination and its source advance through together.
+#[test]
+fn coalescing_merges_only_the_axes_the_source_continues() {
+    let coalesce = super::coalesce_compact_view;
+    // `[2, 0, 1]` of a compact `1024 x 1024 x 512`: the trailing destination axes are one run.
+    assert_eq!(
+        coalesce(&[512, 1024, 1024], &[1048576, 1, 1024]),
+        (vec![512, 1048576], vec![1048576, 1])
+    );
+    // A compact view is one axis; an axis of extent one is dropped wherever it sits.
+    assert_eq!(coalesce(&[4, 3, 2], &[1, 4, 12]), (vec![24], vec![1]));
+    assert_eq!(coalesce(&[4, 1, 3], &[3, 99, 1]), (vec![4, 3], vec![3, 1]));
+    // No merge: a reversal, a gap, a negative stride and a broadcast axis.
+    assert_eq!(
+        coalesce(&[4, 3, 2], &[6, 2, 1]),
+        (vec![4, 3, 2], vec![6, 2, 1])
+    );
+    assert_eq!(coalesce(&[4, 3], &[1, 5]), (vec![4, 3], vec![1, 5]));
+    assert_eq!(coalesce(&[4, 3], &[-1, 4]), (vec![4, 3], vec![-1, 4]));
+    assert_eq!(coalesce(&[4, 3], &[1, 0]), (vec![4, 3], vec![1, 0]));
+    // A reversed run merges into one reversed axis.
+    assert_eq!(coalesce(&[4, 3], &[-1, -4]), (vec![12], vec![-1]));
+    // An empty view and an all-singleton view come back unchanged.
+    assert_eq!(coalesce(&[4, 0], &[1, 4]), (vec![4, 0], vec![1, 4]));
+    assert_eq!(coalesce(&[1, 1], &[1, 1]), (vec![1, 1], vec![1, 1]));
+}
+
+/// The merged view addresses the same source element at every destination position.
+#[test]
+fn a_coalesced_view_addresses_every_element_the_view_names() {
+    let cases: [(Vec<usize>, Vec<isize>, isize); 3] = [
+        // `[2, 0, 1]` and `[2, 0, 1, 3]` of compact sources, and a reversed run at an offset.
+        (vec![17, 5, 7], vec![35, 1, 5], 0),
+        (vec![17, 5, 7, 3], vec![35, 1, 5, 595], 0),
+        (vec![4, 1, 3], vec![-1, 7, -4], 11),
+    ];
+    for (extents, strides, offset) in cases {
+        let count: usize = extents.iter().product();
+        let reach = (count as isize + offset + 1) as usize;
+        let data: Vec<f64> = (0..reach).map(|index| index as f64).collect();
+        let extents_i64: Vec<i64> = extents.iter().map(|&extent| extent as i64).collect();
+        let strides_i64: Vec<i64> = strides.iter().map(|&stride| stride as i64).collect();
+        let (merged_extents, merged_strides) =
+            super::coalesce_compact_view(&extents_i64, &strides_i64);
+        let merged_extents: Vec<usize> = merged_extents.iter().map(|&e| e as usize).collect();
+        let merged_strides: Vec<isize> = merged_strides.iter().map(|&s| s as isize).collect();
+        assert_eq!(
+            host_compact(&data, &merged_extents, &merged_strides, offset),
+            host_compact(&data, &extents, &strides, offset),
+            "view {extents:?} / {strides:?} merged to {merged_extents:?} / {merged_strides:?}"
+        );
+    }
+}
+
+/// The order in which a destination region is one compact span at its base.
+#[test]
+fn a_dense_destination_order_exists_only_for_a_permuted_compact_span() {
+    let order = super::dense_destination_order;
+    // The inverse-permuted destination of a `[2, 0, 1]` transpose, and of a pair swap.
+    assert_eq!(order(&[17, 35, 3], &[35, 1, 595], 0), Some(vec![1, 0, 2]));
+    assert_eq!(order(&[4, 3], &[3, 1], 0), Some(vec![1, 0]));
+    // A compact destination is its own order; extent-one axes go last.
+    assert_eq!(order(&[4, 1, 3], &[1, 9, 4], 0), Some(vec![0, 2, 1]));
+    // Refused: an offset, a gap, an overlap, a broadcast, a reversal and an empty extent.
+    assert_eq!(order(&[4, 3], &[3, 1], 2), None);
+    assert_eq!(order(&[4, 3], &[1, 5], 0), None);
+    assert_eq!(order(&[4, 3], &[1, 2], 0), None);
+    assert_eq!(order(&[4, 3], &[0, 1], 0), None);
+    assert_eq!(order(&[4, 3], &[-1, 4], 0), None);
+    assert_eq!(order(&[4, 0], &[1, 4], 0), None);
+}
+
+/// Which `gpu/permutation` benchmark views the tiled entry addresses once their axes are merged.
+///
+/// Each view is the `transpose_read` view of a compact column-major source: destination axis `k`
+/// reads source axis `perm[k]` at that axis's compact stride. This is the table the #2528
+/// write-up reports; a change in selection shows up here before it shows up in a timing.
+#[test]
+fn the_benchmark_permutations_the_tiled_transpose_addresses() {
+    fn view(shape: &[i64], perm: &[usize]) -> (Vec<i64>, Vec<i64>) {
+        let mut compact = vec![1i64; shape.len()];
+        for axis in 1..shape.len() {
+            compact[axis] = compact[axis - 1] * shape[axis - 1];
+        }
+        (
+            perm.iter().map(|&axis| shape[axis]).collect(),
+            perm.iter().map(|&axis| compact[axis]).collect(),
+        )
+    }
+    let tiled = |shape: &[i64], perm: &[usize]| {
+        let (extents, strides) = view(shape, perm);
+        let (extents, strides) = super::coalesce_compact_view(&extents, &strides);
+        super::tiled_transpose_geometry(&extents, &strides, 0)
+            .map(|g| (g.dst_fast_extent, g.src_fast_extent, g.batches))
+    };
+    let reverse = |rank: usize| (0..rank).rev().collect::<Vec<_>>();
+    let mut tn_perm: Vec<usize> = vec![0, 1, 2, 3, 22, 4, 23];
+    tn_perm.extend(5..22);
+    let mut tn_shape = vec![64i64];
+    tn_shape.extend(std::iter::repeat_n(2, 23));
+    let mut reverse_23 = vec![128i64];
+    reverse_23.extend(std::iter::repeat_n(2, 22));
+    let mut cyclic: Vec<usize> = (1..18).collect();
+    cyclic.push(0);
+
+    assert_eq!(tiled(&[32768, 16384], &[1, 0]), Some((16384, 32768, 1)));
+    assert_eq!(
+        tiled(&[1024, 1024, 512], &[1, 0, 2]),
+        Some((1024, 1024, 512))
+    );
+    assert_eq!(
+        tiled(&[1024, 1024, 512], &[2, 0, 1]),
+        Some((512, 1 << 20, 1))
+    );
+    assert_eq!(
+        tiled(&[3; 18], &cyclic),
+        Some((3i64.pow(17), 3, 1)),
+        "cyclic_18d_3"
+    );
+    assert_eq!(
+        tiled(&[64, 32, 32, 32, 16, 16], &[5, 0, 4, 1, 3, 2]),
+        None,
+        "rotation_6d"
+    );
+    assert_eq!(tiled(&reverse_23, &reverse(23)), None, "reverse_23d_128x2");
+    assert_eq!(tiled(&[3; 18], &reverse(18)), None, "reverse_18d_3");
+    assert_eq!(tiled(&tn_shape, &tn_perm), None, "tn_light_415_24d");
+    // The tn_light view keeps its fastest 512-element run: merged, it fits the by-value layout.
+    let (extents, strides) = view(&tn_shape, &tn_perm);
+    let (extents, _) = super::coalesce_compact_view(&extents, &strides);
+    assert!(extents.len() <= t4a_cuda_kernels::MAX_RANK, "{extents:?}");
+}
+
+/// A source run the default tile cannot launch plans with the 32-wide tile instead.
+#[test]
+fn a_source_run_past_the_default_grid_plans_with_the_wide_tile() {
+    // 65535 tiles of 16 is the longest source run `grid.y` holds at the default tile.
+    let run = 65_535 * 16 + 1;
+    let geometry = super::tiled_transpose_geometry(&[3, run], &[run, 1], 0).expect("pair swap");
+    let len = 3 * run;
+    let (config, plan) =
+        super::tiled_transpose_plan(t4a_cuda_kernels::DType::F64, geometry, len, len)
+            .expect("the wide tile plans it");
+    assert_eq!(config.tile(), 32);
+    assert_eq!(plan.grid, [1, 32_768, 1]);
+    assert_eq!(plan.block, [32, 8, 1]);
+}
+
+/// A rotation whose trailing destination axes merge into one source run reads through the tiled
+/// transpose; the values are the view's own.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_rotation_whose_trailing_axes_merge_reads_through_the_tiled_transpose() {
+    let Some(mut engine) = engine() else { return };
+    // `[2, 0, 1, 3]` of a compact `5 x 7 x 17 x 3`: destination `[17, 5, 7, 3]`, strides
+    // `[35, 1, 5, 595]`, which merges to a `17 x 35` pair swap in three batches. Two tile
+    // columns on x, three tile rows on y and three batches on z, so a dropped grid axis leaves
+    // elements unwritten.
+    let data: Vec<f64> = (0..1785).map(|index| index as f64).collect();
+    let source = device(&engine, vec![5, 7, 17, 3], data.clone());
+
+    let before = engine.tiled_transposes();
+    let copy = engine
+        .transpose_read(TensorRead::from_tensor(&source), &[2, 0, 1, 3])
+        .expect("transpose");
+    assert_eq!(
+        engine.tiled_transposes(),
+        before + 1,
+        "a rotation that merges into a pair swap takes the tiled transpose"
+    );
+    assert_eq!(
+        read(&engine, &copy),
+        host_compact(&data, &[17, 5, 7, 3], &[35, 1, 5, 595], 0)
+    );
+}
+
+/// The same merged rotation read from a view at a nonzero offset reads from the view's base.
+#[test]
+#[ignore = "requires CUDA"]
+fn an_offset_rotation_whose_trailing_axes_merge_reads_through_the_tiled_transpose() {
+    let Some(mut engine) = engine() else { return };
+    let data: Vec<f64> = (0..1786).map(|index| index as f64).collect();
+    let source = device(&engine, vec![1786], data.clone());
+
+    let before = engine.tiled_transposes();
+    let copy = engine
+        .to_contiguous_read(region(&source, vec![17, 5, 7, 3], vec![35, 1, 5, 595], 1))
+        .expect("materialize the offset rotation");
+    assert_eq!(
+        engine.tiled_transposes(),
+        before + 1,
+        "an offset rotation that merges into a pair swap takes the tiled transpose"
+    );
+    assert_eq!(
+        read(&engine, &copy),
+        host_compact(&data, &[17, 5, 7, 3], &[35, 1, 5, 595], 1)
+    );
+}
+
+/// A source run longer than the default tile's grid still reads through the tiled transpose.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_source_run_past_the_default_grid_reads_through_the_wide_tile() {
+    let Some(mut engine) = engine() else { return };
+    let run = 65_535 * 16 + 1;
+    let data: Vec<f64> = (0..3 * run).map(|index| index as f64).collect();
+    let source = device(&engine, vec![run, 3], data.clone());
+
+    let before = engine.tiled_transposes();
+    let copy = engine
+        .transpose_read(TensorRead::from_tensor(&source), &[1, 0])
+        .expect("transpose");
+    assert_eq!(
+        engine.tiled_transposes(),
+        before + 1,
+        "the wide tile serves a run the default grid refuses"
+    );
+    assert_eq!(
+        read(&engine, &copy),
+        host_compact(&data, &[3, run], &[run as isize, 1], 0)
+    );
+}
+
+/// `copy_read_into` writes `source` through the destination region of `root` it names, and
+/// returns the whole root afterwards.
+fn copy_into_region(
+    engine: &mut CudaEngine,
+    root: &mut Tensor,
+    source: &Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+) -> Vec<f64> {
+    {
+        let view = root
+            .as_typed_mut::<f64>()
+            .expect("f64 payload")
+            .backend_region_view_mut(shape, strides, offset)
+            .expect("destination region");
+        engine
+            .copy_read_into(
+                TensorRead::from_tensor(source),
+                TensorWrite::from_view(TensorViewMut::F64(view)),
+            )
+            .expect("copy into the destination region");
+    }
+    read(engine, root)
+}
+
+/// `root` with `values` written at the region's positions, in the region's logical order.
+fn expected_after_copy(
+    root: &[f64],
+    shape: &[usize],
+    strides: &[isize],
+    offset: isize,
+    values: &[f64],
+) -> Vec<f64> {
+    let positions: Vec<f64> = (0..root.len()).map(|index| index as f64).collect();
+    let mut expected = root.to_vec();
+    for (position, &value) in host_compact(&positions, shape, strides, offset)
+        .into_iter()
+        .zip(values)
+    {
+        expected[position as usize] = value;
+    }
+    expected
+}
+
+/// A destination that is a permuted compact span at its base is written through the tiled
+/// transpose, and nothing past the span changes.
+#[test]
+#[ignore = "requires CUDA"]
+fn copy_read_into_a_permuted_compact_destination_reads_through_the_tiled_transpose() {
+    let Some(mut engine) = engine() else { return };
+    let values: Vec<f64> = (0..1785).map(|index| 1000.0 + index as f64).collect();
+    let source = device(&engine, vec![17, 35, 3], values.clone());
+    // The destination's fastest axis is the source's second one: in the destination's own order
+    // the copy reads a `35 x 17` pair swap in three batches. The root holds five sentinels past
+    // the 1785-element span.
+    let sentinels: Vec<f64> = (0..1790).map(|index| -(index as f64)).collect();
+    let mut root = device(&engine, vec![1790], sentinels.clone());
+    let (shape, strides) = (vec![17, 35, 3], vec![35, 1, 595]);
+
+    let before = engine.tiled_transposes();
+    let observed = copy_into_region(
+        &mut engine,
+        &mut root,
+        &source,
+        shape.clone(),
+        strides.clone(),
+        0,
+    );
+    assert_eq!(
+        engine.tiled_transposes(),
+        before + 1,
+        "a permuted compact destination takes the tiled transpose"
+    );
+    assert_eq!(
+        observed,
+        expected_after_copy(&sentinels, &shape, &strides, 0, &values)
+    );
+}
+
+/// The same permuted destination at a nonzero offset keeps the strided-to-strided copy.
+#[test]
+#[ignore = "requires CUDA"]
+fn copy_read_into_an_offset_permuted_destination_keeps_the_strided_copy() {
+    let Some(mut engine) = engine() else { return };
+    let values: Vec<f64> = (0..1785).map(|index| 1000.0 + index as f64).collect();
+    let source = device(&engine, vec![17, 35, 3], values.clone());
+    let sentinels: Vec<f64> = (0..1790).map(|index| -(index as f64)).collect();
+    let mut root = device(&engine, vec![1790], sentinels.clone());
+    let (shape, strides) = (vec![17, 35, 3], vec![35, 1, 595]);
+
+    let before = engine.tiled_transposes();
+    let observed = copy_into_region(
+        &mut engine,
+        &mut root,
+        &source,
+        shape.clone(),
+        strides.clone(),
+        2,
+    );
+    assert_eq!(
+        engine.tiled_transposes(),
+        before,
+        "an offset destination keeps the strided copy"
+    );
+    assert_eq!(
+        observed,
+        expected_after_copy(&sentinels, &shape, &strides, 2, &values)
+    );
 }

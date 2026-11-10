@@ -610,6 +610,91 @@ fn region_is_flat(region: &Region<'_>) -> bool {
 /// sends, so choosing another would be a guess.
 const TILED_TRANSPOSE_CONFIG: TransposeConfig = TransposeConfig::DEFAULT;
 
+/// The tiling a geometry the default tile cannot launch runs with instead, `32 x 8`.
+///
+/// The catalogue tiles the source's fastest extent along `grid.y`, which the hardware caps at
+/// 65535 blocks, so a 16-wide tile refuses any source run longer than `65535 * 16` elements.
+/// Fusing the axes of `transpose_3d_1024_1024_512_201` gives exactly such a run (`2^20`
+/// elements, 65536 tiles). A 32-wide tile halves the tile count; `32 x 8` is a member of the
+/// catalogue's own family (`TransposeConfig::new` admits it, and the entry's
+/// `__launch_bounds__(512, 4)` covers its 256 threads). It is tried only after the default tile
+/// is refused, so every geometry the default already served keeps it. `None` only if the
+/// catalogue ever drops that member, in which case the refused geometry keeps the generic path.
+fn tiled_transpose_wide_config() -> Option<TransposeConfig> {
+    TransposeConfig::new(32, 8, 1, 1).ok()
+}
+
+/// The view a compact column-major destination reads, with its mergeable axes merged.
+///
+/// Two adjacent destination axes `k` and `k + 1` are one axis of extent `e[k] * e[k + 1]` when
+/// the source advances by `s[k] * e[k]` along `k + 1`: the destination is compact, so it already
+/// advances that way, and the source's element `i[k] * s[k] + i[k + 1] * s[k + 1]` is then
+/// `(i[k] + e[k] * i[k + 1]) * s[k]`. An axis of extent one contributes no offset and is
+/// dropped. The merged view names the same elements in the same destination order, so every
+/// materialization entry may read it in place of the original; it differs only in how many
+/// axes the entry has to decode, and in whether a run of the source's axes has become the
+/// single fast axis the tiled transpose needs (`[2, 0, 1]` of a compact source is one pair swap
+/// once its last two destination axes are merged). A view with an empty axis is returned as
+/// it is, and so is one whose every axis has extent one.
+pub(super) fn coalesce_compact_view(extents: &[i64], strides: &[i64]) -> (Vec<i64>, Vec<i64>) {
+    if extents.len() != strides.len() || extents.contains(&0) {
+        return (extents.to_vec(), strides.to_vec());
+    }
+    let mut merged_extents: Vec<i64> = Vec::with_capacity(extents.len());
+    let mut merged_strides: Vec<i64> = Vec::with_capacity(strides.len());
+    for (&extent, &stride) in extents.iter().zip(strides) {
+        if extent == 1 {
+            continue;
+        }
+        if let (Some(last_extent), Some(&last_stride)) =
+            (merged_extents.last_mut(), merged_strides.last())
+        {
+            let continues = last_stride.checked_mul(*last_extent) == Some(stride);
+            if let (true, Some(product)) = (continues, last_extent.checked_mul(extent)) {
+                *last_extent = product;
+                continue;
+            }
+        }
+        merged_extents.push(extent);
+        merged_strides.push(stride);
+    }
+    if merged_extents.is_empty() {
+        return (extents.to_vec(), strides.to_vec());
+    }
+    (merged_extents, merged_strides)
+}
+
+/// The axis order in which a destination region is one compact span at its allocation's base,
+/// or `None` when no order is.
+///
+/// A caller-owned destination that is a permuted view of a compact allocation (the
+/// `copy_read_into` destination of a transpose) is written in that allocation's own order by
+/// reading the source in the same order: element `x` of the copy lands at the compact index of
+/// `x` permuted by the returned order, which is where the destination's strides put it. Axes of
+/// extent one carry no offset and go last. A nonzero offset, a zero or negative stride on an
+/// axis that moves, an overlap and a gap all refuse; so does an empty extent.
+pub(super) fn dense_destination_order(
+    extents: &[i64],
+    strides: &[i64],
+    offset: i64,
+) -> Option<Vec<usize>> {
+    if offset != 0 || extents.len() != strides.len() || extents.contains(&0) {
+        return None;
+    }
+    let (mut order, singletons): (Vec<usize>, Vec<usize>) =
+        (0..extents.len()).partition(|&axis| extents[axis] > 1);
+    order.sort_by_key(|&axis| strides[axis]);
+    let mut expected = 1i64;
+    for &axis in &order {
+        if strides[axis] != expected {
+            return None;
+        }
+        expected = expected.checked_mul(extents[axis])?;
+    }
+    order.extend(singletons);
+    Some(order)
+}
+
 /// The batched two-dimensional transpose the catalogue's tiled kernel serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct TiledTransposeGeometry {
@@ -678,29 +763,38 @@ pub(super) fn tiled_transpose_geometry(
     })
 }
 
-/// The catalogue's plan for `geometry`, or `None` when its planner refuses it.
+/// The catalogue's plan for `geometry` and the tiling it was planned with, or `None` when its
+/// planner refuses both tilings.
 ///
-/// A refusal falls back to the generic materialization instead of failing the call: the tiled
-/// entry serves a subset of the geometry (a grid, dtype or span limit refuses the rest) while the
-/// caller's operation is defined for all of it.
+/// The default tile is tried first and the 32-wide one only after a refusal (see
+/// [`tiled_transpose_wide_config`]). A refusal of both falls back to the generic
+/// materialization instead of failing the call: the tiled entry serves a subset of the geometry
+/// (a grid, dtype or span limit refuses the rest) while the caller's operation is defined for
+/// all of it.
 fn tiled_transpose_plan(
     kernel: t4a_cuda_kernels::DType,
     geometry: TiledTransposeGeometry,
     source_len: i64,
     len: i64,
-) -> Option<t4a_cuda_kernels::Launch> {
-    plan_tiled_transpose(
-        kernel,
-        TILED_TRANSPOSE_CONFIG,
-        geometry.src_offset,
-        geometry.batch_stride(),
-        geometry.dst_fast_extent,
-        geometry.src_fast_extent,
-        geometry.batches,
-        source_len,
-        len,
-    )
-    .ok()
+) -> Option<(TransposeConfig, t4a_cuda_kernels::Launch)> {
+    [Some(TILED_TRANSPOSE_CONFIG), tiled_transpose_wide_config()]
+        .into_iter()
+        .flatten()
+        .find_map(|config| {
+            plan_tiled_transpose(
+                kernel,
+                config,
+                geometry.src_offset,
+                geometry.batch_stride(),
+                geometry.dst_fast_extent,
+                geometry.src_fast_extent,
+                geometry.batches,
+                source_len,
+                len,
+            )
+            .ok()
+            .map(|plan| (config, plan))
+        })
 }
 
 /// The real dtype that holds a magnitude or a norm for `dtype`.
@@ -1206,6 +1300,35 @@ impl TensorStructural for CudaEngine {
         let destination_len = destination.len(OP)?;
         let destination_flat = region_is_flat(&destination);
         if !(destination_flat && region_is_flat(&source)) {
+            // A destination that is a permuted view of one compact span at its allocation's base
+            // is written in that span's own order: the source is read in the same order, which
+            // makes the copy a materialization into a compact destination and lets the tiled
+            // transpose serve it when the reordered view is a pair swap. Every other destination
+            // keeps the strided-to-strided copy below.
+            if let Some(order) = dense_destination_order(
+                &destination.extents,
+                &destination.strides,
+                destination.offset,
+            ) {
+                let extents: Vec<i64> = order.iter().map(|&axis| source.extents[axis]).collect();
+                let strides: Vec<i64> = order.iter().map(|&axis| source.strides[axis]).collect();
+                let (extents, strides) = coalesce_compact_view(&extents, &strides);
+                if extents.len() <= t4a_cuda_kernels::MAX_RANK {
+                    let len = i64::try_from(count)
+                        .map_err(|_| crate::Error::unsupported(OP, "count exceeds i64"))?;
+                    return self.materialize_by_value(
+                        source.storage,
+                        source.len(OP)?,
+                        kernel,
+                        &extents,
+                        &strides,
+                        source.offset,
+                        len,
+                        Arg::DevicePtr(destination.storage.allocation()),
+                        OP,
+                    );
+                }
+            }
             if source.extents.len() <= t4a_cuda_kernels::MAX_RANK {
                 let source_layout = source.layout(OP)?;
                 let source_len = source.len(OP)?;
@@ -1852,64 +1975,39 @@ impl CudaEngine {
                 "the allocation belongs to another runtime",
             ));
         }
-        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
         // The kernel writes one destination element per logical position; `source_len` bounds the
         // view's reachable span inside the whole allocation and is not that count.
         let len = count_i64(&shape, op)?;
-        // A view the catalogue's tiled transpose addresses is copied a tile at a time through
-        // shared memory instead of element by element through the generic decoder; every other
-        // view keeps the generic path below.
-        if let Some(geometry) = tiled_transpose_geometry(extents, strides, offset) {
-            if let Some(plan) = tiled_transpose_plan(kernel, geometry, source_len, len) {
-                let config = CTransposeConfig::from(TILED_TRANSPOSE_CONFIG);
-                let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, op))?;
-                let source = storage.allocation();
-                // The ABI's offsets are signed 64-bit and the runtime's parameter slot is the
-                // unsigned one of the same width; the derivation admitted only non-negative
-                // values.
-                self.note_tiled_transpose();
-                return self
-                    .launch_planned(
-                        Entry::TiledTranspose,
-                        plan,
-                        &[
-                            Arg::DevicePtr(destination),
-                            Arg::DevicePtr(source),
-                            Arg::U32(kernel.tag() as u32),
-                            Arg::U64(geometry.src_offset as u64),
-                            Arg::U64(geometry.batch_stride() as u64),
-                            Arg::U64(geometry.dst_fast_extent as u64),
-                            Arg::U64(geometry.src_fast_extent as u64),
-                            pod_arg(&config),
-                        ],
-                        op,
-                    )
-                    .map(|()| output);
-            }
-        }
+        // The destination is compact, so merging the axes it and the source advance through
+        // together leaves the same copy with fewer axes to decode (see `coalesce_compact_view`).
+        let (extents, strides) = coalesce_compact_view(extents, strides);
+        let (extents, strides) = (extents.as_slice(), strides.as_slice());
         if extents.len() <= t4a_cuda_kernels::MAX_RANK {
-            let view = Layout::new(extents, strides, offset)
-                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-            let plan = plan_materialize_strided(kernel, &view, source_len)
-                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-            let layout = CLayout::new(&view);
-            let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, op))?;
-            let source = storage.allocation();
-            return self
-                .launch_planned(
-                    Entry::MaterializeStrided,
-                    plan,
-                    &[
-                        Arg::DevicePtr(destination),
-                        Arg::DevicePtr(source),
-                        Arg::U32(kernel.tag() as u32),
-                        layout_arg(&layout),
-                        Arg::U64(len as u64),
-                    ],
-                    op,
-                )
-                .map(|()| output);
+            // INVARIANT: uninitialised on purpose, not a missing zero fill. Both by-value entries
+            // write each of the `len` destination elements once: the tiled transpose writes the
+            // `batches * M * N` it planned, which is `len` for a compact destination, and the
+            // generic materialization writes one element per logical position. A zero fill here
+            // was a full extra pass over the destination (2.4 ms of a 4 GiB transpose's 8.0 ms
+            // on the A100, #2528).
+            let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
+            self.materialize_by_value(
+                storage,
+                source_len,
+                kernel,
+                extents,
+                strides,
+                offset,
+                len,
+                Arg::DevicePtrUninit(&output),
+                op,
+            )?;
+            // SAFETY: `materialize_by_value` admitted the launch that writes every one of the
+            // `len` elements on this buffer's stream (or there are none to write), so every later
+            // read is ordered after that write.
+            let output = unsafe { output.assume_init() };
+            return tensor_from_buffer(self.runtime(), dtype, &shape, output);
         }
+        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
         let reference = LayoutRef::new(extents, strides, offset)
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         let plan = plan_materialize_strided(kernel, reference, source_len)
@@ -1963,6 +2061,71 @@ impl CudaEngine {
         }?;
         self.prove_launch(op)?;
         Ok(output)
+    }
+
+    /// Write the `len`-element compact copy of a view of rank at most `MAX_RANK` to the base of
+    /// `destination`, a device pointer of this runtime with room for `len` elements.
+    ///
+    /// A view the catalogue's tiled transpose addresses is copied a tile at a time through shared
+    /// memory instead of element by element through the generic decoder; every other view, and
+    /// one whose tiled launch the planner refuses, takes the generic materialization. Either
+    /// entry writes all `len` elements, which is what lets the caller hand an uninitialised
+    /// destination here.
+    #[allow(clippy::too_many_arguments)]
+    fn materialize_by_value(
+        &self,
+        storage: &CudaStorage,
+        source_len: i64,
+        kernel: t4a_cuda_kernels::DType,
+        extents: &[i64],
+        strides: &[i64],
+        offset: i64,
+        len: i64,
+        destination: Arg<'_>,
+        op: &'static str,
+    ) -> crate::Result<()> {
+        let source = storage.allocation();
+        if let Some(geometry) = tiled_transpose_geometry(extents, strides, offset) {
+            if let Some((config, plan)) = tiled_transpose_plan(kernel, geometry, source_len, len) {
+                let config = CTransposeConfig::from(config);
+                // The ABI's offsets are signed 64-bit and the runtime's parameter slot is the
+                // unsigned one of the same width; the derivation admitted only non-negative
+                // values.
+                self.note_tiled_transpose();
+                return self.launch_planned(
+                    Entry::TiledTranspose,
+                    plan,
+                    &[
+                        destination,
+                        Arg::DevicePtr(source),
+                        Arg::U32(kernel.tag() as u32),
+                        Arg::U64(geometry.src_offset as u64),
+                        Arg::U64(geometry.batch_stride() as u64),
+                        Arg::U64(geometry.dst_fast_extent as u64),
+                        Arg::U64(geometry.src_fast_extent as u64),
+                        pod_arg(&config),
+                    ],
+                    op,
+                );
+            }
+        }
+        let view = Layout::new(extents, strides, offset)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let plan = plan_materialize_strided(kernel, &view, source_len)
+            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        let layout = CLayout::new(&view);
+        self.launch_planned(
+            Entry::MaterializeStrided,
+            plan,
+            &[
+                destination,
+                Arg::DevicePtr(source),
+                Arg::U32(kernel.tag() as u32),
+                layout_arg(&layout),
+                Arg::U64(len as u64),
+            ],
+            op,
+        )
     }
 
     /// Copy wide regions directly, without a tensor-sized temporary or a host transfer.
