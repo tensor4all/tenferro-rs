@@ -19,14 +19,19 @@ runtime check is the one that holds. Collapse toward the enforced expression, th
 Implementation primacy and ergonomic primacy are separate decisions: the primitive gets the `_into` shape because it is the one that
 makes allocation countable; the documented entry stays the allocating one because that is what a caller actually wants.
 
-**R3. Never canonicalize implicitly.** The surface accepts every layout the selected provider handles directly, and *refuses* what it
-cannot express. It does not silently copy. Concretely, on `d4cba68b`:
+**R3. Never change placement or dtype implicitly; never normalize an input layout without the caller's permission.**
+The surface accepts every layout the selected provider handles directly. For what it cannot express, an invocation states what it
+allows: under `MaterializationPolicy::Allow` (the default) the provider may normalize the input's layout once, at the same placement
+and dtype, at its admission boundary; under `Forbid` it refuses with `InputMaterializationForbidden` instead of copying. Placement
+changes, dtype changes and backend fallback are never implicit under either value. The rule below is why the permission exists rather
+than a promise of refusal. Concretely, on `d4cba68b`:
 - `raw_view` refuses only negative strides (`cpu/linalg/mod.rs:92`); `faer_strided_ok` asks only for rank 2 and nonnegative strides
   (`faer_linalg.rs:2071`). So a transposed matrix already runs without staging, and a rule that refused non-contiguous input would
   remove capability while sounding like simplification. (This rule was written that way once; the adversarial review caught it.)
 - The read path does the opposite of refusing: `cpu/backend.rs:362,403,525,561,585` fall back to `with_materialized_tensor_read`, and
   `provider_readable` (`mod.rs:116`) gathers negative strides for `solve`. That is the invisible cost this rule exists to remove.
-- A caller who wants the staging writes `buffers.normalize(view)` themselves. One line, visible at the call site.
+- A caller who wants staging on purpose writes `buffers.normalize(view)` themselves, or passes
+  `MaterializationPolicy::Forbid` to require that no staging happens. Both are visible at the call site.
 
 **R4. Erasure lives at the FFI edge and nowhere else.** One erased type for the bindings. `TensorRead` with 3788 mentions in this crate is
 the *main* type, which is why the copy rule inside it is invisible — that is what to fix, not what to keep.
@@ -51,6 +56,24 @@ before the narrowing, and values the CPU engine itself produces (a materialized 
 cross the same boundary: `TensorWrite::try_mut_host(op)` / `TensorViewMut::try_mut_host(op)` returns a `TensorViewMut<'_, Host>` with the
 read side's errors, so a CPU `_read_into` entry narrows its destination once and writes it without a refusal-only check. `TensorWrite` itself
 stays unparameterized, like `TensorRead`: its `Tensor(&mut Tensor)` arm holds an owner whose placement no type proves.
+
+**R8. An execution constraint travels as a value the caller passes, in the same position as the execution resources.** The materialization
+policy is its first instance: one `Copy` enum, `tenferro_tensor::MaterializationPolicy`, added as the last parameter of the **operation
+entries whose caller already chooses an execution resource** — today the `*_with_exec` family, the einsum trait methods and the `FftExecutor`
+transforms. Internal wiring (backend helpers, `*_with_*` plumbing, runtime and AD surfaces) inherits the value; it does not take one of its own,
+and each of those surfaces is a separate decision, not an implication of this rule. Graph-building entries do not take it. The inventory is
+149 public functions that take an execution resource; the operation entries are a subset, and the rule is scoped to them deliberately: an
+inventory of the whole surface is a migration plan, not a rule. A provider
+selects the same dispatch under both values — `Forbid` is a gate on input normalization, never a selector of a different kernel — so the
+assertion cannot route a call to a different numerical path (it does not promise numerical identity: two runs of one parallel reduction may
+differ, and two different paths may agree bit for bit), and a call that could only succeed through a second numerical path must refuse instead. No `*Options` field,
+no engine setter, no `svd_no_copy` twin: the value is per invocation, and one `Copy` parameter repeated is cheaper surface than a request wrapper with a
+lifetime and a generic parameter whose correct default is not obvious (see #2552 for the two proposals and the
+five-file compile check that decided between them; the check does **not** claim an ergonomic penalty for the
+wrapper — with each request scoped to its call, both carriers compile a twice-calling helper). A second execution constraint may later justify the wrapper; that migration is signature-local and is not built now.
+What counts as the copy `Forbid` refuses is a counterfactual: a copy is input materialization if it would not happen had the same operand
+arrived in the layout the provider consumes directly, at the same placement and dtype. Copies every layout needs are intrinsic workspace and are
+never refused, whatever they are called.
 
 ## 2. Withdrawn — do not re-propose without new evidence
 
