@@ -136,6 +136,20 @@ or thread-count promise for the threads the vendor creates. The calling
 thread's mask is the one you control: a caller already pinned to one CPU also
 confines a newly created vendor team.
 
+A multi-worker `CpuEngine` pins the thread that built it (the team leader) to
+one CPU of its mask `S` for the engine's life (threadteam 0.5). Every LAPACK
+call of the `blas` linalg route, and the compact-QR GEMM, runs through
+`tenferro-linalg`'s `vendor_call`, which widens the leader to `S` for the call
+through threadteam's `TeamExec::external` and pins it again afterwards (two
+`sched_setaffinity` calls per vendor call on a placed leader, nothing on other
+threads). Without it, #2553 measured MKL's OpenMP team confined to one CPU: at
+4 threads with `MKL_NUM_THREADS=4`, Householder QR, full SVD and solve ran
+11-89x slower than with the widening, and with the count unset MKL saw one CPU
+and ran single-threaded. The vendor GEMM inside `cpueinsum-blas` is not widened
+yet. A vendor library usually fixes its worker threads' placement and count on
+its first call, so a process whose first vendor call is that GEMM keeps the
+confinement for later LAPACK calls too.
+
 Provider variables such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and
 `OMP_NUM_THREADS` still control vendor counts where supported. They are outside
 tenferro's resource contract, and a one-worker `CpuEngine` does not imply a

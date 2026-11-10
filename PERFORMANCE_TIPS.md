@@ -575,28 +575,17 @@ thread count, nothing across thread counts — is owned by `docs/spec/reproducib
   a different pool. A kernel that needs every worker at once (a barrier team)
   asks `Exec::can_broadcast` and takes a barrier-free path when it is refused.
 - threadteam places the team; tenferro makes no `sched_setaffinity` call and
-  has no affinity setting of its own. Placement of a root team scope is on by
-  default (threadteam 0.5): member `k` gets one CPU of the calling thread's
-  affinity set `S`, the CPU `S[k]`, and the thread that builds the team (the
-  engine's leader) stays pinned to `{S[0]}` for the team's life, between
-  operations too. A vendor library builds its own thread team from the calling
-  thread, so a vendor call made directly from that leader confines the whole
-  vendor team to `S[0]` (#2553: with `MKL_NUM_THREADS=4`, MKL's OpenMP threads
-  shared one CPU and 4-thread QR, SVD and solve ran 11-89x slower). Every
-  BLAS/LAPACK call of the LAPACK linalg route therefore runs through
-  `tenferro-linalg`'s `vendor_call`, which asks threadteam
-  (`TeamExec::external`) to widen the leader to `S` for the call and pin it
-  again afterwards: two `sched_setaffinity` calls per vendor call on a placed
-  leader, nothing elsewhere. The vendor GEMM inside `cpueinsum-blas` is not
-  widened yet; because a vendor's first call fixes where its worker threads
-  live, a process whose first vendor call is that GEMM keeps the confinement.
-  Nothing wraps: when `S` has fewer CPUs than participants nobody is placed and
-  `Pool::pin_skips()` counts those scopes. A caller that does not want this
-  builds its own pool with `Pool::builder().pin_participants(false)`. A member
-  that calls a vendor library directly is likewise confined to its single
-  CPU, so such a call goes through `Exec::external`, which restores the
-  member's mask first. Provider thread counts remain controlled by the
-  provider variables below, not by worker affinity.
+  has no affinity setting of its own. Placement is on by default (threadteam
+  0.5): member `k` gets CPU `S[k]` of the calling thread's set `S`, and the
+  team's creator (the engine's leader) stays pinned to `{S[0]}` for the team's
+  life. A vendor call from the leader therefore goes through `tenferro-linalg`'s
+  `vendor_call` (`TeamExec::external`: `S` for the call, `{S[0]}` after it), and
+  one from a member through `Exec::external`; see #2553 and the vendor section
+  of `docs/guides/cpu-execution.md` (the `cpueinsum-blas` GEMM is not widened
+  yet). Nothing wraps: when `S` has fewer CPUs than participants nobody is
+  placed and `Pool::pin_skips()` counts those scopes; opt out with
+  `Pool::builder().pin_participants(false)`. Provider thread counts remain
+  controlled by the provider variables below, not by worker affinity.
 - `PoolBuilder` reserves 16 MiB per worker by default rather than the
   `std::thread` default of 2 MiB, because provider kernels recurse with large
   private frames: a `NUM_THREADS=64` OpenBLAS build keeps about 541 KiB per
