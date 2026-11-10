@@ -341,7 +341,13 @@ and Torch reference data in
 [oracle support table](https://tensor4all.org/tenferro-rs/oracle/tensor-ad-oracles-support.html)),
 enforced per-file coverage thresholds, and the reproducible
 [tenferro-benchmark](https://github.com/tensor4all/tenferro-benchmark) suite.
-Every documentation example compiles and runs in CI.
+Every documentation example compiles and runs in CI. The AD replay also runs as
+an [oracle replay nightly](.github/workflows/oracle-replay-nightly.yml) job at
+17:37 UTC, on days when the default branch got a commit in the last 24 hours (or
+when dispatched with `force=true`). A failing night files one issue labelled
+`nightly-oracle-failure` that names the failing oracle `case_id`s, and a later
+replay that actually ran and passed comments its run and closes that issue; see
+[the oracle support notes](docs/oracle/tensor-ad-oracles-support.md#nightly-replay-failure-reporting-and-recovery).
 
 **AI-assisted development.** tenferro-rs assumes AI-assisted and agentic
 coding for development, migration, and review. AI output is never accepted as

@@ -49,13 +49,15 @@ The PR sentinel set should be chosen by these criteria:
 - keep the set deterministic and stable so a PR failure points to a contract
   regression rather than oracle sampling variance.
 
-The current root-facade oracle harness has been removed, and these tiers are
-not active CI gates. Until a crate-local replay harness is restored, CI cannot
-claim full oracle replay coverage; focused regression tests and this support
-snapshot are the active gates.
+The root-facade oracle harness has been removed. The crate-local harness under
+`crates/tenferro-linalg/tests/integration/oracle_replay.rs` is the active one; it
+is not a PR gate but runs on the nightly schedule described in
+[Nightly Replay, Failure Reporting And Recovery](./tensor-ad-oracles-support.md#nightly-replay-failure-reporting-and-recovery),
+so CI reproduces the whole supported database when the default branch moves.
 
 ## Links
 
-- Test source: historical root-facade oracle replay harness, now removed
+- Test source: `crates/tenferro-linalg/tests/integration/oracle_replay.rs` (crate-local,
+  nightly)
 - Oracle database: `third_party/tensor-ad-oracles/`
 - Design spec: [Oracle Replay Design](../superpowers/specs/2026-04-06-oracle-replay-design.md)

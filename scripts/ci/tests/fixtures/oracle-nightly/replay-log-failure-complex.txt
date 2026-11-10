@@ -1,0 +1,13 @@
+   Compiling tenferro-linalg v0.1.0 (/home/runner/work/tenferro-rs/tenferro-rs/crates/tenferro-linalg)
+    Finished `test` profile [unoptimized] target(s) in 39.87s
+     Running tests/integration.rs (target/debug/deps/integration-1f4c2a9b7de11c55)
+
+running 1 test
+thread 'oracle_replays_supported_db_cases_when_requested' panicked at crates/tenferro-linalg/tests/integration/oracle_replay.rs:186:10:
+oracle replay runner should not fail: "incremental_householder_qr_c128_append_qr_001: vjp of factor_qr differs from pytorch_ref.vjp"
+test oracle_replays_supported_db_cases_when_requested ... FAILED
+
+failures:
+    oracle_replays_supported_db_cases_when_requested
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 58.02s

@@ -1,0 +1,16 @@
+   Compiling tenferro-linalg v0.1.0 (/home/runner/work/tenferro-rs/tenferro-rs/crates/tenferro-linalg)
+    Finished `test` profile [unoptimized] target(s) in 41.20s
+     Running tests/integration.rs (target/debug/deps/integration-1f4c2a9b7de11c55)
+
+running 1 test
+thread 'oracle_replays_supported_db_cases_when_requested' panicked at crates/tenferro-linalg/tests/integration/oracle_replay.rs:186:10:
+oracle replay runner should not fail: "solve_f64_identity_004: max |vjp - pytorch_ref.vjp| = 3.7e-08 exceeds atol 1e-09"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test oracle_replays_supported_db_cases_when_requested ... FAILED
+
+failures:
+
+failures:
+    oracle_replays_supported_db_cases_when_requested
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 63.44s
