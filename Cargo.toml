@@ -22,6 +22,7 @@ members = [
     "ext/df64-proof",
     "ext/scalar-consumer-algorithm",
     "ext/scalar-consumer-application",
+    "ext/api-grammar-proof",
 ]
 exclude = ["ext/sparse", "ext/tropical"]
 default-members = [

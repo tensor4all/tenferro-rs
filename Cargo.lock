@@ -2471,6 +2471,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tenferro-api-grammar-proof"
+version = "0.0.0"
+dependencies = [
+ "num-complex",
+ "tenferro-ad",
+ "tenferro-cpu",
+ "tenferro-einsum",
+ "tenferro-fft",
+ "tenferro-linalg",
+ "tenferro-runtime",
+ "tenferro-tensor",
+]
+
+[[package]]
 name = "tenferro-bf16-proof"
 version = "0.0.0"
 dependencies = [

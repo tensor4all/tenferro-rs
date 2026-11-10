@@ -1,0 +1,31 @@
+[package]
+name = "tenferro-api-grammar-proof"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Vertical prototypes for the #2552 call grammar (not published)."
+
+[lib]
+name = "tenferro_api_grammar_proof"
+
+[features]
+default = ["native"]
+native = [
+    "tenferro-cpu/native",
+    "tenferro-runtime/native",
+    "tenferro-ad/native",
+    "tenferro-linalg/native",
+    "tenferro-einsum/native",
+    "tenferro-fft/native",
+]
+
+[dependencies]
+num-complex = { workspace = true }
+tenferro-tensor = { path = "../../crates/tenferro-tensor" }
+tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
+tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
+tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
+tenferro-linalg = { path = "../../crates/tenferro-linalg", default-features = false, features = ["autodiff"] }
+tenferro-einsum = { path = "../../crates/tenferro-einsum", default-features = false, features = ["autodiff"] }
+tenferro-fft = { path = "../../crates/tenferro-fft", default-features = false, features = ["autodiff"] }
