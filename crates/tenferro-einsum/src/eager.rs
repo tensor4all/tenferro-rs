@@ -1197,11 +1197,64 @@ pub(crate) fn eager_einsum_exec_read_into(
     }
 }
 
+/// The operand conjugation requested through [`DotGeneralAccumulation`],
+/// materialized on the operand tensors so a contraction that does not reach
+/// `dot_general` contracts the requested conjugates instead of dropping them.
+///
+/// `lhs_conj` names the first input and `rhs_conj` the second, the operands they
+/// also name on the binary dot path; a contraction over more than two inputs
+/// conjugates only those two.
+pub(crate) struct ConjugatedOperands {
+    operands: [Option<Tensor>; 2],
+}
+
+impl ConjugatedOperands {
+    /// Conjugate the requested operands and clear the flags, which are then
+    /// already applied rather than dropped.
+    pub(crate) fn apply(
+        exec: &mut dyn Engine,
+        inputs: &[TensorRead<'_>],
+        accumulation: &mut DotGeneralAccumulation,
+    ) -> Result<Self> {
+        let requested = [accumulation.lhs_conj, accumulation.rhs_conj];
+        accumulation.lhs_conj = false;
+        accumulation.rhs_conj = false;
+        let mut operands = [None, None];
+        for (index, request) in requested.into_iter().enumerate() {
+            if !request {
+                continue;
+            }
+            let input = inputs.get(index).cloned().ok_or_else(|| {
+                eager_invalid_config(format!(
+                    "cannot conjugate operand {index}: the contraction has {}",
+                    inputs.len()
+                ))
+            })?;
+            operands[index] = Some(exec.conj_read(input)?);
+        }
+        Ok(Self { operands })
+    }
+
+    /// The input list to contract, with the conjugated operands substituted.
+    pub(crate) fn reads<'a>(&'a self, inputs: &[TensorRead<'a>]) -> Vec<TensorRead<'a>> {
+        inputs
+            .iter()
+            .enumerate()
+            .map(
+                |(index, input)| match self.operands.get(index).and_then(Option::as_ref) {
+                    Some(tensor) => TensorRead::from_tensor(tensor),
+                    None => input.clone(),
+                },
+            )
+            .collect()
+    }
+}
+
 pub(crate) fn eager_einsum_exec_read_into_accum(
     exec: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
-    accumulation: DotGeneralAccumulation,
+    mut accumulation: DotGeneralAccumulation,
     mut out: TensorWrite<'_>,
 ) -> Result<()> {
     record_eager_einsum_profile("exec_read_into_accum.enter", Duration::ZERO);
@@ -1230,12 +1283,8 @@ pub(crate) fn eager_einsum_exec_read_into_accum(
         }
     }
 
-    let result = eager_einsum_exec_read(exec, inputs, tree)?;
-    let accumulation = DotGeneralAccumulation {
-        lhs_conj: false,
-        rhs_conj: false,
-        ..accumulation
-    };
+    let conjugated = ConjugatedOperands::apply(exec, inputs, &mut accumulation)?;
+    let result = eager_einsum_exec_read(exec, &conjugated.reads(inputs), tree)?;
     tenferro_tensor::backend::accumulate_dot_result_into(&result, accumulation, &mut out)
 }
 
