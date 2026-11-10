@@ -1,0 +1,5 @@
+error: op `o`: unknown `into` mode `sideways`; expected overwrite, accumulate or scaled
+  --> tests/ui/api_ops_bad_into_mode.rs:14:36
+   |
+14 |         layers: [concrete]; into: [sideways]; layout: "l"; errors: []; omissions: [];
+   |                                    ^^^^^^^^

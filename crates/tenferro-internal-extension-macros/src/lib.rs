@@ -12,6 +12,8 @@
 //! assert_eq!(FftOp::FAMILY_ID, "my-crate.fft.v1");
 //! ```
 
+mod api_ops;
+
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
@@ -147,6 +149,73 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
 pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(input as RuntimeArgs);
     match expand_extension_runtime(args) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Generate public-API traits, forwarding impls, rustdoc, metadata constants
+/// and a Markdown renderer from one operation registry per family.
+///
+/// The registry is the single source of truth: this macro generates method
+/// declarations and forwarding impls only; numerical bodies stay hand-written
+/// in the module named by each layer's `forward` key. See
+/// `tests/api_ops.rs` for a complete working registry and
+/// `docs/design/api-grammar/implementation.md` section 4 for the design.
+///
+/// # Examples
+///
+/// The grammar (a `text` block, because a proc-macro crate cannot invoke its
+/// own macro from a doctest):
+///
+/// ```text
+/// api_ops! {
+///     family: linalg;
+///     layer concrete {
+///         trait_doc: "...";
+///         trait_def: pub trait LinalgOps: AsView;
+///         impl_def: impl<X: AsView + ?Sized> LinalgOps for X;
+///         method_where: [];
+///         receiver: self;            // or `session` + `first_arg: &T;`
+///         tensor_arg: &impl AsView;
+///         exec: &mut dyn Engine;     // optional
+///         dest: Dest;                // optional; enables `_into`
+///         result: Result;
+///         types { V = Tensor, R = Tensor }
+///         forward: crate::api::concrete;
+///     }
+///     layer core_eager { describe_only; }
+///     op svd {
+///         summary: "...";
+///         operands: (a);             // `name: Type` for typed operands
+///         options: SvdOptions;
+///         output: Svd<V, R>;
+///         dtypes: "...";
+///         layers: [concrete];
+///         into: [];                  // overwrite | accumulate | scaled
+///         layout: "...";
+///         errors: [Validation, NumericalFailure(NonConvergence)];
+///         omissions: [];
+///         example concrete: r#"..."#;
+///     }
+///     exceptions {
+///         E08 {
+///             symbols: ["crate::svd_with_exec"];
+///             scope: "..."; category: "..."; owner_module: "...";
+///             reason: "..."; verification: "..."; exit_condition: "...";
+///             status: retired;       // or `retained`
+///         }
+///     }
+/// }
+/// ```
+#[proc_macro]
+pub fn api_ops(input: TokenStream) -> TokenStream {
+    let result = (|input: TokenStream| -> syn::Result<proc_macro2::TokenStream> {
+        let registry = syn::parse::Parser::parse(api_ops::parse_registry, input)?;
+        registry.validate()?;
+        api_ops::expand(&registry)
+    })(input);
+    match result {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }

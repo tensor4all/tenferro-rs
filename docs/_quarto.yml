@@ -137,6 +137,7 @@ website:
               - spec/tensor-semantics.md
               - spec/operation-categories.md
               - spec/reproducibility.md
+              - spec/generated/api-ops.md
           - section: "Oracle Validation"
             contents:
               - oracle/index.md

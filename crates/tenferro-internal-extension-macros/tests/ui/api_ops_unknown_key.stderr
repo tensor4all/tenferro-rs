@@ -1,0 +1,5 @@
+error: unknown key `bogus_key` in `op o`
+  --> tests/ui/api_ops_unknown_key.rs:15:9
+   |
+15 |         bogus_key: 1;
+   |         ^^^^^^^^^

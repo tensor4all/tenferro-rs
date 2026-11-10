@@ -1,0 +1,5 @@
+error: op `o` lists layer `nowhere`, which is not declared by a `layer nowhere { .. }` block
+  --> tests/ui/api_ops_undeclared_layer.rs:14:28
+   |
+14 |         layers: [concrete, nowhere]; into: []; layout: "l"; errors: []; omissions: [];
+   |                            ^^^^^^^
