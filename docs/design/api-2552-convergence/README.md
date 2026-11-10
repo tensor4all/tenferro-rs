@@ -25,11 +25,14 @@ the check is narrower than a first reading suggests: the wrapper **as Fable wrot
 (`fable-proposal.md:16`, `R: ?Sized = dyn Engine + 'a`) compiles. What does not compile is the naive
 form without that default — `dyn Engine` is invariant in `R` and its default object lifetime is
 `'static` — which is a pitfall a reader would meet if they wrote the type themselves, not a defect of
-the submitted proposal. The decision therefore rests on the second half of the check: with the
-correct default in place, a helper that holds `&mut dyn Engine` and calls twice needs `reborrow()` on
-all but the last call, while the plain argument compiles that helper untouched. The wrapper's other
-claimed advantage — that sugar cannot drop the policy — is a lint setting (`deny(unused_variables)`),
-not a type. And the wrapper's claimed advantage — that sugar cannot drop the policy — is a lint
+the submitted proposal. What the check does **not** establish is an ergonomic penalty for the wrapper: with the correct
+default in place, a helper that holds `&mut dyn Engine` and calls twice compiles under both carriers
+as long as each request is scoped to its call, and holding two requests at once fails under both
+(`E0499`, aliasing). An earlier draft of the ruling used a `reborrow()` difference as its second
+reason; it does not reproduce, and the ruling now withdraws it. What is left is a surface-size and
+explainability argument — one generic struct with a lifetime parameter whose correct default is not
+obvious, versus one `Copy` enum — and the ruling states it as that. The wrapper's other claimed
+advantage, that sugar cannot drop the policy, is a lint setting (`deny(unused_variables)`), not a type. And the wrapper's claimed advantage — that sugar cannot drop the policy — is a lint
 setting (`deny(unused_variables)`), not a type.
 
 **The scope sentence was wrong in all three documents.** Both proposals and the first ruling said

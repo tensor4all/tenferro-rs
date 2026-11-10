@@ -55,14 +55,15 @@ items below.
    execution constraint will arrive and want the same carrier. Nobody has named that constraint. The
    wrapper also has a present benefit — call sites that keep passing `&mut engine` unchanged — and
    that is a real ergonomic advantage, not a speculative one; it is outweighed here because a new
-   public type with a lifetime and a generic parameter, plus reborrow at every multi-call helper, is
-   more surface than one `Copy` enum in one more position. Migration in either direction changes
+   public type with a lifetime and a generic parameter, whose correct default is not obvious, is more
+   surface than one `Copy` enum in one more position. Migration in either direction changes
    downstream signatures, so this decision is not free later; it is simply the smaller thing to
    carry today.
-2. **A lifetime pitfall exists in the naive wrapper, not in the submitted one.** A four-file check
-   with `rustc 1.96.0` shows the naive form failing for a plain `&mut dyn Engine`, and the fix is the
-   default the submitted wrapper already carries. The failing form is exactly this — note the
-   `impl<'a> Req<'a, dyn Engine>` that names the object type without a lifetime:
+2. **A lifetime pitfall exists in the naive wrapper, but the wrapper's ergonomic cost did not
+   reproduce.** Two measurements, both `rustc 1.96.0`:
+
+   *The naive form does not compile.* Note the `impl<'a> Req<'a, dyn Engine>` that names the object
+   type without a lifetime:
 
    ```rust
    pub struct Req<'a, R: ?Sized>(&'a mut R);
@@ -70,22 +71,34 @@ items below.
        pub fn new(e: &'a mut dyn Engine) -> Self { Req(e) }
    }
    ```
-
-   and the compiler answers
-
    ```
    error: lifetime may not live long enough
-     | impl<'a> Req<'a, dyn Engine> { pub fn new(e: &'a mut dyn Engine) -> Self { Req(e) } }
-     |                                   -                       ^^^^^^ returning this value requires
-     |                                   |                              that `'a` must outlive `'static`
      = note: requirement occurs because of the type `Req<'_, dyn Engine>`, which makes the generic
              argument `dyn Engine` invariant
    ```
 
-   Writing `R: ?Sized = dyn Engine + 'a` fixes it, which is what the submitted wrapper does; see the
-   appendix for the four files and all four outcomes. The same helper compiles untouched with the plain
-   argument: `fn helper(s: &mut dyn Engine, m: MaterializationPolicy) { einsum(.., s, m); einsum(.., s, m); }`.
-   The sources, the rustc invocation, and both diagnostics are attached to this issue as a comment.
+   Writing `R: ?Sized = dyn Engine + 'a` fixes it, which is what the submitted wrapper does.
+
+   *But the wrapper then carries no measured ergonomic penalty.* The claim that a helper holding
+   `&mut dyn Engine` needs `reborrow()` per call with the wrapper is **false when each request is
+   scoped to its call**, which is how one would write it:
+
+   ```rust
+   fn helper(e: &mut dyn Engine) {
+       { let mut r = Req::new(e); r.call(); }
+       { let mut r = Req::new(e); r.call(); }
+   }
+   ```
+   compiles. So does the plain argument's `fn helper(e: &mut dyn Engine) { svd(e, M); svd(e, M); }`.
+   Holding two requests at once fails with `E0499` under **both** carriers — that is aliasing, not the
+   carrier. An earlier draft of this ruling used the reborrow difference as the second reason; the
+   measurement does not support it, and it is withdrawn.
+
+   What remains is smaller and is stated as such: the wrapper adds a generic struct with a lifetime
+   parameter to the public surface where the plain argument adds one `Copy` enum, and the correct
+   default on that struct is not obvious — a reader who writes the type themselves meets the
+   diagnostic above. That is a surface-size and explainability argument, not a compile argument.
+
 3. **Neither carrier keeps a policy from being dropped, and no lint does either.** A wrapper can log
    the policy, branch on it once, or forward it to one of two nested calls and still satisfy
    `unused_variables`. What establishes the contract is a test that drives an adapter under
@@ -190,7 +203,7 @@ pub fn helper(s: &mut dyn Engine) {
 fn main() {}
 ```
 
-### `t6.rs`
+### `t7.rs`
 ```rust
 pub trait Engine {}
 #[derive(Clone, Copy)] pub enum MaterializationPolicy { Allow, Forbid }
@@ -202,14 +215,34 @@ pub fn helper(s: &mut dyn Engine, m: MaterializationPolicy) {
 fn main() {}
 ```
 
+### `t7.rs` — the submitted wrapper verbatim
+```rust
+pub trait Engine {}
+pub struct ExecutionRequest<'a, R: ?Sized = dyn Engine + 'a> {
+    engine: &'a mut R,
+}
+impl<'a> ExecutionRequest<'a> {
+    pub fn new(engine: &'a mut dyn Engine) -> Self { Self { engine } }
+}
+
+fn helper(e: &mut dyn Engine) {
+    let a = ExecutionRequest::new(e);
+    drop(a);
+    let b = ExecutionRequest::new(e);
+    drop(b);
+}
+```
+
 Observed outcomes:
 
 | file | what it asks | outcome |
 |---|---|---|
 | `t1` | does a lint catch a sugar that drops the policy? | `error: unused variable: \`materialization\`` under `#![deny(unused_variables)]` — yes, and only for the unused case |
 | `t2` | the wrapper as a reader would naively write it, used from a helper | `error: lifetime may not live long enough` (invariant `dyn Engine`, default object lifetime `'static`) |
-| `t4` | the same wrapper with `R: ?Sized = dyn Engine + 'a` | compiles; the helper calls it twice |
+| `t4` | the wrapper with the object type written as `dyn Engine + 'a` at each use site (not as a declared default) | compiles; the helper calls it twice |
 | `t6` | the plain argument, `Copy` enum, same helper | compiles; the helper calls it twice with no `reborrow` |
+| `t7` | the submitted wrapper verbatim — `R: ?Sized = dyn Engine + 'a` — called twice from a helper, each request scoped to its call | compiles |
 
-`t3` (the same naive wrapper behind a generic `Into`) fails for the same lifetime reason as `t2`
-before the move error matters, which is why the wrapper does not rescue the reborrow problem.
+`t3` (the naive wrapper behind a generic `Into`) fails for the same lifetime reason as `t2` before the
+move error matters. Holding two requests at once fails with `E0499` under both carriers, so it does not
+separate them.
