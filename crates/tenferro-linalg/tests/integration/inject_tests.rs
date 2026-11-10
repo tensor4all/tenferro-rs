@@ -259,7 +259,8 @@ fn allowed_cpus() -> Option<Vec<usize>> {
 }
 
 /// Opt-out for hosts that cannot place a two-member team. A skip is never silent: without this
-/// variable such a host fails the test, so a green result always means the widening was observed.
+/// variable such a host fails the test, so a green result means the widening was observed, unless
+/// it was explicitly skipped (`TENFERRO_SKIP_AFFINITY_WIDENING_TEST=1`).
 const SKIP_AFFINITY_TEST: &str = "TENFERRO_SKIP_AFFINITY_WIDENING_TEST";
 
 // #2553: threadteam 0.5 pins the thread that builds a `Team` (the engine's leader) to `{S[0]}`
