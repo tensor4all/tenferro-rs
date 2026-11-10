@@ -16,17 +16,18 @@ mod private {
     pub trait Sealed {}
     impl Sealed for tenferro_tensor::Tensor {}
     impl Sealed for tenferro_tensor::TensorRead<'_> {}
+    impl<T: crate::LinalgScalar> Sealed for tenferro_tensor::TypedTensor<T> {}
     impl<T: crate::LinalgScalar> Sealed for tenferro_tensor::TypedTensorView<'_, T> {}
 }
 
 /// A concrete linalg input: a metadata-only route to the borrowed view, and the
 /// output types that view's dtype produces.
 ///
-/// Implemented for [`Tensor`], [`TensorRead`] and [`TypedTensorView`]; the trait is
-/// sealed. Operations are called through [`TensorLinalgExt`](crate::TensorLinalgExt),
+/// Implemented for [`Tensor`], [`TensorRead`], [`TypedTensor`] and [`TypedTensorView`]; the
+/// trait is sealed. Operations are called through [`TensorLinalgExt`](crate::TensorLinalgExt),
 /// which every `LinalgInput` implements.
 ///
-/// | output | `Tensor`, `TensorRead` | `TypedTensorView<'_, T>` |
+/// | output | `Tensor`, `TensorRead` | `TypedTensor<T>`, `TypedTensorView<'_, T>` |
 /// |---|---|---|
 /// | [`Out`](Self::Out): the input dtype | `Tensor` | `TypedTensor<T>` |
 /// | [`Real`](Self::Real): the real dtype (singular values, norms, parity) | `Tensor` | `TypedTensor<T::Real>` |
@@ -105,6 +106,35 @@ macro_rules! erased_input {
 erased_input!(Tensor, |tensor| TensorRead::from_tensor(tensor));
 erased_input!(TensorRead<'_>, |read| read.clone());
 
+macro_rules! typed_outputs {
+    () => {
+        fn linalg_out(tensor: Tensor) -> tenferro_tensor::Result<Self::Out> {
+            typed_output::<T>(tensor)
+        }
+        fn linalg_real(tensor: Tensor) -> tenferro_tensor::Result<Self::Real> {
+            typed_output::<<T as TensorScalar>::Real>(tensor)
+        }
+        fn linalg_complex(tensor: Tensor) -> tenferro_tensor::Result<Self::Complex> {
+            typed_output::<<T as LinalgScalar>::Complex>(tensor)
+        }
+        fn linalg_index(tensor: Tensor) -> tenferro_tensor::Result<Self::Index> {
+            typed_output::<i64>(tensor)
+        }
+    };
+}
+
+impl<T: LinalgScalar> LinalgInput for TypedTensor<T> {
+    type Out = TypedTensor<T>;
+    type Real = TypedTensor<<T as TensorScalar>::Real>;
+    type Complex = TypedTensor<<T as LinalgScalar>::Complex>;
+    type Index = TypedTensor<i64>;
+
+    fn linalg_read(&self) -> TensorRead<'_> {
+        T::tensor_read(self)
+    }
+    typed_outputs!();
+}
+
 impl<T: LinalgScalar> LinalgInput for TypedTensorView<'_, T> {
     type Out = TypedTensor<T>;
     type Real = TypedTensor<<T as TensorScalar>::Real>;
@@ -114,18 +144,7 @@ impl<T: LinalgScalar> LinalgInput for TypedTensorView<'_, T> {
     fn linalg_read(&self) -> TensorRead<'_> {
         TensorRead::from_view(T::tensor_view(self.clone()))
     }
-    fn linalg_out(tensor: Tensor) -> tenferro_tensor::Result<Self::Out> {
-        typed_output::<T>(tensor)
-    }
-    fn linalg_real(tensor: Tensor) -> tenferro_tensor::Result<Self::Real> {
-        typed_output::<<T as TensorScalar>::Real>(tensor)
-    }
-    fn linalg_complex(tensor: Tensor) -> tenferro_tensor::Result<Self::Complex> {
-        typed_output::<<T as LinalgScalar>::Complex>(tensor)
-    }
-    fn linalg_index(tensor: Tensor) -> tenferro_tensor::Result<Self::Index> {
-        typed_output::<i64>(tensor)
-    }
+    typed_outputs!();
 }
 
 /// Checked downcast of a backend output to the dtype the typed contract promises.

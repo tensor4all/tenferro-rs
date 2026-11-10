@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::TensorReadLinalgExt;
+use crate::TensorLinalgExt;
 use std::sync::Arc;
 use tenferro_tensor::{BackendStorageHandle, MemoryKind, Placement, StorageBuffer};
 
@@ -125,24 +125,24 @@ fn solve_read_into_rejects_bad_destination_before_mutation() {
 }
 
 #[test]
-fn solve_read_into_covers_public_extension_complex_rhs_and_singular_atomicity() {
+fn solve_into_covers_public_extension_complex_rhs_and_singular_atomicity() {
     let a = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 4.0, 4.0, 8.0]).unwrap();
     let mut out = Tensor::from_vec_col_major([2, 2], vec![-31.0_f64; 4]).unwrap();
     let mut backend = tenferro_cpu::CpuEngine::serial();
+    TensorRead::from_tensor(&a)
+        .solve_into(
+            &TensorRead::from_tensor(&b),
+            &crate::SolveOptions::default(),
+            &mut backend,
+            tenferro_tensor::TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+    assert_f64_close(get_f64(&out, &[0, 0]), 1.0);
+    assert_f64_close(get_f64(&out, &[1, 0]), 1.0);
+    assert_f64_close(get_f64(&out, &[0, 1]), 2.0);
+    assert_f64_close(get_f64(&out, &[1, 1]), 2.0);
     with_cpu_linalg(&mut backend, |backend| {
-        TensorRead::from_tensor(&a)
-            .solve_read_into(
-                TensorRead::from_tensor(&b),
-                tenferro_tensor::TensorWrite::from_tensor(&mut out),
-                backend,
-            )
-            .unwrap();
-        assert_f64_close(get_f64(&out, &[0, 0]), 1.0);
-        assert_f64_close(get_f64(&out, &[1, 0]), 1.0);
-        assert_f64_close(get_f64(&out, &[0, 1]), 2.0);
-        assert_f64_close(get_f64(&out, &[1, 1]), 2.0);
-
         let a = Tensor::from_vec_col_major(
             [2, 2],
             vec![
@@ -2691,24 +2691,21 @@ fn empty_slogdet_on_a_cpu_session_narrows_its_input_to_host() {
         ),
         "{error}"
     );
-    let error = TensorRead::from_tensor(&device_empty)
-        .slogdet_read(&mut backend)
-        .unwrap_err();
+    let error =
+        crate::TensorLinalgExt::slogdet(&TensorRead::from_tensor(&device_empty), &mut backend)
+            .unwrap_err();
     assert!(
         matches!(
             error,
-            tenferro_tensor::Error::RuntimeState {
-                op: "slogdet_read",
-                ..
-            }
+            tenferro_tensor::Error::RuntimeState { op: "slogdet", .. }
         ),
         "{error}"
     );
 
     let host_empty = Tensor::from_vec_col_major(vec![0, 0], Vec::<f64>::new()).unwrap();
-    let (sign, logabsdet) = TensorRead::from_tensor(&host_empty)
-        .slogdet_read(&mut backend)
-        .unwrap();
-    assert_eq!(sign.as_slice::<f64>().unwrap(), &[1.0]);
-    assert_eq!(logabsdet.as_slice::<f64>().unwrap(), &[0.0]);
+    let result =
+        crate::TensorLinalgExt::slogdet(&TensorRead::from_tensor(&host_empty), &mut backend)
+            .unwrap();
+    assert_eq!(result.sign.as_slice::<f64>().unwrap(), &[1.0]);
+    assert_eq!(result.logabsdet.as_slice::<f64>().unwrap(), &[0.0]);
 }

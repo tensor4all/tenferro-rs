@@ -302,10 +302,8 @@ const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
 /// 2026-11-08 on `aarch64` (Apple M5 Max, macOS 26.7.2, rustc 1.96.0) against `t4a-faer`
 /// 0.32.0 / `t4a-gemm-common` 0.20.4, which is the graph *before* the `t4a-faer` 0.33 bump:
 /// **every row measures at or below its baseline**, so no override is needed. The largest
-/// aarch64 count is 10
-/// (`borrowed/qr/rank9`, baseline 16, the rank-9 metadata spill); every other row is 0-3.
-/// Three rows that used to carry an override: `faer/svd/48` is 1 against a baseline of 3,
-/// `borrowed/svd/48` and `borrowed/qr/48` are 0 against a baseline of 0.
+/// aarch64 count is 3.
+/// A row that used to carry an override: `faer/svd/48` is 1 against a baseline of 3.
 ///
 /// The surplus these overrides recorded was two allocations per GEMM call inside
 /// `t4a-gemm-common` 0.20.3 `gemm_basic_generic`, attributed by backtrace in #2448: a fresh
@@ -327,7 +325,6 @@ fn ceiling(name: &str) -> usize {
         .iter()
         .chain(F64_LU_CEILINGS)
         .chain(REMAINING_FAMILY_CEILINGS)
-        .chain(BORROWED_ENTRY_CEILINGS)
         .find(|(case, _)| *case == name)
         .map(|(_, ceiling)| *ceiling)
         .unwrap_or_else(|| panic!("no recorded allocation ceiling for {name}"))
@@ -557,141 +554,6 @@ fn remaining_linalg_families_keep_their_steady_state_allocation_counts() {
     assert!(
         failures.is_empty(),
         "CPU linalg routes allocate more per call than the recorded ceilings:\n{}",
-        failures.join("\n")
-    );
-}
-
-/// Steady-state ceilings of the borrowed-`Exec` entries (#2462), measured on the caller's lane
-/// pool. Their contract is that every output, the provider workspace and a complex input's
-/// transient spectrum come from that pool, so they make no host-side allocation at all: zero, as
-/// the complex rows (which take the pooled real-spectrum gather) and the values-only rows show on
-/// every arch. Off x86_64 the real 48x48 factor rows used to add faer per-GEMM allocations;
-/// with `t4a-gemm-common` 0.20.4 they measure zero on the one aarch64 host measured so far
-/// (see `ARCH_CEILING_OVERRIDES`).
-const BORROWED_ENTRY_CEILINGS: &[(&str, usize)] = &[
-    ("borrowed/svd/48", 0),
-    ("borrowed/svd_full/48", 0),
-    ("borrowed/svd_values/48", 0),
-    ("borrowed/qr/48", 0),
-    ("borrowed/eigh/48", 0),
-    ("borrowed/eigh_values/48", 0),
-    ("borrowed/eig_values/48", 0),
-    ("borrowed/svd/complex64", 0),
-    ("borrowed/eigh/complex64", 0),
-    // The rank boundary of the storage guarantee (#2505): metadata up to `INLINE_RANK` is inline,
-    // so a rank-8 operand still measures zero, while a rank-9 one spends a small, fixed number of
-    // host allocations on the dims and strides that no longer fit. The measured count and the
-    // crate documentation are two halves of one claim: `docs` scopes the pool guarantee to the
-    // payload and the workspace, and the rank-9 row keeps the spill from quietly becoming "zero"
-    // (below) or unbounded (this ceiling).
-    ("borrowed/qr/rank8", 0),
-    ("borrowed/qr/rank9", 16),
-];
-
-#[test]
-fn borrowed_entries_keep_their_steady_state_allocation_counts() {
-    use tenferro_cpu::linalg_interop::BufferPool;
-    use tenferro_linalg::{
-        eig_values_with_exec, eigh_values_with_exec, eigh_with_exec, qr_with_exec,
-        svd_values_with_exec, svd_with_exec,
-    };
-
-    let _serial = serial_test();
-    let mut engine = faer_backend();
-    let mut lane_pool = BufferPool::new();
-    let a = f64_matrix(48);
-    let spd = f64_spd(48);
-    let c = c64_matrix(32);
-    let herm = c64_hermitian(32);
-    let a = a.as_typed::<f64>().unwrap().as_view();
-    let spd = spd.as_typed::<f64>().unwrap().as_view();
-    let c = c.as_typed::<Complex64>().unwrap().as_view();
-    let herm = herm.as_typed::<Complex64>().unwrap().as_view();
-
-    let mut failures = Vec::new();
-    let mut run = |name: &str,
-                   call: &mut dyn FnMut(&mut tcontract_exec::Exec<'_>, &mut BufferPool)|
-     -> AllocationReport {
-        let mut best: Option<AllocationReport> = None;
-        for _ in 0..4 {
-            let report = measure(|| {
-                engine.with_exec(|exec| call(exec, &mut lane_pool)).unwrap();
-            });
-            if best.is_none_or(|best| report.allocations < best.allocations) {
-                best = Some(report);
-            }
-        }
-        let report = best.unwrap_or_default();
-        let ceiling = ceiling(name);
-        println!("{name}: {report:?} (ceiling {ceiling})");
-        if report.allocations > ceiling {
-            failures.push(format!("{name}: {} > {ceiling}", report.allocations));
-        }
-        report
-    };
-    run("borrowed/svd/48", &mut |e, b| {
-        drop(svd_with_exec(e, b, &a, false).unwrap())
-    });
-    run("borrowed/svd_full/48", &mut |e, b| {
-        drop(svd_with_exec(e, b, &a, true).unwrap())
-    });
-    run("borrowed/svd_values/48", &mut |e, b| {
-        drop(svd_values_with_exec(e, b, &a).unwrap())
-    });
-    run("borrowed/qr/48", &mut |e, b| {
-        drop(qr_with_exec(e, b, &a).unwrap())
-    });
-    run("borrowed/eigh/48", &mut |e, b| {
-        drop(eigh_with_exec(e, b, &spd).unwrap())
-    });
-    run("borrowed/eigh_values/48", &mut |e, b| {
-        drop(eigh_values_with_exec(e, b, &spd).unwrap())
-    });
-    run("borrowed/eig_values/48", &mut |e, b| {
-        drop(eig_values_with_exec(e, b, &a).unwrap())
-    });
-    run("borrowed/svd/complex64", &mut |e, b| {
-        drop(svd_with_exec(e, b, &c, false).unwrap())
-    });
-    run("borrowed/eigh/complex64", &mut |e, b| {
-        drop(eigh_with_exec(e, b, &herm).unwrap())
-    });
-
-    // The rank boundary of the storage guarantee (#2505). One 4x4 operand at two ranks, so only
-    // the metadata length differs: at rank 8 the dims and strides still fit `INLINE_RANK`, and at
-    // rank 9 they do not, so the same call pays a few small host allocations that the pool cannot
-    // hold. This pair is the test half of the "Storage" wording in the crate docs, which scopes
-    // the guarantee to the payload and the provider workspace: rank 8 must stay at zero, and rank
-    // 9 must not, so neither the wording nor the spill can drift alone.
-    let block: Vec<f64> = (0..16).map(|index| 1.0 + index as f64).collect();
-    let rank8 = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![4, 4, 1, 1, 1, 1, 1, 1], block.clone()).unwrap(),
-    );
-    let rank9 = Tensor::from_typed::<f64>(
-        TypedTensor::from_vec_col_major(vec![4, 4, 1, 1, 1, 1, 1, 1, 1], block).unwrap(),
-    );
-    let rank8 = rank8.as_typed::<f64>().unwrap().as_view();
-    let rank9 = rank9.as_typed::<f64>().unwrap().as_view();
-
-    let report = run("borrowed/qr/rank8", &mut |e, b| {
-        drop(qr_with_exec(e, b, &rank8).unwrap())
-    });
-    assert_eq!(
-        report.allocations, 0,
-        "a rank-8 operand fits `INLINE_RANK`, so its metadata stays inline"
-    );
-    let report = run("borrowed/qr/rank9", &mut |e, b| {
-        drop(qr_with_exec(e, b, &rank9).unwrap())
-    });
-    assert!(
-        report.allocations > 0,
-        "a rank-9 operand spilled nothing: the documented metadata spill above `INLINE_RANK` \
-         no longer happens, so the \"Storage\" wording owes a correction"
-    );
-
-    assert!(
-        failures.is_empty(),
-        "borrowed entries allocate more per call than the recorded ceilings:\n{}",
         failures.join("\n")
     );
 }

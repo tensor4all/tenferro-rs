@@ -1,25 +1,18 @@
-//! The borrowed-`Exec` factorization entries against the engine entries (#2462).
+//! Typed borrowed views against the owned-tensor entries (#2462, #2552).
 //!
-//! The contract on the issue: each entry gives the result the owned-tensor engine entry gives for
-//! the same view materialized with `from_vec_col_major`, value bits and placement included; a
-//! negative stride is `Unsupported`; an invalid input fails with the same variant and the same
-//! downcastable source; and every buffer comes from the caller's pool and no other.
+//! Each `TensorLinalgExt` call on a `TypedTensorView` gives the result the same call gives on the
+//! same view materialized with `from_vec_col_major`, value bits and placement included; a
+//! negative-stride view is gathered and agrees with the compact input; and an invalid input fails
+//! with the same variant and the same downcastable source.
 
 #![cfg(feature = "native")]
 
 use std::error::Error as _;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine};
-use tenferro_linalg::{
-    eig_values_with_exec, eigh_values_with_exec, eigh_with_exec, qr_with_exec,
-    svd_values_with_exec, svd_with_exec, Eigh, LinalgScalar, Qr, Svd, SvdOptions, SvdShape,
-    TensorLinalgExt, TensorReadLinalgExt,
-};
-use tenferro_tensor::{
-    ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorScalar, TensorView, TypedTensor,
-    TypedTensorView,
-};
+use tenferro_cpu::CpuEngine;
+use tenferro_linalg::{Eigh, LinalgScalar, Qr, Svd, SvdOptions, SvdShape, TensorLinalgExt};
+use tenferro_tensor::{StridedSliceSpec, Tensor, TensorScalar, TypedTensor, TypedTensorView};
 
 // ---------------------------------------------------------------------------------------------
 // Fixtures
@@ -130,73 +123,58 @@ fn assert_same<S: TensorScalar + std::fmt::Debug>(
     );
 }
 
-/// Run `body` on a fresh serial engine's bundle with a fresh caller pool.
-fn borrowed<R>(
-    body: impl FnOnce(&mut tcontract_exec::Exec<'_>, &mut BufferPool) -> tenferro_tensor::Result<R>,
-) -> tenferro_tensor::Result<R> {
-    let mut engine = CpuEngine::serial();
-    let mut buffers = BufferPool::new();
-    engine.with_exec(|exec| body(exec, &mut buffers))?
-}
-
 // ---------------------------------------------------------------------------------------------
 // Equality with the engine entry
 // ---------------------------------------------------------------------------------------------
 
-/// Every general (non-square-only) factorization of `view`, borrowed against engine.
+/// Every general (non-square-only) factorization of `view`, on the view against the owned tensor.
 fn check_general<T: Sample>(label: &str, view: &TypedTensorView<'_, T>)
 where
-    T::RealScalar: std::fmt::Debug,
+    <T as TensorScalar>::Real: std::fmt::Debug,
 {
     let owned = materialize(view);
     let mut engine = CpuEngine::serial();
 
     for full in [false, true] {
-        let (u, s, vt) = borrowed(|exec, buffers| svd_with_exec(exec, buffers, view, full))
+        let shape = if full { SvdShape::Full } else { SvdShape::Thin };
+        let options = SvdOptions::default().with_shape(shape);
+        let Svd { u, s, vh: vt } = view
+            .svd_with(&options, &mut engine)
             .unwrap_or_else(|error| panic!("{label} svd(full={full}): {error}"));
         let Svd {
             u: eu,
             s: es,
             vh: evt,
-        } = if full {
-            owned
-                .svd_with(
-                    &SvdOptions::default().with_shape(SvdShape::Full),
-                    &mut engine,
-                )
-                .unwrap()
-        } else {
-            owned.svd(&mut engine).unwrap()
-        };
+        } = owned.svd_with(&options, &mut engine).unwrap();
         let tag = format!("{label} svd(full={full})");
         assert_same(&format!("{tag} U"), &u, &eu);
         assert_same(&format!("{tag} S"), &s, &es);
         assert_same(&format!("{tag} Vh"), &vt, &evt);
     }
 
-    let s = borrowed(|exec, buffers| svd_values_with_exec(exec, buffers, view)).unwrap();
+    let s = view.svdvals(&mut engine).unwrap();
     assert_same(
         &format!("{label} svd_values"),
         &s,
         &owned.svdvals(&mut engine).unwrap(),
     );
 
-    let (q, r) = borrowed(|exec, buffers| qr_with_exec(exec, buffers, view)).unwrap();
+    let Qr { q, r } = view.qr(&mut engine).unwrap();
     let Qr { q: eq, r: er } = owned.qr(&mut engine).unwrap();
     assert_same(&format!("{label} qr Q"), &q, &eq);
     assert_same(&format!("{label} qr R"), &r, &er);
 }
 
-/// Every square-only factorization of `view`, borrowed against engine.
+/// Every square-only factorization of `view`, on the view against the owned tensor.
 fn check_square<T: Sample>(label: &str, view: &TypedTensorView<'_, T>)
 where
-    T::RealScalar: std::fmt::Debug,
+    <T as TensorScalar>::Real: std::fmt::Debug,
     T::Complex: std::fmt::Debug,
 {
     let owned = materialize(view);
     let mut engine = CpuEngine::serial();
 
-    let (values, vectors) = borrowed(|exec, buffers| eigh_with_exec(exec, buffers, view)).unwrap();
+    let Eigh { values, vectors } = view.eigh(&mut engine).unwrap();
     let Eigh {
         values: evalues,
         vectors: evectors,
@@ -204,14 +182,14 @@ where
     assert_same(&format!("{label} eigh values"), &values, &evalues);
     assert_same(&format!("{label} eigh vectors"), &vectors, &evectors);
 
-    let values = borrowed(|exec, buffers| eigh_values_with_exec(exec, buffers, view)).unwrap();
+    let values = view.eigvalsh(&mut engine).unwrap();
     assert_same(
         &format!("{label} eigh_values"),
         &values,
         &owned.eigvalsh(&mut engine).unwrap(),
     );
 
-    let values = borrowed(|exec, buffers| eig_values_with_exec(exec, buffers, view)).unwrap();
+    let values = view.eigvals(&mut engine).unwrap();
     assert_same(
         &format!("{label} eig_values"),
         &values,
@@ -221,7 +199,7 @@ where
 
 fn equality_for<T: Sample>(dtype: &str)
 where
-    T::RealScalar: std::fmt::Debug,
+    <T as TensorScalar>::Real: std::fmt::Debug,
     T::Complex: std::fmt::Debug,
 {
     // Non-square, compact.
@@ -267,7 +245,7 @@ where
 }
 
 #[test]
-fn each_entry_matches_the_engine_entry_on_value_bits_and_placement() {
+fn each_view_entry_matches_the_owned_entry_on_value_bits_and_placement() {
     equality_for::<f32>("f32");
     equality_for::<f64>("f64");
     equality_for::<Complex32>("c32");
@@ -288,13 +266,15 @@ fn assert_close(label: &str, gathered: &[f64], direct: &[f64], tol: f64) {
 fn complex_spectra_are_real_typed_and_agree_with_the_values_only_route() {
     // The factor entries gather the spectrum into the real scalar after the provider writes it in
     // `T`; the values-only entries have the provider write the real scalar directly. Equality with
-    // the engine cannot see a gather bug (both paths share it), so compare the two routes.
+    // the owned entry cannot see a gather bug (both paths share it), so compare the two routes.
+    let mut engine = CpuEngine::serial();
     let a = base::<Complex64>(&[4, 3, 2]);
-    let (_, s, _) =
-        borrowed(|exec, buffers| svd_with_exec(exec, buffers, &a.as_view(), false)).unwrap();
+    let Svd { s, .. } = a
+        .as_view()
+        .svd_with(&SvdOptions::default(), &mut engine)
+        .unwrap();
     let s: TypedTensor<f64> = s;
-    let direct =
-        borrowed(|exec, buffers| svd_values_with_exec(exec, buffers, &a.as_view())).unwrap();
+    let direct = a.as_view().svdvals(&mut engine).unwrap();
     assert_eq!(s.shape(), &[3, 2]);
     assert_close(
         "c64 svd spectrum",
@@ -304,11 +284,9 @@ fn complex_spectra_are_real_typed_and_agree_with_the_values_only_route() {
     );
 
     let h = hermitian::<Complex64>(3, 2);
-    let (values, vectors) =
-        borrowed(|exec, buffers| eigh_with_exec(exec, buffers, &h.as_view())).unwrap();
+    let Eigh { values, vectors } = h.as_view().eigh(&mut engine).unwrap();
     let _: &TypedTensor<Complex64> = &vectors;
-    let direct =
-        borrowed(|exec, buffers| eigh_values_with_exec(exec, buffers, &h.as_view())).unwrap();
+    let direct = h.as_view().eigvalsh(&mut engine).unwrap();
     assert_close(
         "c64 eigh spectrum",
         values.host_data().unwrap(),
@@ -317,13 +295,11 @@ fn complex_spectra_are_real_typed_and_agree_with_the_values_only_route() {
     );
 
     let h32 = hermitian::<Complex32>(3, 1);
-    let (values, _) =
-        borrowed(|exec, buffers| eigh_with_exec(exec, buffers, &h32.as_view())).unwrap();
+    let Eigh { values, .. } = h32.as_view().eigh(&mut engine).unwrap();
     let _: TypedTensor<f32> = values;
 
     let r = base::<f32>(&[2, 2]);
-    let values =
-        borrowed(|exec, buffers| eig_values_with_exec(exec, buffers, &r.as_view())).unwrap();
+    let values = r.as_view().eigvals(&mut engine).unwrap();
     let _: TypedTensor<Complex32> = values;
 }
 
@@ -332,7 +308,7 @@ fn complex_spectra_are_real_typed_and_agree_with_the_values_only_route() {
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-fn a_negative_stride_is_unsupported_for_every_entry() {
+fn a_negative_stride_view_is_gathered_and_matches_the_compact_input() {
     let a = base::<f64>(&[3, 3]);
     let reversed = a
         .as_view()
@@ -340,117 +316,29 @@ fn a_negative_stride_is_unsupported_for_every_entry() {
         .unwrap();
     assert!(reversed.strides()[0] < 0);
 
-    // The same rule has to hold when there is nothing to read: a zero-length axis taken from the
-    // reversed view keeps the negative stride, and the zero-dimension shortcut must not return
-    // success before the layout is validated (#2505). `[3, 0]` is the matrix shape the factor
-    // entries read, `[0, 0]` the square one the eigensolvers require.
+    let mut engine = CpuEngine::serial();
+    let compact = materialize(&reversed);
+    let from_view = reversed.svdvals(&mut engine).unwrap();
+    let from_compact = compact.svdvals(&mut engine).unwrap();
+    assert_eq!(from_view.shape(), &[3]);
+    assert_close(
+        "negative-stride svdvals",
+        from_view.host_data().unwrap(),
+        from_compact.as_slice::<f64>().unwrap(),
+        1e-12,
+    );
+
+    // A zero-length axis taken from the reversed view keeps the negative stride; the
+    // zero-dimension shortcut must still return the empty result (#2505).
     let empty_wide = reversed
         .slice_view(&[
             StridedSliceSpec::all(),
             StridedSliceSpec::new(0, Some(0), 1),
         ])
         .unwrap();
-    let empty_square = reversed
-        .slice_view(&[
-            StridedSliceSpec::new(0, Some(0), 1),
-            StridedSliceSpec::new(0, Some(0), 1),
-        ])
-        .unwrap();
     assert_eq!(empty_wide.shape(), &[3, 0]);
-    assert_eq!(empty_square.shape(), &[0, 0]);
-
-    let errors = [
-        (
-            "svd",
-            borrowed(|e, b| svd_with_exec(e, b, &reversed, false)).map(|_| ()),
-        ),
-        (
-            "svd_full",
-            borrowed(|e, b| svd_with_exec(e, b, &reversed, true)).map(|_| ()),
-        ),
-        (
-            "svd_values",
-            borrowed(|e, b| svd_values_with_exec(e, b, &reversed)).map(|_| ()),
-        ),
-        (
-            "qr",
-            borrowed(|e, b| qr_with_exec(e, b, &reversed)).map(|_| ()),
-        ),
-        (
-            "eigh",
-            borrowed(|e, b| eigh_with_exec(e, b, &reversed)).map(|_| ()),
-        ),
-        (
-            "eigh_values",
-            borrowed(|e, b| eigh_values_with_exec(e, b, &reversed)).map(|_| ()),
-        ),
-        (
-            "eig_values",
-            borrowed(|e, b| eig_values_with_exec(e, b, &reversed)).map(|_| ()),
-        ),
-    ];
-    let mut non_empty = Vec::new();
-    for (op, result) in errors {
-        let error = result.expect_err(op);
-        assert_eq!(error.kind(), ErrorKind::Unsupported, "{op}: {error}");
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "{op}: unsupported operation: a negative stride is not a supported linalg input layout"
-            ),
-            "{op}"
-        );
-        non_empty.push(error.to_string());
-    }
-
-    let empty_errors = [
-        (
-            "svd",
-            borrowed(|e, b| svd_with_exec(e, b, &empty_wide, false)).map(|_| ()),
-        ),
-        (
-            "svd_full",
-            borrowed(|e, b| svd_with_exec(e, b, &empty_wide, true)).map(|_| ()),
-        ),
-        (
-            "svd_values",
-            borrowed(|e, b| svd_values_with_exec(e, b, &empty_wide)).map(|_| ()),
-        ),
-        (
-            "qr",
-            borrowed(|e, b| qr_with_exec(e, b, &empty_wide)).map(|_| ()),
-        ),
-        (
-            "eigh",
-            borrowed(|e, b| eigh_with_exec(e, b, &empty_square)).map(|_| ()),
-        ),
-        (
-            "eigh_values",
-            borrowed(|e, b| eigh_values_with_exec(e, b, &empty_square)).map(|_| ()),
-        ),
-        (
-            "eig_values",
-            borrowed(|e, b| eig_values_with_exec(e, b, &empty_square)).map(|_| ()),
-        ),
-    ];
-    // Same variant, same message as the non-empty operand: the empty operand's shape is a result
-    // the shortcut may answer, but its layout is not, so it cannot be answered with outputs.
-    for ((op, result), message) in empty_errors.into_iter().zip(&non_empty) {
-        let error = result.expect_err(op);
-        assert_eq!(
-            error.kind(),
-            ErrorKind::Unsupported,
-            "{op} on an empty operand: {error}"
-        );
-        assert_eq!(&error.to_string(), message, "{op} on an empty operand");
-    }
-
-    // No engine entry refuses this view: the `*_read` entries gather a negative stride by design
-    // (contract point 3), which is exactly the rule the borrowed entries do not promise.
-    let mut engine = CpuEngine::serial();
-    let read = || TensorRead::from_view(TensorView::F64(reversed.clone()));
-    assert!(read().svd_read(&mut engine).is_ok());
-    assert!(read().eigvals_read(&mut engine).is_ok());
+    let empty = empty_wide.svdvals(&mut engine).unwrap();
+    assert_eq!(empty.shape(), &[0]);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -479,7 +367,7 @@ fn assert_same_error(
 }
 
 #[test]
-fn invalid_inputs_fail_with_the_same_variant_and_source_as_the_engine() {
+fn invalid_inputs_fail_with_the_same_variant_and_source_as_the_owned_entry() {
     let mut engine = CpuEngine::serial();
 
     // Rank 1: every entry refuses the rank.
@@ -488,17 +376,17 @@ fn invalid_inputs_fail_with_the_same_variant_and_source_as_the_engine() {
     let view = vector.as_view();
     assert_same_error(
         "rank-1 svd",
-        borrowed(|e, b| svd_with_exec(e, b, &view, false)).unwrap_err(),
+        view.svd(&mut engine).unwrap_err(),
         owned.svd(&mut engine).unwrap_err(),
     );
     assert_same_error(
         "rank-1 svd_values",
-        borrowed(|e, b| svd_values_with_exec(e, b, &view)).unwrap_err(),
+        view.svdvals(&mut engine).unwrap_err(),
         owned.svdvals(&mut engine).unwrap_err(),
     );
     assert_same_error(
         "rank-1 qr",
-        borrowed(|e, b| qr_with_exec(e, b, &view)).unwrap_err(),
+        view.qr(&mut engine).unwrap_err(),
         owned.qr(&mut engine).unwrap_err(),
     );
 
@@ -508,17 +396,17 @@ fn invalid_inputs_fail_with_the_same_variant_and_source_as_the_engine() {
     let view = rect.as_view();
     assert_same_error(
         "non-square eigh",
-        borrowed(|e, b| eigh_with_exec(e, b, &view)).unwrap_err(),
+        view.eigh(&mut engine).unwrap_err(),
         owned.eigh(&mut engine).unwrap_err(),
     );
     assert_same_error(
         "non-square eigh_values",
-        borrowed(|e, b| eigh_values_with_exec(e, b, &view)).unwrap_err(),
+        view.eigvalsh(&mut engine).unwrap_err(),
         owned.eigvalsh(&mut engine).unwrap_err(),
     );
     assert_same_error(
         "non-square eig_values",
-        borrowed(|e, b| eig_values_with_exec(e, b, &view)).unwrap_err(),
+        view.eigvals(&mut engine).unwrap_err(),
         owned.eigvals(&mut engine).unwrap_err(),
     );
 
@@ -533,32 +421,32 @@ fn invalid_inputs_fail_with_the_same_variant_and_source_as_the_engine() {
     let cases: [(&str, Outcome, Outcome); 6] = [
         (
             "nan svd",
-            borrowed(|e, b| svd_with_exec(e, b, &view, false)).map(|_| ()),
+            view.svd(&mut engine).map(|_| ()),
             owned.svd(&mut engine).map(|_| ()),
         ),
         (
             "nan svd_values",
-            borrowed(|e, b| svd_values_with_exec(e, b, &view)).map(|_| ()),
+            view.svdvals(&mut engine).map(|_| ()),
             owned.svdvals(&mut engine).map(|_| ()),
         ),
         (
             "nan qr",
-            borrowed(|e, b| qr_with_exec(e, b, &view)).map(|_| ()),
+            view.qr(&mut engine).map(|_| ()),
             owned.qr(&mut engine).map(|_| ()),
         ),
         (
             "nan eigh",
-            borrowed(|e, b| eigh_with_exec(e, b, &view)).map(|_| ()),
+            view.eigh(&mut engine).map(|_| ()),
             owned.eigh(&mut engine).map(|_| ()),
         ),
         (
             "nan eigh_values",
-            borrowed(|e, b| eigh_values_with_exec(e, b, &view)).map(|_| ()),
+            view.eigvalsh(&mut engine).map(|_| ()),
             owned.eigvalsh(&mut engine).map(|_| ()),
         ),
         (
             "nan eig_values",
-            borrowed(|e, b| eig_values_with_exec(e, b, &view)).map(|_| ()),
+            view.eigvals(&mut engine).map(|_| ()),
             owned.eigvals(&mut engine).map(|_| ()),
         ),
     ];
@@ -579,100 +467,4 @@ fn invalid_inputs_fail_with_the_same_variant_and_source_as_the_engine() {
         provider_failures > 0,
         "the non-finite fixture must reach at least one provider failure"
     );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Storage: the caller's pool and no other
-// ---------------------------------------------------------------------------------------------
-
-/// One call of every entry on `exec`/`buffers`, dropping every output.
-fn run_all(exec: &mut tcontract_exec::Exec<'_>, buffers: &mut BufferPool) {
-    let a = base::<Complex64>(&[4, 3, 2]);
-    let h = hermitian::<Complex64>(3, 2);
-    let (a, h) = (a.as_view(), h.as_view());
-    drop(svd_with_exec(exec, buffers, &a, false).unwrap());
-    drop(svd_with_exec(exec, buffers, &a, true).unwrap());
-    drop(svd_values_with_exec(exec, buffers, &a).unwrap());
-    drop(qr_with_exec(exec, buffers, &a).unwrap());
-    drop(eigh_with_exec(exec, buffers, &h).unwrap());
-    drop(eigh_values_with_exec(exec, buffers, &h).unwrap());
-    drop(eig_values_with_exec(exec, buffers, &h).unwrap());
-}
-
-#[test]
-fn every_buffer_comes_from_the_callers_pool_and_reaches_a_steady_state() {
-    let mut engine = CpuEngine::serial();
-    let engine_pool_before = engine.buffer_pool_stats();
-    let mut lane_pool = BufferPool::new();
-    assert!(lane_pool.is_empty());
-
-    engine
-        .with_exec(|exec| run_all(exec, &mut lane_pool))
-        .unwrap();
-    // The outputs and the transient spectra returned to the lane's pool, not the engine's.
-    let warm = lane_pool.stats();
-    assert!(
-        warm.buffers > 0,
-        "outputs must recycle into the caller's pool"
-    );
-    assert_eq!(
-        engine.buffer_pool_stats(),
-        engine_pool_before,
-        "the engine's own pool must not be touched"
-    );
-
-    // A second round reuses what the first returned: the pool does not grow.
-    engine
-        .with_exec(|exec| run_all(exec, &mut lane_pool))
-        .unwrap();
-    assert_eq!(
-        lane_pool.stats(),
-        warm,
-        "steady state: no growth beyond the pool"
-    );
-    assert_eq!(engine.buffer_pool_stats(), engine_pool_before);
-}
-
-#[test]
-fn two_execs_with_two_pools_do_not_share_storage() {
-    let mut first_engine = CpuEngine::serial();
-    let mut second_engine = CpuEngine::serial();
-    let mut first_pool = BufferPool::new();
-    let mut second_pool = BufferPool::new();
-    let a = base::<f64>(&[4, 4]);
-
-    let first = first_engine
-        .with_exec(|exec| svd_with_exec(exec, &mut first_pool, &a.as_view(), false))
-        .unwrap()
-        .unwrap();
-    let second = second_engine
-        .with_exec(|exec| svd_with_exec(exec, &mut second_pool, &a.as_view(), false))
-        .unwrap()
-        .unwrap();
-
-    // Same values, distinct storage.
-    assert_eq!(first.1.host_data().unwrap(), second.1.host_data().unwrap());
-    for (x, y) in [(&first.0, &second.0), (&first.2, &second.2)] {
-        assert_ne!(
-            x.host_data().unwrap().as_ptr(),
-            y.host_data().unwrap().as_ptr(),
-            "two pools handed out the same storage"
-        );
-    }
-    assert_ne!(
-        first.1.host_data().unwrap().as_ptr(),
-        second.1.host_data().unwrap().as_ptr()
-    );
-
-    // Dropping the first lane's outputs fills only the first pool.
-    let second_before = second_pool.stats();
-    drop(first);
-    assert!(first_pool.stats().buffers > 0);
-    assert_eq!(second_pool.stats(), second_before);
-
-    // And the second lane's outputs return only to the second pool.
-    let first_before = first_pool.stats();
-    drop(second);
-    assert_eq!(first_pool.stats(), first_before);
-    assert!(second_pool.stats().buffers > second_before.buffers);
 }

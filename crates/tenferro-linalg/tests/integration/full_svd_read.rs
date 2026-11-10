@@ -1,4 +1,4 @@
-//! Public borrowed and concrete full-matrices SVD (`svd_full` / `svd_full_read`).
+//! Public borrowed and concrete full-matrices SVD (`svd_with` with `SvdShape::Full`, on owned and borrowed inputs).
 //!
 //! One public call must behave the same on every compiled CPU provider, so the
 //! numeric tests select each provider explicitly instead of relying on the
@@ -10,9 +10,7 @@
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{
-    Svd, SvdOptions, SvdShape, TensorLinalgExt, TensorReadLinalgExt, TypedTensorLinalgExt,
-};
+use tenferro_linalg::{Svd, SvdOptions, SvdShape, TensorLinalgExt};
 use tenferro_tensor::{
     DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor,
 };
@@ -227,8 +225,12 @@ fn owned_and_borrowed_full_svd_agree_for_every_dtype_and_shape() {
                         .unwrap();
                     assert_full_svd(dtype, m, n, &source, &u, &s, &vt);
 
-                    let (ru, rs, rvt) = TensorRead::from_tensor(&input)
-                        .svd_full_read(&mut host)
+                    let Svd {
+                        u: ru,
+                        s: rs,
+                        vh: rvt,
+                    } = TensorRead::from_tensor(&input)
+                        .svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)
                         .unwrap();
                     assert_full_svd(dtype, m, n, &source, &ru, &rs, &rvt);
 
@@ -295,8 +297,8 @@ fn full_svd_read_consumes_strided_offset_and_reversed_views_unchanged() {
             let source = complex_values(&expected);
 
             {
-                let (u, s, vt) = TensorRead::from_view(TensorView::F64(view.clone()))
-                    .svd_full_read(&mut host)
+                let Svd { u, s, vh: vt } = TensorRead::from_view(TensorView::F64(view.clone()))
+                    .svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)
                     .unwrap();
                 assert_full_svd(DType::F64, m, n, &source, &u, &s, &vt);
 
@@ -336,12 +338,12 @@ fn full_svd_keeps_square_factors_when_a_core_dimension_is_empty() {
                             .unwrap();
                         (r.u, r.s, r.vh)
                     }),
-                    (
-                        "borrowed",
-                        TensorRead::from_tensor(&input)
-                            .svd_full_read(&mut host)
-                            .unwrap(),
-                    ),
+                    ("borrowed", {
+                        let r = TensorRead::from_tensor(&input)
+                            .svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)
+                            .unwrap();
+                        (r.u, r.s, r.vh)
+                    }),
                 ] {
                     assert_eq!(u.shape(), &[m, m], "{label}: U shape");
                     assert_eq!(s.shape(), &[m.min(n)], "{label}: S shape");
@@ -373,8 +375,12 @@ fn full_svd_handles_batched_inputs_per_matrix() {
             assert_eq!(s.shape(), &[m.min(n), batch]);
             assert_eq!(vt.shape(), &[n, n, batch]);
 
-            let (ru, rs, rvt) = TensorRead::from_tensor(&input)
-                .svd_full_read(&mut host)
+            let Svd {
+                u: ru,
+                s: rs,
+                vh: rvt,
+            } = TensorRead::from_tensor(&input)
+                .svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)
                 .unwrap();
             assert_eq!(ru.shape(), u.shape());
             assert_eq!(rs.shape(), s.shape());
@@ -420,11 +426,13 @@ fn typed_full_svd_returns_real_singular_values() {
         .unwrap();
 
         {
-            let (u, s, vt) = input.svd_full(&mut host).unwrap();
+            let Svd { u, s, vh: vt } = input
+                .svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)
+                .unwrap();
             assert_eq!(u.shape(), &[3, 3]);
             assert_eq!(s.shape(), &[2]);
             assert_eq!(vt.shape(), &[2, 2]);
-            // `TypedSvd<Complex64>` types the singular values as f64.
+            // `Svd<TypedTensor<Complex64>, TypedTensor<f64>>` types the singular values as f64.
             let values: &[f64] = s.as_slice().unwrap();
             assert!(values[0] >= values[1] && values[1] >= 0.0);
         };
@@ -438,7 +446,7 @@ fn full_svd_read_rejects_unsupported_dtypes_before_provider_entry() {
             TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
         {
             let error = TensorRead::from_view(TensorView::I64(input.as_view()))
-                .svd_full_read(&mut host)
+                .svd_with(&SvdOptions::default().with_shape(SvdShape::Full), &mut host)
                 .unwrap_err();
             assert_eq!(error.kind(), ErrorKind::Unsupported);
         };
@@ -463,7 +471,10 @@ fn faer_view_path_does_not_pool_an_input_copy() {
     let mut view_host = faer_backend();
     {
         TensorRead::from_tensor(&owned)
-            .svd_full_read(&mut view_host)
+            .svd_with(
+                &SvdOptions::default().with_shape(SvdShape::Full),
+                &mut view_host,
+            )
             .unwrap();
     };
     let view_stats = view_host.buffer_pool_stats();
@@ -475,7 +486,10 @@ fn faer_view_path_does_not_pool_an_input_copy() {
             .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
             .unwrap();
         TensorRead::from_view(TensorView::F64(reversed))
-            .svd_full_read(&mut packed_host)
+            .svd_with(
+                &SvdOptions::default().with_shape(SvdShape::Full),
+                &mut packed_host,
+            )
             .unwrap();
     };
     let packed_stats = packed_host.buffer_pool_stats();

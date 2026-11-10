@@ -6,14 +6,13 @@ use std::sync::Arc;
 
 use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::{
-    apply_eager_with_targeted_extension_in_session, apply_eager_with_targeted_extension_session,
-    EagerExtensionBackendKind, EagerExtensionTarget,
+    apply_eager_with_targeted_extension_in_session, EagerExtensionBackendKind, EagerExtensionTarget,
 };
 use tenferro_ad::{EagerSession, EagerTensor};
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::CudaEngine;
-use tenferro_runtime::{ErrorPhase, ExecutionEngine, ExtensionModule};
+use tenferro_runtime::{ErrorPhase, ExtensionModule};
 
 use crate::eager_composites;
 use crate::extension::{
@@ -28,64 +27,6 @@ use crate::{
     RankRevealingQrResult, Side, Slogdet, SlogdetOptions, SolveOptions, Svd, SvdShape, Transpose,
     TriangularSolveOptions, Uplo,
 };
-
-/// Tensor-owned linear solve. Other eager linear-algebra operations use
-/// [`EagerSessionLinalgExt`] inside [`tenferro_ad::EagerRuntime::with_eager_session`].
-///
-/// The tensor-owned entry preserves calling-thread `no_grad` behavior for
-/// tracked solves; it must not be called from inside a borrowed session.
-///
-/// # Examples
-/// ```rust
-/// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-/// # use tenferro_linalg::EagerTensorLinalgExt;
-/// # let ctx = EagerRuntime::new()?;
-/// # let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major([1, 1], vec![2.0_f64])?, ctx.clone())?;
-/// # let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major([1, 1], vec![4.0_f64])?, ctx)?;
-/// let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b)?;
-/// assert_eq!(x.shape(), &[1, 1]);
-/// # Ok::<(), tenferro_ad::Error>(())
-/// ```
-#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
-pub trait EagerTensorLinalgExt {
-    /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
-    /// the forward solve path, so it performs no per-call non-singularity check
-    /// and issues no host round trip. An exactly singular input is left to the
-    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
-    /// still report their own exactly singular factor as `Error::Singular`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` for incompatible matrix, batch, or dtype
-    /// metadata, `Error::Extension` for an unsupported dtype or singular
-    /// system, and `Error::RuntimeState` when the backend is unavailable.
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_linalg::EagerTensorLinalgExt;
-    /// # let ctx = EagerRuntime::new()?;
-    /// # let a = EagerTensor::from_tensor_in(
-    /// #     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
-    /// #     ctx.clone(),
-    /// # )?;
-    /// # let b = EagerTensor::from_tensor_in(
-    /// #     Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]).unwrap(),
-    /// #     ctx,
-    /// # )?;
-    /// let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b)?;
-    /// assert_eq!(x.value()?.as_slice::<f64>()?, &[2.0, 2.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    fn solve(&self, engine: &mut dyn ExecutionEngine, b: &EagerTensor) -> Result<EagerTensor>;
-}
-
-impl EagerTensorLinalgExt for EagerTensor {
-    fn solve(&self, engine: &mut dyn ExecutionEngine, b: &EagerTensor) -> Result<EagerTensor> {
-        solve(engine, self, b)
-    }
-}
 
 /// Linear algebra operations on a runtime-bound borrowed eager session.
 ///
@@ -1445,15 +1386,6 @@ pub(crate) fn apply_linalg_eager_in_session(
     apply_eager_with_targeted_extension_in_session(session, op, inputs, eager_extension_module)
 }
 
-pub(crate) fn apply_linalg_eager(
-    engine: &mut dyn ExecutionEngine,
-    op: LinalgOp,
-    inputs: &[&EagerTensor],
-) -> Result<Vec<EagerTensor>> {
-    let op = Arc::new(LinalgExtensionOp::new(op));
-    apply_eager_with_targeted_extension_session(engine, op, inputs, eager_extension_module)
-}
-
 fn eager_extension_module(target: EagerExtensionTarget) -> Result<Arc<dyn ExtensionModule>> {
     let EagerExtensionTarget {
         engine_id,
@@ -1476,58 +1408,6 @@ fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> E
         ErrorPhase::Execution,
         source,
     )
-}
-
-/// Solve a linear system for eager tensors.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-/// use tenferro_linalg::EagerTensorLinalgExt;
-///
-/// let ctx = EagerRuntime::new()?;
-/// let a = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
-///     ctx.clone(),
-/// ).unwrap();
-/// let b = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 8.0]).unwrap(),
-///     ctx,
-/// ).unwrap();
-/// let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b)?;
-/// assert_eq!(x.shape(), &[2, 1]);
-/// # Ok::<(), tenferro_ad::Error>(())
-/// ```
-///
-/// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
-/// the forward solve path, so it performs no per-call non-singularity check
-/// and issues no host round trip. An exactly singular input is left to the
-/// caller's verification, as in `torch.linalg.solve`. CPU providers may
-/// still report their own exactly singular factor as `Error::Singular`.
-///
-/// # Errors
-///
-/// Returns `Error::Validation` for incompatible matrix, batch, or dtype
-/// metadata, `Error::Extension` for an unsupported dtype or singular system,
-/// and `Error::RuntimeState` when the backend is unavailable.
-pub fn solve(
-    engine: &mut dyn ExecutionEngine,
-    a: &EagerTensor,
-    b: &EagerTensor,
-) -> Result<EagerTensor> {
-    if !a.tracks_grad() && !b.tracks_grad() {
-        return one_output(
-            apply_linalg_eager(engine, LinalgOp::Solve, &[a, b])?,
-            "solve",
-        );
-    }
-    validate_tracked_solve_inputs(a, b)?;
-    factor_solve_output(apply_linalg_eager(
-        engine,
-        LinalgOp::LuFactorSolve,
-        &[a, b],
-    )?)
 }
 
 fn validate_tracked_solve_inputs(a: &EagerTensor, b: &EagerTensor) -> Result<()> {

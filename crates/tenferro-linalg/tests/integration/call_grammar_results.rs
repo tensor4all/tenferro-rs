@@ -102,3 +102,17 @@ fn eager_results_are_named_structs() {
     let Qr { r, .. } = qr;
     assert_eq!((s.shape(), r.shape()), (&[2][..], &[2, 2][..]));
 }
+
+#[test]
+fn owned_typed_tensors_use_the_same_entry_as_views() {
+    let mut engine = CpuEngine::serial();
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]).unwrap();
+    let owned: Svd<TypedTensor<f64>> = a.svd(&mut engine).unwrap();
+    let borrowed: Svd<TypedTensor<f64>> = a.as_view().svd(&mut engine).unwrap();
+    assert_eq!(
+        owned.s.host_data().unwrap(),
+        borrowed.s.host_data().unwrap()
+    );
+    let Lu { parity, .. }: Lu<TypedTensor<f64>> = a.lu(&mut engine).unwrap();
+    assert_eq!(parity.shape(), &[] as &[usize]);
+}

@@ -6,8 +6,8 @@ use crate::QrGauge;
 ///
 /// `Q` and `R` use `T`; the column permutation and numerical rank use `M`.
 /// For dynamic, eager, and traced tensors, `T` and `M` are the same tensor
-/// type. Typed tensors use [`crate::TypedRankRevealingQrResult`], whose metadata
-/// tensors have scalar type `i64`.
+/// type. Typed tensors use `TypedTensor<T>` for `Q` and `R` and
+/// `TypedTensor<i64>` for the metadata.
 ///
 /// # Examples
 ///

@@ -10,8 +10,7 @@ use tenferro_gpu::{
 };
 use tenferro_linalg::{
     EighDriver, EighOptions, HouseholderQr, LinalgBackend, PinvOptions, QrGauge, QrOptions,
-    RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt, TensorReadLinalgExt,
-    TracedTensorLinalgExt,
+    RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt, TracedTensorLinalgExt,
 };
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 use tenferro_tensor::{DType, Error, Tensor, TensorRead, TypedTensor};
@@ -2074,7 +2073,7 @@ fn empty_square_slogdet_keeps_input_residency_check_on_cpu_and_cuda() {
         matches!(owned, Err(tenferro_tensor::Error::RuntimeState { .. })),
         "a CUDA-resident empty tensor must be refused by the CPU engine, got {owned:?}"
     );
-    let read = TensorRead::from_tensor(&device_empty).slogdet_read(&mut cpu);
+    let read = TensorRead::from_tensor(&device_empty).slogdet(&mut cpu);
     assert!(
         matches!(read, Err(tenferro_tensor::Error::RuntimeState { .. })),
         "a CUDA-resident empty read must be refused by the CPU engine, got {read:?}"
@@ -2085,7 +2084,7 @@ fn empty_square_slogdet_keeps_input_residency_check_on_cpu_and_cuda() {
         matches!(owned, Err(tenferro_tensor::Error::RuntimeState { .. })),
         "a host empty tensor must be refused by the CUDA engine, got {owned:?}"
     );
-    let read = TensorRead::from_tensor(&host_empty).slogdet_read(&mut gpu);
+    let read = TensorRead::from_tensor(&host_empty).slogdet(&mut gpu);
     assert!(
         matches!(read, Err(tenferro_tensor::Error::RuntimeState { .. })),
         "a host empty read must be refused by the CUDA engine, got {read:?}"

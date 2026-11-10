@@ -9,9 +9,9 @@ use tenferro_gpu::{
     cuda::CudaEngine,
 };
 use tenferro_linalg::{
-    EagerSessionLinalgExt, EagerTensorLinalgExt, EighGauge, EighOptions, KeepDims, LinalgBackend,
-    NormOptions, PinvOptions, QrGauge, QrOptions, RankRevealingQrOptions, Side, SvdGauge,
-    SvdOptions, SvdShape, TriangularSolveOptions, Uplo,
+    EagerSessionLinalgExt, EighGauge, EighOptions, KeepDims, LinalgBackend, NormOptions,
+    PinvOptions, QrGauge, QrOptions, RankRevealingQrOptions, Side, SvdGauge, SvdOptions, SvdShape,
+    TriangularSolveOptions, Uplo,
 };
 use tenferro_linalg::{Eig, Eigh, FullPivLu, Lu, Qr, Slogdet, Svd};
 
@@ -359,7 +359,8 @@ fn eager_solve_f64(ctx: &Arc<EagerRuntime>, a: &[f64], b: &[f64]) -> [f64; 2] {
     )
     .unwrap();
     let solved = a
-        .solve(&mut tenferro_cpu::CpuEngine::serial(), &b)
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
         .unwrap()
         .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
@@ -380,7 +381,8 @@ fn eager_solve_f32(ctx: &Arc<EagerRuntime>, a: &[f64], b: &[f64]) -> [f64; 2] {
     )
     .unwrap();
     let solved = a
-        .solve(&mut tenferro_cpu::CpuEngine::serial(), &b)
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
         .unwrap()
         .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
@@ -401,7 +403,8 @@ fn eager_solve_c64(ctx: &Arc<EagerRuntime>, a: &[Complex64], b: &[Complex64]) ->
     )
     .unwrap();
     let solved = a
-        .solve(&mut tenferro_cpu::CpuEngine::serial(), &b)
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
         .unwrap()
         .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
@@ -1373,7 +1376,10 @@ fn solve_returns_expected_solution() {
         test_ctx(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
+        .unwrap();
 
     assert_eq!(x.shape(), &[2, 1]);
     assert_eq!(
@@ -1400,7 +1406,10 @@ fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
     )
     .unwrap();
 
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
+        .unwrap();
     let loss = x
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
@@ -1442,12 +1451,13 @@ fn solve_matches_concrete_partial_pivot_backend() {
         let b = Tensor::from_vec_col_major(vec![2, 1], rhs.to_vec()).unwrap();
         let concrete =
             crate::support::with_cpu_linalg(&mut backend, |session| session.solve(&a, &b)).unwrap();
-        let eager = EagerTensor::from_tensor_in(a, test_ctx())
-            .unwrap()
-            .solve(
-                &mut tenferro_cpu::CpuEngine::serial(),
-                &EagerTensor::from_tensor_in(b, test_ctx()).unwrap(),
-            )
+        let eager_a = EagerTensor::from_tensor_in(a, test_ctx()).unwrap();
+        let eager_b = EagerTensor::from_tensor_in(b, test_ctx()).unwrap();
+        let eager = eager_a
+            .runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                s.solve(&eager_a, &eager_b)
+            })
             .unwrap()
             .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
             .unwrap();
@@ -1486,12 +1496,13 @@ fn solve_matches_concrete_partial_pivot_backend() {
         let b = Tensor::from_vec_col_major(vec![2, 1], rhs.to_vec()).unwrap();
         let concrete =
             crate::support::with_cpu_linalg(&mut backend, |session| session.solve(&a, &b)).unwrap();
-        let eager = EagerTensor::from_tensor_in(a, test_ctx())
-            .unwrap()
-            .solve(
-                &mut tenferro_cpu::CpuEngine::serial(),
-                &EagerTensor::from_tensor_in(b, test_ctx()).unwrap(),
-            )
+        let eager_a = EagerTensor::from_tensor_in(a, test_ctx()).unwrap();
+        let eager_b = EagerTensor::from_tensor_in(b, test_ctx()).unwrap();
+        let eager = eager_a
+            .runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                s.solve(&eager_a, &eager_b)
+            })
             .unwrap()
             .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
             .unwrap();
@@ -1529,7 +1540,10 @@ fn solve_forward_jvp_wrt_matrix_and_rhs_matches_analytic_and_finite_difference()
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
+        .unwrap();
     let da = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
         ctx.clone(),
@@ -1623,7 +1637,10 @@ fn solve_backward_wrt_matrix_and_rhs_matches_analytic_and_finite_difference() {
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
+        .unwrap();
     let loss = x
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
@@ -1719,7 +1736,10 @@ fn solve_forward_and_backward_match_finite_difference_in_f32() {
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
+        .unwrap();
     let da = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 0.0, 0.0, 1.0]).unwrap(),
         ctx.clone(),
@@ -1830,7 +1850,10 @@ fn solve_forward_jvp_complex_matches_analytic_and_finite_difference() {
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
+        .unwrap();
     let da_data = [
         Complex64::new(1.0, 1.0),
         Complex64::new(0.0, 0.0),
@@ -1932,7 +1955,10 @@ fn solve_backward_complex_uses_adjoint_and_matches_finite_difference() {
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
+        .unwrap();
     // Real loss L = sum(|x|^2); tenferro's Hermitian convention gives the
     // cotangent into x as 2x (grad(sum(|z|^2)) = 2z).
     let loss = ctx
@@ -2205,7 +2231,10 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
     let a = EagerTensor::from_tensor_in(a_gpu, ctx.clone()).unwrap();
     let b = EagerTensor::from_tensor_in(b_gpu, ctx).unwrap();
 
-    let x = a.solve(&mut upload_backend, &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut upload_backend, |s| s.solve(&a, &b))
+        .unwrap();
 
     let x_host = download_resident(&mut upload_backend, &x);
     assert_eq!(x_host.shape(), &[2, 1]);
@@ -2654,7 +2683,10 @@ fn tracked_batched_solve_backward_matches_finite_diff() {
         ctx,
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(&a, &b))
+        .unwrap();
     let loss = x
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {

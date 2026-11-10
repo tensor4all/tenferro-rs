@@ -113,18 +113,6 @@ impl Error {
     }
 }
 
-/// Result type for linalg-owned domain operations.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_linalg::{Error, Result};
-///
-/// let result: Result<()> = Err(Error::Singular { op: "solve" });
-/// assert!(result.is_err());
-/// ```
-pub type Result<T> = std::result::Result<T, Error>;
-
 /// Wrap a linalg-owned source at the tensor extension boundary.
 pub(crate) fn into_tensor_error(op: &'static str, source: Error) -> tenferro_tensor::Error {
     tenferro_tensor::Error::extension(

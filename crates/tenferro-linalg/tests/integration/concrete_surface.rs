@@ -1,9 +1,9 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    Eig, EighOptions, KeepDims, LinalgBackend, NormOptions, PinvOptions, QrOptions,
-    RankRevealingQrOptions, Slogdet, Svd, SvdOptions, TensorLinalgExt, TensorReadLinalgExt,
-    TypedTensorLinalgExt,
+    Diagonal, Eig, EighOptions, KeepDims, LinalgBackend, NormOptions, PinvOptions, Qr, QrOptions,
+    RankRevealingQrOptions, Side, Slogdet, SolveOptions, Svd, SvdOptions, TensorLinalgExt,
+    TriangularSolveOptions, Uplo,
 };
 use tenferro_tensor::{Tensor, TensorRead, TensorScalar, TypedTensor};
 
@@ -37,7 +37,7 @@ fn dynamic_and_read_surfaces_return_fixed_tuples() {
     {
         let Svd { s, .. } = input.svd(&mut host).unwrap();
         let svdvals = input.svdvals(&mut host).unwrap();
-        let (_q, r) = TensorRead::from_tensor(&input).qr_read(&mut host).unwrap();
+        let Qr { r, .. } = TensorRead::from_tensor(&input).qr(&mut host).unwrap();
         let Slogdet { sign, logabsdet } = input.slogdet(&mut host).unwrap();
 
         assert_eq!(s.as_slice::<f64>().unwrap(), &[4.0, 2.0]);
@@ -276,15 +276,17 @@ fn typed_surface_exposes_associated_real_and_complex_outputs() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let (_u, singular_values, _vt): (TypedTensor<f64>, TypedTensor<f64>, TypedTensor<f64>) =
-            real.svd(&mut host).unwrap();
-        let (eigenvalues, _vectors): (TypedTensor<Complex64>, TypedTensor<Complex64>) =
-            real.eig(&mut host).unwrap();
-        let (_cu, complex_singular_values, _cvt): (
-            TypedTensor<Complex64>,
-            TypedTensor<f64>,
-            TypedTensor<Complex64>,
-        ) = complex.svd(&mut host).unwrap();
+        let Svd {
+            s: singular_values, ..
+        }: Svd<TypedTensor<f64>, TypedTensor<f64>> = real.svd(&mut host).unwrap();
+        let Eig {
+            values: eigenvalues,
+            ..
+        }: Eig<TypedTensor<Complex64>> = real.eig(&mut host).unwrap();
+        let Svd {
+            s: complex_singular_values,
+            ..
+        }: Svd<TypedTensor<Complex64>, TypedTensor<f64>> = complex.svd(&mut host).unwrap();
         let real_values: TypedTensor<f64> = real.svdvals(&mut host).unwrap();
         let complex_values: TypedTensor<f64> = complex.svdvals(&mut host).unwrap();
 
@@ -304,7 +306,7 @@ fn typed_input_is_erased_as_a_borrowed_read() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let factor = read.cholesky_read(&mut host).unwrap();
+        let factor = read.cholesky(&mut host).unwrap();
         assert_eq!(factor.shape(), &[2, 2]);
     };
 }
@@ -345,9 +347,11 @@ fn read_surface_accepts_a_strided_view_without_an_input_clone() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let (_u, singular_values, _vt) = read.svd_read(&mut host).unwrap();
+        let Svd {
+            s: singular_values, ..
+        } = read.svd(&mut host).unwrap();
         let values = TensorRead::from_view(f64::tensor_view(values_view))
-            .svdvals_read(&mut host)
+            .svdvals(&mut host)
             .unwrap();
         assert_eq!(singular_values.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
         assert_eq!(values.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
@@ -369,9 +373,11 @@ fn typed_complex_composites_return_real_outputs_where_required() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let (_sign, logabsdet): (TypedTensor<Complex64>, TypedTensor<f64>) =
+        let Slogdet { logabsdet, .. }: Slogdet<TypedTensor<Complex64>, TypedTensor<f64>> =
             input.slogdet(&mut host).unwrap();
-        let norm: TypedTensor<f64> = input.norm(None, Some(&[0, 1]), false, &mut host).unwrap();
+        let norm: TypedTensor<f64> = input
+            .norm_with(&norm_opts(None, Some(&[0, 1]), false), &mut host)
+            .unwrap();
 
         assert!((logabsdet.as_slice().unwrap()[0] - 8.0_f64.ln()).abs() < 1.0e-12);
         assert!((norm.as_slice().unwrap()[0] - 20.0_f64.sqrt()).abs() < 1.0e-12);
@@ -390,7 +396,14 @@ fn typed_solve_surfaces_accept_vector_and_matrix_rhs() {
         let vector_x = a.full_piv_lu_solve(&vector, &mut host).unwrap();
         let matrix_x = a.full_piv_lu_solve(&matrix, &mut host).unwrap();
         let triangular_x = a
-            .triangular_solve(&matrix, true, false, false, false, &mut host)
+            .triangular_solve_with(
+                &matrix,
+                &TriangularSolveOptions::default()
+                    .with_side(Side::Left)
+                    .with_uplo(Uplo::Upper)
+                    .with_diagonal(Diagonal::NonUnit),
+                &mut host,
+            )
             .unwrap();
 
         assert_eq!(vector_x.as_slice().unwrap(), &[2.0, 2.0]);
@@ -445,33 +458,29 @@ fn read_surface_covers_factorizations_and_composites() {
 
     {
         TensorRead::from_tensor(&a)
-            .svd_with_options_read(SvdOptions::default(), &mut host)
+            .svd_with(&SvdOptions::default(), &mut host)
             .unwrap();
         TensorRead::from_tensor(&a)
-            .qr_with_options_read(QrOptions::default(), &mut host)
+            .qr_with(&QrOptions::default(), &mut host)
             .unwrap();
-        TensorRead::from_tensor(&a).lu_read(&mut host).unwrap();
-        TensorRead::from_tensor(&a)
-            .full_piv_lu_read(&mut host)
-            .unwrap();
+        TensorRead::from_tensor(&a).lu(&mut host).unwrap();
+        TensorRead::from_tensor(&a).full_piv_lu(&mut host).unwrap();
         let x = TensorRead::from_tensor(&a)
-            .full_piv_lu_solve_read(TensorRead::from_tensor(&b), &mut host)
+            .full_piv_lu_solve(&TensorRead::from_tensor(&b), &mut host)
             .unwrap();
         TensorRead::from_tensor(&a)
-            .solve_read(TensorRead::from_tensor(&b), &mut host)
+            .solve(&TensorRead::from_tensor(&b), &mut host)
             .unwrap();
         TensorRead::from_tensor(&a)
-            .eigh_with_options_read(EighOptions::default(), &mut host)
+            .eigh_with(&EighOptions::default(), &mut host)
             .unwrap();
-        TensorRead::from_tensor(&a).eig_read(&mut host).unwrap();
-        TensorRead::from_tensor(&a).slogdet_read(&mut host).unwrap();
-        TensorRead::from_tensor(&a).det_read(&mut host).unwrap();
-        TensorRead::from_tensor(&a).inv_read(&mut host).unwrap();
-        let svdvals = TensorRead::from_tensor(&a).svdvals_read(&mut host).unwrap();
-        let eigvalsh = TensorRead::from_tensor(&a)
-            .eigvalsh_read(&mut host)
-            .unwrap();
-        let eigvals = TensorRead::from_tensor(&a).eigvals_read(&mut host).unwrap();
+        TensorRead::from_tensor(&a).eig(&mut host).unwrap();
+        TensorRead::from_tensor(&a).slogdet(&mut host).unwrap();
+        TensorRead::from_tensor(&a).det(&mut host).unwrap();
+        TensorRead::from_tensor(&a).inv(&mut host).unwrap();
+        let svdvals = TensorRead::from_tensor(&a).svdvals(&mut host).unwrap();
+        let eigvalsh = TensorRead::from_tensor(&a).eigvalsh(&mut host).unwrap();
+        let eigvals = TensorRead::from_tensor(&a).eigvals(&mut host).unwrap();
         // Values-only reads must still produce the same eigenvalues as the
         // full decomposition surfaces (issue #1666). A = [[4, 1], [1, 3]] has
         // eigenvalues (7 ± √5) / 2.
@@ -483,12 +492,12 @@ fn read_surface_covers_factorizations_and_composites() {
         assert!((eigvalsh_values[1] - (7.0 + 5.0_f64.sqrt()) / 2.0).abs() < 1.0e-12);
         assert_eq!(eigvals.dtype(), tenferro_tensor::DType::C64);
         assert_eq!(eigvals.shape(), &[2]);
-        TensorRead::from_tensor(&a).pinv_read(&mut host).unwrap();
+        TensorRead::from_tensor(&a).pinv(&mut host).unwrap();
         TensorRead::from_tensor(&a)
-            .pinv_with_rtol_read(1.0e-12, &mut host)
+            .pinv_with(&PinvOptions::default().with_rtol(1.0e-12), &mut host)
             .unwrap();
         TensorRead::from_tensor(&a)
-            .norm_read(Some(2.0), Some(&[0, 1]), false, &mut host)
+            .norm_with(&norm_opts(Some(2.0), Some(&[0, 1]), false), &mut host)
             .unwrap();
 
         let actual = x.as_slice::<f64>().unwrap();
@@ -498,8 +507,8 @@ fn read_surface_covers_factorizations_and_composites() {
 }
 
 #[test]
-fn read_surface_solve_read_into_writes_the_caller_buffer_directly() {
-    // The concrete `solve_read_into` keeps the direct write path: the CPU
+fn read_surface_solve_into_writes_the_caller_buffer_directly() {
+    // The concrete `solve_into` keeps the direct write path: the CPU
     // exec session solves into the caller's buffer without an allocate-then-
     // copy round trip (issue #1680 Phase 3).
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
@@ -508,10 +517,11 @@ fn read_surface_solve_read_into_writes_the_caller_buffer_directly() {
 
     let mut owned = Tensor::from_vec_col_major([2, 1], vec![-9.0_f64; 2]).unwrap();
     {
-        TensorRead::from_tensor(&a).solve_read_into(
-            TensorRead::from_tensor(&b),
-            tenferro_tensor::TensorWrite::from_tensor(&mut owned),
+        TensorRead::from_tensor(&a).solve_into(
+            &TensorRead::from_tensor(&b),
+            &SolveOptions::default(),
             &mut host,
+            tenferro_tensor::TensorWrite::from_tensor(&mut owned),
         )
     }
     .unwrap();
@@ -524,10 +534,11 @@ fn read_surface_solve_read_into_writes_the_caller_buffer_directly() {
     let view =
         tenferro_tensor::TypedTensorViewMut::from_slice([2, 1], [1, 4], 1, &mut storage).unwrap();
     {
-        TensorRead::from_tensor(&a).solve_read_into(
-            TensorRead::from_tensor(&b),
-            tenferro_tensor::TensorWrite::from_view(tenferro_tensor::TensorViewMut::F64(view)),
+        TensorRead::from_tensor(&a).solve_into(
+            &TensorRead::from_tensor(&b),
+            &SolveOptions::default(),
             &mut host,
+            tenferro_tensor::TensorWrite::from_view(tenferro_tensor::TensorViewMut::F64(view)),
         )
     }
     .unwrap();
@@ -544,25 +555,27 @@ fn typed_surface_covers_all_receiver_adapters() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        a.svd_with_options(SvdOptions::default(), &mut host)
-            .unwrap();
+        a.svd_with(&SvdOptions::default(), &mut host).unwrap();
         a.qr(&mut host).unwrap();
-        a.qr_with_options(QrOptions::default(), &mut host).unwrap();
+        a.qr_with(&QrOptions::default(), &mut host).unwrap();
         a.lu(&mut host).unwrap();
         a.full_piv_lu(&mut host).unwrap();
         a.solve(&b, &mut host).unwrap();
         a.cholesky(&mut host).unwrap();
         a.eigh(&mut host).unwrap();
-        a.eigh_with_options(EighOptions::default(), &mut host)
-            .unwrap();
+        a.eigh_with(&EighOptions::default(), &mut host).unwrap();
         a.det(&mut host).unwrap();
         a.inv(&mut host).unwrap();
         a.eigvalsh(&mut host).unwrap();
         a.eigvals(&mut host).unwrap();
         a.pinv(&mut host).unwrap();
-        a.pinv_with_rtol(1.0e-12, &mut host).unwrap();
+        a.pinv_with(&PinvOptions::default().with_rtol(1.0e-12), &mut host)
+            .unwrap();
         let norm = a
-            .norm(Some(f64::INFINITY), Some(&[0, 1]), false, &mut host)
+            .norm_with(
+                &norm_opts(Some(f64::INFINITY), Some(&[0, 1]), false),
+                &mut host,
+            )
             .unwrap();
 
         assert_eq!(norm.as_slice().unwrap(), &[5.0]);
@@ -606,33 +619,33 @@ fn concrete_spectral_norm_preserves_signed_and_complex_input_across_surfaces() {
                     .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut backend)
                     .unwrap(),
                 TensorRead::from_tensor(&signed)
-                    .norm_read(order, Some(&[0, 1]), false, &mut backend)
+                    .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut backend)
                     .unwrap(),
                 complex
                     .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut backend)
                     .unwrap(),
                 TensorRead::from_tensor(&complex)
-                    .norm_read(order, Some(&[0, 1]), false, &mut backend)
+                    .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut backend)
                     .unwrap(),
                 TensorRead::from_view(tenferro_tensor::TensorView::F64(
                     typed_signed.as_view().transpose_view([1, 0]).unwrap(),
                 ))
-                .norm_read(order, Some(&[1, 0]), true, &mut backend)
+                .norm_with(&norm_opts(order, Some(&[1, 0]), true), &mut backend)
                 .unwrap(),
                 TensorRead::from_view(tenferro_tensor::TensorView::C64(
                     typed_complex.as_view().transpose_view([1, 0]).unwrap(),
                 ))
-                .norm_read(order, Some(&[0, 1]), false, &mut backend)
+                .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut backend)
                 .unwrap(),
             ] {
                 assert!((value.as_slice::<f64>().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
             }
 
             let signed_value = typed_signed
-                .norm(order, Some(&[0, 1]), false, &mut backend)
+                .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut backend)
                 .unwrap();
             let complex_value = typed_complex
-                .norm(order, Some(&[0, 1]), false, &mut backend)
+                .norm_with(&norm_opts(order, Some(&[0, 1]), false), &mut backend)
                 .unwrap();
             assert!((signed_value.as_slice().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
             assert!((complex_value.as_slice().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
@@ -788,7 +801,7 @@ fn full_piv_lu_solve_rejects_rank_deficiency_on_every_surface() {
 
     assert!(a.full_piv_lu_solve(&b, &mut host).is_err());
     assert!(TensorRead::from_tensor(&a)
-        .full_piv_lu_solve_read(TensorRead::from_tensor(&b), &mut host)
+        .full_piv_lu_solve(&TensorRead::from_tensor(&b), &mut host)
         .is_err());
     let typed_a =
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0e-17]).unwrap();

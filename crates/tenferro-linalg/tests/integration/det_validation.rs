@@ -8,8 +8,7 @@
 
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    Side, Slogdet, TensorLinalgExt, TensorReadLinalgExt, TracedTensorLinalgExt,
-    TriangularSolveOptions, TypedTensorLinalgExt,
+    Side, Slogdet, TensorLinalgExt, TracedTensorLinalgExt, TriangularSolveOptions,
 };
 use tenferro_runtime::{DType, Error, GraphCompiler, TracedTensor};
 use tenferro_tensor::{Tensor, TensorRead, TypedTensor, ValidationError};
@@ -99,14 +98,12 @@ fn determinant_rejects_rectangular_matrices_on_every_surface() {
         assert_tensor_shape_mismatch(
             "read slogdet",
             &TensorRead::from_tensor(&tensor)
-                .slogdet_read(&mut host)
+                .slogdet(&mut host)
                 .unwrap_err(),
         );
         assert_tensor_shape_mismatch(
             "read det",
-            &TensorRead::from_tensor(&tensor)
-                .det_read(&mut host)
-                .unwrap_err(),
+            &TensorRead::from_tensor(&tensor).det(&mut host).unwrap_err(),
         );
         assert_tensor_shape_mismatch("typed slogdet", &typed.slogdet(&mut host).unwrap_err());
         assert_tensor_shape_mismatch("typed det", &typed.det(&mut host).unwrap_err());
@@ -173,13 +170,14 @@ fn empty_square_determinant_remains_one_and_zero() {
     let det = tensor.det(&mut host).unwrap();
     assert_eq!(det.as_slice::<f64>().unwrap(), &[1.0]);
 
-    let (sign, logabsdet) = { TensorRead::from_tensor(&tensor).slogdet_read(&mut host) }.unwrap();
+    let Slogdet { sign, logabsdet } =
+        { TensorRead::from_tensor(&tensor).slogdet(&mut host) }.unwrap();
     assert_eq!(sign.as_slice::<f64>().unwrap(), &[1.0]);
     assert_eq!(logabsdet.as_slice::<f64>().unwrap(), &[0.0]);
-    let det = { TensorRead::from_tensor(&tensor).det_read(&mut host) }.unwrap();
+    let det = { TensorRead::from_tensor(&tensor).det(&mut host) }.unwrap();
     assert_eq!(det.as_slice::<f64>().unwrap(), &[1.0]);
 
-    let (sign, logabsdet) = typed.slogdet(&mut host).unwrap();
+    let Slogdet { sign, logabsdet } = typed.slogdet(&mut host).unwrap();
     assert_eq!(sign.as_slice().unwrap(), &[1.0]);
     assert_eq!(logabsdet.as_slice().unwrap(), &[0.0]);
     let det = typed.det(&mut host).unwrap();
@@ -290,10 +288,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
             match op {
                 "inv" => {
                     assert_error(&label("owned"), a.inv(&mut host));
-                    assert_error(
-                        &label("read"),
-                        TensorRead::from_tensor(&a).inv_read(&mut host),
-                    );
+                    assert_error(&label("read"), TensorRead::from_tensor(&a).inv(&mut host));
                     assert_error(&label("typed"), typed_a.inv(&mut host));
                     #[cfg(feature = "autodiff")]
                     assert_error(
@@ -306,10 +301,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                 }
                 "eigh" => {
                     assert_error(&label("owned"), a.eigh(&mut host));
-                    assert_error(
-                        &label("read"),
-                        TensorRead::from_tensor(&a).eigh_read(&mut host),
-                    );
+                    assert_error(&label("read"), TensorRead::from_tensor(&a).eigh(&mut host));
                     assert_error(&label("typed"), typed_a.eigh(&mut host));
                     #[cfg(feature = "autodiff")]
                     assert_error(
@@ -327,7 +319,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     assert_error(&label("owned"), a.eigvalsh(&mut host));
                     assert_error(
                         &label("read"),
-                        TensorRead::from_tensor(&a).eigvalsh_read(&mut host),
+                        TensorRead::from_tensor(&a).eigvalsh(&mut host),
                     );
                     assert_error(&label("typed"), typed_a.eigvalsh(&mut host));
                     #[cfg(feature = "autodiff")]
@@ -341,10 +333,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                 }
                 "eig" => {
                     assert_error(&label("owned"), a.eig(&mut host));
-                    assert_error(
-                        &label("read"),
-                        TensorRead::from_tensor(&a).eig_read(&mut host),
-                    );
+                    assert_error(&label("read"), TensorRead::from_tensor(&a).eig(&mut host));
                     assert_error(&label("typed"), typed_a.eig(&mut host));
                     #[cfg(feature = "autodiff")]
                     assert_error(
@@ -362,7 +351,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     assert_error(&label("owned"), a.eigvals(&mut host));
                     assert_error(
                         &label("read"),
-                        TensorRead::from_tensor(&a).eigvals_read(&mut host),
+                        TensorRead::from_tensor(&a).eigvals(&mut host),
                     );
                     assert_error(&label("typed"), typed_a.eigvals(&mut host));
                     #[cfg(feature = "autodiff")]
@@ -378,7 +367,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     assert_error(&label("owned"), a.cholesky(&mut host));
                     assert_error(
                         &label("read"),
-                        TensorRead::from_tensor(&a).cholesky_read(&mut host),
+                        TensorRead::from_tensor(&a).cholesky(&mut host),
                     );
                     assert_error(&label("typed"), typed_a.cholesky(&mut host));
                     #[cfg(feature = "autodiff")]
@@ -394,8 +383,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     assert_error(&label("owned"), a.solve(&b, &mut host));
                     assert_error(
                         &label("read"),
-                        TensorRead::from_tensor(&a)
-                            .solve_read(TensorRead::from_tensor(&b), &mut host),
+                        TensorRead::from_tensor(&a).solve(&TensorRead::from_tensor(&b), &mut host),
                     );
                     assert_error(&label("typed"), typed_a.solve(&typed_b, &mut host));
                     #[cfg(feature = "autodiff")]
@@ -421,18 +409,19 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     );
                     assert_error(
                         &label("read"),
-                        TensorRead::from_tensor(&a).triangular_solve_read(
-                            TensorRead::from_tensor(&b),
-                            true,
-                            false,
-                            false,
-                            false,
+                        TensorRead::from_tensor(&a).triangular_solve_with(
+                            &TensorRead::from_tensor(&b),
+                            &TriangularSolveOptions::default().with_side(Side::Left),
                             &mut host,
                         ),
                     );
                     assert_error(
                         &label("typed"),
-                        typed_a.triangular_solve(&typed_b, true, false, false, false, &mut host),
+                        typed_a.triangular_solve_with(
+                            &typed_b,
+                            &TriangularSolveOptions::default().with_side(Side::Left),
+                            &mut host,
+                        ),
                     );
                     #[cfg(feature = "autodiff")]
                     assert_error(
@@ -459,7 +448,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     assert_error(&label("owned"), a.full_piv_lu(&mut host));
                     assert_error(
                         &label("read"),
-                        TensorRead::from_tensor(&a).full_piv_lu_read(&mut host),
+                        TensorRead::from_tensor(&a).full_piv_lu(&mut host),
                     );
                     assert_error(&label("typed"), typed_a.full_piv_lu(&mut host));
                     #[cfg(feature = "autodiff")]
@@ -481,7 +470,7 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                     assert_error(
                         &label("read"),
                         TensorRead::from_tensor(&a)
-                            .full_piv_lu_solve_read(TensorRead::from_tensor(&b), &mut host),
+                            .full_piv_lu_solve(&TensorRead::from_tensor(&b), &mut host),
                     );
                     assert_error(
                         &label("typed"),

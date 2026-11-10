@@ -18,7 +18,7 @@ use std::time::Duration;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt, Eigh, Svd};
+use tenferro_linalg::{EagerSessionLinalgExt, Eigh, Svd};
 use tenferro_tensor::Tensor;
 
 fn runtime() -> Arc<EagerRuntime> {
@@ -93,8 +93,8 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let b = leaf(&rt, tracked, tensor(vec![2, 1], vec![1.0, 1.0]));
         group.bench_function(BenchmarkId::new("solve_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let out = black_box(&a)
-                    .solve(&mut engine, black_box(&b))
+                let out = rt
+                    .with_eager_session(&mut engine, |s| s.solve(black_box(&a), black_box(&b)))
                     .expect("solve");
                 consume(&mut engine, out);
             });

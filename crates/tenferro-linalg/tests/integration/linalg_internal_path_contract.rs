@@ -236,16 +236,6 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
         "svdvals should not compute singular vectors and discard them"
     );
 
-    let read_svdvals = source_section(
-        &source,
-        "fn svdvals_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
-        "fn svd_with_options_read(",
-    );
-    assert!(
-        read_svdvals.contains("backend.svd_values_read(self)"),
-        "svdvals_read should call the borrowed singular-values-only hook"
-    );
-
     // Owned eigvalsh: values-only hook, not compute-and-discard via eigh.
     let owned_eigvalsh = source_section(&source, "fn eigvalsh_with(&self", "\n    }\n");
     assert!(
@@ -266,39 +256,6 @@ fn concrete_values_only_surfaces_use_backend_values_only_hooks() {
     assert!(
         !owned_eigvals.contains("eig(backend)?.0"),
         "owned eigvals should not compute eigenvectors and discard them"
-    );
-
-    // Read surfaces route directly through the borrowed values-only hook.
-    let read_eigvalsh = source_section(
-        &source,
-        "fn eigvalsh_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
-        "fn eigvals_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
-    );
-    assert!(
-        read_eigvalsh.contains("eigh_values_read(self)"),
-        "eigvalsh_read should call the borrowed Hermitian values-only hook"
-    );
-    assert!(
-        !read_eigvalsh.contains("eigh_read(backend)?.0"),
-        "eigvalsh_read should not compute eigenvectors and discard them"
-    );
-
-    let read_eigvals = source_section(
-        &source,
-        "fn eigvals_read(self, session: &mut dyn Engine) -> tenferro_tensor::Result<Tensor> {",
-        "fn pinv_read",
-    );
-    assert!(
-        read_eigvals.contains("eig_values_read(self)"),
-        "eigvals_read should call the borrowed general values-only hook"
-    );
-    assert!(
-        !read_eigvals.contains("to_contiguous_read"),
-        "eigvals_read should not pack the view before a provider that can read it"
-    );
-    assert!(
-        !read_eigvals.contains("eig_read(backend)?.0"),
-        "eigvals_read should not compute eigenvectors and discard them"
     );
 }
 
@@ -429,8 +386,8 @@ fn cpu_general_eig_values_only_paths_do_not_request_vectors() {
         faer_dispatch.contains("tlinalg::eig::eig_into("),
         "Faer eig should call the provider's vectors entry point"
     );
-    let typed_source = crate_source("src/cpu/linalg/faer_linalg/with_exec.rs");
-    let faer_values = source_section(&typed_source, "pub(crate) fn eig_values_typed", "\n}\n");
+    let typed_source = crate_source("src/cpu/linalg/faer_linalg.rs");
+    let faer_values = source_section(&typed_source, "fn eig_values_typed", "\n}\n");
     assert!(
         faer_values.contains("false") && !faer_values.contains("true"),
         "Faer eig_values should not request eigenvectors"
