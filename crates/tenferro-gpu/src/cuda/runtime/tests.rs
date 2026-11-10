@@ -194,7 +194,7 @@ fn the_environment_sets_the_artifact_directory_bound_in_mib() {
         artifact_cache_max_bytes(Some(OsStr::new(" 64\n"))),
         64 * MIB
     );
-    // Zero is a hard bound, not a read-only mode: the runtime trims the directory to it.
+    // Zero is not a read-only mode: it stops publishing and trims the directory towards zero.
     assert_eq!(artifact_cache_max_bytes(Some(OsStr::new("0"))), 0);
     // An absurd value saturates rather than wrapping to a small bound.
     assert_eq!(

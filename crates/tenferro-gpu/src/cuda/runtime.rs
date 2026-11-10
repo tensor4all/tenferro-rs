@@ -189,10 +189,11 @@ pub(crate) struct Detached {
 /// directory is mode 0700 on Unix.
 ///
 /// The directory is bounded, never unlimited: at most [`artifact_cache_max_bytes`] bytes of
-/// images, 256 MiB unless `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` says otherwise. Crossing the bound
-/// drops the least recently used images first; [`CudaRuntime::artifact_dir_evictions`] counts
-/// them, and [`CudaRuntime::artifact_dir_stats`] and [`CudaRuntime::clear_artifact_dir`] read and
-/// empty it.
+/// images, 256 MiB unless `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` says otherwise. Publishing past the
+/// bound removes the least recently used images first, best effort: a removal that fails is
+/// dropped, so the directory can stay above its bound. [`CudaRuntime::artifact_dir_evictions`]
+/// counts what was actually removed, and [`CudaRuntime::artifact_dir_stats`] and
+/// [`CudaRuntime::clear_artifact_dir`] read and empty it.
 ///
 /// `TENFERRO_CUDA_POOL_RELEASE_MIB` overrides the allocation pool's retention budget, the idle
 /// device memory the pool keeps mapped instead of handing back to the driver. See
@@ -250,11 +251,12 @@ fn pool_release_threshold_from(override_mib: Option<u64>, total_memory_bytes: u6
 /// `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` (`value`) sets it in MiB. `0` is a bound like any other, not
 /// a read-only mode: the runtime applies a bound through
 /// [`t4a_cuda_runtime::Runtime::set_artifact_dir_max_bytes`], which trims the directory as it
-/// records the bound, so a zero bound removes the images already there at the next open and
-/// publishes no new one — every image is compiled again. A process that wants no persistent
-/// directory asks for that with `TENFERRO_CUDA_ARTIFACT_CACHE=none`. Unset, or a value that is not
-/// a whole number of MiB, keeps [`t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES`] (256 MiB, the
-/// in-memory artifact budget): there is no spelling of "unlimited".
+/// records the bound. That trim is best effort — a removal that fails is dropped — so `0` stops
+/// new images being published and does not guarantee the directory is empty; an image a failed
+/// trim left behind is still served. A process that wants no persistent directory asks for that
+/// with `TENFERRO_CUDA_ARTIFACT_CACHE=none`. Unset, or a value that is not a whole number of MiB,
+/// keeps [`t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES`] (256 MiB, the in-memory artifact
+/// budget): there is no spelling of "unlimited".
 fn artifact_cache_max_bytes(value: Option<&std::ffi::OsStr>) -> u64 {
     value
         .and_then(std::ffi::OsStr::to_str)
@@ -538,8 +540,11 @@ impl CudaRuntime {
         self.submit().clear_artifact_dir()
     }
 
-    /// Images this runtime dropped from the persistent artifact directory to stay within its
-    /// bound, least recently used first.
+    /// Images this runtime actually removed from the persistent artifact directory to stay within
+    /// its bound, least recently used first.
+    ///
+    /// Trimming is best effort, so a removal that failed is not counted here and the directory can
+    /// stay above its bound; [`CudaRuntime::artifact_dir_stats`] reports what is really there.
     pub fn artifact_dir_evictions(&self) -> u64 {
         self.submit().artifact_dir_evictions()
     }
