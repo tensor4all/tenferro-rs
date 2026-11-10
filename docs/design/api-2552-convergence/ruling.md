@@ -146,7 +146,7 @@ implementation that copies silently and returns `Ok` satisfies it.
 
 ---
 
-## Appendix: the four-file check (rustc 1.96.0, macOS arm64)
+## Appendix: the five-file check (rustc 1.96.0, macOS arm64)
 
 Each file is compiled with
 `rustc --edition 2021 --crate-type lib -o /tmp/<name>.rlib /tmp/<name>.rs`.
