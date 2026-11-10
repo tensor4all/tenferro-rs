@@ -98,3 +98,22 @@ pub enum KeepDims {
     /// Keep the reduced axes with size one.
     Yes,
 }
+
+/// Whether an SVD returns the thin or the full-matrices factors.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::SvdShape;
+///
+/// assert_eq!(SvdShape::default(), SvdShape::Thin);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum SvdShape {
+    /// `U` is `m x k` and `Vh` is `k x n` with `k = min(m, n)`.
+    #[default]
+    Thin,
+    /// `U` is `m x m` and `Vh` is `n x n`; the trailing rows of `Vh` span the
+    /// right nullspace.
+    Full,
+}

@@ -167,7 +167,7 @@ mod native {
         view: &TypedTensorView<'_, T>,
         full: bool,
     ) -> tenferro_tensor::Result<[Tensor; 3]> {
-        let (u, s, vh) = T::svd_with_exec(exec, pool, view, full)?;
+        let (u, s, vh) = T::svd_on_exec(exec, pool, view, full)?;
         Ok([
             Tensor::from_typed(u),
             Tensor::from_typed(s),
@@ -180,7 +180,7 @@ mod native {
         pool: &mut BufferPool,
         view: &TypedTensorView<'_, T>,
     ) -> tenferro_tensor::Result<Tensor> {
-        T::svd_values_with_exec(exec, pool, view).map(Tensor::from_typed)
+        T::svd_values_on_exec(exec, pool, view).map(Tensor::from_typed)
     }
 
     fn qr_body<T: LinalgScalar>(
@@ -188,7 +188,7 @@ mod native {
         pool: &mut BufferPool,
         view: &TypedTensorView<'_, T>,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)> {
-        let (q, r) = T::qr_with_exec(exec, pool, view)?;
+        let (q, r) = T::qr_on_exec(exec, pool, view)?;
         Ok((Tensor::from_typed(q), Tensor::from_typed(r)))
     }
 
@@ -197,7 +197,7 @@ mod native {
         pool: &mut BufferPool,
         view: &TypedTensorView<'_, T>,
     ) -> tenferro_tensor::Result<[Tensor; 2]> {
-        let (values, vectors) = T::eigh_with_exec(exec, pool, view)?;
+        let (values, vectors) = T::eigh_on_exec(exec, pool, view)?;
         Ok([Tensor::from_typed(values), Tensor::from_typed(vectors)])
     }
 
@@ -206,7 +206,7 @@ mod native {
         pool: &mut BufferPool,
         view: &TypedTensorView<'_, T>,
     ) -> tenferro_tensor::Result<Tensor> {
-        T::eigh_values_with_exec(exec, pool, view).map(Tensor::from_typed)
+        T::eigh_values_on_exec(exec, pool, view).map(Tensor::from_typed)
     }
 
     fn eigvals_body<T: LinalgScalar>(
@@ -214,7 +214,7 @@ mod native {
         pool: &mut BufferPool,
         view: &TypedTensorView<'_, T>,
     ) -> tenferro_tensor::Result<Tensor> {
-        T::eig_values_with_exec(exec, pool, view).map(Tensor::from_typed)
+        T::eig_values_on_exec(exec, pool, view).map(Tensor::from_typed)
     }
 
     /// SVD on a lane: `(U, S, Vh)`, thin or `full`.

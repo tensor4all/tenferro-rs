@@ -5,11 +5,16 @@
 #   scripts/api-snapshot.sh --check   regenerate into a temporary directory and
 #                                     diff against api/; exit 1 on any difference
 #
-# Needs `cargo-public-api` and a nightly toolchain (rustdoc JSON). The feature
+# Needs `cargo-public-api` and the pinned nightly below (rustdoc JSON); the
+# rendering of rustdoc JSON changes between nightlies, so CI installs the same
+# dated toolchain (`.github/workflows/ci.yml`, `placement`). Override with
+# API_SNAPSHOT_TOOLCHAIN only to try a newer nightly, then re-pin both. The feature
 # combinations are fixed below and documented in api/README.md; change both
 # together. A snapshot is review evidence, not a proof of behaviour.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+toolchain="${API_SNAPSHOT_TOOLCHAIN:-nightly-2026-07-18}"
 
 mode="${1:-}"
 case "$mode" in
@@ -73,7 +78,7 @@ for combo in "${COMBOS[@]}"; do
         file="$out_dir/$crate+$suffix.txt"
     fi
     echo "api-snapshot: $crate ($suffix)" >&2
-    cargo public-api "${args[@]}" >"$file"
+    cargo "+$toolchain" public-api "${args[@]}" >"$file"
 done
 
 if [ "$mode" = --check ]; then

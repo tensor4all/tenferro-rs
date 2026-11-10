@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 LINALG_SOURCE = r"""
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::{FullPivLu, LinalgOps};
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
@@ -102,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![2, 2],
         vec![0.0_f64, 2.0, 1.0, 3.0],
     )?;
-    let (p, l, u, q, parity) = a.full_piv_lu(&mut engine)?;
+    let FullPivLu { p, l, u, q, parity } = a.full_piv_lu(&mut engine)?;
 
     let pt = p.transpose(&[1, 0], &mut engine)?;
     let pt_l = pt.matmul(&l, &mut engine)?;

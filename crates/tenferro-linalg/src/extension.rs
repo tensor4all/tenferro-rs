@@ -13,6 +13,7 @@ use tenferro_tensor::{DType, Engine, Error, ErrorKind, Tensor, TensorRead};
 use tenferro_gpu::cuda::raw::with_cuda_engine;
 
 use crate::backend::LinalgBackend;
+use crate::flags::SvdShape;
 use crate::RankRevealingQrOptions;
 
 #[cfg(all(test, feature = "cuda"))]
@@ -176,18 +177,23 @@ pub enum SvdDriver {
 /// assert_eq!(options.driver, SvdDriver::QrBased);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SvdOptions {
+    /// Thin or full-matrices factors. The default is [`SvdShape::Thin`].
+    pub shape: SvdShape,
     /// Singular-vector gauge convention.
     pub gauge: SvdGauge,
     /// AD derivative regularization for repeated or nearly repeated singular values.
     pub derivative_eps: f64,
-    /// Algorithm family for the SVD; a provider may ignore it.
+    /// Algorithm family for the SVD: a hint for providers that can choose a
+    /// driver; the current CPU provider ignores it.
     pub driver: SvdDriver,
 }
 
 impl Default for SvdOptions {
     fn default() -> Self {
         Self {
+            shape: SvdShape::Thin,
             gauge: SvdGauge::Raw,
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             driver: SvdDriver::Auto,
@@ -196,6 +202,21 @@ impl Default for SvdOptions {
 }
 
 impl SvdOptions {
+    /// Return options with the requested factor shape.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::{SvdOptions, SvdShape};
+    ///
+    /// let options = SvdOptions::default().shape(SvdShape::Full);
+    /// assert_eq!(options.shape, SvdShape::Full);
+    /// ```
+    pub fn shape(mut self, shape: SvdShape) -> Self {
+        self.shape = shape;
+        self
+    }
+
     /// Return options with the requested singular-vector gauge.
     ///
     /// # Examples
@@ -298,6 +319,7 @@ pub enum EighDriver {
 /// assert_eq!(options.driver, EighDriver::Jacobi);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct EighOptions {
     /// Eigenvector gauge convention.
     pub gauge: EighGauge,
@@ -375,6 +397,7 @@ impl EighOptions {
 /// assert_eq!(options.gauge, QrGauge::PositiveDiagonal);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct QrOptions {
     /// QR sign or phase convention.
     pub gauge: QrGauge,
@@ -977,11 +1000,10 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
         } => {
             return session.svd_with_options_read(
                 inputs[0].clone(),
-                SvdOptions {
-                    derivative_eps,
-                    gauge,
-                    driver,
-                },
+                SvdOptions::default()
+                    .derivative_eps(derivative_eps)
+                    .gauge(gauge)
+                    .driver(driver),
             );
         }
         LinalgOp::SvdFull => return session.svd_full_read(inputs[0].clone()),
@@ -1167,11 +1189,10 @@ fn execute_linalg<B: LinalgBackend>(
             driver,
         } => backend.svd_with_options(
             inputs[0],
-            SvdOptions {
-                derivative_eps,
-                gauge,
-                driver,
-            },
+            SvdOptions::default()
+                .derivative_eps(derivative_eps)
+                .gauge(gauge)
+                .driver(driver),
         ),
         LinalgOp::SvdFull => backend.svd_full(inputs[0]),
         LinalgOp::SvdVals { driver, .. } => {

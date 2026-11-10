@@ -7,7 +7,7 @@ use serde::Serialize;
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::{download_tensor, gpu_available, upload_tensor, CudaDeviceId, CudaEngine};
-use tenferro_linalg::{HouseholderQr, LinalgBackend, QrGauge, QrOptions, TensorLinalgExt};
+use tenferro_linalg::{HouseholderQr, LinalgBackend, LinalgOps, QrGauge, QrOptions};
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorRead};
 
 const SOURCE_COMMIT: &str = "da0775a208006352f6e5eab18bc6bb09ca39a1f6";

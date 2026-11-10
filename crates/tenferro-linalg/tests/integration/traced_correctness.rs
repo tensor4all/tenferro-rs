@@ -1,6 +1,10 @@
 use num_complex::Complex64;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
+use tenferro_linalg::{
+    Eig, Eigh, Lu, NormOptions, NormOrd, Qr, Slogdet, Svd, TriangularSolveOptions,
+};
 use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
+use tenferro_tensor::AxisVec;
 
 use super::support;
 
@@ -28,7 +32,7 @@ fn traced_tensor_linalg_ext_exposes_svd() {
     let a = trace
         .from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0])
         .unwrap();
-    let (_u, s, _vt) = a.svd().unwrap();
+    let Svd { u: _u, s, vh: _vt } = a.svd().unwrap();
 
     assert_eq!(s.rank(), 1);
 }
@@ -39,7 +43,7 @@ fn svd_traced_tensor_returns_three_outputs() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 2.0]))
         .unwrap();
-    let (u, s, vt) = a.svd().unwrap();
+    let Svd { u, s, vh: vt } = a.svd().unwrap();
     let results = run_many(&[&u, &s, &vt]);
 
     assert_eq!(results[0].shape(), &[2, 2]);
@@ -57,7 +61,7 @@ fn qr_traced_tensor_returns_q_and_r() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]))
         .unwrap();
-    let (q, r) = a.qr().unwrap();
+    let Qr { q, r } = a.qr().unwrap();
     let results = run_many(&[&q, &r]);
 
     assert_eq!(results[0].shape(), &[2, 2]);
@@ -72,7 +76,7 @@ fn eigh_traced_tensor_returns_values_and_vectors() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
         .unwrap();
-    let (values, vectors) = a.eigh().unwrap();
+    let Eigh { values, vectors } = a.eigh().unwrap();
     let results = run_many(&[&values, &vectors]);
 
     assert_eq!(results[0].shape(), &[2]);
@@ -95,7 +99,9 @@ fn linalg_single_output_traced_tensor_functions_eval() {
 
     let chol = a.cholesky().unwrap();
     let solved = a.solve(&b).unwrap();
-    let triangular = a.triangular_solve(&b, true, true, false, false).unwrap();
+    let triangular = a
+        .triangular_solve_with(&b, &TriangularSolveOptions::default())
+        .unwrap();
     let results = run_many(&[&chol, &solved, &triangular]);
 
     assert_eq!(get_f64_data(&results[0]), &[2.0, 0.0, 0.0, 3.0]);
@@ -132,7 +138,7 @@ fn lu_traced_tensor_returns_four_outputs() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]))
         .unwrap();
-    let (p, l, u, parity) = a.lu().unwrap();
+    let Lu { p, l, u, parity } = a.lu().unwrap();
     let results = run_many(&[&p, &l, &u, &parity]);
 
     assert_eq!(results[0].shape(), &[2, 2]);
@@ -164,7 +170,7 @@ fn eig_traced_tensor_returns_complex_outputs() {
     let a = trace
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]))
         .unwrap();
-    let (values, vectors) = a.eig().unwrap();
+    let Eig { values, vectors } = a.eig().unwrap();
     let results = run_many(&[&values, &vectors]);
 
     assert_eq!(results[0].shape(), &[2]);
@@ -187,7 +193,10 @@ fn determinant_inverse_and_eigenvalue_helpers_eval() {
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 4.0]))
         .unwrap();
 
-    let (sign, logabsdet) = a.slogdet().unwrap();
+    let Slogdet {
+        sign,
+        log_abs_det: logabsdet,
+    } = a.slogdet().unwrap();
     let determinant = a.det().unwrap();
     let inverse = a.inv().unwrap();
     let eigvals = a.eigvals().unwrap();
@@ -228,7 +237,9 @@ fn pseudoinverse_and_norm_eval() {
         .unwrap();
 
     let pseudo_inverse = a.pinv().unwrap();
-    let frob = a.norm(None, Some(&[0, 1]), false).unwrap();
+    let frob = a
+        .norm_with(&NormOptions::default().axes(Some([0, 1].into_iter().collect::<AxisVec>())))
+        .unwrap();
     let results = run_many(&[&pseudo_inverse, &frob]);
 
     assert_tensor_f64_eq(get_f64_data(&results[0]), &[0.5, 0.0, 0.0, 0.25]);
@@ -256,10 +267,34 @@ fn traced_spectral_norm_preserves_signed_and_complex_input() {
         ))
         .unwrap();
     let outputs = [
-        signed.norm(Some(2.0), Some(&[0, 1]), false).unwrap(),
-        signed.norm(Some(-2.0), Some(&[0, 1]), false).unwrap(),
-        complex.norm(Some(2.0), Some(&[0, 1]), false).unwrap(),
-        complex.norm(Some(-2.0), Some(&[0, 1]), false).unwrap(),
+        signed
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::P(2.0))
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+            )
+            .unwrap(),
+        signed
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::P(-2.0))
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+            )
+            .unwrap(),
+        complex
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::P(2.0))
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+            )
+            .unwrap(),
+        complex
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::P(-2.0))
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+            )
+            .unwrap(),
     ];
     let output_refs = outputs.iter().collect::<Vec<_>>();
     let mut backend = tenferro_cpu::CpuEngine::serial();
@@ -283,14 +318,40 @@ fn norm_supports_vector_zero_and_matrix_induced_orders() {
         .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 3.0, 2.0, 4.0]))
         .unwrap();
 
-    let zero_norm = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
-    let matrix_one = matrix.norm(Some(1.0), Some(&[0, 1]), false).unwrap();
-    let matrix_neg_one = matrix.norm(Some(-1.0), Some(&[0, 1]), false).unwrap();
+    let zero_norm = vector
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::Zero)
+                .axes(Some([0].into_iter().collect::<AxisVec>())),
+        )
+        .unwrap();
+    let matrix_one = matrix
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::P(1.0))
+                .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+        )
+        .unwrap();
+    let matrix_neg_one = matrix
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::P(-1.0))
+                .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+        )
+        .unwrap();
     let matrix_inf = matrix
-        .norm(Some(f64::INFINITY), Some(&[0, 1]), false)
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::Inf)
+                .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+        )
         .unwrap();
     let matrix_neg_inf = matrix
-        .norm(Some(f64::NEG_INFINITY), Some(&[0, 1]), false)
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::NegInf)
+                .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+        )
         .unwrap();
     let results = run_many(&[
         &zero_norm,
@@ -343,7 +404,13 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         let vector = trace
             .from_tensor_concrete_shape(f64_tensor(vec![data.len()], data))
             .unwrap();
-        let count = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
+        let count = vector
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::Zero)
+                    .axes(Some([0].into_iter().collect::<AxisVec>())),
+            )
+            .unwrap();
         assert_f64_eq(get_f64_data(&run_many(&[&count])[0])[0], expected);
     }
 
@@ -381,7 +448,13 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         let vector = trace
             .from_tensor_concrete_shape(c64_tensor(vec![data.len()], data))
             .unwrap();
-        let count = vector.norm(Some(0.0), Some(&[0]), false).unwrap();
+        let count = vector
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::Zero)
+                    .axes(Some([0].into_iter().collect::<AxisVec>())),
+            )
+            .unwrap();
         assert_f64_eq(get_f64_data(&run_many(&[&count])[0])[0], expected);
     }
 
@@ -400,9 +473,19 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         ))
         .unwrap();
 
-    let matrix_count = matrix.norm(Some(0.0), Some(&[0, 1]), false).unwrap();
+    let matrix_count = matrix
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::Zero)
+                .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+        )
+        .unwrap();
     let complex_matrix_count = complex_matrix
-        .norm(Some(0.0), Some(&[0, 1]), false)
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::Zero)
+                .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+        )
         .unwrap();
     let results = run_many(&[&matrix_count, &complex_matrix_count]);
     assert_f64_eq(get_f64_data(&results[0])[0], 2.0);

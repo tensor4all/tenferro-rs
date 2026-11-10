@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fn snippet_linear_algebra_1() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_1
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::LinalgOps;
 use tenferro_runtime::Tensor;
 
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
@@ -38,7 +38,7 @@ assert_eq!(x.as_slice::<f64>()?, &[2.0, 3.0]);
     fn snippet_linear_algebra_2() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_2
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::LinalgOps;
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
@@ -83,7 +83,7 @@ let ad = AdContext::builder()
     fn snippet_linear_algebra_4() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_4
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::{LinalgOps, Svd};
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
@@ -97,7 +97,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
 let mut engine = CpuEngine::serial();
-let (u, s, vt) = a.svd(&mut engine)?;
+let Svd { u, s, vh: vt } = a.svd(&mut engine)?;
 
 assert_eq!(u.shape(), &[2, 2]);
 assert_eq!(vt.shape(), &[2, 2]);
@@ -121,7 +121,7 @@ assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
     // snippet source: docs/guides/linear-algebra.md:210
     fn snippet_linear_algebra_5() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_5
-use tenferro_linalg::{SvdGauge, SvdOptions, TracedTensorLinalgExt};
+use tenferro_linalg::{Svd, SvdGauge, SvdOptions, TracedLinalgOps};
 use tenferro_runtime::{TraceContext, TracedTensor};
 let trace = TraceContext::new();
 
@@ -133,12 +133,10 @@ let a = trace.from_vec_col_major(
         0.0, 0.0, 1.0,
     ],
 )?;
-let (u, s, vt) = a
-    .svd_with_options(
-        SvdOptions::default()
+let Svd { u, s, vh: vt } = a
+    .svd_with(&SvdOptions::default()
             .gauge(SvdGauge::CanonicalPivot)
-            .derivative_eps(1.0e-10),
-    )?;
+            .derivative_eps(1.0e-10))?;
 
 let rank = 2;
 let u_rank2 = u.slice_axis(1, 0..rank)?;
@@ -157,7 +155,7 @@ assert_eq!(vt_rank2.concrete_shape()?, vec![2, 3]);
     // snippet source: docs/guides/linear-algebra.md:276
     fn snippet_linear_algebra_svd_driver() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_svd_driver
-use tenferro_linalg::{SvdDriver, SvdOptions, TracedTensorLinalgExt};
+use tenferro_linalg::{Svd, SvdDriver, SvdOptions, TracedLinalgOps};
 use tenferro_runtime::{TraceContext, TracedTensor};
 let trace = TraceContext::new();
 
@@ -169,7 +167,7 @@ let a = trace.from_vec_col_major(
     ],
 )?;
 // Forces cuSOLVER `gesvd` on CUDA; CPU providers ignore the driver.
-let (u, s, vt) = a.svd_with_options(SvdOptions::default().driver(SvdDriver::QrBased))?;
+let Svd { u, s, vh: vt } = a.svd_with(&SvdOptions::default().driver(SvdDriver::QrBased))?;
 
 assert_eq!(u.concrete_shape()?, vec![3, 2]);
 assert_eq!(s.concrete_shape()?, vec![2]);
@@ -183,7 +181,7 @@ assert_eq!(vt.concrete_shape()?, vec![2, 2]);
     // snippet source: docs/guides/linear-algebra.md
     fn snippet_linear_algebra_eigh_driver() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_eigh_driver
-use tenferro_linalg::{EighDriver, EighOptions, TracedTensorLinalgExt};
+use tenferro_linalg::{Eigh, EighDriver, EighOptions, TracedLinalgOps};
 use tenferro_runtime::{TraceContext, TracedTensor};
 let trace = TraceContext::new();
 
@@ -197,8 +195,8 @@ let a = trace.from_vec_col_major(
 )?;
 // On CUDA this reaches `syevjBatched`: one launch for the whole batch.
 // CPU providers ignore the driver.
-let (values, vectors) =
-    a.eigh_with_options(EighOptions::default().driver(EighDriver::Jacobi))?;
+let Eigh { values, vectors } =
+    a.eigh_with(&EighOptions::default().driver(EighDriver::Jacobi))?;
 
 assert_eq!(values.concrete_shape()?, vec![2, 2]);
 assert_eq!(vectors.concrete_shape()?, vec![2, 2, 2]);
@@ -211,7 +209,7 @@ assert_eq!(vectors.concrete_shape()?, vec![2, 2, 2]);
     // snippet source: docs/guides/linear-algebra.md:244
     fn snippet_linear_algebra_6() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_6
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{Svd, TracedLinalgOps};
 use tenferro_runtime::{TraceContext, TracedTensor};
 let trace = TraceContext::new();
 
@@ -223,7 +221,7 @@ let a = trace.from_vec_col_major(
         0.0, 0.0, 1.0,
     ],
 )?;
-let (_u, s, _vt) = a.svd()?;
+let Svd { u: _u, s, vh: _vt } = a.svd()?;
 let repeated = s.take_axis(0, &[0, 1, 0])?;
 
 assert_eq!(repeated.concrete_shape()?, vec![3]);
@@ -237,7 +235,7 @@ assert_eq!(repeated.concrete_shape()?, vec![3]);
     fn snippet_linear_algebra_7() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_7
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
+use tenferro_linalg::{LinalgOps, Qr, QrGauge, QrOptions};
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
@@ -258,10 +256,7 @@ let a = Tensor::from_vec_col_major(
     ],
 )?;
 let mut engine = CpuEngine::serial();
-let (q, r) = a.qr_with_options(
-    QrOptions::default().gauge(QrGauge::PositiveDiagonal),
-    &mut engine,
-)?;
+let Qr { q, r } = a.qr_with(&QrOptions::default().gauge(QrGauge::PositiveDiagonal), &mut engine)?;
 
 let identity = Tensor::from_vec_col_major(
     vec![3, 3],
@@ -285,7 +280,7 @@ assert!(max_abs_diff(&qtq, &identity)? < 1.0e-12);
     fn snippet_incremental_householder_qr() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:incremental_householder_qr
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
+use tenferro_linalg::{QrGauge, QrOptions, LinalgOps};
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
 let initial = Tensor::from_vec_col_major(
@@ -325,7 +320,7 @@ assert!(error < 1.0e-12);
     fn snippet_linear_algebra_8() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_8
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::{Eigh, LinalgOps};
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
@@ -339,7 +334,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])?;
 let mut engine = CpuEngine::serial();
-let (values, vectors) = a.eigh(&mut engine)?;
+let Eigh { values, vectors } = a.eigh(&mut engine)?;
 
 assert_eq!(values.shape(), &[2]);
 assert_eq!(vectors.shape(), &[2, 2]);
@@ -366,7 +361,7 @@ assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
         // snippet-start:linear_algebra_9
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
 let trace = TraceContext::new();
 
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
@@ -400,7 +395,7 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 0.0, 0.0, 3.0]);
         // snippet-start:linear_algebra_10
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
 let trace = TraceContext::new();
 
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
@@ -434,7 +429,7 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 3.0]);
     fn snippet_linear_algebra_11() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:linear_algebra_11
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::{FullPivLu, LinalgOps};
 use tenferro_runtime::{Tensor, TensorSessionOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
@@ -458,7 +453,7 @@ let a = Tensor::from_vec_col_major(
 )?;
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 
-let (p, l, u, q, parity) = a.full_piv_lu(&mut engine)?;
+let FullPivLu { p, l, u, q, parity } = a.full_piv_lu(&mut engine)?;
 let pt = p.transpose(&[1, 0], &mut engine)?;
 let pt_l = pt.matmul(&l, &mut engine)?;
 let pt_lu = pt_l.matmul(&u, &mut engine)?;
@@ -802,7 +797,7 @@ assert_eq!(metadata.shape().len(), 2);
         // snippet-start:autodiff_18
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
 let trace = TraceContext::new();
 
@@ -835,7 +830,7 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 4.0, 6.0]);
 use tenferro_ad::AdContext;
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
 let trace = TraceContext::new();
 
 let mut compiler = GraphCompiler::new();

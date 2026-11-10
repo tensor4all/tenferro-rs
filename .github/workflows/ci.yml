@@ -51,11 +51,15 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check bans
-      - uses: dtolnay/rust-toolchain@nightly
+      # Pinned: rustdoc JSON rendering changes between nightlies, and
+      # scripts/api-snapshot.sh uses this exact toolchain (#2552 Q4).
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-07-18
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-public-api
+          tool: cargo-public-api@0.52.0
       - name: No rayon type in the public API of tenferro-cpu
         run: scripts/check-no-public-rayon.sh
       - name: Public API snapshot matches api/ (#2552)

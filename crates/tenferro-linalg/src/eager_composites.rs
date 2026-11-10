@@ -4,7 +4,7 @@ use tenferro_ad::{
 };
 use tenferro_runtime::ErrorPhase;
 
-use crate::eager_ext::EagerSessionLinalgExt;
+use crate::eager_ext::EagerLinalg;
 use crate::traced::real_values_dtype;
 use crate::validation::{ensure_float_or_complex, validate_lstsq, validate_square_matrix};
 

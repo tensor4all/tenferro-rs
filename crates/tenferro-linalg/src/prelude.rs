@@ -1,17 +1,16 @@
-//! Linear algebra extension traits and their method-resolution types.
+//! The linear algebra grammar traits, options and result types (#2552).
 
 pub use crate::{
-    EighOptions, QrOptions, RankRevealingQrOptions, RankRevealingQrResult, SvdOptions,
+    Eig, Eigh, FullPivLu, LinalgBackend, LinalgOps, LinalgScalar, Lu, Qr, Slogdet, Svd,
+    TracedLinalgOps,
 };
 pub use crate::{
-    LinalgBackend, LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TraceContextLinalgExt,
-    TracedTensorLinalgExt, TypedEig, TypedFullPivLu, TypedLu, TypedRankRevealingQrResult, TypedSvd,
-    TypedTensorLinalgExt,
+    EighOptions, QrOptions, RankRevealingQrOptions, RankRevealingQrResult, SvdOptions,
 };
 
 pub use tenferro_runtime::{Tensor, TensorRead, TracedTensor, TypedTensor};
 
 #[cfg(feature = "autodiff")]
-pub use crate::{EagerSessionLinalgExt, EagerTensorLinalgExt};
+pub use crate::EagerLinalgOps;
 #[cfg(feature = "autodiff")]
 pub use tenferro_ad::{EagerRuntime, EagerSession, EagerTensor};

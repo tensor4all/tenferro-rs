@@ -1,10 +1,13 @@
 use num_complex::Complex64;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{Slogdet, TracedLinalgOps};
 use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::Tensor;
 
 fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
-    let (sign, logabsdet) = a.slogdet().unwrap();
+    let Slogdet {
+        sign,
+        log_abs_det: logabsdet,
+    } = a.slogdet().unwrap();
     let det = a.det().unwrap();
     let program = GraphCompiler::new()
         .compile_many(&[&det, &sign, &logabsdet])
@@ -15,12 +18,15 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
     #[cfg(feature = "autodiff")]
     {
         use tenferro_ad::{EagerRuntime, EagerTensor};
-        use tenferro_linalg::EagerSessionLinalgExt;
+        use tenferro_linalg::{EagerLinalgOps, Slogdet};
         let runtime = EagerRuntime::new().unwrap();
         let eager = EagerTensor::from_tensor_in(input, runtime.clone()).unwrap();
         let (det, sign, log) = runtime
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-                let (sign, log) = session.slogdet(&eager)?;
+                let Slogdet {
+                    sign,
+                    log_abs_det: log,
+                } = session.slogdet(&eager)?;
                 Ok::<_, tenferro_ad::Error>((session.det(&eager)?, sign, log))
             })
             .unwrap();

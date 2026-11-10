@@ -542,7 +542,7 @@ impl CpuEngine {
     /// repeated calls allocation-free in steady state. A pool is never shared between lanes.
     ///
     /// Only the linalg factorizations svd, svdvals, qr, eigh, eigvalsh and eigvals run in a lane
-    /// (through the ordinary `tenferro-linalg` methods, for example `svd_read`); every other
+    /// (through the ordinary `tenferro-linalg` grammar, for example `view.svd(lane)`); every other
     /// operation on a lane engine returns [`tenferro_tensor::Error::Unsupported`]. A negative-stride
     /// input is gathered once into a buffer from the lane's pool; the steady-state zero-allocation
     /// property is only promised for inputs without negative strides.

@@ -8,7 +8,7 @@
 
 use std::error::Error as _;
 
-use tenferro_linalg::{Error as LinalgError, TensorLinalgExt};
+use tenferro_linalg::{Error as LinalgError, LinalgOps};
 use tenferro_tensor::{DType, ErrorKind};
 
 /// Every decomposition reports through the same four variants, and the

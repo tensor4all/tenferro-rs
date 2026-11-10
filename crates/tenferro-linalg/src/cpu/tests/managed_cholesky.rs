@@ -556,7 +556,7 @@ fn managed_borrowed_cholesky_respects_offset_and_rejects_strides() {
 #[cfg(feature = "autodiff")]
 #[test]
 fn managed_eager_cholesky_preserves_domain_and_values() {
-    use crate::EagerSessionLinalgExt;
+    use crate::EagerLinalgOps;
     use tenferro_ad::EagerRuntime;
     let domain = FakeDomain::new();
     let input = domain.tensor(&[2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]);
@@ -579,7 +579,7 @@ fn managed_eager_cholesky_preserves_domain_and_values() {
 
 #[test]
 fn managed_traced_cholesky_preserves_domain_and_values() {
-    use crate::TracedTensorLinalgExt;
+    use crate::TracedLinalgOps;
     use tenferro_runtime::{GraphCompiler, Runtime, TraceContext, TracedTensor};
     let trace = TraceContext::new();
     let domain = FakeDomain::new();

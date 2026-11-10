@@ -2,7 +2,7 @@
 //!
 //! # Borrowed operands
 //!
-//! The public `_read` contract in `TensorReadLinalgExt` makes no zero-copy
+//! The public `_read` contract in `ReadLinalg` makes no zero-copy
 //! promise: a provider consumes the borrowed view without copying when its own
 //! layout rules allow, and otherwise materialises it once inside its own
 //! boundary. This provider is the strict case, because cuSOLVER needs compact

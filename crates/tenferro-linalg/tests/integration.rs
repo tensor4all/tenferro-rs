@@ -2,8 +2,6 @@
 mod ad_support_manifest;
 #[path = "integration/backend_errors.rs"]
 mod backend_errors;
-#[path = "integration/borrowed_exec_entries.rs"]
-mod borrowed_exec_entries;
 #[path = "integration/borrowed_linalg_parity.rs"]
 mod borrowed_linalg_parity;
 #[path = "integration/concrete_surface.rs"]
@@ -20,6 +18,8 @@ mod determinant_extremes;
 mod eager_surface_parity;
 #[path = "integration/eager_tensor.rs"]
 mod eager_tensor;
+#[path = "integration/error_causes.rs"]
+mod error_causes;
 #[path = "integration/error_contract.rs"]
 mod error_contract;
 #[path = "integration/full_piv_lu.rs"]

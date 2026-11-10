@@ -2,7 +2,7 @@ use std::error::Error as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use num_complex::{Complex32, Complex64};
-use tenferro_linalg::{LinalgBackend, QrOptions, TensorLinalgExt};
+use tenferro_linalg::{LinalgBackend, LinalgOps, QrOptions};
 use tenferro_tensor::{
     BackendStorageHandle, CompareDir, DType, DotGeneralConfig, ElementwiseReadOp, Engine, Error,
     ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig,

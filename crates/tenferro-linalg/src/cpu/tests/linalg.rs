@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::TensorReadLinalgExt;
+use crate::ReadLinalg;
 use std::sync::Arc;
 use tenferro_tensor::{BackendStorageHandle, MemoryKind, Placement, StorageBuffer};
 
@@ -2683,7 +2683,7 @@ fn empty_slogdet_on_a_cpu_session_narrows_its_input_to_host() {
     let mut backend = tenferro_cpu::CpuEngine::serial();
 
     let device_empty = backend_resident_f64(131, vec![0, 0], MemoryKind::Device);
-    let error = crate::TensorLinalgExt::slogdet(&device_empty, &mut backend).unwrap_err();
+    let error = crate::OwnedLinalg::slogdet(&device_empty, &mut backend).unwrap_err();
     assert!(
         matches!(
             error,

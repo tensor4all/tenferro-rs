@@ -1,6 +1,6 @@
 use super::{checked_product, FaerLinalg};
 use crate::cpu::tests::with_cpu_linalg;
-use crate::{QrOptions, TensorLinalgExt};
+use crate::{OwnedLinalg, QrOptions};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::Tensor;
 

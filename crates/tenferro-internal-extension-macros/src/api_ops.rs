@@ -37,6 +37,8 @@ pub(crate) struct GenLayer {
     pub result: Path,
     pub types: Vec<(Ident, Type)>,
     pub forward: Path,
+    /// Optional `cfg` predicate gating the generated trait and impl.
+    pub cfg: Option<TokenStream>,
 }
 
 pub(crate) enum LayerKind {

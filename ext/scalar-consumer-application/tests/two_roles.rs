@@ -12,7 +12,7 @@ use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::ad::Df64VjpRule;
 use tenferro_df64_proof::extension::{module, Df64Qr, Df64ToF64, DF64_SCALAR_IDENTITY};
 use tenferro_df64_proof::Df64;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{Qr, TracedLinalgOps};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_scalar_consumer_algorithm::{factor_norm_gradient, ScalarSupport};
@@ -27,7 +27,8 @@ struct Standard;
 
 impl ScalarSupport for Standard {
     fn qr(&self, input: &TracedTensor) -> Result<(TracedTensor, TracedTensor), Error> {
-        input.qr()
+        let Qr { q, r } = input.qr()?;
+        Ok((q, r))
     }
 
     fn to_f64(&self, input: &TracedTensor) -> Result<TracedTensor, Error> {

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt};
+use tenferro_linalg::EagerLinalgOps;
 
 const DEFAULT_SIZES: &[usize] = &[8, 16];
 

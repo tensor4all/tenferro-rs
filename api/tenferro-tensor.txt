@@ -1,4 +1,5 @@
 pub mod tenferro_tensor
+pub use tenferro_tensor::AxisVec
 pub use tenferro_tensor::Complex
 pub use tenferro_tensor::DType
 pub use tenferro_tensor::DynRank
@@ -15,6 +16,8 @@ pub use tenferro_tensor::TensorLayout
 pub use tenferro_tensor::TensorRank
 pub use tenferro_tensor::ValidationError
 pub use tenferro_tensor::ValidationKind
+pub use tenferro_tensor::normalize_axes
+pub use tenferro_tensor::normalize_axis
 pub mod tenferro_tensor::backend
 pub enum tenferro_tensor::backend::ActivationOp
 pub tenferro_tensor::backend::ActivationOp::Gelu

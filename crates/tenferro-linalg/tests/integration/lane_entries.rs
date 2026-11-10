@@ -1,11 +1,13 @@
-//! The factorization entries inside a lane of `CpuEngine::with_lanes` against the
-//! `*_with_exec` entries (#2552 S2b, the P7 parity tests).
+//! The factorization entries inside a lane of `CpuEngine::with_lanes` against the owned-engine
+//! entries (#2552 S2b, the P7 parity tests; #2462 for the contract the former `*_with_exec`
+//! entries carried).
 //!
 //! A lane is an engine over a share of the thread budget and a caller-owned pool. The ordinary
-//! entries (`svd_read` and its siblings, and `TypedTensorLinalgExt`, which goes through the read
-//! path) run on it and must give bit-identical results to the borrowed entries, fail with the
-//! same error, and draw every buffer from the lane's pool. Every other linalg operation is
-//! `Unsupported` on a lane.
+//! grammar (`view.svd(lane)` and its siblings from `LinalgOps`) runs on it and must give the
+//! result the owned-tensor engine entry gives for the same logical matrix (value bits and
+//! placement included), fail with the same error, accept a negative stride by gathering it once
+//! into the lane's pool, and draw every buffer from the lane's pool and no other. Every other
+//! linalg operation is `Unsupported` on a lane.
 
 #![cfg(feature = "native")]
 
@@ -14,13 +16,11 @@ use std::error::Error as _;
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine};
 use tenferro_linalg::{
-    eig_values_with_exec, eigh_values_with_exec, eigh_with_exec, qr_with_exec,
-    svd_values_with_exec, svd_with_exec, EighGauge, EighOptions, LinalgScalar, SvdGauge,
-    SvdOptions, TensorLinalgExt, TensorReadLinalgExt, TypedTensorLinalgExt,
+    EighGauge, EighOptions, LinalgOps, LinalgScalar, SolveOptions, Svd, SvdGauge, SvdOptions,
+    SvdShape,
 };
 use tenferro_tensor::{
-    DType, Engine, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorScalar, TypedTensor,
-    TypedTensorView,
+    DType, Engine, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TypedTensor, TypedTensorView,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -88,27 +88,6 @@ fn hermitian<T: Sample>(n: usize, batch: usize) -> TypedTensor<T> {
     TypedTensor::from_vec_col_major(vec![n, n, batch], data).unwrap()
 }
 
-/// Bit equality of a typed borrowed-entry result and a lane tensor, plus shape and placement.
-///
-/// `Debug` of a float is its shortest round-trip text, so equal text is equal bits for every
-/// non-NaN value, signed zero included.
-fn assert_same<S: TensorScalar + std::fmt::Debug>(
-    label: &str,
-    free: &TypedTensor<S>,
-    lane: &Tensor,
-) {
-    assert_eq!(free.shape(), lane.shape(), "{label}: shape");
-    assert_eq!(free.placement(), lane.placement(), "{label}: placement");
-    let lane_data = lane
-        .as_slice::<S>()
-        .unwrap_or_else(|error| panic!("{label}: lane dtype differs: {error}"));
-    assert_eq!(
-        format!("{:?}", free.host_data().unwrap()),
-        format!("{lane_data:?}"),
-        "{label}: value bits"
-    );
-}
-
 /// The element text of an erased tensor of a linalg dtype (`Debug` of a float is its shortest
 /// round-trip text, so equal text is equal bits for every non-NaN value).
 fn element_text(tensor: &Tensor) -> String {
@@ -145,6 +124,25 @@ fn read_of<'a, T: Sample>(view: &TypedTensorView<'a, T>) -> TensorRead<'a> {
     TensorRead::from_view(T::tensor_view(view.clone()))
 }
 
+/// The view's logical elements, materialized as the owned compact tensor the engine is fed.
+fn materialize<T: Sample>(view: &TypedTensorView<'_, T>) -> Tensor {
+    let shape = view.shape().to_vec();
+    let len: usize = shape.iter().product();
+    let mut data = Vec::with_capacity(len);
+    let mut index = vec![0usize; shape.len()];
+    for _ in 0..len {
+        data.push(*view.get(&index).unwrap());
+        for (axis, value) in index.iter_mut().enumerate() {
+            *value += 1;
+            if *value < shape[axis] {
+                break;
+            }
+            *value = 0;
+        }
+    }
+    Tensor::from_typed::<T>(TypedTensor::from_vec_col_major(shape, data).unwrap())
+}
+
 /// Run `body` on one lane of a fresh serial engine with a fresh lane pool.
 fn on_lane<R: Send>(body: impl Fn(&mut dyn Engine) -> R + Sync) -> R {
     let mut engine = CpuEngine::serial();
@@ -155,77 +153,77 @@ fn on_lane<R: Send>(body: impl Fn(&mut dyn Engine) -> R + Sync) -> R {
     out.pop().unwrap()
 }
 
-/// Run `body` on a fresh serial engine's bundle with a fresh caller pool (the `*_with_exec` way).
-fn borrowed<R>(
-    body: impl FnOnce(&mut tcontract_exec::Exec<'_>, &mut BufferPool) -> tenferro_tensor::Result<R>,
-) -> tenferro_tensor::Result<R> {
+// ---------------------------------------------------------------------------------------------
+// Result parity with the owned engine entry
+// ---------------------------------------------------------------------------------------------
+
+fn check_general<T: Sample>(label: &str, view: &TypedTensorView<'_, T>) {
+    let owned = materialize(view);
     let mut engine = CpuEngine::serial();
-    let mut buffers = BufferPool::new();
-    engine.with_exec(|exec| body(exec, &mut buffers))?
-}
 
-// ---------------------------------------------------------------------------------------------
-// Result parity with the `*_with_exec` entries
-// ---------------------------------------------------------------------------------------------
-
-fn check_general<T: Sample>(label: &str, view: &TypedTensorView<'_, T>)
-where
-    T::RealScalar: std::fmt::Debug,
-{
     for full in [false, true] {
-        let (u, s, vh) = borrowed(|e, b| svd_with_exec(e, b, view, full)).unwrap();
-        let (lu, ls, lvh) = on_lane(|lane| {
+        let want = if full {
+            owned
+                .svd_with(&SvdOptions::default().shape(SvdShape::Full), &mut engine)
+                .unwrap()
+        } else {
+            owned.svd(&mut engine).unwrap()
+        };
+        let got = on_lane(|lane| {
             if full {
-                read_of(view).svd_full_read(lane)
+                read_of(view)
+                    .svd_with(&SvdOptions::default().shape(SvdShape::Full), lane)
+                    .unwrap()
             } else {
-                read_of(view).svd_read(lane)
+                read_of(view).svd(lane).unwrap()
             }
-            .unwrap()
         });
         let tag = format!("{label} svd(full={full})");
-        assert_same(&format!("{tag} U"), &u, &lu);
-        assert_same(&format!("{tag} S"), &s, &ls);
-        assert_same(&format!("{tag} Vh"), &vh, &lvh);
+        assert_same_tensors(&format!("{tag} U"), &want.u, &got.u);
+        assert_same_tensors(&format!("{tag} S"), &want.s, &got.s);
+        assert_same_tensors(&format!("{tag} Vh"), &want.vh, &got.vh);
     }
 
-    let s = borrowed(|e, b| svd_values_with_exec(e, b, view)).unwrap();
-    let lane = on_lane(|lane| read_of(view).svdvals_read(lane).unwrap());
-    assert_same(&format!("{label} svdvals"), &s, &lane);
+    let want = owned.svdvals(&mut engine).unwrap();
+    let got = on_lane(|lane| read_of(view).svdvals(lane).unwrap());
+    assert_same_tensors(&format!("{label} svdvals"), &want, &got);
 
-    let (q, r) = borrowed(|e, b| qr_with_exec(e, b, view)).unwrap();
-    let (lq, lr) = on_lane(|lane| read_of(view).qr_read(lane).unwrap());
-    assert_same(&format!("{label} qr Q"), &q, &lq);
-    assert_same(&format!("{label} qr R"), &r, &lr);
+    let want = owned.qr(&mut engine).unwrap();
+    let got = on_lane(|lane| read_of(view).qr(lane).unwrap());
+    assert_same_tensors(&format!("{label} qr Q"), &want.q, &got.q);
+    assert_same_tensors(&format!("{label} qr R"), &want.r, &got.r);
 }
 
-fn check_square<T: Sample>(label: &str, view: &TypedTensorView<'_, T>)
-where
-    T::RealScalar: std::fmt::Debug,
-    T::Complex: std::fmt::Debug,
-{
-    let (values, vectors) = borrowed(|e, b| eigh_with_exec(e, b, view)).unwrap();
-    let (lvalues, lvectors) = on_lane(|lane| read_of(view).eigh_read(lane).unwrap());
-    assert_same(&format!("{label} eigh values"), &values, &lvalues);
-    assert_same(&format!("{label} eigh vectors"), &vectors, &lvectors);
+fn check_square<T: Sample>(label: &str, view: &TypedTensorView<'_, T>) {
+    let owned = materialize(view);
+    let mut engine = CpuEngine::serial();
 
-    let values = borrowed(|e, b| eigh_values_with_exec(e, b, view)).unwrap();
-    let lane = on_lane(|lane| read_of(view).eigvalsh_read(lane).unwrap());
-    assert_same(&format!("{label} eigvalsh"), &values, &lane);
+    let want = owned.eigh(&mut engine).unwrap();
+    let got = on_lane(|lane| read_of(view).eigh(lane).unwrap());
+    assert_same_tensors(&format!("{label} eigh values"), &want.values, &got.values);
+    assert_same_tensors(
+        &format!("{label} eigh vectors"),
+        &want.vectors,
+        &got.vectors,
+    );
 
-    let values = borrowed(|e, b| eig_values_with_exec(e, b, view)).unwrap();
-    let lane = on_lane(|lane| read_of(view).eigvals_read(lane).unwrap());
-    assert_same(&format!("{label} eigvals"), &values, &lane);
+    let want = owned.eigvalsh(&mut engine).unwrap();
+    let got = on_lane(|lane| read_of(view).eigvalsh(lane).unwrap());
+    assert_same_tensors(&format!("{label} eigvalsh"), &want, &got);
+
+    let want = owned.eigvals(&mut engine).unwrap();
+    let got = on_lane(|lane| read_of(view).eigvals(lane).unwrap());
+    assert_same_tensors(&format!("{label} eigvals"), &want, &got);
 }
 
-fn parity_for<T: Sample>(dtype: &str)
-where
-    T::RealScalar: std::fmt::Debug,
-    T::Complex: std::fmt::Debug,
-{
+fn parity_for<T: Sample>(dtype: &str) {
+    // Non-square, compact.
     for shape in [[3, 2], [2, 3]] {
         let a = base::<T>(&shape);
         check_general(&format!("{dtype} {shape:?}"), &a.as_view());
     }
+    // Non-square with arbitrary non-negative strides: every other row of a taller matrix,
+    // transposed, so neither axis is unit-stride.
     let tall = base::<T>(&[6, 3]);
     let strided = tall
         .as_view()
@@ -233,13 +231,17 @@ where
         .unwrap()
         .transpose_view([1, 0])
         .unwrap();
+    assert_eq!(strided.shape(), &[3, 3]);
     check_general(&format!("{dtype} strided"), &strided);
+    // Zero dimensions, including the full SVD's identity factors.
     for shape in [[0, 3], [3, 0], [0, 0]] {
         let a = base::<T>(&shape);
         check_general(&format!("{dtype} empty {shape:?}"), &a.as_view());
     }
+    // Batched `[m, n, b]` read in place: the batch axis is the unit-stride one.
     let stacked = base::<T>(&[2, 4, 3]);
     let batched = stacked.as_view().transpose_view([1, 2, 0]).unwrap();
+    assert_eq!(batched.shape(), &[4, 3, 2]);
     check_general(&format!("{dtype} batched"), &batched);
     let herm = hermitian::<T>(3, 2);
     check_square(&format!("{dtype} batched square"), &herm.as_view());
@@ -250,47 +252,100 @@ where
 }
 
 #[test]
-fn lane_results_are_bit_identical_to_the_with_exec_entries_f64() {
+fn lane_results_are_bit_identical_to_the_engine_entries_f64() {
     parity_for::<f64>("f64");
 }
 
 #[test]
-fn lane_results_are_bit_identical_to_the_with_exec_entries_complex64() {
+fn lane_results_are_bit_identical_to_the_engine_entries_complex64() {
     parity_for::<Complex64>("c64");
 }
 
 #[test]
-fn lane_results_are_bit_identical_to_the_with_exec_entries_single_precision() {
+fn lane_results_are_bit_identical_to_the_engine_entries_single_precision() {
     parity_for::<f32>("f32");
     parity_for::<Complex32>("c32");
 }
 
 #[test]
 fn every_lane_entry_spelling_gives_the_same_bits() {
-    // Owned `Tensor` methods, the read methods and the typed trait are one route on a lane.
+    // Owned `Tensor`, the borrowed read and the typed tensor are one route on a lane.
     let typed = base::<Complex64>(&[5, 4]);
     let owned = owned_of(&typed);
     let herm = hermitian::<Complex64>(4, 1);
     let owned_herm = owned_of(&herm);
+    let mut engine = CpuEngine::serial();
+    let want = owned.svd(&mut engine).unwrap();
     on_lane(|lane| {
-        let (u, s, vh) = borrowed(|e, b| svd_with_exec(e, b, &typed.as_view(), false)).unwrap();
         let from_owned = owned.svd(lane).unwrap();
-        assert_same("owned svd U", &u, &from_owned.0);
-        assert_same("owned svd S", &s, &from_owned.1);
-        assert_same("owned svd Vh", &vh, &from_owned.2);
-        let from_typed = TypedTensorLinalgExt::svd(&typed, lane).unwrap();
-        assert_same("typed svd U", &u, &Tensor::from_typed(from_typed.0));
-        assert_same("typed svd S", &s, &Tensor::from_typed(from_typed.1));
-        assert_same("typed svd Vh", &vh, &Tensor::from_typed(from_typed.2));
-        let full = owned.svd_full(lane).unwrap();
-        assert_eq!(full.0.shape(), &[5, 5]);
+        assert_same_tensors("owned svd U", &want.u, &from_owned.u);
+        assert_same_tensors("owned svd S", &want.s, &from_owned.s);
+        assert_same_tensors("owned svd Vh", &want.vh, &from_owned.vh);
+        let from_typed = typed.svd(lane).unwrap();
+        assert_same_tensors("typed svd U", &want.u, &Tensor::from_typed(from_typed.u));
+        assert_same_tensors("typed svd S", &want.s, &Tensor::from_typed(from_typed.s));
+        assert_same_tensors("typed svd Vh", &want.vh, &Tensor::from_typed(from_typed.vh));
+        let from_view = typed.as_view().svd(lane).unwrap();
+        assert_same_tensors("view svd U", &want.u, &Tensor::from_typed(from_view.u));
+        let full = owned
+            .svd_with(&SvdOptions::default().shape(SvdShape::Full), lane)
+            .unwrap();
+        assert_eq!(full.u.shape(), &[5, 5]);
         assert_eq!(owned.svdvals(lane).unwrap().shape(), &[4]);
-        assert_eq!(owned.qr(lane).unwrap().0.shape(), &[5, 4]);
-        assert_eq!(owned_herm.eigh(lane).unwrap().1.shape(), &[4, 4, 1]);
+        assert_eq!(owned.qr(lane).unwrap().q.shape(), &[5, 4]);
+        assert_eq!(owned_herm.eigh(lane).unwrap().vectors.shape(), &[4, 4, 1]);
         assert_eq!(owned_herm.eigvalsh(lane).unwrap().shape(), &[4, 1]);
         assert_eq!(owned_herm.eigvals(lane).unwrap().shape(), &[4, 1]);
-        let typed_values = TypedTensorLinalgExt::eigvalsh(&herm, lane).unwrap();
+        let typed_values = herm.eigvalsh(lane).unwrap();
         assert_eq!(typed_values.shape(), &[4, 1]);
+    });
+}
+
+fn assert_close(label: &str, gathered: &[f64], direct: &[f64], tol: f64) {
+    assert_eq!(gathered.len(), direct.len(), "{label}: length");
+    for (index, (g, d)) in gathered.iter().zip(direct).enumerate() {
+        assert!(
+            (g - d).abs() <= tol * d.abs().max(1.0),
+            "{label}[{index}]: {g} vs {d}"
+        );
+    }
+}
+
+#[test]
+fn complex_spectra_are_real_typed_and_agree_with_the_values_only_route() {
+    // The factor entries gather the spectrum into the real scalar after the provider writes it in
+    // `T`; the values-only entries have the provider write the real scalar directly. Equality with
+    // the engine cannot see a gather bug (both paths share it), so compare the two routes.
+    let a = base::<Complex64>(&[4, 3, 2]);
+    let h = hermitian::<Complex64>(3, 2);
+    let h32 = hermitian::<Complex32>(3, 1);
+    let r = base::<f32>(&[2, 2]);
+    on_lane(|lane| {
+        let Svd { s, .. } = a.as_view().svd(lane).unwrap();
+        let s: TypedTensor<f64> = s;
+        let direct = a.as_view().svdvals(lane).unwrap();
+        assert_eq!(s.shape(), &[3, 2]);
+        assert_close(
+            "c64 svd spectrum",
+            s.host_data().unwrap(),
+            direct.host_data().unwrap(),
+            1e-12,
+        );
+
+        let eigh = h.as_view().eigh(lane).unwrap();
+        let _: &TypedTensor<Complex64> = &eigh.vectors;
+        let direct = h.as_view().eigvalsh(lane).unwrap();
+        assert_close(
+            "c64 eigh spectrum",
+            eigh.values.host_data().unwrap(),
+            direct.host_data().unwrap(),
+            1e-12,
+        );
+
+        let values: TypedTensor<f32> = h32.as_view().eigh(lane).unwrap().values;
+        drop(values);
+        let values: TypedTensor<Complex32> = r.as_view().eigvals(lane).unwrap();
+        drop(values);
     });
 }
 
@@ -298,43 +353,64 @@ fn every_lane_entry_spelling_gives_the_same_bits() {
 // Error parity
 // ---------------------------------------------------------------------------------------------
 
-fn same_error(label: &str, lane: tenferro_tensor::Error, free: tenferro_tensor::Error) {
-    assert_eq!(lane.kind(), free.kind(), "{label}: kind");
-    assert_eq!(format!("{lane:?}"), format!("{free:?}"), "{label}: variant");
+fn same_error(label: &str, lane: tenferro_tensor::Error, engine: tenferro_tensor::Error) {
+    assert_eq!(lane.kind(), engine.kind(), "{label}: kind");
+    assert_eq!(
+        format!("{lane:?}"),
+        format!("{engine:?}"),
+        "{label}: variant"
+    );
     let payload = |error: &tenferro_tensor::Error| {
         error
             .source()
             .and_then(|source| source.downcast_ref::<tenferro_linalg::Error>())
             .map(|payload| format!("{payload:?}"))
     };
-    assert_eq!(payload(&lane), payload(&free), "{label}: source");
+    assert_eq!(payload(&lane), payload(&engine), "{label}: source");
 }
 
 #[test]
-fn lane_errors_have_the_same_kind_variant_and_source_as_the_with_exec_entries() {
+fn lane_errors_have_the_same_kind_variant_and_source_as_the_engine_entries() {
+    let mut engine = CpuEngine::serial();
+
+    // Rank 1: every entry refuses the rank.
     let vector = base::<f64>(&[3]);
     let v = vector.as_view();
+    let owned = materialize(&v);
     same_error(
         "rank-1 svd",
-        on_lane(|lane| read_of(&v).svd_read(lane).map(|_| ()).unwrap_err()),
-        borrowed(|e, b| svd_with_exec(e, b, &v, false)).unwrap_err(),
+        on_lane(|lane| read_of(&v).svd(lane).map(|_| ()).unwrap_err()),
+        owned.svd(&mut engine).map(|_| ()).unwrap_err(),
+    );
+    same_error(
+        "rank-1 svdvals",
+        on_lane(|lane| read_of(&v).svdvals(lane).map(|_| ()).unwrap_err()),
+        owned.svdvals(&mut engine).map(|_| ()).unwrap_err(),
     );
     same_error(
         "rank-1 qr",
-        on_lane(|lane| read_of(&v).qr_read(lane).map(|_| ()).unwrap_err()),
-        borrowed(|e, b| qr_with_exec(e, b, &v)).unwrap_err(),
+        on_lane(|lane| read_of(&v).qr(lane).map(|_| ()).unwrap_err()),
+        owned.qr(&mut engine).map(|_| ()).unwrap_err(),
     );
+
+    // Non-square: the eigensolvers refuse the shape.
     let rect = base::<f64>(&[3, 2]);
     let r = rect.as_view();
+    let owned = materialize(&r);
     same_error(
         "non-square eigh",
-        on_lane(|lane| read_of(&r).eigh_read(lane).map(|_| ()).unwrap_err()),
-        borrowed(|e, b| eigh_with_exec(e, b, &r)).unwrap_err(),
+        on_lane(|lane| read_of(&r).eigh(lane).map(|_| ()).unwrap_err()),
+        owned.eigh(&mut engine).map(|_| ()).unwrap_err(),
+    );
+    same_error(
+        "non-square eigvalsh",
+        on_lane(|lane| read_of(&r).eigvalsh(lane).map(|_| ()).unwrap_err()),
+        owned.eigvalsh(&mut engine).map(|_| ()).unwrap_err(),
     );
     same_error(
         "non-square eigvals",
-        on_lane(|lane| read_of(&r).eigvals_read(lane).map(|_| ()).unwrap_err()),
-        borrowed(|e, b| eig_values_with_exec(e, b, &r)).unwrap_err(),
+        on_lane(|lane| read_of(&r).eigvals(lane).map(|_| ()).unwrap_err()),
+        owned.eigvals(&mut engine).map(|_| ()).unwrap_err(),
     );
 
     // Non-finite input: the provider's own mapped failure, wherever it reports one.
@@ -342,37 +418,49 @@ fn lane_errors_have_the_same_kind_variant_and_source_as_the_with_exec_entries() 
     data[4] = f64::NAN;
     let nan = TypedTensor::<f64>::from_vec_col_major(vec![3, 3], data).unwrap();
     let n = nan.as_view();
-    let mut failures = 0;
-    let cases = [
+    let owned = materialize(&n);
+    type Outcome = Result<(), tenferro_tensor::Error>;
+    let cases: [(&str, Outcome, Outcome); 6] = [
         (
             "nan svd",
-            on_lane(|lane| read_of(&n).svd_read(lane).map(|_| ())),
-            borrowed(|e, b| svd_with_exec(e, b, &n, false)).map(|_| ()),
+            on_lane(|lane| read_of(&n).svd(lane).map(|_| ())),
+            owned.svd(&mut engine).map(|_| ()),
+        ),
+        (
+            "nan svdvals",
+            on_lane(|lane| read_of(&n).svdvals(lane).map(|_| ())),
+            owned.svdvals(&mut engine).map(|_| ()),
         ),
         (
             "nan qr",
-            on_lane(|lane| read_of(&n).qr_read(lane).map(|_| ())),
-            borrowed(|e, b| qr_with_exec(e, b, &n)).map(|_| ()),
+            on_lane(|lane| read_of(&n).qr(lane).map(|_| ())),
+            owned.qr(&mut engine).map(|_| ()),
         ),
         (
             "nan eigh",
-            on_lane(|lane| read_of(&n).eigh_read(lane).map(|_| ())),
-            borrowed(|e, b| eigh_with_exec(e, b, &n)).map(|_| ()),
+            on_lane(|lane| read_of(&n).eigh(lane).map(|_| ())),
+            owned.eigh(&mut engine).map(|_| ()),
+        ),
+        (
+            "nan eigvalsh",
+            on_lane(|lane| read_of(&n).eigvalsh(lane).map(|_| ())),
+            owned.eigvalsh(&mut engine).map(|_| ()),
         ),
         (
             "nan eigvals",
-            on_lane(|lane| read_of(&n).eigvals_read(lane).map(|_| ())),
-            borrowed(|e, b| eig_values_with_exec(e, b, &n)).map(|_| ()),
+            on_lane(|lane| read_of(&n).eigvals(lane).map(|_| ())),
+            owned.eigvals(&mut engine).map(|_| ()),
         ),
     ];
-    for (label, lane, free) in cases {
-        match (lane, free) {
+    let mut failures = 0;
+    for (label, lane, engine) in cases {
+        match (lane, engine) {
             (Ok(()), Ok(())) => {}
-            (Err(lane), Err(free)) => {
+            (Err(lane), Err(engine)) => {
                 failures += 1;
-                same_error(label, lane, free);
+                same_error(label, lane, engine);
             }
-            (lane, free) => panic!("{label}: lane {lane:?} but free {free:?}"),
+            (lane, engine) => panic!("{label}: lane {lane:?} but engine {engine:?}"),
         }
     }
     assert!(
@@ -387,12 +475,18 @@ fn lane_errors_have_the_same_kind_variant_and_source_as_the_with_exec_entries() 
 
 #[test]
 fn every_other_operation_on_a_lane_is_unsupported() {
-    let a = Tensor::from_typed::<f64>(hermitian::<f64>(3, 1));
     let square = Tensor::from_vec_col_major(vec![3, 3], (0..9).map(f64::from).collect()).unwrap();
+    let a = Tensor::from_typed::<f64>(hermitian::<f64>(3, 1));
     let typed = hermitian::<f64>(3, 1);
     on_lane(|lane| {
         let refused: Vec<(&str, tenferro_tensor::Error)> = vec![
             ("solve", square.solve(&square, lane).unwrap_err()),
+            (
+                "solve_with",
+                square
+                    .solve_with(&square, &SolveOptions::default(), lane)
+                    .unwrap_err(),
+            ),
             ("cholesky", square.cholesky(lane).unwrap_err()),
             ("lu", square.lu(lane).map(|_| ()).unwrap_err()),
             ("eig", square.eig(lane).map(|_| ()).unwrap_err()),
@@ -400,10 +494,14 @@ fn every_other_operation_on_a_lane_is_unsupported() {
             ("det", square.det(lane).unwrap_err()),
             ("pinv", square.pinv(lane).unwrap_err()),
             (
-                "qr_with_options",
-                a.qr_with_options(Default::default(), lane)
-                    .map(|_| ())
-                    .unwrap_err(),
+                "qr_with (non-default gauge)",
+                a.qr_with(
+                    &tenferro_linalg::QrOptions::default()
+                        .gauge(tenferro_linalg::QrGauge::PositiveDiagonal),
+                    lane,
+                )
+                .map(|_| ())
+                .unwrap_err(),
             ),
             (
                 "typed solve",
@@ -426,6 +524,90 @@ fn every_other_operation_on_a_lane_is_unsupported() {
 // Layout (F1): a negative stride is gathered from the lane's pool
 // ---------------------------------------------------------------------------------------------
 
+/// Every lane entry on `view` against the owned engine entry on the materialized logical
+/// matrix, bit for bit. `square` also runs the eigensolvers.
+fn assert_lane_matches_materialized(tag: &str, view: &TypedTensorView<'_, f64>, square: bool) {
+    let owned = materialize(view);
+    let mut engine = CpuEngine::serial();
+    let want = owned.svd(&mut engine).unwrap();
+    let want_full = owned
+        .svd_with(&SvdOptions::default().shape(SvdShape::Full), &mut engine)
+        .unwrap();
+    let want_vals = owned.svdvals(&mut engine).unwrap();
+    let want_qr = owned.qr(&mut engine).unwrap();
+    let want_eigh = square.then(|| owned.eigh(&mut engine).unwrap());
+    let want_eigvalsh = square.then(|| owned.eigvalsh(&mut engine).unwrap());
+    let want_eigvals = square.then(|| owned.eigvals(&mut engine).unwrap());
+    on_lane(|lane| {
+        let got = read_of(view).svd(lane).unwrap();
+        assert_same_tensors(&format!("{tag} svd U"), &want.u, &got.u);
+        assert_same_tensors(&format!("{tag} svd S"), &want.s, &got.s);
+        assert_same_tensors(&format!("{tag} svd Vh"), &want.vh, &got.vh);
+        let got = read_of(view)
+            .svd_with(&SvdOptions::default().shape(SvdShape::Full), lane)
+            .unwrap();
+        assert_same_tensors(&format!("{tag} svd_full U"), &want_full.u, &got.u);
+        assert_same_tensors(&format!("{tag} svd_full Vh"), &want_full.vh, &got.vh);
+        assert_same_tensors(
+            &format!("{tag} svdvals"),
+            &want_vals,
+            &read_of(view).svdvals(lane).unwrap(),
+        );
+        let got = read_of(view).qr(lane).unwrap();
+        assert_same_tensors(&format!("{tag} qr Q"), &want_qr.q, &got.q);
+        assert_same_tensors(&format!("{tag} qr R"), &want_qr.r, &got.r);
+        if let (Some(eigh), Some(eigvalsh), Some(eigvals)) =
+            (&want_eigh, &want_eigvalsh, &want_eigvals)
+        {
+            let got = read_of(view).eigh(lane).unwrap();
+            assert_same_tensors(&format!("{tag} eigh values"), &eigh.values, &got.values);
+            assert_same_tensors(&format!("{tag} eigh vectors"), &eigh.vectors, &got.vectors);
+            assert_same_tensors(
+                &format!("{tag} eigvalsh"),
+                eigvalsh,
+                &read_of(view).eigvalsh(lane).unwrap(),
+            );
+            assert_same_tensors(
+                &format!("{tag} eigvals"),
+                eigvals,
+                &read_of(view).eigvals(lane).unwrap(),
+            );
+        }
+    });
+}
+
+#[test]
+fn a_negative_stride_operand_runs_in_a_lane_like_its_materialized_matrix() {
+    // Replaces `a_negative_stride_is_unsupported_for_every_entry`: the borrowed `*_with_exec`
+    // entries refused a negative stride (and an empty operand that kept one, #2505); the lane
+    // gathers it once into its pool, so every entry accepts it and gives the bits the owned
+    // engine entry gives for the materialized logical matrix.
+    let a = base::<f64>(&[3, 3]);
+    let reversed = a
+        .as_view()
+        .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::all()])
+        .unwrap();
+    assert!(reversed.strides()[0] < 0);
+    let empty_wide = reversed
+        .slice_view(&[
+            StridedSliceSpec::all(),
+            StridedSliceSpec::new(0, Some(0), 1),
+        ])
+        .unwrap();
+    let empty_square = reversed
+        .slice_view(&[
+            StridedSliceSpec::new(0, Some(0), 1),
+            StridedSliceSpec::new(0, Some(0), 1),
+        ])
+        .unwrap();
+    assert_eq!(empty_wide.shape(), &[3, 0]);
+    assert_eq!(empty_square.shape(), &[0, 0]);
+
+    assert_lane_matches_materialized("reversed", &reversed, true);
+    assert_lane_matches_materialized("empty wide", &empty_wide, false);
+    assert_lane_matches_materialized("empty square", &empty_square, true);
+}
+
 #[test]
 fn a_negative_stride_is_gathered_into_the_lane_pool_and_matches_the_engine_route() {
     let a = base::<f64>(&[4, 3]);
@@ -435,13 +617,7 @@ fn a_negative_stride_is_gathered_into_the_lane_pool_and_matches_the_engine_route
         .unwrap();
     assert!(reversed.strides()[0] < 0);
     let compact = base::<f64>(&[4, 3]);
-    let empty = reversed
-        .slice_view(&[
-            StridedSliceSpec::all(),
-            StridedSliceSpec::new(0, Some(0), 1),
-        ])
-        .unwrap();
-    assert_eq!(empty.shape(), &[4, 0]);
+    let input_bytes = 4 * 3 * std::mem::size_of::<f64>();
 
     // Cold lane pools, outputs dropped inside the lane: whatever the pool holds afterwards was
     // taken from it during the call. The reversed input needs one more buffer (the gather
@@ -452,7 +628,7 @@ fn a_negative_stride_is_gathered_into_the_lane_pool_and_matches_the_engine_route
         let mut pools = [BufferPool::new()];
         engine
             .with_lanes(&[1], &mut pools, |_, lane| {
-                drop(read_of(view).qr_read(lane).unwrap());
+                drop(read_of(view).qr(lane).unwrap());
             })
             .unwrap();
         pools[0].stats()
@@ -461,7 +637,7 @@ fn a_negative_stride_is_gathered_into_the_lane_pool_and_matches_the_engine_route
     let reversed_stats = held_after(&reversed);
     assert!(
         reversed_stats.buffers > compact_stats.buffers
-            && reversed_stats.capacity_bytes > compact_stats.capacity_bytes,
+            && reversed_stats.capacity_bytes >= compact_stats.capacity_bytes + input_bytes,
         "the gather buffer must come from and return to the lane pool: \
          compact {compact_stats:?}, reversed {reversed_stats:?}"
     );
@@ -470,60 +646,39 @@ fn a_negative_stride_is_gathered_into_the_lane_pool_and_matches_the_engine_route
         engine_pool_before,
         "the engine's own pool is untouched"
     );
+
+    // Steady state with the gather in play: a second call neither grows the pool nor touches the
+    // engine's.
     let mut pools = [BufferPool::new()];
-    let qr_bits = engine
+    let first = engine
         .with_lanes(&[1], &mut pools, |_, lane| {
-            read_of(&reversed).qr_read(lane).unwrap()
+            read_of(&reversed).qr(lane).unwrap()
         })
         .unwrap()
         .pop()
         .unwrap();
-    // Steady state with the gather in play: a second call neither grows the pool nor touches the
-    // engine's.
+    drop(first);
     let warm = pools[0].stats();
-    drop(qr_bits);
     engine
         .with_lanes(&[1], &mut pools, |_, lane| {
-            drop(read_of(&reversed).qr_read(lane).unwrap());
+            drop(read_of(&reversed).qr(lane).unwrap());
         })
         .unwrap();
     assert!(pools[0].stats().buffers >= warm.buffers);
     assert_eq!(engine.buffer_pool_stats(), engine_pool_before);
     let qr_bits = engine
         .with_lanes(&[1], &mut pools, |_, lane| {
-            read_of(&reversed).qr_read(lane).unwrap()
+            read_of(&reversed).qr(lane).unwrap()
         })
         .unwrap()
         .pop()
         .unwrap();
 
-    // The engine route gathers too, so both factor the same compact copy.
+    // The engine route on the materialized logical matrix gives the same bits.
     let mut cpu = CpuEngine::serial();
-    let (eq, er) = read_of(&reversed).qr_read(&mut cpu).unwrap();
-    assert_same_tensors("reversed qr Q", &eq, &qr_bits.0);
-    assert_same_tensors("reversed qr R", &er, &qr_bits.1);
-
-    // Every lane entry accepts the reversed view and the empty one, like the engine entry.
-    on_lane(|lane| {
-        let mut cpu = CpuEngine::serial();
-        for (tag, view) in [("reversed", &reversed), ("empty", &empty)] {
-            assert_same_tensors(
-                &format!("{tag} svdvals"),
-                &read_of(view).svdvals_read(&mut cpu).unwrap(),
-                &read_of(view).svdvals_read(lane).unwrap(),
-            );
-            assert_same_tensors(
-                &format!("{tag} svd S"),
-                &read_of(view).svd_read(&mut cpu).unwrap().1,
-                &read_of(view).svd_read(lane).unwrap().1,
-            );
-            assert_same_tensors(
-                &format!("{tag} svd_full U"),
-                &read_of(view).svd_full_read(&mut cpu).unwrap().0,
-                &read_of(view).svd_full_read(lane).unwrap().0,
-            );
-        }
-    });
+    let want = materialize(&reversed).qr(&mut cpu).unwrap();
+    assert_same_tensors("reversed qr Q", &want.q, &qr_bits.q);
+    assert_same_tensors("reversed qr R", &want.r, &qr_bits.r);
 }
 
 #[test]
@@ -538,22 +693,23 @@ fn a_negative_stride_batch_and_square_operand_run_in_a_lane() {
         ])
         .unwrap();
     assert!(reversed.strides()[0] < 0);
+    let owned = materialize(&reversed);
     let mut cpu = CpuEngine::serial();
-    let want = read_of(&reversed).eigvalsh_read(&mut cpu).unwrap();
-    let want_vals = read_of(&reversed).eigvals_read(&mut cpu).unwrap();
+    let want = owned.eigvalsh(&mut cpu).unwrap();
+    let want_vals = owned.eigvals(&mut cpu).unwrap();
     on_lane(|lane| {
         assert_same_tensors(
             "eigvalsh",
             &want,
-            &read_of(&reversed).eigvalsh_read(lane).unwrap(),
+            &read_of(&reversed).eigvalsh(lane).unwrap(),
         );
         assert_same_tensors(
             "eigvals",
             &want_vals,
-            &read_of(&reversed).eigvals_read(lane).unwrap(),
+            &read_of(&reversed).eigvals(lane).unwrap(),
         );
         assert_eq!(
-            read_of(&reversed).eigh_read(lane).unwrap().1.shape(),
+            read_of(&reversed).eigh(lane).unwrap().vectors.shape(),
             &[3, 3, 2]
         );
     });
@@ -572,40 +728,40 @@ fn svd_and_eigh_gauges_on_a_lane_match_the_engine_route() {
     let svd_options = SvdOptions::default().gauge(SvdGauge::CanonicalPivot);
     let eigh_options = EighOptions::default().gauge(EighGauge::CanonicalPivot);
     let mut cpu = CpuEngine::serial();
-    let want_svd = owned.svd_with_options(svd_options, &mut cpu).unwrap();
+    let want_svd = owned.svd_with(&svd_options, &mut cpu).unwrap();
     let want_svd_read = read_of(&a.as_view())
-        .svd_with_options_read(svd_options, &mut cpu)
+        .svd_with(&svd_options, &mut cpu)
         .unwrap();
-    let want_eigh = owned_herm
-        .eigh_with_options(eigh_options, &mut cpu)
-        .unwrap();
+    let want_eigh = owned_herm.eigh_with(&eigh_options, &mut cpu).unwrap();
     let want_eigh_read = read_of(&herm.as_view())
-        .eigh_with_options_read(eigh_options, &mut cpu)
+        .eigh_with(&eigh_options, &mut cpu)
         .unwrap();
     let raw = owned.svd(&mut cpu).unwrap();
     // The fixture must make the gauge visible, or this test checks nothing.
-    assert_ne!(element_text(&raw.0), element_text(&want_svd.0));
+    assert_ne!(element_text(&raw.u), element_text(&want_svd.u));
 
     on_lane(|lane| {
-        let got = owned.svd_with_options(svd_options, lane).unwrap();
-        assert_same_tensors("svd_with_options U", &want_svd.0, &got.0);
-        assert_same_tensors("svd_with_options S", &want_svd.1, &got.1);
-        assert_same_tensors("svd_with_options Vh", &want_svd.2, &got.2);
-        let got = read_of(&a.as_view())
-            .svd_with_options_read(svd_options, lane)
-            .unwrap();
-        assert_same_tensors("svd_with_options_read U", &want_svd_read.0, &got.0);
-        assert_same_tensors("svd_with_options_read Vh", &want_svd_read.2, &got.2);
-        let got = owned_herm.eigh_with_options(eigh_options, lane).unwrap();
-        assert_same_tensors("eigh_with_options values", &want_eigh.0, &got.0);
-        assert_same_tensors("eigh_with_options vectors", &want_eigh.1, &got.1);
+        let got = owned.svd_with(&svd_options, lane).unwrap();
+        assert_same_tensors("svd_with U", &want_svd.u, &got.u);
+        assert_same_tensors("svd_with S", &want_svd.s, &got.s);
+        assert_same_tensors("svd_with Vh", &want_svd.vh, &got.vh);
+        let got = read_of(&a.as_view()).svd_with(&svd_options, lane).unwrap();
+        assert_same_tensors("svd_with (read) U", &want_svd_read.u, &got.u);
+        assert_same_tensors("svd_with (read) Vh", &want_svd_read.vh, &got.vh);
+        let got = owned_herm.eigh_with(&eigh_options, lane).unwrap();
+        assert_same_tensors("eigh_with values", &want_eigh.values, &got.values);
+        assert_same_tensors("eigh_with vectors", &want_eigh.vectors, &got.vectors);
         let got = read_of(&herm.as_view())
-            .eigh_with_options_read(eigh_options, lane)
+            .eigh_with(&eigh_options, lane)
             .unwrap();
-        assert_same_tensors("eigh_with_options_read vectors", &want_eigh_read.1, &got.1);
+        assert_same_tensors(
+            "eigh_with (read) vectors",
+            &want_eigh_read.vectors,
+            &got.vectors,
+        );
         // A default-gauge option set is the plain entry.
-        let plain = owned.svd_with_options(SvdOptions::default(), lane).unwrap();
-        assert_same_tensors("default-gauge svd U", &raw.0, &plain.0);
+        let plain = owned.svd_with(&SvdOptions::default(), lane).unwrap();
+        assert_same_tensors("default-gauge svd U", &raw.u, &plain.u);
     });
 }
 
@@ -616,13 +772,13 @@ fn an_invalid_derivative_eps_fails_on_a_lane_like_on_the_engine_route() {
     let bad_svd = SvdOptions::default().derivative_eps(-1.0);
     let bad_eigh = EighOptions::default().derivative_eps(f64::NAN);
     let mut cpu = CpuEngine::serial();
-    let want_svd = a.svd_with_options(bad_svd, &mut cpu).unwrap_err();
-    let want_eigh = herm.eigh_with_options(bad_eigh, &mut cpu).unwrap_err();
+    let want_svd = a.svd_with(&bad_svd, &mut cpu).unwrap_err();
+    let want_eigh = herm.eigh_with(&bad_eigh, &mut cpu).unwrap_err();
     on_lane(|lane| {
-        let got = a.svd_with_options(bad_svd, lane).unwrap_err();
+        let got = a.svd_with(&bad_svd, lane).unwrap_err();
         assert_eq!(got.kind(), want_svd.kind());
         assert_eq!(format!("{got:?}"), format!("{want_svd:?}"));
-        let got = herm.eigh_with_options(bad_eigh, lane).unwrap_err();
+        let got = herm.eigh_with(&bad_eigh, lane).unwrap_err();
         assert_eq!(got.kind(), want_eigh.kind());
         assert_eq!(format!("{got:?}"), format!("{want_eigh:?}"));
     });
@@ -636,13 +792,17 @@ fn run_all(lane: &mut dyn Engine) {
     let a = base::<Complex64>(&[4, 3, 2]);
     let h = hermitian::<Complex64>(3, 2);
     let (a, h) = (a.as_view(), h.as_view());
-    drop(read_of(&a).svd_read(lane).unwrap());
-    drop(read_of(&a).svd_full_read(lane).unwrap());
-    drop(read_of(&a).svdvals_read(lane).unwrap());
-    drop(read_of(&a).qr_read(lane).unwrap());
-    drop(read_of(&h).eigh_read(lane).unwrap());
-    drop(read_of(&h).eigvalsh_read(lane).unwrap());
-    drop(read_of(&h).eigvals_read(lane).unwrap());
+    drop(read_of(&a).svd(lane).unwrap());
+    drop(
+        read_of(&a)
+            .svd_with(&SvdOptions::default().shape(SvdShape::Full), lane)
+            .unwrap(),
+    );
+    drop(read_of(&a).svdvals(lane).unwrap());
+    drop(read_of(&a).qr(lane).unwrap());
+    drop(read_of(&h).eigh(lane).unwrap());
+    drop(read_of(&h).eigvalsh(lane).unwrap());
+    drop(read_of(&h).eigvals(lane).unwrap());
 }
 
 #[test]
@@ -650,8 +810,10 @@ fn every_buffer_comes_from_the_lane_pool_and_the_engine_pool_is_untouched() {
     let mut host = CpuEngine::serial();
     let engine_before = host.buffer_pool_stats();
     let mut pools = [BufferPool::new()];
+    assert!(pools[0].is_empty());
     host.with_lanes(&[1], &mut pools, |_, lane| run_all(lane))
         .unwrap();
+    // The outputs and the transient spectra returned to the lane's pool, not the engine's.
     let warm = pools[0].stats();
     assert!(warm.buffers > 0, "outputs recycle into the lane pool");
     assert_eq!(
@@ -670,12 +832,62 @@ fn every_buffer_comes_from_the_lane_pool_and_the_engine_pool_is_untouched() {
 }
 
 #[test]
+fn two_lanes_with_two_pools_do_not_share_storage() {
+    let mut first_engine = CpuEngine::serial();
+    let mut second_engine = CpuEngine::serial();
+    let mut first_pools = [BufferPool::new()];
+    let mut second_pools = [BufferPool::new()];
+    let a = base::<f64>(&[4, 4]);
+
+    let first = first_engine
+        .with_lanes(&[1], &mut first_pools, |_, lane| {
+            a.as_view().svd(lane).unwrap()
+        })
+        .unwrap()
+        .pop()
+        .unwrap();
+    let second = second_engine
+        .with_lanes(&[1], &mut second_pools, |_, lane| {
+            a.as_view().svd(lane).unwrap()
+        })
+        .unwrap()
+        .pop()
+        .unwrap();
+
+    // Same values, distinct storage.
+    assert_eq!(first.s.host_data().unwrap(), second.s.host_data().unwrap());
+    for (x, y) in [(&first.u, &second.u), (&first.vh, &second.vh)] {
+        assert_ne!(
+            x.host_data().unwrap().as_ptr(),
+            y.host_data().unwrap().as_ptr(),
+            "two pools handed out the same storage"
+        );
+    }
+    assert_ne!(
+        first.s.host_data().unwrap().as_ptr(),
+        second.s.host_data().unwrap().as_ptr()
+    );
+
+    // Dropping the first lane's outputs fills only the first pool.
+    let second_before = second_pools[0].stats();
+    drop(first);
+    assert!(first_pools[0].stats().buffers > 0);
+    assert_eq!(second_pools[0].stats(), second_before);
+
+    // And the second lane's outputs return only to the second pool.
+    let first_before = first_pools[0].stats();
+    drop(second);
+    assert_eq!(first_pools[0].stats(), first_before);
+    assert!(second_pools[0].stats().buffers > second_before.buffers);
+}
+
+#[test]
 fn two_lanes_with_two_pools_run_concurrent_factorizations_with_the_reference_bits() {
     let a = base::<Complex64>(&[24, 18]);
     let h = hermitian::<Complex64>(16, 3);
-    let (want_u, want_s, want_vh) =
-        borrowed(|e, b| svd_with_exec(e, b, &a.as_view(), false)).unwrap();
-    let want_vals = borrowed(|e, b| eigh_values_with_exec(e, b, &h.as_view())).unwrap();
+    let mut reference = CpuEngine::serial();
+    let want = owned_of(&a).svd(&mut reference).unwrap();
+    let want_vals = owned_of(&h).eigvalsh(&mut reference).unwrap();
 
     let pool = tenferro_cpu::Pool::builder()
         .threads(4)
@@ -691,12 +903,9 @@ fn two_lanes_with_two_pools_run_concurrent_factorizations_with_the_reference_bit
             let out = host
                 .with_lanes(&[2, 2], &mut pools, |lane, engine| {
                     if lane == 0 {
-                        (Some(read_of(&a.as_view()).svd_read(engine).unwrap()), None)
+                        (Some(read_of(&a.as_view()).svd(engine).unwrap()), None)
                     } else {
-                        (
-                            None,
-                            Some(read_of(&h.as_view()).eigvalsh_read(engine).unwrap()),
-                        )
+                        (None, Some(read_of(&h.as_view()).eigvalsh(engine).unwrap()))
                     }
                 })
                 .unwrap();
@@ -706,10 +915,10 @@ fn two_lanes_with_two_pools_run_concurrent_factorizations_with_the_reference_bit
             .recv_timeout(std::time::Duration::from_secs(60))
             .expect("no result within 60 s: deadlock or lost lane");
         let svd = out[0].0.as_ref().unwrap();
-        assert_same("lane svd U", &want_u, &svd.0);
-        assert_same("lane svd S", &want_s, &svd.1);
-        assert_same("lane svd Vh", &want_vh, &svd.2);
-        assert_same("lane eigvalsh", &want_vals, out[1].1.as_ref().unwrap());
+        assert_same_tensors("lane svd U", &want.u, &svd.u);
+        assert_same_tensors("lane svd S", &want.s, &svd.s);
+        assert_same_tensors("lane svd Vh", &want.vh, &svd.vh);
+        assert_same_tensors("lane eigvalsh", &want_vals, out[1].1.as_ref().unwrap());
     });
     assert!(pools.iter().all(|p| p.stats().buffers > 0));
     assert_eq!(host.buffer_pool_stats().buffers, 0);

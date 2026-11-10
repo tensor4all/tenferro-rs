@@ -382,3 +382,82 @@ fn docs_sync_replaces_between_markers_only_and_is_idempotent() {
     assert!(appended.ends_with("<!-- api-ops:dummy:end -->\n"));
     assert_eq!(api_docs_sync(&appended), appended);
 }
+
+/// A layer with `cfg: all();` is generated; a layer with `cfg: any();` is not.
+mod gated {
+    pub struct On;
+    #[allow(dead_code)]
+    pub struct Off;
+    pub type Result<T> = ::std::result::Result<T, String>;
+    #[derive(Default)]
+    pub struct PingOptions;
+
+    pub mod forward_on {
+        use super::*;
+        pub fn ping(_s: &mut On, _a: (), _o: &PingOptions) -> Result<u32> {
+            Ok(7)
+        }
+    }
+
+    // `not(any())` is always true. If the macro generated `OffOps` despite
+    // `cfg: any();`, this definition would be a duplicate and fail to compile.
+    #[cfg(not(any()))]
+    #[allow(dead_code)]
+    pub trait OffOps {}
+
+    tenferro_extension_macros::api_ops! {
+        family: gated;
+
+        layer on {
+            trait_doc: "Enabled layer.";
+            trait_def: pub trait OnOps;
+            impl_def: impl OnOps for On;
+            method_where: [];
+            receiver: session;
+            first_arg: ();
+            tensor_arg: ();
+            result: Result;
+            types { V = u32 }
+            forward: self::forward_on;
+            cfg: all();
+        }
+        layer off {
+            trait_doc: "Disabled layer; its forward module does not exist.";
+            trait_def: pub trait OffOps;
+            impl_def: impl OffOps for Off;
+            method_where: [];
+            receiver: session;
+            first_arg: ();
+            tensor_arg: ();
+            result: Result;
+            types { V = u32 }
+            forward: self::forward_missing;
+            cfg: any();
+        }
+        op ping {
+            summary: "Ping.";
+            operands: (a);
+            options: PingOptions;
+            output: V;
+            dtypes: "any";
+            layers: [on, off];
+            into: [];
+            layout: "None.";
+            errors: [Validation];
+            omissions: [];
+            example on: "let _ = 1;";
+            example off: "let _ = 2;";
+        }
+    }
+}
+
+#[test]
+fn cfg_key_gates_generated_trait_and_impl() {
+    use gated::OnOps;
+    let mut s = gated::On;
+    assert_eq!(s.ping(()).unwrap(), 7);
+    assert_eq!(s.ping_with((), &gated::PingOptions).unwrap(), 7);
+    // Metadata is unaffected by `cfg`.
+    assert_eq!(gated::API_LAYERS, &[("on", "OnOps"), ("off", "OffOps")]);
+    assert_eq!(gated::API_OPS[0].layers, ["on", "off"]);
+}

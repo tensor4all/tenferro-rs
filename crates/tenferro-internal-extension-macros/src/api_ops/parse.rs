@@ -132,6 +132,7 @@ fn parse_layer(input: ParseStream<'_>) -> syn::Result<Layer> {
     let mut result = None;
     let mut types = None;
     let mut forward = None;
+    let mut cfg = None;
     let mut any_other = false;
 
     while !input.is_empty() {
@@ -188,6 +189,7 @@ fn parse_layer(input: ParseStream<'_>) -> syn::Result<Layer> {
             "dest" => set(&mut dest, &key, input.parse::<Type>()?)?,
             "result" => set(&mut result, &key, input.parse::<Path>()?)?,
             "forward" => set(&mut forward, &key, input.parse::<Path>()?)?,
+            "cfg" => set(&mut cfg, &key, tokens_until_semi(input, &key)?)?,
             _ => {
                 return Err(syn::Error::new_spanned(
                     &key,
@@ -234,6 +236,7 @@ fn parse_layer(input: ParseStream<'_>) -> syn::Result<Layer> {
             result: need(result, &name, "result")?,
             types: types.unwrap_or_default(),
             forward: need(forward, &name, "forward")?,
+            cfg,
         })),
         name,
     })

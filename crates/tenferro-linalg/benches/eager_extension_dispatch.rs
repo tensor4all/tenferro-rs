@@ -14,11 +14,12 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use tenferro_linalg::{Eigh, Svd};
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerSessionLinalgExt, EagerTensorLinalgExt};
+use tenferro_linalg::EagerLinalgOps;
 use tenferro_tensor::Tensor;
 
 fn runtime() -> Arc<EagerRuntime> {
@@ -93,8 +94,10 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let b = leaf(&rt, tracked, tensor(vec![2, 1], vec![1.0, 1.0]));
         group.bench_function(BenchmarkId::new("solve_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let out = black_box(&a)
-                    .solve(&mut engine, black_box(&b))
+                let out = rt
+                    .with_eager_session(&mut engine, |session| {
+                        session.solve(black_box(&a), black_box(&b))
+                    })
                     .expect("solve");
                 consume(&mut engine, out);
             });
@@ -106,7 +109,7 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let a = leaf(&rt, tracked, mat2(1.0, 0.0, 0.0, 2.0));
         group.bench_function(BenchmarkId::new("svd_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let (u, _s, _vt) = rt
+                let Svd { u, s: _s, vh: _vt } = rt
                     .with_eager_session(&mut engine, |session| session.svd(black_box(&a)))
                     .expect("svd");
                 consume(&mut engine, u);
@@ -119,7 +122,10 @@ fn bench_group(c: &mut Criterion, tracked: bool, label: &str) {
         let a = leaf(&rt, tracked, mat2(4.0, 1.0, 1.0, 3.0));
         group.bench_function(BenchmarkId::new("eigh_2x2", "f64"), |bench| {
             bench.iter(|| {
-                let (w, _v) = rt
+                let Eigh {
+                    values: w,
+                    vectors: _v,
+                } = rt
                     .with_eager_session(&mut engine, |session| session.eigh(black_box(&a)))
                     .expect("eigh");
                 consume(&mut engine, w);

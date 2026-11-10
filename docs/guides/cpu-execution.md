@@ -158,15 +158,50 @@ one-thread vendor call.
 
 ### Lanes and the vendor provider
 
-The two providers differ in what a lane can call. The native provider has a
-per-context entry: inside `engine.with_exec(|exec| ..)`, a caller forks the
-bundle's token into lanes, builds each lane's bundle with
-`tcontract_exec::Exec::from_token`, and runs a cpueinsum or tlinalg plan in
-each lane on that lane's share of the budget. For factorizations, the
-`tenferro_linalg::*_with_exec` entries (`svd`, `svd_values`, `qr`, `eigh`,
-`eigh_values`, `eig_values`) take that lane bundle and a lane-owned
-`BufferPool` and return typed tensors, with the same results as the engine
-entries. The vendor provider has no such entry, and it will not get one:
+The two providers differ in what a lane can call. The native provider runs a
+factorization on a share of the engine's budget:
+`CpuEngine::with_lanes(&shares, &mut pools, |index, lane| ..)` splits the
+engine's thread budget into one lane per entry of `shares` (the shares must be
+nonzero and sum to at most the budget), pairs each lane with a caller-owned
+`BufferPool`, and runs the closure once per lane, concurrently. The `lane` it
+receives is a `&mut dyn Engine`, so the ordinary `tenferro_linalg::LinalgOps`
+grammar runs on it unchanged.
+
+```rust
+use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine, Pool};
+use tenferro_linalg::{LinalgOps, Svd};
+use tenferro_tensor::Tensor;
+
+let mut engine = CpuEngine::new(Pool::builder().threads(2).build()?);
+// One pool per lane, owned by the caller and reused across calls.
+let mut pools = [BufferPool::new(), BufferPool::new()];
+let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 1.0])?;
+let b = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 1.0])?;
+let results = engine.with_lanes(&[1, 1], &mut pools, |index, lane| {
+    let input = if index == 0 { &a } else { &b };
+    input.svd(lane)
+})?;
+for result in results {
+    let Svd { s, .. } = result?;
+    assert_eq!(s.shape(), &[2]);
+}
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Only `svd`, `svdvals`, `qr`, `eigh`, `eigvalsh` and `eigvals` run in a lane.
+Every other operation, linalg or not, returns `Unsupported` on a lane; use a
+`CpuEngine` for those. A lane draws every output and the provider workspace
+from its own pool, and the engine's own pool is untouched. Reusing the same
+pools across calls is what makes the steady state allocation-free: a cold first
+call allocates, later calls with the same shapes make no host allocation for
+operands of rank 8 or less. A negative-stride input is gathered once into a
+buffer taken from the lane's pool and handed back afterwards, so the zero
+steady-state allocation promise holds only for inputs without negative strides.
+The results are bit-identical to the engine entries on the same logical matrix.
+
+The vendor provider has no lane entry, and it will not get one. A `blas`
+build has no lane factorization bodies, so there every lane operation returns
+`Unsupported`, for the reasons below:
 
 - **A vendor call takes the whole engine and the vendor's own threads.** The
   GEMM entries of a `blas` build are the engine's operations
