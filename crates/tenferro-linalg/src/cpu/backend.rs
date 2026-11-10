@@ -468,6 +468,29 @@ impl LinalgBackend for CpuEngine {
         })
     }
 
+    fn svd_read_with_policy(
+        &mut self,
+        input: TensorRead<'_>,
+        policy: tenferro_tensor::MaterializationPolicy,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        if policy == tenferro_tensor::MaterializationPolicy::Forbid {
+            // Same predicate `svd_read` branches on: the native build reads a
+            // rank-2 non-negative-stride view in place; everything else is
+            // gathered by `with_owned_layout` unless already owned-layout.
+            // Checked before the pool is entered, so a refusal has no side effect.
+            let host = input.clone().try_host("svd")?;
+            ensure_supported_linalg_dtype("svd", host.dtype())?;
+            #[cfg(feature = "native")]
+            let direct = faer_strided_host_ok(&host) || host.is_owned_layout();
+            #[cfg(not(feature = "native"))]
+            let direct = host.is_owned_layout();
+            if !direct {
+                return Err(Error::input_materialization_forbidden("svd", 0));
+            }
+        }
+        self.svd_read(input)
+    }
+
     fn svd_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         let input = input.try_host("svd_values")?;
         ensure_supported_linalg_dtype("svd_values", input.dtype())?;

@@ -365,6 +365,30 @@ pub trait LinalgBackend: Engine {
         ))
     }
 
+    /// Policy-aware [`Self::svd_read`] (prototype hook for tenferro-rs#2552).
+    ///
+    /// `Allow` is exactly [`Self::svd_read`]. `Forbid` must refuse with
+    /// [`tenferro_tensor::Error::InputMaterializationForbidden`] (operand 0)
+    /// before any pool or output side effect when the provider would gather the
+    /// input. The default implementation cannot promise that, so it refuses
+    /// `Forbid` as unsupported.
+    #[doc(hidden)]
+    fn svd_read_with_policy(
+        &mut self,
+        input: TensorRead<'_>,
+        policy: tenferro_tensor::MaterializationPolicy,
+    ) -> tenferro_tensor::Result<Vec<Tensor>> {
+        match policy {
+            tenferro_tensor::MaterializationPolicy::Allow => self.svd_read(input),
+            tenferro_tensor::MaterializationPolicy::Forbid => {
+                Err(tenferro_tensor::Error::unsupported(
+                    "svd",
+                    "backend cannot enforce MaterializationPolicy::Forbid",
+                ))
+            }
+        }
+    }
+
     /// Compute public SVD outputs `(U, S, Vt)` from a tensor read target with
     /// explicit options.
     ///

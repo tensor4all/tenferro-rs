@@ -1812,6 +1812,45 @@ impl ConcreteEinsumPlan {
             .map_err(Error::from)
     }
 
+    /// Policy-aware [`Self::execute_read`] (prototype hook for tenferro-rs#2552).
+    ///
+    /// Validates every operand, then applies `policy`, before any cache lookup
+    /// or kernel work. The route taken is identical under both policies.
+    #[doc(hidden)]
+    pub fn execute_read_with_policy<'a, I>(
+        &self,
+        inputs: I,
+        session: &mut dyn Engine,
+        policy: tenferro_tensor::MaterializationPolicy,
+    ) -> Result<Tensor>
+    where
+        I: AsRef<[TensorRead<'a>]>,
+    {
+        let inputs = inputs.as_ref();
+        self.validate_read_inputs(inputs, PLAN_EXECUTE_OP)?;
+        crate::cpu_concrete::check_input_materialization(session, inputs, policy, PLAN_EXECUTE_OP)?;
+        self.execute_read(inputs, session)
+    }
+
+    /// Policy-aware [`Self::execute_read_into`]; `out` is untouched on refusal.
+    #[doc(hidden)]
+    pub fn execute_read_into_with_policy<'a, I>(
+        &self,
+        inputs: I,
+        session: &mut dyn Engine,
+        policy: tenferro_tensor::MaterializationPolicy,
+        out: TensorWrite<'_>,
+    ) -> Result<()>
+    where
+        I: AsRef<[TensorRead<'a>]>,
+    {
+        let inputs = inputs.as_ref();
+        self.validate_read_inputs(inputs, PLAN_EXECUTE_OP)?;
+        self.validate_cached_output(&out, PLAN_EXECUTE_OP)?;
+        crate::cpu_concrete::check_input_materialization(session, inputs, policy, PLAN_EXECUTE_OP)?;
+        self.execute_read_into(inputs, session, out)
+    }
+
     /// Execute this plan on read-only inputs with scaled output accumulation
     /// inside a borrowed backend session.
     ///

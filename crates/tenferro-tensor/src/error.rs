@@ -93,10 +93,42 @@ pub enum Error {
         #[source]
         source: BoxError,
     },
+    /// `MaterializationPolicy::Forbid` refused an operand whose layout the
+    /// selected provider cannot consume without an input-materializing copy.
+    ///
+    /// `input` is the zero-based operand index. The display text names the
+    /// remediation (pass a compact column-major tensor, or use `Allow`).
+    #[error("{op}: input {input} would need an implicit layout copy, which the call forbids; pass a compact column-major tensor or use MaterializationPolicy::Allow")]
+    InputMaterializationForbidden { op: &'static str, input: usize },
     #[error("missing runtime value for slot {slot}")]
     MissingValue { slot: usize },
     #[error("internal tensor error: {0}")]
     Internal(String),
+}
+
+/// Per-call constraint on implicit input-layout materialization.
+///
+/// An input copy is "materialization" iff it would not have happened had the
+/// same operand arrived in the layout the selected provider consumes directly
+/// (same placement and dtype). Workspace or packing done for every layout is
+/// not materialization. The policy never changes which kernel is selected:
+/// `Forbid` refuses with [`Error::InputMaterializationForbidden`] instead of
+/// rerouting.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::MaterializationPolicy;
+///
+/// assert_eq!(MaterializationPolicy::default(), MaterializationPolicy::Allow);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MaterializationPolicy {
+    /// Provider may normalize the input layout once (default).
+    #[default]
+    Allow,
+    /// Refuse any implicit input-layout materialization before side effects.
+    Forbid,
 }
 
 /// Owns the original tensor when a consuming representation reinterpretation
@@ -378,6 +410,25 @@ impl Error {
         }
     }
 
+    /// Construct the error for an input-layout copy refused by
+    /// [`MaterializationPolicy::Forbid`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Error, ErrorKind};
+    ///
+    /// let error = Error::input_materialization_forbidden("svd", 0);
+    /// assert!(matches!(
+    ///     error,
+    ///     Error::InputMaterializationForbidden { op: "svd", input: 0 }
+    /// ));
+    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// ```
+    pub fn input_materialization_forbidden(op: &'static str, input: usize) -> Self {
+        Self::InputMaterializationForbidden { op, input }
+    }
+
     /// Construct a structured unsupported-operation error.
     ///
     /// Use this for an operation or execution surface that is not implemented
@@ -585,7 +636,8 @@ impl Error {
             Self::Validation { source, .. } => ErrorKind::Validation(source.kind()),
             Self::UnsupportedDTypeConversion { .. }
             | Self::UnsupportedDType { .. }
-            | Self::Unsupported { .. } => ErrorKind::Unsupported,
+            | Self::Unsupported { .. }
+            | Self::InputMaterializationForbidden { .. } => ErrorKind::Unsupported,
             Self::BackendFailure { .. } | Self::BackendSource { .. } => ErrorKind::BackendFailure,
             Self::IoSource { .. } => ErrorKind::Io,
             Self::RuntimeState { .. }

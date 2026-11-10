@@ -107,7 +107,7 @@ pub use config::{
     ScatterConfig, SliceConfig,
 };
 pub use erased_host::ErasedHostTensor;
-pub use error::{BoxError, Error, ReinterpretError, Result};
+pub use error::{BoxError, Error, MaterializationPolicy, ReinterpretError, Result};
 pub use native_engine::NativeSessionRef;
 pub use scalar_set::ScalarSet;
 

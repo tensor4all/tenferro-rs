@@ -2672,6 +2672,22 @@ pub(crate) fn with_linalg_backend<X>(
     ))
 }
 
+/// Policy-aware borrowed SVD `(U, S, Vt)` (prototype hook for tenferro-rs#2552).
+///
+/// `Allow` behaves exactly like [`TensorReadLinalgExt::svd_read`]. `Forbid`
+/// refuses with `Error::InputMaterializationForbidden { op: "svd", input: 0 }`
+/// before the buffer pool is entered when the provider would gather the input.
+#[doc(hidden)]
+pub fn svd_read_with_policy(
+    input: TensorRead<'_>,
+    session: &mut dyn Engine,
+    policy: tenferro_tensor::MaterializationPolicy,
+) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)> {
+    with_linalg_backend(session, "svd_read", |backend| {
+        three(backend.svd_read_with_policy(input, policy)?, "svd_read")
+    })
+}
+
 /// The empty-determinant shortcut, taken after the backend's own input-residency boundary.
 ///
 /// An empty square input needs no factorization, but it still crosses the same boundary the LU

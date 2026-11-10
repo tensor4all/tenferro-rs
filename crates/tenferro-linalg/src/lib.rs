@@ -197,6 +197,8 @@ pub use extension::{
 };
 pub use householder::HouseholderQr;
 pub use rank_revealing_qr::{RankRevealingQrOptions, RankRevealingQrResult};
+#[doc(hidden)]
+pub use tensor_ext::svd_read_with_policy;
 pub use tensor_ext::{
     LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TypedEig, TypedFullPivLu, TypedLu,
     TypedRankRevealingQrResult, TypedSvd, TypedTensorLinalgExt,

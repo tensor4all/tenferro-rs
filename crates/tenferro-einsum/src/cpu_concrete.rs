@@ -308,6 +308,65 @@ fn run_into<T: Scalar>(
     )
 }
 
+/// Would this operand need an input-materializing copy on the CPU provider?
+///
+/// Input materialization is a copy that would not happen had the operand
+/// arrived in the layout the provider consumes directly. On the native build
+/// `cpueinsum` reads arbitrary strided views and its packing is workspace done
+/// for every layout, so no operand is ever materialized because of its layout.
+/// The eager fallback (binary and non-float shapes) copies unconditionally
+/// through `to_contiguous_read`, which is likewise layout independent.
+#[cfg(feature = "native")]
+fn operand_materializes(_index: usize, _input: &TensorRead<'_>) -> Option<bool> {
+    Some(false)
+}
+
+/// The BLAS build packs whole operands whose layout its steps cannot consume
+/// (`cpueinsum-blas` `BlasStep::packed()`); that predicate is not wired here, so
+/// the answer is unknown. Not verified in this prototype.
+#[cfg(not(feature = "native"))]
+fn operand_materializes(_index: usize, _input: &TensorRead<'_>) -> Option<bool> {
+    None
+}
+
+/// Policy hook: refuse under `Forbid` before any cache lookup or output write.
+///
+/// Every operand is examined before any is normalized. Dispatch is not
+/// consulted or changed: the same route runs under both policies.
+pub(crate) fn check_input_materialization(
+    session: &mut dyn Engine,
+    inputs: &[TensorRead<'_>],
+    policy: tenferro_tensor::MaterializationPolicy,
+    op: &'static str,
+) -> tenferro_tensor::Result<()> {
+    if policy == tenferro_tensor::MaterializationPolicy::Allow {
+        return Ok(());
+    }
+    if with_cpu_engine(session, |_| ()).is_none() {
+        return Err(tenferro_tensor::Error::unsupported(
+            op,
+            "MaterializationPolicy::Forbid is only enforced on the CPU provider",
+        ));
+    }
+    for (index, input) in inputs.iter().enumerate() {
+        match operand_materializes(index, input) {
+            Some(false) => {}
+            Some(true) => {
+                return Err(tenferro_tensor::Error::input_materialization_forbidden(
+                    op, index,
+                ))
+            }
+            None => {
+                return Err(tenferro_tensor::Error::unsupported(
+                    op,
+                    "MaterializationPolicy::Forbid cannot be verified for this CPU build",
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn supports(session: &mut dyn Engine, inputs: &[TensorRead<'_>]) -> bool {
     inputs.len() >= 3
         && inputs.first().is_some_and(|input| {
