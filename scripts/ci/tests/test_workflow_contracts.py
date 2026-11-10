@@ -27,6 +27,14 @@ def read(path: str) -> str:
     return text
 
 
+def job_block(text: str, job: str) -> str:
+    """Return one job's YAML, so a permission can be asserted per job."""
+
+    start = text.index(f"\n  {job}:\n") + 1
+    following = re.search(r"\n  [a-z][a-z0-9-]*:\s*$", text[start:], re.MULTILINE)
+    return text[start : start + following.start()] if following else text[start:]
+
+
 class WorkflowContractTests(unittest.TestCase):
     def test_linux_workflows_and_cuda_sources_use_ubuntu24(self) -> None:
         for workflow in (ROOT / ".github/workflows").glob("*.yml"):
@@ -200,6 +208,26 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' }}", text)
         self.assertIn("actions/upload-artifact@", text)
         self.assertIn("Oracle replay not required", text)
+
+    def test_oracle_nightly_reports_through_the_tested_reporter(self) -> None:
+        text = read(".github/workflows/oracle-replay-nightly.yml")
+        # The reporting decision lives in the script; the workflow only hands it
+        # the job results, so a skipped or cancelled run cannot look like a
+        # successful replay.
+        self.assertIn("bash scripts/ci/report_oracle_nightly.sh\n", text)
+        reporter = job_block(text, "notify-failure")
+        self.assertIn("RUN_ORACLE: ${{ needs.recent-commits.outputs.run_oracle }}", reporter)
+        self.assertIn("RECENT_RESULT: ${{ needs.recent-commits.result }}", reporter)
+        self.assertIn("REPLAY_RESULT: ${{ needs.oracle-replay.result }}", reporter)
+        self.assertIn("gh run download", reporter)
+        self.assertIn("if: always() && github.ref == 'refs/heads/main'", text)
+        self.assertNotIn("pull_request_target", text)
+        # `issues: write` belongs to the reporting job only; the replay keeps read.
+        self.assertEqual(text.count("issues: write"), 1)
+        self.assertIn("permissions:\n  contents: read\n", text)
+        self.assertIn("issues: write", reporter)
+        self.assertNotIn("issues: write", job_block(text, "oracle-replay"))
+        self.assertNotIn("issues: write", job_block(text, "recent-commits"))
 
     def test_heavy_workflow_has_explicit_noop_matrix_and_gate_contract(self) -> None:
         text = read(".github/workflows/ci-pr-workspace-tests.yml")

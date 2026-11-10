@@ -1,0 +1,12 @@
+[
+  {
+    "number": 24,
+    "title": "oracle-replay-nightly is failing on macOS",
+    "labels": []
+  },
+  {
+    "number": 23,
+    "title": "oracle-replay-nightly is failing",
+    "labels": [{ "name": "enhancement" }]
+  }
+]

@@ -1,0 +1,9 @@
+   Compiling tenferro-linalg v0.1.0 (/home/runner/work/tenferro-rs/tenferro-rs/crates/tenferro-linalg)
+error[E0425]: cannot find value `oracle_db_root` in this scope
+  --> crates/tenferro-linalg/tests/oracle_replay/db.rs:42:9
+   |
+42 |         oracle_db_root,
+   |         ^^^^^^^^^^^^^^ not found in this scope
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `tenferro-linalg` (test "integration") due to 1 previous error

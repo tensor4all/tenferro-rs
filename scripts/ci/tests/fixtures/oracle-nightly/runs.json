@@ -1,0 +1,38 @@
+{
+  "failed_replay": {
+    "RECENT_RESULT": "success",
+    "REPLAY_RESULT": "failure",
+    "RUN_ORACLE": "true",
+    "log": "replay-log-failure.txt"
+  },
+  "failed_build_without_case_ids": {
+    "RECENT_RESULT": "success",
+    "REPLAY_RESULT": "failure",
+    "RUN_ORACLE": "true",
+    "log": "replay-log-without-case-ids.txt"
+  },
+  "skipped_by_gate": {
+    "RECENT_RESULT": "success",
+    "REPLAY_RESULT": "success",
+    "RUN_ORACLE": "false",
+    "log": null
+  },
+  "successful_replay": {
+    "RECENT_RESULT": "success",
+    "REPLAY_RESULT": "success",
+    "RUN_ORACLE": "true",
+    "log": null
+  },
+  "cancelled": {
+    "RECENT_RESULT": "success",
+    "REPLAY_RESULT": "cancelled",
+    "RUN_ORACLE": "true",
+    "log": null
+  },
+  "failed_replay_complex": {
+    "RECENT_RESULT": "success",
+    "REPLAY_RESULT": "failure",
+    "RUN_ORACLE": "true",
+    "log": "replay-log-failure-complex.txt"
+  }
+}

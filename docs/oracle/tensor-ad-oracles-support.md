@@ -29,6 +29,46 @@ RUST_TEST_THREADS=1 RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=48 \
 OS worker threads instead of an outer Rayon pool because replayed cases execute
 CPU backend kernels that may use backend-owned Rayon scopes internally.
 
+## Nightly Replay, Failure Reporting And Recovery
+
+`.github/workflows/oracle-replay-nightly.yml` runs the full replay on a schedule:
+
+- Cron `37 17 * * *` (UTC), on the default branch only.
+- A 24-hour commit gate: the `recent-commits` job writes `run_oracle=true` only when `main`
+  has a commit in the last 24 hours. Otherwise the run is an auditable no-op that prints
+  `Oracle replay not required` and replays nothing.
+- Manual runs: `gh workflow run oracle-replay-nightly.yml --ref main -f force=true` replays
+  even when the last 24 hours are quiet. Without `force=true` a manual run obeys the gate.
+
+On failure:
+
+- The `notify` job (`if: always() && github.ref == 'refs/heads/main'`, with `issues: write` on
+  that job only) opens one issue titled `oracle-replay-nightly is failing`, labelled
+  `nightly-oracle-failure`; a later failure comments on the same issue instead of opening a
+  second one. An issue filed before the label existed is still found by its exact title and
+  adopts the label.
+- The issue body carries the run URL, the commit, the failed job names, the failing oracle
+  `case_id`s parsed from the `oracle-replay-<run id>` log artifact, and the identity of the
+  replayed database. When a run fails before replaying a record (a build, infrastructure or
+  gate failure) there is no case ID, and the body says so instead of omitting the field.
+- The database identity is the vendored `third_party/tensor-ad-oracles` tree recorded in the
+  commit (`git rev-parse <commit>:third_party/tensor-ad-oracles`) plus the `torch==` pin in
+  `third_party/tensor-ad-oracles/pyproject.toml`. No upstream revision of the oracle repository
+  is pinned in this repository, so the issue states that instead of naming a revision.
+
+On recovery:
+
+- Only a replay that actually ran and passed closes the issue: `recent-commits` reported
+  `run_oracle=true` **and** the `oracle-replay` job concluded `success`. The recovery comment
+  records the run URL, the commit and the database identity before the issue is closed, so the
+  provenance survives the close.
+- A run that skipped the replay (24-hour gate), a cancelled run, and any run whose replay was
+  not requested leave the issue open.
+
+The reporting logic lives in `scripts/ci/report_oracle_nightly.sh`; the workflow only hands it the
+job results. `scripts/ci/tests/test_report_oracle_nightly.py` covers the skipped, cancelled, recovered,
+duplicate and missing-case-ID paths.
+
 ## Crate-Local AD Coverage Outside Replay
 
 The support tables below describe the active env-gated oracle replay adapter

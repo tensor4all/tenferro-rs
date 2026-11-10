@@ -1,0 +1,12 @@
+[
+  {
+    "number": 51,
+    "title": "oracle-replay-nightly is failing (triaged)",
+    "labels": [{ "name": "nightly-oracle-failure" }]
+  },
+  {
+    "number": 52,
+    "title": "oracle-replay-nightly is failing (duplicate tracker)",
+    "labels": [{ "name": "nightly-oracle-failure" }]
+  }
+]
