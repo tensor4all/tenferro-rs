@@ -22,6 +22,7 @@ Normative specs — trait signatures, op semantics, backend contracts.
 - [Optimizer passes](../spec/optimizer-passes.md)
 - [Tensor semantics](../spec/tensor-semantics.md)
 - [Public-boundary overhead inventory](public-boundary-overhead-inventory.md)
+- [CUDA surface inventory](cuda-surface-inventory.md)
 
 The overhead inventory records source-path responsibilities, not measured CPU
 performance. CUDA/GPU, XLA, and multi-device execution each remain separately

@@ -1,0 +1,1270 @@
+{
+  "issue": "tensor4all/tenferro-rs#2298",
+  "note": "Reviewed verdicts for scripts/cuda_surface_inventory.py. `public` = a user of the crate needs it (documented or required to name a public signature); `workspace-internal` = another tenferro crate calls it today and no guide documents it; `private` = nothing outside `crates/tenferro-gpu/src/cuda/` reads it. Evidence per item is in docs/internals/cuda-surface-inventory.md.",
+  "items": {
+    "cuda::CudaBackend": {
+      "verdict": "private",
+      "reason": "the seam marker: nothing outside `cuda/` names it; only the crate-private `gpu::Buffer<CudaBackend>` in `storage.rs` uses it, and the documentation hits are design notes from before the cutover"
+    },
+    "cuda::capability::cuda_capabilities": {
+      "verdict": "public",
+      "reason": "the already-documented capability table (issue #2298's one documented symbol)"
+    },
+    "cuda::cutensor::Contraction": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::cutensor::Cutensor": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::cutensor::Cutensor::cached_plans": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::cutensor::Cutensor::cold_plans": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::cutensor::Cutensor::contract": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::cutensor::Cutensor::new": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::cutensor::Cutensor::warm_hits": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::cutensor::MAX_TENSOR_MODES": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::cutensor::Operand": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::device": {
+      "verdict": "private",
+      "reason": "`pub(crate)` module: the device types are public through `tenferro_gpu::cuda::` re-exports, not through this path"
+    },
+    "cuda::device::CudaDeviceError": {
+      "verdict": "public",
+      "reason": "the error of `cuda_devices` and `CudaEngine::open`"
+    },
+    "cuda::device::CudaDeviceError::device": {
+      "verdict": "public",
+      "reason": "documented accessor (has a doctest)"
+    },
+    "cuda::device::CudaDeviceError::discovered": {
+      "verdict": "public",
+      "reason": "documented accessor (has a doctest)"
+    },
+    "cuda::device::CudaDeviceError::operation": {
+      "verdict": "public",
+      "reason": "documented accessor (has a doctest)"
+    },
+    "cuda::device::CudaDeviceError::requested": {
+      "verdict": "public",
+      "reason": "documented accessor (has a doctest)"
+    },
+    "cuda::device::CudaDeviceId": {
+      "verdict": "public",
+      "reason": "the device id every documented CUDA call takes; sibling crates and the guides name it"
+    },
+    "cuda::device::CudaDeviceId::from_ordinal": {
+      "verdict": "public",
+      "reason": "the documented constructor of the device id; sibling crates and the guides use it"
+    },
+    "cuda::device::CudaDeviceId::ordinal": {
+      "verdict": "public",
+      "reason": "the only way back to the ordinal; `tenferro-fft` calls it"
+    },
+    "cuda::device::CudaDeviceInfo": {
+      "verdict": "public",
+      "reason": "the value `cuda_devices` returns; its fields are private"
+    },
+    "cuda::device::CudaDeviceInfo::compute_capability": {
+      "verdict": "public",
+      "reason": "accessor of a public value type with private fields"
+    },
+    "cuda::device::CudaDeviceInfo::id": {
+      "verdict": "public",
+      "reason": "the accessor the quickstart uses to open an engine (`device.id()`)"
+    },
+    "cuda::device::CudaDeviceInfo::name": {
+      "verdict": "public",
+      "reason": "accessor of a public value type with private fields"
+    },
+    "cuda::device::CudaDeviceInfo::new": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::device::CudaDeviceInfo::total_memory_bytes": {
+      "verdict": "public",
+      "reason": "accessor of a public value type with private fields"
+    },
+    "cuda::device::CudaDeviceInfo::uuid": {
+      "verdict": "public",
+      "reason": "accessor of a public value type with private fields"
+    },
+    "cuda::device::DiscoveryDriver": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::device::cuda_devices": {
+      "verdict": "public",
+      "reason": "documented device discovery: `cuda_devices` in the quickstart, the guides and a sibling test"
+    },
+    "cuda::device::discover_with": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::CudaEngine::dispatcher": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::arithmetic": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::binary": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::clamp": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::clamp_buffers": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::combined_strided": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::compare": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::contiguous_to_view": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::convert": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::copy_exact": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::dynamic_slice": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::dynamic_update_slice": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::for_entries": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::gather": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::in_scope": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::pad": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::prepare": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::reduce": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::reduce_planned": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::run_planned": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::scatter_add": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::select": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::slice": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::strided_to_strided": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::triangular_view": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::unary": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::validate_float_indices": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::Dispatcher::validate_real_cast": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::IndexPointer": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::PreparedDispatchers": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::dispatch::pod_arg": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::engine::CudaEngine": {
+      "verdict": "public",
+      "reason": "the CUDA engine a user opens and drives; the quickstart and most sibling-crate files name it"
+    },
+    "cuda::engine::CudaEngine::clear_vendor_resources": {
+      "verdict": "public",
+      "reason": "the redundancy audit (2026-11-04, item 9) records it as a deliberate downstream-facing hook; it stays public and `#[doc(hidden)]`"
+    },
+    "cuda::engine::CudaEngine::cutensor": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::engine::CudaEngine::device_id": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::engine::CudaEngine::ensure_healthy": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::engine::CudaEngine::launch_completion_syncs": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-ad` and `tenferro-linalg` tests read the counter"
+    },
+    "cuda::engine::CudaEngine::note_staged_read": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::engine::CudaEngine::note_tiled_transpose": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::engine::CudaEngine::open": {
+      "verdict": "public",
+      "reason": "the documented constructor: `CudaEngine::open` in the quickstart, the guides and sibling crates"
+    },
+    "cuda::engine::CudaEngine::publish": {
+      "verdict": "public",
+      "reason": "the publication entry point; its return types are the publication surface below"
+    },
+    "cuda::engine::CudaEngine::runtime": {
+      "verdict": "public",
+      "reason": "the documented accessor for the runtime: `engine.runtime()` in the quickstart, the guides and sibling crates"
+    },
+    "cuda::engine::CudaEngine::runtime_engine_id": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-einsum`, `tenferro-fft` and `tenferro-linalg` tests key extension modules by it"
+    },
+    "cuda::engine::CudaEngine::runtime_identity": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-fft` keys its cuFFT plan cache by it",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/mod.rs:91"
+      ]
+    },
+    "cuda::engine::CudaEngine::vendor_resource_inits": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s deferred-completion test reads the counter"
+    },
+    "cuda::engine::CudaEngine::vendor_resource_stats": {
+      "verdict": "public",
+      "reason": "the redundancy audit (2026-11-04, item 9) records it as a deliberate downstream-facing hook; it stays public and `#[doc(hidden)]`"
+    },
+    "cuda::engine::CudaEngineError": {
+      "verdict": "public",
+      "reason": "the error of `CudaEngine::open`, named by the module and runtime doctests"
+    },
+    "cuda::engine::DEFAULT_RUNTIME_ENGINE_ID": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::engine::default_runtime_engine_id": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::event_domain::CoalescedEventToken": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::event_domain::StreamEventDomainDriver": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::event_domain::StreamEventDomainDriver::new": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::event_domain::StreamEventToken": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::event_domain::event_domain_error": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::fusion::PreparedFusion": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::fusion::PreparedFusion::dtype": {
+      "verdict": "private",
+      "reason": "the count is the same-named method on other types; no other crate names `PreparedFusion`, so nothing outside `cuda/` can call it"
+    },
+    "cuda::fusion::PreparedFusion::key": {
+      "verdict": "private",
+      "reason": "no code names it; only a design note mentions it, and the in-crate `fusion::tests` module reads it, so it is gated together with the seam tests"
+    },
+    "cuda::fusion::PreparedFusion::launch": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::fusion::PreparedFusion::prepare": {
+      "verdict": "private",
+      "reason": "the count is the same-named method on other types; no other crate names `PreparedFusion`, so nothing outside `cuda/` can call it"
+    },
+    "cuda::gpu_available": {
+      "verdict": "public",
+      "reason": "documented device probe; the guides, the quickstart and every GPU test call it, and issue #2298 asks for exactly this decision"
+    },
+    "cuda::identity": {
+      "verdict": "private",
+      "reason": "`pub(crate)` module: the identity types are public through `tenferro_gpu::cuda::` re-exports, not through this path"
+    },
+    "cuda::identity::CudaComputeCapability": {
+      "verdict": "public",
+      "reason": "returned by `CudaDeviceInfo::compute_capability`"
+    },
+    "cuda::identity::CudaDeviceUuid": {
+      "verdict": "public",
+      "reason": "documented device identity with doctests"
+    },
+    "cuda::identity::CudaDeviceUuid::as_bytes": {
+      "verdict": "public",
+      "reason": "documented accessor with a doctest"
+    },
+    "cuda::identity::CudaDeviceUuid::from_bytes": {
+      "verdict": "public",
+      "reason": "documented constructor with a doctest"
+    },
+    "cuda::identity::CudaDeviceUuid::to_bytes": {
+      "verdict": "public",
+      "reason": "documented accessor with a doctest"
+    },
+    "cuda::identity::GpuExtensionCapability": {
+      "verdict": "private",
+      "reason": "nobody constructs it and no public signature returns it; its rustdoc names `CudaEngine::supports`, which does not exist, so it is a leftover of the CubeCL-era seam to delete rather than document"
+    },
+    "cuda::launch::KernelModules": {
+      "verdict": "workspace-internal",
+      "reason": "kernel-launch family kept `workspace-internal` by the #2298 decision: the extension-hook design says the RRQR kernels will need a module and launch surface, so it stays hidden `pub` until that hook lands (docs/design/cuda-surface.md section 4)"
+    },
+    "cuda::launch::KernelModules::for_entries": {
+      "verdict": "workspace-internal",
+      "reason": "kernel-launch family kept `workspace-internal` by the #2298 decision: the extension-hook design says the RRQR kernels will need a module and launch surface, so it stays hidden `pub` until that hook lands (docs/design/cuda-surface.md section 4)"
+    },
+    "cuda::launch::KernelModules::function": {
+      "verdict": "workspace-internal",
+      "reason": "kernel-launch family kept `workspace-internal` by the #2298 decision: the extension-hook design says the RRQR kernels will need a module and launch surface, so it stays hidden `pub` until that hook lands (docs/design/cuda-surface.md section 4)"
+    },
+    "cuda::launch::KernelModules::in_scope": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::launch::KernelModules::launch": {
+      "verdict": "workspace-internal",
+      "reason": "kernel-launch family kept `workspace-internal` by the #2298 decision: the extension-hook design says the RRQR kernels will need a module and launch surface, so it stays hidden `pub` until that hook lands (docs/design/cuda-surface.md section 4)"
+    },
+    "cuda::launch::KernelModules::modules": {
+      "verdict": "workspace-internal",
+      "reason": "kernel-launch family kept `workspace-internal` by the #2298 decision: the extension-hook design says the RRQR kernels will need a module and launch surface, so it stays hidden `pub` until that hook lands (docs/design/cuda-surface.md section 4)"
+    },
+    "cuda::launch::KernelModules::prepare": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::launch::device_buffer": {
+      "verdict": "workspace-internal",
+      "reason": "kernel-launch family kept `workspace-internal` by the #2298 decision: the extension-hook design says the RRQR kernels will need a module and launch surface, so it stays hidden `pub` until that hook lands (docs/design/cuda-surface.md section 4)"
+    },
+    "cuda::launch::layout_arg": {
+      "verdict": "workspace-internal",
+      "reason": "kernel-launch family kept `workspace-internal` by the #2298 decision: the extension-hook design says the RRQR kernels will need a module and launch surface, so it stays hidden `pub` until that hook lands (docs/design/cuda-surface.md section 4)"
+    },
+    "cuda::pending::PendingDownload": {
+      "verdict": "public",
+      "reason": "the handle `download_pending` returns"
+    },
+    "cuda::pending::PendingDownload::is_ready": {
+      "verdict": "public",
+      "reason": "documented poll (guides name `is_ready`)"
+    },
+    "cuda::pending::PendingDownload::new": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::pending::PendingDownload::wait": {
+      "verdict": "public",
+      "reason": "documented wait (guides name `wait`)"
+    },
+    "cuda::pending::PendingUpload": {
+      "verdict": "public",
+      "reason": "the handle `upload_pending` returns"
+    },
+    "cuda::pending::PendingUpload::is_ready": {
+      "verdict": "public",
+      "reason": "documented poll (guides name `is_ready`)"
+    },
+    "cuda::pending::PendingUpload::new": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::pending::PendingUpload::wait": {
+      "verdict": "public",
+      "reason": "documented wait (guides name `wait`)"
+    },
+    "cuda::pending::RejectedTransfer": {
+      "verdict": "public",
+      "reason": "the value a rejected submission hands back inside `TransferSubmitError`"
+    },
+    "cuda::pending::TransferSubmitError": {
+      "verdict": "public",
+      "reason": "the documented error of the asynchronous transfers"
+    },
+    "cuda::pending::cuda_storage": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::pinned::PinnedHostBuffer": {
+      "verdict": "public",
+      "reason": "documented pinned host staging buffer"
+    },
+    "cuda::pinned::PinnedHostBuffer::as_mut_slice": {
+      "verdict": "public",
+      "reason": "documented accessor of the pinned buffer"
+    },
+    "cuda::pinned::PinnedHostBuffer::as_slice": {
+      "verdict": "public",
+      "reason": "documented accessor of the pinned buffer"
+    },
+    "cuda::pinned::PinnedHostBuffer::is_empty": {
+      "verdict": "public",
+      "reason": "documented emptiness accessor"
+    },
+    "cuda::pinned::PinnedHostBuffer::len": {
+      "verdict": "public",
+      "reason": "documented length accessor"
+    },
+    "cuda::pinned::PinnedHostBuffer::new": {
+      "verdict": "public",
+      "reason": "documented constructor (`PinnedHostBuffer::new` in the transfers guide)"
+    },
+    "cuda::publication::PublicationAdmissionError": {
+      "verdict": "public",
+      "reason": "the error `CudaEngine::publish` returns"
+    },
+    "cuda::publication::PublicationDownload": {
+      "verdict": "public",
+      "reason": "the handle `SourcePublication::download_into` returns"
+    },
+    "cuda::publication::PublicationDownload::is_ready": {
+      "verdict": "public",
+      "reason": "poll of the publication download"
+    },
+    "cuda::publication::PublicationDownload::wait": {
+      "verdict": "public",
+      "reason": "wait of the publication download (`download_pending(..).wait()`)"
+    },
+    "cuda::publication::PublicationError": {
+      "verdict": "public",
+      "reason": "the error of every publication step"
+    },
+    "cuda::publication::RejectedPublication": {
+      "verdict": "public",
+      "reason": "the value a refused publication hands back inside `PublicationAdmissionError`"
+    },
+    "cuda::publication::SourcePublication": {
+      "verdict": "public",
+      "reason": "returned by `CudaEngine::publish`; the issue names publication as public surface"
+    },
+    "cuda::publication::SourcePublication::await_frontier": {
+      "verdict": "public",
+      "reason": "the documented wait before a download"
+    },
+    "cuda::publication::SourcePublication::bytes": {
+      "verdict": "public",
+      "reason": "accessor of the published value"
+    },
+    "cuda::publication::SourcePublication::download_into": {
+      "verdict": "public",
+      "reason": "the documented download of a published value"
+    },
+    "cuda::publication::SourcePublication::frontier_ready": {
+      "verdict": "public",
+      "reason": "the documented poll before a download"
+    },
+    "cuda::publication::SourcePublication::new": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw": {
+      "verdict": "public",
+      "reason": "the documented raw extension scope (issue #1597): `tenferro_gpu::cuda::raw` is a public module whose items the guides name"
+    },
+    "cuda::raw::CudaEngine::with_raw": {
+      "verdict": "public",
+      "reason": "the same hook, declared beside the raw scope (`with_raw` in `raw.rs`)",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:617"
+      ]
+    },
+    "cuda::raw::CudaEngineMarker": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::CudaResourceGuard": {
+      "verdict": "public",
+      "reason": "returned by `Session::resource`; the extension crates hold it"
+    },
+    "cuda::raw::DeviceBytes": {
+      "verdict": "public",
+      "reason": "returned by `Session::alloc_bytes`, named in a `tenferro-fft` signature"
+    },
+    "cuda::raw::DeviceBytes::byte_len": {
+      "verdict": "public",
+      "reason": "caller evidence unverified: no `byte_len` call on a `DeviceBytes` exists outside `cuda/`"
+    },
+    "cuda::raw::DeviceBytes::with_ptr": {
+      "verdict": "public",
+      "reason": "called by `tenferro-fft` and `tenferro-linalg` on a raw device allocation",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:347"
+      ]
+    },
+    "cuda::raw::PinnedStaging": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::PinnedStaging::bytes": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::PinnedStaging::empty": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::PinnedStaging::pointer": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::Session": {
+      "verdict": "public",
+      "reason": "the documented raw extension session (`tenferro_gpu::cuda::raw`)"
+    },
+    "cuda::raw::Session::alloc_bytes": {
+      "verdict": "public",
+      "reason": "called by `tenferro-fft` and `tenferro-linalg` inside the raw scope (`raw.alloc_bytes`)",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:625",
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1465"
+      ]
+    },
+    "cuda::raw::Session::alloc_output": {
+      "verdict": "public",
+      "reason": "called by `tenferro-linalg` (`raw.alloc_output`)",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1411",
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1426"
+      ]
+    },
+    "cuda::raw::Session::copy_bytes": {
+      "verdict": "public",
+      "reason": "called by `tenferro-linalg` (`raw.copy_bytes`)",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1433"
+      ]
+    },
+    "cuda::raw::Session::download_tensor": {
+      "verdict": "public",
+      "reason": "documented raw download",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1509"
+      ]
+    },
+    "cuda::raw::Session::resource": {
+      "verdict": "public",
+      "reason": "called by `tenferro-linalg` to register its vendor handles (`raw.resource`)",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1419"
+      ]
+    },
+    "cuda::raw::Session::retain_tensor": {
+      "verdict": "public",
+      "reason": "called by `tenferro-fft` to keep an allocation alive",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:641"
+      ]
+    },
+    "cuda::raw::Session::stream": {
+      "verdict": "public",
+      "reason": "called by `tenferro-fft` and `tenferro-linalg` (`raw.stream()`)",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:620"
+      ]
+    },
+    "cuda::raw::Session::synchronize": {
+      "verdict": "public",
+      "reason": "called by the extension crates and their benches",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:684"
+      ]
+    },
+    "cuda::raw::Session::tensor": {
+      "verdict": "public",
+      "reason": "called by `tenferro-fft` and `tenferro-linalg` (`raw.tensor(...)`)",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:657"
+      ]
+    },
+    "cuda::raw::Session::tensor_mut": {
+      "verdict": "public",
+      "reason": "called by `tenferro-fft` and `tenferro-linalg` (`raw.tensor_mut(...)`)",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:665"
+      ]
+    },
+    "cuda::raw::Session::upload_bytes": {
+      "verdict": "public",
+      "reason": "called by `tenferro-linalg` inside the raw scope",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1665"
+      ]
+    },
+    "cuda::raw::StagingAccounting": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::StagingAccounting::allocations": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::StagingAccounting::limit": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::StagingAccounting::new": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::StagingAccounting::record_retained": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::StagingAccounting::retained": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::StagingAccounting::set_limit": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::raw::StreamRef": {
+      "verdict": "public",
+      "reason": "returned by `Session::stream`"
+    },
+    "cuda::raw::StreamRef::raw_handle": {
+      "verdict": "public",
+      "reason": "called by `tenferro-fft` and `tenferro-linalg` (`raw.stream().raw_handle()`)",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:620"
+      ]
+    },
+    "cuda::raw::TensorMut": {
+      "verdict": "public",
+      "reason": "returned by `Session::tensor_mut`"
+    },
+    "cuda::raw::TensorMut::byte_len": {
+      "verdict": "public",
+      "reason": "caller evidence unverified: no `byte_len` call on a `TensorMut` exists outside `cuda/`"
+    },
+    "cuda::raw::TensorMut::raw_ptr": {
+      "verdict": "public",
+      "reason": "called by the extension crates (`raw_ptr` on a raw tensor)",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:679"
+      ]
+    },
+    "cuda::raw::TensorMut::with_ptr": {
+      "verdict": "public",
+      "reason": "caller evidence unverified: the `with_ptr` calls in the extension crates are `DeviceBytes::with_ptr`; no `TensorMut::with_ptr` call exists outside `cuda/`"
+    },
+    "cuda::raw::TensorRef": {
+      "verdict": "public",
+      "reason": "returned by `Session::tensor`"
+    },
+    "cuda::raw::TensorRef::byte_len": {
+      "verdict": "public",
+      "reason": "read by the extension crates on a raw tensor reference",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1433"
+      ]
+    },
+    "cuda::raw::TensorRef::raw_ptr": {
+      "verdict": "public",
+      "reason": "called by the extension crates (`raw_ptr` on a raw tensor)",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:678"
+      ]
+    },
+    "cuda::raw::TensorRef::with_ptr": {
+      "verdict": "public",
+      "reason": "caller evidence unverified: the `with_ptr` calls in the extension crates are `DeviceBytes::with_ptr`; no `TensorRef::with_ptr` call exists outside `cuda/`"
+    },
+    "cuda::raw::with_cuda_engine": {
+      "verdict": "public",
+      "reason": "the documented entry into the raw scope, used by `tenferro-fft`",
+      "evidence": [
+        "crates/tenferro-fft/src/lib.rs:2069"
+      ]
+    },
+    "cuda::runtime::ActivatedContext": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::CompletionDeferral": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::CudaRuntime": {
+      "verdict": "public",
+      "reason": "the documented runtime: `engine.runtime()` returns it, `tenferro-fft` names it in a signature and the guides document its knobs"
+    },
+    "cuda::runtime::CudaRuntime::alloc_pinned": {
+      "verdict": "private",
+      "reason": "no reader outside `cuda/`; called from `cuda/pinned.rs`"
+    },
+    "cuda::runtime::CudaRuntime::allocation_domain_id": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg` checks an operand's domain against it",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:364"
+      ]
+    },
+    "cuda::runtime::CudaRuntime::artifact_cache_hits": {
+      "verdict": "private",
+      "reason": "no reader anywhere: nothing outside `cuda/` names it; read only by the test-only `PreparedFusion::counters`; gated with its two sibling counters"
+    },
+    "cuda::runtime::CudaRuntime::artifact_dir_evictions": {
+      "verdict": "public",
+      "reason": "documented by the devices guide"
+    },
+    "cuda::runtime::CudaRuntime::artifact_dir_max_bytes": {
+      "verdict": "public",
+      "reason": "documented by the devices guide"
+    },
+    "cuda::runtime::CudaRuntime::artifact_dir_stats": {
+      "verdict": "public",
+      "reason": "documented by the devices guide"
+    },
+    "cuda::runtime::CudaRuntime::clear_artifact_dir": {
+      "verdict": "public",
+      "reason": "documented by the devices guide"
+    },
+    "cuda::runtime::CudaRuntime::clear_pinned_staging": {
+      "verdict": "public",
+      "reason": "documented by the transfers guide"
+    },
+    "cuda::runtime::CudaRuntime::compile_attempts": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::completion_checkpoints": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::completion_deferred": {
+      "verdict": "private",
+      "reason": "no reader outside `cuda/`; read by `cuda/structural.rs`"
+    },
+    "cuda::runtime::CudaRuntime::copy_to": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::defer_completion": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::CudaRuntime::detach": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::CudaRuntime::device_id": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-fft` reads the device ordinal through it",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/mod.rs:85"
+      ]
+    },
+    "cuda::runtime::CudaRuntime::device_info": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::device_ordinal": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::download_bytes": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::identity": {
+      "verdict": "private",
+      "reason": "`CudaEngine::runtime_identity` is what `tenferro-fft` keys its plan cache on; this accessor has no outside caller, only `cuda/engine.rs` and `cuda/runtime.rs`"
+    },
+    "cuda::runtime::CudaRuntime::module_loads": {
+      "verdict": "private",
+      "reason": "no code outside `cuda/` names it; only the test-only `PreparedFusion::counters` reads it, so it is gated with its two sibling counters"
+    },
+    "cuda::runtime::CudaRuntime::new": {
+      "verdict": "public",
+      "reason": "the runtime constructor (`CudaRuntime::new(device)`)"
+    },
+    "cuda::runtime::CudaRuntime::note_completion_checkpoint": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::CudaRuntime::pending_transfer_retirements": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::pinned_staging_allocations": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::pinned_staging_stats": {
+      "verdict": "public",
+      "reason": "documented by the transfers guide"
+    },
+    "cuda::runtime::CudaRuntime::pool_release_threshold_bytes": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::retire_detached": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::CudaRuntime::set_pinned_staging_limit_bytes": {
+      "verdict": "public",
+      "reason": "documented by the transfers guide"
+    },
+    "cuda::runtime::CudaRuntime::stats": {
+      "verdict": "private",
+      "reason": "the count is the same-named method on other types; no other crate names `CudaRuntime`, so nothing outside `cuda/` can call it"
+    },
+    "cuda::runtime::CudaRuntime::stream_waits": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s deferred-completion test reads the counter",
+      "evidence": [
+        "crates/tenferro-linalg/tests/integration/deferred_completion.rs:108",
+        "crates/tenferro-linalg/tests/integration/deferred_completion.rs:114"
+      ]
+    },
+    "cuda::runtime::CudaRuntime::submit": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::CudaRuntime::synchronize": {
+      "verdict": "public",
+      "reason": "documented barrier (`engine.runtime().synchronize()`)"
+    },
+    "cuda::runtime::CudaRuntime::synchronize_best_effort": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::CudaRuntime::trim_pool": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::upload_bytes": {
+      "verdict": "private",
+      "reason": "the count is `Session::upload_bytes`/`raw.upload_bytes` on the raw scope; no other crate names `CudaRuntime::upload_bytes`"
+    },
+    "cuda::runtime::CudaRuntime::with_config": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::runtime::CudaRuntime::with_current_context": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-fft` activates the context around its cuFFT calls",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/plan.rs:482"
+      ]
+    },
+    "cuda::runtime::CudaRuntime::with_raw_locked": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::CudaRuntimeIdentity": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-fft` names it as its plan-cache key type"
+    },
+    "cuda::runtime::CudaRuntimeState": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::DEFAULT_PINNED_STAGING_LIMIT_BYTES": {
+      "verdict": "public",
+      "reason": "documented by the transfers guide"
+    },
+    "cuda::runtime::Detached": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime::PinnedStagingStats": {
+      "verdict": "public",
+      "reason": "returned by `CudaRuntime::pinned_staging_stats`"
+    },
+    "cuda::runtime::write_best_effort_warning": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::CudaPreparedKind": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::CudaPreparedOperation": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::PreparedCudaRegistrationIdentity": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::core_operation_name": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::cuda_input_placement": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::cuda_input_signature": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::cuda_operation_kind": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::cuda_provider_device_identity": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::cuda_runtime_engine_registration": {
+      "verdict": "public",
+      "reason": "the documented registration path, used by `tenferro-ad` and sibling tests"
+    },
+    "cuda::runtime_adapter::cuda_runtime_hardware_class": {
+      "verdict": "public",
+      "reason": "has its own doctest; names the CUDA hardware class the registration carries"
+    },
+    "cuda::runtime_adapter::cuda_runtime_storage_class": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::prepare_cuda": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::runtime_adapter::prepare_cuda_registration_identity": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::storage::CudaStorage": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::storage::CudaStorage::allocation": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::storage::CudaStorage::bytes": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::storage::CudaStorage::device_ordinal": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::storage::CudaStorage::domain": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::storage::fresh_storage": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::structural::CudaEngine::alloc_output": {
+      "verdict": "workspace-internal",
+      "reason": "declared in `cuda::structural::CudaEngine::alloc_output`; a sibling crate calls it today",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:827"
+      ]
+    },
+    "cuda::structural::CudaEngine::ensure_gpu_resident": {
+      "verdict": "workspace-internal",
+      "reason": "declared in `cuda::structural::CudaEngine::ensure_gpu_resident`; a sibling crate calls it today",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:338"
+      ]
+    },
+    "cuda::structural::CudaEngine::linalg_apply_reflector": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_column_norms": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_extract_r": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_fill_one": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_householder_assemble": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_householder_explicit_v": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_identity_shifted": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_initialize_permutation": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_lu_apply_pivots": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_lu_extract_outputs": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_lu_parity": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_matrix_adjoint": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:2006"
+      ]
+    },
+    "cuda::structural::CudaEngine::linalg_prefix_rank": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg/rank_revealing_qr.rs:188"
+      ]
+    },
+    "cuda::structural::CudaEngine::linalg_qr_apply_phase": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_qr_phase": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_reflector": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_select_pivot": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_slice": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_swap_columns": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine"
+    },
+    "cuda::structural::CudaEngine::linalg_triangular": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:1517"
+      ]
+    },
+    "cuda::structural::CudaEngine::linalg_upper_trapezoidal_violation": {
+      "verdict": "workspace-internal",
+      "reason": "`tenferro-linalg`'s QR/LU decomposition paths call this auxiliary on the engine",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/linalg.rs:829"
+      ]
+    },
+    "cuda::structural::CudaEngine::scale_tensor_write": {
+      "verdict": "workspace-internal",
+      "reason": "declared in `cuda::structural::CudaEngine::scale_tensor_write`; a sibling crate calls it today",
+      "evidence": [
+        "crates/tenferro-fft/src/cuda/mod.rs:139"
+      ]
+    },
+    "cuda::structural::CudaEngine::to_contiguous": {
+      "verdict": "private",
+      "reason": "no reader outside `cuda/`; read by `cuda/structural.rs`. A one-line forward to `TensorStructural::to_contiguous_read`, and a second path to the same operation"
+    },
+    "cuda::structural::CudaEngine::to_contiguous_view": {
+      "verdict": "workspace-internal",
+      "reason": "declared in `cuda::structural::CudaEngine::to_contiguous_view`; a sibling crate calls it today",
+      "evidence": [
+        "crates/tenferro-linalg/src/gpu/mod.rs:53"
+      ]
+    },
+    "cuda::structural::DeviceOperand": {
+      "verdict": "workspace-internal",
+      "reason": "the operand bound on the `linalg_*` auxiliaries that `tenferro-linalg` calls; `pub(crate)` trips `private_bounds` on every one of them"
+    },
+    "cuda::structural::Region": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::structural::TiledTransposeGeometry": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::structural::activation": {
+      "verdict": "private",
+      "reason": "`pub(super)` module: the fused-activation kernels stay inside `cuda::structural`"
+    },
+    "cuda::structural::activation::CudaEngine::fused_activation": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::structural::activation::FusedActivationKernels": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::structural::alloc_tensor": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::structural::element_count": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::structural::region_of": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::structural::tiled_transpose_geometry": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::transfer::download_pending": {
+      "verdict": "public",
+      "reason": "documented asynchronous transfer (guides)"
+    },
+    "cuda::transfer::download_tensor": {
+      "verdict": "public",
+      "reason": "documented transfer: `download_tensor` in the guides and the quickstart, and by sibling crates in their GPU tests"
+    },
+    "cuda::transfer::placement": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::transfer::submit_download": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::transfer::upload_pending": {
+      "verdict": "public",
+      "reason": "documented asynchronous transfer (guides)"
+    },
+    "cuda::transfer::upload_tensor": {
+      "verdict": "public",
+      "reason": "documented transfer: `upload_tensor` in the guides and the quickstart, and by sibling crates in their GPU tests"
+    },
+    "cuda::vendor": {
+      "verdict": "private",
+      "reason": "`pub(crate)` module: `Cublas`/`GemmRequest` reach users through the `cuda::` re-export, and this path is crate-private"
+    },
+    "cuda::vendor::ComplexCoefficient": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::vendor::Cublas": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::vendor::Cublas::gemm": {
+      "verdict": "private",
+      "reason": "the count is `.gemm(` on `tenferro-linalg`'s own cuBLAS helper types, which share the name; only this crate's `tests/seam_vendor.rs` calls this `gemm`, so removing `pub` means porting that suite first"
+    },
+    "cuda::vendor::Cublas::new": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::vendor::GemmRequest": {
+      "verdict": "private",
+      "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
+    },
+    "cuda::vendor::narrow_i32": {
+      "verdict": "private",
+      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    }
+  }
+}

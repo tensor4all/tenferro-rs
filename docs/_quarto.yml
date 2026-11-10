@@ -114,6 +114,7 @@ website:
               - design/dynamic-symbolic-shapes.md
               - design/execution-engine-ownership.md
               - design/gpu-backend-design.md
+              - design/cuda-surface.md
               - design/xla-backend.md
               - design/inplace-indexing.md
               - design/linalg.md

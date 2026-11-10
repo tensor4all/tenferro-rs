@@ -49,7 +49,7 @@ pub use identity::{CudaComputeCapability, CudaDeviceUuid, GpuExtensionCapability
 /// [`gpu::Buffer<CudaBackend>`] owns it, so no consumer reaches into tensor storage for a
 /// device address.
 #[doc(hidden)]
-pub struct CudaBackend;
+pub(crate) struct CudaBackend;
 
 impl crate::gpu::Backend for CudaBackend {
     type Allocation = t4a_cuda_runtime::Buffer;
