@@ -1787,3 +1787,355 @@ fn prepared_swapped_binary_dot_accumulates_with_conjugation_on_the_named_inputs(
         }
     }
 }
+
+// Regression tests for #2565: the accumulation entry point must never drop a
+// requested operand conjugation on paths that do not reach the binary dot
+// fast path. `lhs_conj` names the first input and `rhs_conj` the second, on the
+// binary contraction and on the n-ary tree walk alike.
+
+/// Deterministic C64 matrix, column-major, with real and imaginary parts varying by index.
+fn conj_probe_matrix(rows: usize, cols: usize, seed: usize) -> (Tensor, Vec<Complex64>) {
+    let values: Vec<Complex64> = (0..rows * cols)
+        .map(|index| {
+            Complex64::new(
+                ((index + seed) % 7) as f64 * 0.5 - 1.5,
+                ((index * 3 + seed) % 5) as f64 * 0.25 - 0.5,
+            )
+        })
+        .collect();
+    let tensor = Tensor::from_vec_col_major(vec![rows, cols], values.clone()).unwrap();
+    (tensor, values)
+}
+
+fn scaled_c64_accumulation() -> DotGeneralAccumulation {
+    DotGeneralAccumulation::scaled(
+        ContractionScalar::C64(Complex64::new(2.0, 1.0)),
+        ContractionScalar::C64(Complex64::new(1.0, 0.0)),
+    )
+    .unwrap()
+}
+
+fn conj_if(value: Complex64, conj: bool) -> Complex64 {
+    if conj {
+        value.conj()
+    } else {
+        value
+    }
+}
+
+/// Contract `inputs` into a prefilled destination and compare against `expected`.
+///
+/// `initial` fills the destination, so a NaN fill with `beta == 0` fails unless
+/// the accumulation really skips reading it.
+fn assert_conj_accum(
+    subscripts: &str,
+    inputs: &[&Tensor],
+    out_shape: &[usize],
+    (lhs_conj, rhs_conj): (bool, bool),
+    mut accumulation: DotGeneralAccumulation,
+    initial: Complex64,
+    expected: &[Complex64],
+) {
+    let plan = ConcreteEinsumPlan::prepare(inputs, subscripts).unwrap();
+    let reads: Vec<TensorRead<'_>> = inputs.iter().map(|t| TensorRead::from_tensor(t)).collect();
+    assert_eq!(out_shape.iter().product::<usize>(), expected.len());
+    let mut out =
+        Tensor::from_vec_col_major(out_shape.to_vec(), vec![initial; expected.len()]).unwrap();
+    accumulation.lhs_conj = lhs_conj;
+    accumulation.rhs_conj = rhs_conj;
+    let mut backend = CpuEngine::serial();
+    {
+        let session = &mut backend;
+        {
+            plan.execute_read_into_accum(
+                &reads,
+                session,
+                accumulation,
+                TensorWrite::from_tensor(&mut out),
+            )
+        }
+    }
+    .unwrap_or_else(|error| {
+        panic!("{subscripts} conj=({lhs_conj}, {rhs_conj}) must succeed: {error:?}")
+    });
+
+    let (ContractionScalar::C64(alpha), ContractionScalar::C64(beta)) =
+        (accumulation.alpha, accumulation.beta)
+    else {
+        panic!("these tests contract C64")
+    };
+    let values = out.as_slice::<Complex64>().unwrap();
+    for (index, (got, einsum)) in values.iter().zip(expected).enumerate() {
+        let scaled = if beta.norm() == 0.0 {
+            Complex64::new(0.0, 0.0)
+        } else {
+            beta * initial
+        };
+        let want = alpha * einsum + scaled;
+        assert!(
+            (got - want).norm() < 1e-11,
+            "{subscripts} conj=({lhs_conj}, {rhs_conj}) [{index}]: {got} vs {want}"
+        );
+    }
+}
+
+/// `A = diag(1+i, 2+3i)`, `B = [[1], [1]]`: `sum_i conj(A[i,i]) * B[i,0] = 3-4i`,
+/// while the unconjugated contraction gives `3+4i`.
+#[test]
+fn prepared_accum_conj_repeated_label_honours_lhs_conj() {
+    let lhs = Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, 3.0),
+        ],
+    )
+    .unwrap();
+    let rhs = Tensor::from_vec_col_major(
+        vec![2, 1],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)],
+    )
+    .unwrap();
+    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ii,ij->j").unwrap();
+    let mut accumulation = DotGeneralAccumulation::overwrite(DType::C64).unwrap();
+    accumulation.lhs_conj = true;
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap();
+    let mut backend = CpuEngine::serial();
+    {
+        let session = &mut backend;
+        {
+            plan.execute_read_into_accum(
+                [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+                session,
+                accumulation,
+                TensorWrite::from_tensor(&mut out),
+            )
+        }
+    }
+    .unwrap();
+    let got = out.as_slice::<Complex64>().unwrap()[0];
+    assert!(
+        (got - Complex64::new(3.0, -4.0)).norm() < 1e-12,
+        "lhs_conj on ii,ij->j must contract conj(lhs); got {got}"
+    );
+}
+
+/// The same repeated-label shape with a non-real `rhs`:
+/// `A = diag(1+i, 2+3i)`, `B = [[1+i], [1]]`, so `rhs_conj` must give
+/// `4+3i` where the unconjugated contraction gives `2+5i`.
+#[test]
+fn prepared_accum_conj_repeated_label_honours_rhs_conj() {
+    let lhs = Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, 3.0),
+        ],
+    )
+    .unwrap();
+    let rhs = Tensor::from_vec_col_major(
+        vec![2, 1],
+        vec![Complex64::new(1.0, 1.0), Complex64::new(1.0, 0.0)],
+    )
+    .unwrap();
+    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ii,ij->j").unwrap();
+    let mut accumulation = DotGeneralAccumulation::overwrite(DType::C64).unwrap();
+    accumulation.rhs_conj = true;
+    let mut out = Tensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap();
+    let mut backend = CpuEngine::serial();
+    {
+        let session = &mut backend;
+        {
+            plan.execute_read_into_accum(
+                [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
+                session,
+                accumulation,
+                TensorWrite::from_tensor(&mut out),
+            )
+        }
+    }
+    .unwrap();
+    let got = out.as_slice::<Complex64>().unwrap()[0];
+    assert!(
+        (got - Complex64::new(4.0, 3.0)).norm() < 1e-12,
+        "rhs_conj on ii,ij->j must contract conj(rhs); got {got}"
+    );
+}
+
+/// `ii,ij->j` has no binary dot plan, so it runs the generic tree walk.
+#[test]
+fn prepared_accum_conj_repeated_label_honours_all_flag_combinations() {
+    let (lhs, lhs_values) = conj_probe_matrix(3, 3, 1);
+    let (rhs, rhs_values) = conj_probe_matrix(3, 2, 4);
+    for (lhs_conj, rhs_conj) in [(false, false), (true, false), (false, true), (true, true)] {
+        let expected: Vec<Complex64> = (0..2)
+            .map(|j| {
+                (0..3)
+                    .map(|i| {
+                        conj_if(lhs_values[i + 3 * i], lhs_conj)
+                            * conj_if(rhs_values[i + 3 * j], rhs_conj)
+                    })
+                    .sum()
+            })
+            .collect();
+        assert_conj_accum(
+            "ii,ij->j",
+            &[&lhs, &rhs],
+            &[2],
+            (lhs_conj, rhs_conj),
+            scaled_c64_accumulation(),
+            Complex64::new(0.5, -0.5),
+            &expected,
+        );
+    }
+}
+
+/// An n-ary contraction walks the contraction tree; `lhs_conj` names the first
+/// input and `rhs_conj` the second, and the remaining operands are unconjugated.
+#[test]
+fn prepared_accum_conj_ternary_tree_honours_all_flag_combinations() {
+    let (first, first_values) = conj_probe_matrix(2, 3, 2);
+    let (second, second_values) = conj_probe_matrix(3, 2, 5);
+    let (third, third_values) = conj_probe_matrix(2, 2, 7);
+    for (lhs_conj, rhs_conj) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut expected = vec![Complex64::new(0.0, 0.0); 4];
+        for l in 0..2 {
+            for i in 0..2 {
+                let mut sum = Complex64::new(0.0, 0.0);
+                for j in 0..3 {
+                    for k in 0..2 {
+                        sum += conj_if(first_values[i + 2 * j], lhs_conj)
+                            * conj_if(second_values[j + 3 * k], rhs_conj)
+                            * third_values[k + 2 * l];
+                    }
+                }
+                expected[i + 2 * l] = sum;
+            }
+        }
+        assert_conj_accum(
+            "ij,jk,kl->il",
+            &[&first, &second, &third],
+            &[2, 2],
+            (lhs_conj, rhs_conj),
+            scaled_c64_accumulation(),
+            Complex64::new(0.5, -0.5),
+            &expected,
+        );
+    }
+}
+
+/// The `ij,jk->ik` binary dot fast path already honoured the flags; keep it
+/// pinned so a fix on the other paths cannot change its numbers.
+#[test]
+fn prepared_accum_conj_binary_dot_fast_path_honours_all_flag_combinations() {
+    let (lhs, lhs_values) = conj_probe_matrix(2, 3, 3);
+    let (rhs, rhs_values) = conj_probe_matrix(3, 2, 6);
+    for (lhs_conj, rhs_conj) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut expected = vec![Complex64::new(0.0, 0.0); 4];
+        for k in 0..2 {
+            for i in 0..2 {
+                expected[i + 2 * k] = (0..3)
+                    .map(|j| {
+                        conj_if(lhs_values[i + 2 * j], lhs_conj)
+                            * conj_if(rhs_values[j + 3 * k], rhs_conj)
+                    })
+                    .sum();
+            }
+        }
+        assert_conj_accum(
+            "ij,jk->ik",
+            &[&lhs, &rhs],
+            &[2, 2],
+            (lhs_conj, rhs_conj),
+            scaled_c64_accumulation(),
+            Complex64::new(0.5, -0.5),
+            &expected,
+        );
+    }
+}
+
+/// The accumulation modes other than the scaled reference: an additive update
+/// into a prefilled destination, and an overwrite whose `beta == 0` must not
+/// read the NaN-filled destination at all.
+#[test]
+fn prepared_accum_conj_ternary_honours_additive_and_overwrite_accumulation() {
+    let (first, first_values) = conj_probe_matrix(2, 3, 2);
+    let (second, second_values) = conj_probe_matrix(3, 2, 5);
+    let (third, third_values) = conj_probe_matrix(2, 2, 7);
+    let nan = Complex64::new(f64::NAN, f64::NAN);
+    for (lhs_conj, rhs_conj) in [(true, false), (false, true), (true, true)] {
+        let mut expected = vec![Complex64::new(0.0, 0.0); 4];
+        for l in 0..2 {
+            for i in 0..2 {
+                for j in 0..3 {
+                    for k in 0..2 {
+                        expected[i + 2 * l] += conj_if(first_values[i + 2 * j], lhs_conj)
+                            * conj_if(second_values[j + 3 * k], rhs_conj)
+                            * third_values[k + 2 * l];
+                    }
+                }
+            }
+        }
+        assert_conj_accum(
+            "ij,jk,kl->il",
+            &[&first, &second, &third],
+            &[2, 2],
+            (lhs_conj, rhs_conj),
+            DotGeneralAccumulation::add_to(DType::C64).unwrap(),
+            Complex64::new(0.5, -0.5),
+            &expected,
+        );
+        assert_conj_accum(
+            "ij,jk,kl->il",
+            &[&first, &second, &third],
+            &[2, 2],
+            (lhs_conj, rhs_conj),
+            DotGeneralAccumulation::overwrite(DType::C64).unwrap(),
+            nan,
+            &expected,
+        );
+    }
+}
+
+/// A conjugation that names an operand the contraction does not have is
+/// refused before the destination is touched.
+#[test]
+fn prepared_accum_conj_unary_rhs_conj_is_rejected_before_writing() {
+    let (input, _) = conj_probe_matrix(2, 3, 1);
+    let plan = ConcreteEinsumPlan::prepare([&input], "ij->ji").unwrap();
+    let mut accumulation = DotGeneralAccumulation::overwrite(DType::C64).unwrap();
+    accumulation.rhs_conj = true;
+    let initial = Complex64::new(7.0, 7.0);
+    let mut out = Tensor::from_vec_col_major(vec![3, 2], vec![initial; 6]).unwrap();
+    let mut backend = CpuEngine::serial();
+    let error = {
+        let session = &mut backend;
+        {
+            plan.execute_read_into_accum(
+                [TensorRead::from_tensor(&input)],
+                session,
+                accumulation,
+                TensorWrite::from_tensor(&mut out),
+            )
+        }
+    }
+    .unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::Tensor(tenferro_tensor::Error::Validation {
+                source: tenferro_tensor::ValidationError::InvalidArgument { .. },
+                ..
+            })
+        ),
+        "a conjugation naming a missing operand must be a typed refusal; got {error:?}"
+    );
+    assert_eq!(
+        out.as_slice::<Complex64>().unwrap(),
+        [initial; 6].as_slice()
+    );
+}

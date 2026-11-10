@@ -12,7 +12,7 @@ use crate::eager::{
     eager_einsum_exec_read, eager_einsum_exec_read_into, eager_einsum_exec_read_into_accum,
     eager_einsum_read_subscripts_on_session, eager_einsum_subscripts_on_session,
     execute_binary_dot_read_into, execute_binary_dot_read_into_accum, execute_binary_dot_shortcut,
-    plan_subscripts, try_binary_dot_shortcut,
+    plan_subscripts, try_binary_dot_shortcut, ConjugatedOperands,
 };
 use crate::ellipsis::resolve_einsum_notation;
 use crate::TensorDotAxes;
@@ -1818,6 +1818,11 @@ impl ConcreteEinsumPlan {
     /// `accumulation` follows the dot-general contract:
     /// `out = alpha * einsum(inputs) + beta * out`.
     ///
+    /// `accumulation.lhs_conj` conjugates the first input and
+    /// `accumulation.rhs_conj` the second, on every execution path. A
+    /// contraction over more than two inputs conjugates only those two
+    /// operands; per-operand conjugation is not part of this contract.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1850,7 +1855,8 @@ impl ConcreteEinsumPlan {
     /// input-count contract violations, [`Error::Tensor`] with a
     /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
     /// mismatches, [`Error::Numerical`] for an invalid accumulation, or
-    /// [`Error::Tensor`] for a typed backend failure.
+    /// [`Error::Tensor`] for a typed backend failure, including a requested
+    /// conjugation the backend cannot apply.
     pub fn execute_read_into_accum<'a, I>(
         &self,
         inputs: I,
@@ -1875,12 +1881,9 @@ impl ConcreteEinsumPlan {
             .map_err(Error::from);
         }
         if crate::cpu_concrete::supports(session, inputs) {
-            let result = self.execute_read(inputs, session)?;
-            let accumulation = DotGeneralAccumulation {
-                lhs_conj: false,
-                rhs_conj: false,
-                ..accumulation
-            };
+            let mut accumulation = accumulation;
+            let conjugated = ConjugatedOperands::apply(session, inputs, &mut accumulation)?;
+            let result = self.execute_read(conjugated.reads(inputs), session)?;
             let mut out = out;
             return tenferro_tensor::backend::accumulate_dot_result_into(
                 &result,
