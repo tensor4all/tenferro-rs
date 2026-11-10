@@ -62,10 +62,76 @@ pub(crate) fn lstsq(
     // Least squares via thin QR: A = Q R (full column rank), so
     // argmin_x |A x - b| solves R x = Qᴴ b.
     let (q, r) = session.qr(a)?;
+    ensure_lstsq_full_column_rank(session, a, &r)?;
     let q_conj = session.conj(&q)?;
     let qh = session.transpose(&q_conj, &matrix_transpose_perm(q.shape().len()))?;
     let qh_b = session.dot_general(&qh, b, trailing_batch_dot_config(qh.shape().len()))?;
     session.triangular_solve(&r, &qh_b, true, false, false, false)
+}
+
+/// Refuse a rank-deficient `A` before the back substitution divides by a zero
+/// or roundoff-level pivot of `R` (#2583).
+///
+/// A pivot is negligible when `|R_ii| <= max(m, n) * eps * max_j |R_jj|`, the
+/// relative cutoff `pinv` applies to singular values. The test is one-sided:
+/// `sigma_min(R) <= min_j |R_jj|`, so a flagged `R` is numerically singular,
+/// but unpivoted QR is not rank revealing and a rank-deficient `A` whose pivots
+/// all stay above the cutoff is not caught. A batch slice with a NaN or
+/// infinite pivot is skipped rather than reported as rank deficient; its
+/// non-finite values reach the solution as before.
+fn ensure_lstsq_full_column_rank(
+    session: &mut EagerSession<'_>,
+    a: &EagerTensor,
+    r: &EagerTensor,
+) -> Result<()> {
+    let (rows, cols) = (a.shape()[0], a.shape()[1]);
+    if cols == 0 {
+        return Ok(());
+    }
+    let pivots = {
+        // The check reads values only; keep it off the AD tape.
+        let _no_grad = a.runtime().no_grad();
+        let diagonal = session.extract_diag(r, 0, 1)?;
+        session.abs(&diagonal)?
+    };
+    // One `cols * batch` real readback; on a device engine this is the only
+    // host synchronization the check adds.
+    let host = session.engine().download_to_host(pivots.tensor_read())?;
+    let pivots: Vec<f64> = match host.dtype() {
+        DType::F64 => host.as_slice::<f64>()?.to_vec(),
+        DType::F32 => host
+            .as_slice::<f32>()?
+            .iter()
+            .map(|&v| f64::from(v))
+            .collect(),
+        // `validate_lstsq` admitted only float or complex `A`, whose pivot
+        // magnitudes are `f32` or `f64`; anything else is refused, not guessed.
+        dtype => return Err(crate::error::unsupported_dtype("lstsq", dtype).into()),
+    };
+    let rtol = default_pinv_rtol(a.dtype(), rows.max(cols));
+    if has_negligible_pivot(&pivots, cols, rtol) {
+        return Err(crate::error::into_tensor_error(
+            "lstsq",
+            crate::Error::Singular { op: "lstsq" },
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Whether some batch slice has a pivot at or below `rtol` times its largest
+/// pivot; slices with a non-finite pivot are skipped.
+fn has_negligible_pivot(pivots: &[f64], cols: usize, rtol: f64) -> bool {
+    pivots.chunks_exact(cols).any(|slice| {
+        // Check finiteness explicitly: `f64::max` would drop a NaN and let the
+        // scale come from the remaining pivots.
+        if slice.iter().any(|pivot| !pivot.is_finite()) {
+            return false;
+        }
+        let scale = slice.iter().fold(0.0_f64, |acc, &pivot| acc.max(pivot));
+        let cutoff = rtol * scale;
+        slice.iter().any(|&pivot| pivot <= cutoff)
+    })
 }
 
 pub(crate) fn pinv(session: &mut EagerSession<'_>, a: &EagerTensor) -> Result<EagerTensor> {

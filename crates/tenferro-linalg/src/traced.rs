@@ -269,7 +269,9 @@ pub trait TracedTensorLinalgExt {
     /// Backend QR and triangular-solve failures and concrete shape mismatches
     /// are reported during compile or execution. Rank-deficient `A` is not
     /// detected: `R` is singular and the result is ill-defined, so callers must
-    /// ensure full column rank.
+    /// ensure full column rank. The eager `EagerSessionLinalgExt::lstsq`
+    /// (feature `autodiff`) checks the pivots of `R` and returns an error; the
+    /// traced graph has no such check.
     fn lstsq(&self, b: &TracedTensor) -> Result<TracedTensor>;
 
     /// Build a traced complete-pivot LU solve operation.
@@ -937,7 +939,9 @@ pub trait TraceContextLinalgExt {
     /// complex; `Error::RuntimeStateSource` when `a` or `b` belongs to another
     /// context (ownership is checked before the operand validation above). Rank-deficient `A` is not detected here: `R` is singular and the
     /// triangular solve yields a non-finite or ill-defined result, so callers must
-    /// ensure full column rank.
+    /// ensure full column rank. The eager `EagerSessionLinalgExt::lstsq`
+    /// (feature `autodiff`) checks the pivots of `R` and returns an error; the
+    /// traced graph has no such check.
     ///
     /// # Deferred errors
     ///

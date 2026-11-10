@@ -294,8 +294,22 @@ pub trait EagerSessionLinalgExt {
     /// assert!((x.value()?.as_slice::<f64>()?[0] - 2.0).abs() < 1e-12);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// Rank deficiency is checked on the `R` factor of the unpivoted thin QR:
+    /// the solve is refused when some pivot satisfies
+    /// `|R_ii| <= max(m, n) * eps * max_j |R_jj|` (per batch slice), which
+    /// includes an exactly zero pivot. The check is sufficient, not necessary:
+    /// unpivoted QR is not rank revealing, so a rank-deficient `A` whose pivots
+    /// all stay above that cutoff is not detected. A batch slice whose pivots
+    /// include NaN or infinity is not checked, and its non-finite values reach
+    /// the solution. The check reads the pivot magnitudes back to the host,
+    /// which is one synchronization on a device engine.
+    ///
     /// # Errors
-    /// Returns typed rank/shape/dtype validation, extension, backend, or unsupported errors.
+    /// Returns typed rank/shape/dtype validation, extension, backend, or unsupported errors,
+    /// and a `NumericalFailure` extension error with a
+    /// [`Error::Singular`](crate::Error::Singular) `{ op: "lstsq" }` source when
+    /// the rank check above rejects `A`.
     fn lstsq(&mut self, matrix: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor>;
 
     /// Factor a matrix without leaving this borrowed session.
