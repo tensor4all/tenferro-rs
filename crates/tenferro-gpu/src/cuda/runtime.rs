@@ -487,7 +487,9 @@ impl CudaRuntime {
     ///
     /// # Errors
     ///
-    /// The I/O error from listing a directory that exists but cannot be read.
+    /// The [`std::io::Error`] from listing a directory that exists but cannot be read, such as
+    /// `ErrorKind::PermissionDenied`. A directory that does not exist yet is not an error; it
+    /// reports zero entries.
     pub fn artifact_dir_stats(&self) -> std::io::Result<t4a_cuda_runtime::ArtifactDirStats> {
         self.submit().artifact_dir_stats()
     }
@@ -503,7 +505,9 @@ impl CudaRuntime {
     ///
     /// # Errors
     ///
-    /// The I/O error from listing the directory or removing an entry.
+    /// The [`std::io::Error`] from listing the directory or removing an entry, such as
+    /// `ErrorKind::PermissionDenied` on a read-only cache. An entry another process removed
+    /// first (`ErrorKind::NotFound`) is not an error.
     pub fn clear_artifact_dir(&self) -> std::io::Result<t4a_cuda_runtime::ArtifactDirStats> {
         self.submit().clear_artifact_dir()
     }
