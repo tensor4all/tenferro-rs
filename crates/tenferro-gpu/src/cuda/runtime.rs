@@ -486,7 +486,7 @@ impl CudaRuntime {
 
     /// The identity of this runtime; distinct for every opened runtime.
     #[doc(hidden)]
-    pub fn identity(&self) -> &CudaRuntimeIdentity {
+    pub(crate) fn identity(&self) -> &CudaRuntimeIdentity {
         &self.inner.identity
     }
 
@@ -739,7 +739,7 @@ impl CudaRuntime {
     /// [`CudaDeviceError::Initialization`] when the driver cannot allocate pinned
     /// memory.
     #[doc(hidden)]
-    pub fn alloc_pinned(
+    pub(crate) fn alloc_pinned(
         &self,
         bytes: usize,
     ) -> Result<t4a_cuda_runtime::PinnedHostBuffer, CudaDeviceError> {
@@ -946,7 +946,7 @@ impl CudaRuntime {
     /// the barrier for its own work (see the CUDA engine's event domain), so an operation's launch
     /// does not prove its own completion while it is zero. A standalone call sees zero and waits.
     #[doc(hidden)]
-    pub fn completion_deferred(&self) -> bool {
+    pub(crate) fn completion_deferred(&self) -> bool {
         self.inner
             .deferred_completions
             .load(std::sync::atomic::Ordering::Relaxed)

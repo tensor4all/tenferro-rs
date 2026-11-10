@@ -32,6 +32,7 @@ impl KernelModules {
     /// [`crate::Error::Unsupported`] when an entry has no translation unit,
     /// [`crate::Error::RuntimeStateSource`] when NVRTC rejects a module, and
     /// [`crate::Error::RuntimeState`] when the runtime cannot prepare its artifact.
+    #[doc(hidden)]
     pub fn for_entries(runtime: &CudaRuntime, entries: &[Entry]) -> crate::Result<KernelModules> {
         let mut modules = KernelModules {
             runtime: runtime.clone(),
@@ -89,6 +90,7 @@ impl KernelModules {
     }
 
     /// Number of prepared modules.
+    #[doc(hidden)]
     pub fn modules(&self) -> usize {
         self.artifacts.len()
     }
@@ -106,6 +108,7 @@ impl KernelModules {
     /// [`crate::Error::Unsupported`] when the entry has no translation unit,
     /// [`crate::Error::RuntimeState`] when its module is not prepared, and
     /// [`crate::Error::RuntimeStateSource`] when the entry point cannot be bound.
+    #[doc(hidden)]
     pub fn function(&mut self, entry: Entry) -> crate::Result<&BoundFunction> {
         self.function_named(entry, entry.name())
     }
@@ -186,6 +189,7 @@ impl KernelModules {
     ///
     /// As [`KernelModules::function`] for binding, and
     /// [`crate::Error::RuntimeStateSource`] when the runtime refuses or fails the launch.
+    #[doc(hidden)]
     pub unsafe fn launch(
         &mut self,
         entry: Entry,

@@ -6076,7 +6076,10 @@ impl CudaEngine {
     ///
     /// The structural surface's own refusal for a host tensor, and the runtime's failure.
     #[doc(hidden)]
-    pub fn to_contiguous(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
+    // Named after the `TensorStructural` method it forwards to; the lint exempts exported
+    // API, so narrowing this wrapper is what surfaces it.
+    #[expect(clippy::wrong_self_convention)]
+    pub(crate) fn to_contiguous(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         use tenferro_tensor::TensorStructural as _;
         self.to_contiguous_read(tenferro_tensor::TensorRead::from_tensor(tensor))
     }
