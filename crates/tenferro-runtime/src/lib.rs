@@ -50,6 +50,7 @@
 
 #[doc(hidden)]
 pub mod ad_support;
+mod api;
 mod checkpoint;
 mod compiler;
 #[doc(hidden)]
@@ -69,7 +70,6 @@ pub mod scalar_semantics;
 #[doc(hidden)]
 pub mod scale;
 mod segment;
-mod session_ext;
 mod shape_constraint;
 mod shape_infer;
 mod shape_packing;
@@ -78,9 +78,9 @@ mod tensor;
 mod trace;
 mod trace_ops;
 pub mod traced;
-mod typed_session_ext;
 mod typed_tensor;
 
+pub use api::{AddOptions, CoreOps, CoreRepr, SelectCondition, SelectOperand};
 pub use compiler::{CompilerOptions, OptimizerConfig};
 pub use error::{
     ContextId, Error, ErrorPhase, Result, RuntimeFailureReasonRef, ShapeConstraintEvalError,
@@ -123,7 +123,6 @@ pub use runtime::{
     TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
     UnsupportedReason,
 };
-pub use session_ext::TensorSessionOpsExt;
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;
 pub use shape_packing::TracedSliceBuilder;
@@ -135,6 +134,5 @@ pub use tenferro_tensor::{
     TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
-pub use typed_session_ext::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
 
 pub use traced::TracedTensor;

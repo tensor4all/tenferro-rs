@@ -45,7 +45,9 @@ fn eval_many(outputs: &[&TracedTensor]) -> Vec<Tensor> {
 
 fn reduce_all(tensor: &TracedTensor) -> TracedTensor {
     let axes: Vec<usize> = (0..tensor.rank()).collect();
-    tensor.reduce_sum(Some(&axes)).unwrap()
+    tensor
+        .reduce_sum(Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()))
+        .unwrap()
 }
 
 /// Operations of the output's frozen program, in semantic order.

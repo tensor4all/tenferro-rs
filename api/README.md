@@ -29,6 +29,10 @@ The second combination of a crate is its docs.rs feature set. `tenferro-cpu`
 and `tenferro-runtime` have one file each, because their docs.rs set
 (`native`) is the default set.
 
+`allowlist.txt` is not a snapshot: it lists, symbol by symbol, the approved
+external types and owner-scoped bridges of exception E06 (see the core
+registry, `crates/tenferro-runtime/src/api/registry.rs`).
+
 Not snapshotted:
 
 - `publish = false` packages (`docs/tutorial-code`, the `ext/*` proof and

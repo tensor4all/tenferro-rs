@@ -108,7 +108,7 @@ pub use config::{
     degenerate_dot_kind, CompareDir, DegenerateDotKind, DotGeneralConfig, GatherConfig, PadConfig,
     ScatterConfig, SliceConfig,
 };
-pub use dest::{Conj, Dest, DestMode};
+pub use dest::{Conj, Dest, DestMode, DotGeneralOptions};
 pub use erased_host::ErasedHostTensor;
 pub use error::{BoxError, Error, ReinterpretError, Result};
 pub use native_engine::NativeSessionRef;

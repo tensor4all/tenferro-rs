@@ -127,7 +127,12 @@ fn assert_eager_vjp(case: &BroadcastCase) {
     assert_eq!(output.shape(), case.output_shape, "eager forward shape");
     let axes: Vec<usize> = (0..case.output_shape.len()).collect();
     let loss = ctx
-        .with_eager_session(&mut engine, |s| s.reduce_sum(&output, Some(&axes)))
+        .with_eager_session(&mut engine, |s| {
+            s.reduce_sum(
+                &output,
+                Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+            )
+        })
         .unwrap();
     let _ = loss.backward(&mut engine).unwrap();
 

@@ -74,7 +74,7 @@ ordinary tensor computation without autodiff when runtime dtype is useful.
 <!-- snippet-source: crates/tenferro-runtime/examples/direct_tensor_execution.rs -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = CpuEngine::serial();

@@ -11,7 +11,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::TensorSessionOpsExt;
+use tenferro_runtime::CoreOps;
 use tenferro_tensor::TensorRead;
 use tenferro_tensor::{CompareDir, DotGeneralConfig, Engine, Tensor};
 

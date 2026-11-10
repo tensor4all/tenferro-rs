@@ -9,7 +9,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuEngine;
 use tenferro_einsum::ConcreteEinsumPlan;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, Tensor};
 
 const N: usize = 8;
 const CALLS: usize = 10;

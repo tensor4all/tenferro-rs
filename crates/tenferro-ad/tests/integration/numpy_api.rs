@@ -5,9 +5,8 @@ use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_ops::{ext_op::ExtensionOp, std_tensor_op::StdTensorOp, SymDim};
 use tenferro_runtime::{
-    CompareDir, DType, Error as RuntimeError, ErrorPhase, GraphCompiler, Tensor,
-    TensorSessionOpsExt, TraceContext, TracedTensor, TypedTensor, TypedTensorMaskSessionOpsExt,
-    TypedTensorSessionOpsExt,
+    CompareDir, CoreOps, DType, Error as RuntimeError, ErrorPhase, GraphCompiler, Tensor,
+    TraceContext, TracedTensor, TypedTensor,
 };
 use tenferro_tensor::ValidationError;
 

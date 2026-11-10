@@ -55,7 +55,10 @@ fn fixture(ctx: &Arc<EagerRuntime>, left_bond: usize, right_bond: usize, seed: u
             let weighted = s.mul(&x, &weight)?;
             let quadratic = s.mul(&weighted, &x)?;
             let axes: Vec<usize> = (0..quadratic.shape().len()).collect();
-            s.reduce_sum(&quadratic, Some(&axes))
+            s.reduce_sum(
+                &quadratic,
+                Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+            )
         })
         .unwrap();
     Fixture {

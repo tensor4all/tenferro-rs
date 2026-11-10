@@ -17,7 +17,7 @@ fn get_f64_data(tensor: &Tensor) -> &[f64] {
 }
 
 fn sym_size(input: &TracedTensor, axis: usize) -> SymDim {
-    input.sym_size(axis).unwrap()
+    input.sym_size(axis as isize).unwrap()
 }
 
 #[test]

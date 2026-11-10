@@ -10,7 +10,10 @@ fn esc(s: &str) -> String {
 /// Generated method names of an op, e.g. `svd`, `svd_with`, `svd_into (overwrite)`.
 fn suffixes(op: &Op) -> String {
     let n = op.name.to_string();
-    let mut parts = vec![format!("`{n}`"), format!("`{n}_with`")];
+    let mut parts = vec![format!("`{n}`")];
+    if op.options.is_some() {
+        parts.push(format!("`{n}_with`"));
+    }
     if !op.into.is_empty() {
         let modes = op
             .into
@@ -52,11 +55,13 @@ pub(crate) fn render(reg: &Registry) -> String {
     }
     out.push('\n');
     for op in &reg.ops {
-        let opts = &op.options;
         let output = &op.output;
         out.push_str(&format!("### {}\n\n", op.name));
         out.push_str(&format!("{}\n\n", op.summary.value()));
-        out.push_str(&format!("- Options: `{}`\n", tidy(&quote!(#opts))));
+        match &op.options {
+            Some(opts) => out.push_str(&format!("- Options: `{}`\n", tidy(&quote!(#opts)))),
+            None => out.push_str("- Options: none\n"),
+        }
         out.push_str(&format!("- Output: `{}`\n", tidy(&quote!(#output))));
         out.push_str(&format!("- Dtypes: {}\n", op.dtypes.value()));
         out.push_str(&format!("- Layout: {}\n", op.layout.value()));

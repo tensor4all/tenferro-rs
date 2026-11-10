@@ -26,6 +26,8 @@ mod runtime_public_api;
 mod session_ops;
 #[path = "integration/session_ops_parity.rs"]
 mod session_ops_parity;
+#[path = "integration/signed_axes.rs"]
+mod signed_axes;
 #[path = "integration/trace_context.rs"]
 mod trace_context;
 #[path = "integration/typed_tensor_contract.rs"]

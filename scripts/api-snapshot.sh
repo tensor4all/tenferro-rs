@@ -96,6 +96,10 @@ if [ "$mode" = --check ]; then
     done
     for file in api/*.txt; do
         name=$(basename "$file")
+        # api/allowlist.txt is the E06 symbol list (#2552), not a snapshot.
+        if [ "$name" = allowlist.txt ]; then
+            continue
+        fi
         if [ ! -f "$out_dir/$name" ]; then
             echo "api-snapshot: api/$name is stale (no such crate/feature combination)" >&2
             status=1

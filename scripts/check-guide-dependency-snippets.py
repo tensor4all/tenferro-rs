@@ -79,7 +79,7 @@ LINALG_SOURCE = r"""
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{FullPivLu, LinalgOps};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -124,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 TENSOR_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{CompareDir, TypedTensorSessionOpsExt};
+use tenferro_runtime::{CompareDir, CoreOps};
 use tenferro_tensor::{Rank, TypedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

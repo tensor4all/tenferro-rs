@@ -1,5 +1,5 @@
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, Tensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = CpuEngine::serial();

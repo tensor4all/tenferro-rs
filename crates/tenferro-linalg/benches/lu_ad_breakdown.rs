@@ -143,8 +143,14 @@ fn fixture(n: usize, threads: usize) -> Fixture {
         .with_eager_session(&mut engine, |s| {
             let l_axes: Vec<usize> = (0..l.shape().len()).collect();
             let u_axes: Vec<usize> = (0..u.shape().len()).collect();
-            let l_sum = s.reduce_sum(&l, Some(&l_axes))?;
-            let u_sum = s.reduce_sum(&u, Some(&u_axes))?;
+            let l_sum = s.reduce_sum(
+                &l,
+                Some(&l_axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+            )?;
+            let u_sum = s.reduce_sum(
+                &u,
+                Some(&u_axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+            )?;
             s.add(&l_sum, &u_sum)
         })
         .unwrap();

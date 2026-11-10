@@ -4,10 +4,7 @@
 
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{
-    Tensor, TensorSessionOpsExt, TypedTensor, TypedTensorMaskSessionOpsExt,
-    TypedTensorSessionOpsExt,
-};
+use tenferro_runtime::{CoreOps, Tensor, TypedTensor};
 use tenferro_tensor::{
     DotGeneralConfig, Engine, GatherConfig, PadConfig, ScatterConfig, SliceConfig, TensorRead,
 };
@@ -128,29 +125,53 @@ fn reduction_family_matches_the_session_form() {
         for axes in [vec![0], vec![1], vec![0, 1]] {
             same(
                 &x.reduce_max(Some(&axes), s).unwrap(),
-                &s.reduce_max_read(read(), &axes).unwrap(),
+                &s.reduce_max_read(
+                    read(),
+                    &axes.iter().map(|&a| a as usize).collect::<Vec<_>>(),
+                )
+                .unwrap(),
             );
             same(
                 &x.reduce_min(Some(&axes), s).unwrap(),
-                &s.reduce_min_read(read(), &axes).unwrap(),
+                &s.reduce_min_read(
+                    read(),
+                    &axes.iter().map(|&a| a as usize).collect::<Vec<_>>(),
+                )
+                .unwrap(),
             );
             same(
                 &x.reduce_prod(Some(&axes), s).unwrap(),
-                &s.reduce_prod_read(read(), &axes).unwrap(),
+                &s.reduce_prod_read(
+                    read(),
+                    &axes.iter().map(|&a| a as usize).collect::<Vec<_>>(),
+                )
+                .unwrap(),
             );
             same(
                 &x.reduce_sum_squares(Some(&axes), s).unwrap(),
-                &s.reduce_sum_squares_read(read(), &axes).unwrap(),
+                &s.reduce_sum_squares_read(
+                    read(),
+                    &axes.iter().map(|&a| a as usize).collect::<Vec<_>>(),
+                )
+                .unwrap(),
             );
             let typed = tx.reduce_max(Some(&axes), s).unwrap();
             same(
                 &Tensor::from_typed(typed),
-                &s.reduce_max_read(read(), &axes).unwrap(),
+                &s.reduce_max_read(
+                    read(),
+                    &axes.iter().map(|&a| a as usize).collect::<Vec<_>>(),
+                )
+                .unwrap(),
             );
             let typed = tx.reduce_sum_squares(Some(&axes), s).unwrap();
             same(
                 &Tensor::from_typed(typed),
-                &s.reduce_sum_squares_read(read(), &axes).unwrap(),
+                &s.reduce_sum_squares_read(
+                    read(),
+                    &axes.iter().map(|&a| a as usize).collect::<Vec<_>>(),
+                )
+                .unwrap(),
             );
         }
         // `None` is every axis.
@@ -379,7 +400,14 @@ fn dot_family_matches_the_session_form() {
         );
         for (lc, rc) in [(false, false), (true, false), (false, true), (true, true)] {
             let receiver = cl
-                .dot_general_with_conj(&cr, matrix.clone(), lc, rc, s)
+                .dot_general_with(
+                    &cr,
+                    matrix.clone(),
+                    &tenferro_tensor::DotGeneralOptions::default()
+                        .lhs(conj(lc))
+                        .rhs(conj(rc)),
+                    s,
+                )
                 .unwrap();
             let session = s.dot_general_with_conj(&cl, &cr, &matrix, lc, rc).unwrap();
             assert_eq!(
@@ -397,7 +425,14 @@ fn dot_family_matches_the_session_form() {
             )
             .unwrap();
             let typed = typed_l
-                .dot_general_with_conj(&typed_r, matrix.clone(), lc, rc, s)
+                .dot_general_with(
+                    &typed_r,
+                    matrix.clone(),
+                    &tenferro_tensor::DotGeneralOptions::default()
+                        .lhs(conj(lc))
+                        .rhs(conj(rc)),
+                    s,
+                )
                 .unwrap();
             assert_eq!(
                 typed.host_data().unwrap(),
@@ -499,4 +534,12 @@ fn scale_factors_follow_the_shared_dtype_rules() {
         &[Complex32::new(1.0, -1.0)]
     );
     assert!(complex_scale_scalar(DType::I64, Complex64::new(1.0, 0.0)).is_err());
+}
+
+fn conj(yes: bool) -> tenferro_tensor::Conj {
+    if yes {
+        tenferro_tensor::Conj::Yes
+    } else {
+        tenferro_tensor::Conj::No
+    }
 }

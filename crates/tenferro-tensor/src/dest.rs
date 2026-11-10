@@ -45,6 +45,55 @@ impl Conj {
     }
 }
 
+/// Options of `dot_general`: which operand enters conjugated.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{Conj, DotGeneralOptions};
+///
+/// let options = DotGeneralOptions::default().lhs(Conj::Yes);
+/// assert_eq!((options.lhs, options.rhs), (Conj::Yes, Conj::No));
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct DotGeneralOptions {
+    /// Conjugate the left operand. The default is [`Conj::No`].
+    pub lhs: Conj,
+    /// Conjugate the right operand. The default is [`Conj::No`].
+    pub rhs: Conj,
+}
+
+impl DotGeneralOptions {
+    /// Return options with the requested left-operand conjugation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Conj, DotGeneralOptions};
+    ///
+    /// assert_eq!(DotGeneralOptions::default().lhs(Conj::Yes).lhs, Conj::Yes);
+    /// ```
+    pub fn lhs(mut self, lhs: Conj) -> Self {
+        self.lhs = lhs;
+        self
+    }
+
+    /// Return options with the requested right-operand conjugation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Conj, DotGeneralOptions};
+    ///
+    /// assert_eq!(DotGeneralOptions::default().rhs(Conj::Yes).rhs, Conj::Yes);
+    /// ```
+    pub fn rhs(mut self, rhs: Conj) -> Self {
+        self.rhs = rhs;
+        self
+    }
+}
+
 /// Which [`Dest`] variant a destination is, without its target.
 ///
 /// The operation registry uses this to declare the accepted modes.

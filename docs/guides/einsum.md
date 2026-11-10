@@ -72,8 +72,7 @@ use tenferro_cpu::CpuEngine;
 use tenferro_einsum::EinsumOps;
 use tenferro_tensor::{
     Tensor, TensorWrite, TypedTensor, TypedTensorView,
-    TypedTensorViewMut, TypedTensorWrite,
-};
+    TypedTensorViewMut, TypedTensorWrite};
 
 let lhs = Tensor::from_vec_col_major(
     vec![2, 3],

@@ -141,7 +141,7 @@ assert_eq!(x.as_slice::<f64>()?, &[2.0, 3.0]);
 ```rust
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::LinalgOps;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -194,7 +194,7 @@ let ad = AdContext::builder()
 ```rust
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{LinalgOps, Svd};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -375,7 +375,7 @@ assert_eq!(repeated.concrete_shape()?, vec![3]);
 ```rust
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{LinalgOps, Qr, QrGauge, QrOptions};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -425,7 +425,7 @@ you need:
 ```rust
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{QrGauge, QrOptions, LinalgOps};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let initial = Tensor::from_vec_col_major(
     vec![3, 2],
@@ -480,7 +480,7 @@ shape, dtype, provider, or thread count.
 ```rust
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{Eigh, LinalgOps};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -590,7 +590,7 @@ exposes an explicit transpose flag.
 ```rust
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{FullPivLu, LinalgOps};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;

@@ -171,10 +171,9 @@ fn tensor_checkpoint_and_cpu_gemm_public_paths_avoid_panic_helpers() {
 
 #[test]
 fn runtime_matmul_and_shape_inference_use_shared_validation_before_indexing() {
-    for path in [
-        "crates/tenferro-runtime/src/tensor.rs",
-        "crates/tenferro-runtime/src/typed_tensor.rs",
-    ] {
+    // One concrete body serves every input kind since #2552 S6.
+    {
+        let path = "crates/tenferro-runtime/src/api/body.rs";
         let source = repo_file(path);
         assert!(
             source.contains("matmul_config_for_shapes(\"matmul\""),

@@ -88,7 +88,10 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
             let solution = solve(&ctx, &a, &b).unwrap();
             let loss = ctx
                 .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-                    s.reduce_sum(&solution, Some(&axes))
+                    s.reduce_sum(
+                        &solution,
+                        Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+                    )
                 })
                 .unwrap();
             drop(solution); // LU/pivots and X must survive without user handles.
@@ -115,7 +118,10 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                 let solution = solve(&ctx, &a, &b).unwrap();
                 let loss = ctx
                     .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-                        s.reduce_sum(&solution, Some(&axes))
+                        s.reduce_sum(
+                            &solution,
+                            Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+                        )
                     })
                     .unwrap();
                 (
@@ -147,7 +153,10 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                 .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                     let conjugated = s.conj(&direction)?;
                     let product = s.mul(&ga, &conjugated)?;
-                    s.reduce_sum(&product, Some(&axes))
+                    s.reduce_sum(
+                        &product,
+                        Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+                    )
                 })
                 .unwrap();
             close(

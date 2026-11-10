@@ -2833,6 +2833,25 @@ pub fn tenferro_tensor::config::DotGeneralConfig::fmt(&self, &mut core::fmt::For
 impl core::hash::Hash for tenferro_tensor::config::DotGeneralConfig
 pub fn tenferro_tensor::config::DotGeneralConfig::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for tenferro_tensor::config::DotGeneralConfig
+#[non_exhaustive] pub struct tenferro_tensor::DotGeneralOptions
+pub tenferro_tensor::DotGeneralOptions::lhs: tenferro_tensor::Conj
+pub tenferro_tensor::DotGeneralOptions::rhs: tenferro_tensor::Conj
+impl tenferro_tensor::DotGeneralOptions
+pub fn tenferro_tensor::DotGeneralOptions::lhs(self, tenferro_tensor::Conj) -> Self
+pub fn tenferro_tensor::DotGeneralOptions::rhs(self, tenferro_tensor::Conj) -> Self
+impl core::clone::Clone for tenferro_tensor::DotGeneralOptions
+pub fn tenferro_tensor::DotGeneralOptions::clone(&self) -> tenferro_tensor::DotGeneralOptions
+impl core::cmp::Eq for tenferro_tensor::DotGeneralOptions
+impl core::cmp::PartialEq for tenferro_tensor::DotGeneralOptions
+pub fn tenferro_tensor::DotGeneralOptions::eq(&self, &tenferro_tensor::DotGeneralOptions) -> bool
+impl core::default::Default for tenferro_tensor::DotGeneralOptions
+pub fn tenferro_tensor::DotGeneralOptions::default() -> tenferro_tensor::DotGeneralOptions
+impl core::fmt::Debug for tenferro_tensor::DotGeneralOptions
+pub fn tenferro_tensor::DotGeneralOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_tensor::DotGeneralOptions
+pub fn tenferro_tensor::DotGeneralOptions::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_tensor::DotGeneralOptions
+impl core::marker::StructuralPartialEq for tenferro_tensor::DotGeneralOptions
 pub struct tenferro_tensor::Dynamic
 impl core::fmt::Debug for tenferro_tensor::types::Dynamic
 pub fn tenferro_tensor::types::Dynamic::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result

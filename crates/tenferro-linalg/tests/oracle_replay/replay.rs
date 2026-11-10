@@ -1240,7 +1240,11 @@ fn cotangent_scalar(
         };
         let product = (&output.tensor * &cotangent).map_err(to_string)?;
         let axes: Vec<usize> = (0..product.rank()).collect();
-        scalar_terms.push(product.reduce_sum(Some(&axes)).map_err(to_string)?);
+        scalar_terms.push(
+            product
+                .reduce_sum(Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()))
+                .map_err(to_string)?,
+        );
     }
 
     let mut iter = scalar_terms.into_iter();
@@ -1518,7 +1522,9 @@ fn oracle_to_tenferro(tensor: &TracedTensor, core_rank: usize) -> Result<TracedT
     let mut perm = Vec::with_capacity(rank);
     perm.extend(split..rank);
     perm.extend(0..split);
-    tensor.transpose(&perm).map_err(to_string)
+    tensor
+        .transpose(&perm.iter().map(|&a| a as isize).collect::<Vec<_>>())
+        .map_err(to_string)
 }
 
 fn tenferro_to_oracle(tensor: &TracedTensor, core_rank: usize) -> Result<TracedTensor, String> {
@@ -1529,7 +1535,9 @@ fn tenferro_to_oracle(tensor: &TracedTensor, core_rank: usize) -> Result<TracedT
     let mut perm = Vec::with_capacity(rank);
     perm.extend(core_rank..rank);
     perm.extend(0..core_rank);
-    tensor.transpose(&perm).map_err(to_string)
+    tensor
+        .transpose(&perm.iter().map(|&a| a as isize).collect::<Vec<_>>())
+        .map_err(to_string)
 }
 
 fn rhs_core_rank(a: &TracedTensor, b: &TracedTensor) -> usize {
@@ -1666,7 +1674,9 @@ fn swap_tenferro_matrix_axes(tensor: &TracedTensor) -> Result<TracedTensor, Stri
     }
     let mut perm: Vec<usize> = (0..tensor.rank()).collect();
     perm.swap(0, 1);
-    tensor.transpose(&perm).map_err(to_string)
+    tensor
+        .transpose(&perm.iter().map(|&a| a as isize).collect::<Vec<_>>())
+        .map_err(to_string)
 }
 
 fn adjoint_tenferro_matrix_axes(tensor: &TracedTensor) -> Result<TracedTensor, String> {

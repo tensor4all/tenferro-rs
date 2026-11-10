@@ -192,8 +192,10 @@ pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
 ///     op svd {
 ///         summary: "...";
 ///         operands: (a);             // `name: Type` for typed operands
-///         options: SvdOptions;
-///         output: Svd<V, R>;
+///         options: SvdOptions;       // `options: none;`: no options type, no `_with`
+///         // optional: `generics: <Y: Bound>;` (method generics) and
+///         // `associated;` (no receiver, `Self: Sized`, e.g. concatenate)
+///         output: Svd<V, R>;         // `V`/`R`/... are the layer's `types` keys
 ///         dtypes: "...";
 ///         layers: [concrete];
 ///         into: [];                  // overwrite | accumulate | scaled

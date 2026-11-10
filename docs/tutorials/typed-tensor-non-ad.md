@@ -19,7 +19,7 @@ The example below shows four details that matter in real code:
 <!-- snippet-source: docs/tutorial-code/src/bin/typed_tensor_non_ad.rs -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, TypedTensor};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());

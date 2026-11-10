@@ -1,0 +1,8 @@
+# Exception E06 (#2552): approved external types and owner-scoped bridges that
+# appear in the public API outside the operation grammar. One symbol per line;
+# the core registry (crates/tenferro-runtime/src/api/registry.rs) lists the
+# same symbols and `exception_table_lists_concrete_symbols` checks that each is
+# here. Lines starting with `#` are comments.
+num_complex::Complex
+tenferro_cpu::with_borrowed_cpu_engine
+tenferro_tensor::Dest::into_accumulation

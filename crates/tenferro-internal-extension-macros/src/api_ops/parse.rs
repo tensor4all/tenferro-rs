@@ -305,11 +305,24 @@ fn parse_op(input: ParseStream<'_>) -> syn::Result<Op> {
     let mut layout = None;
     let mut errors = None;
     let mut omissions = None;
+    let mut generics = None;
+    let mut associated = false;
     let mut examples: Vec<(Ident, LitStr)> = Vec::new();
 
     while !input.is_empty() {
         let key: Ident = input.parse()?;
         let k = key.to_string();
+        if k == "associated" {
+            if associated {
+                return Err(syn::Error::new_spanned(
+                    &key,
+                    format!("duplicate `associated` in `op {name}`"),
+                ));
+            }
+            associated = true;
+            end_key(input)?;
+            continue;
+        }
         if k == "example" {
             let layer: Ident = input.parse()?;
             input.parse::<Token![:]>()?;
@@ -333,7 +346,17 @@ fn parse_op(input: ParseStream<'_>) -> syn::Result<Op> {
                 let v = Punctuated::<Operand, Token![,]>::parse_terminated(&body)?;
                 set(&mut operands, &key, v.into_iter().collect::<Vec<_>>())?;
             }
-            "options" => set(&mut options, &key, input.parse::<Path>()?)?,
+            "options" => {
+                let none = input.peek(Ident) && input.fork().parse::<Ident>()? == "none";
+                let value = if none {
+                    input.parse::<Ident>()?;
+                    None
+                } else {
+                    Some(input.parse::<Path>()?)
+                };
+                set(&mut options, &key, value)?
+            }
+            "generics" => set(&mut generics, &key, input.parse::<syn::Generics>()?)?,
             "output" => set(&mut output, &key, input.parse::<Type>()?)?,
             "dtypes" => set(&mut dtypes, &key, input.parse::<LitStr>()?)?,
             "layers" => set(&mut layers, &key, list::<Ident>(input)?)?,
@@ -355,6 +378,8 @@ fn parse_op(input: ParseStream<'_>) -> syn::Result<Op> {
         summary: need(summary, &name, "summary")?,
         operands: need(operands, &name, "operands")?,
         options: need(options, &name, "options")?,
+        generics,
+        associated,
         output: need(output, &name, "output")?,
         dtypes: need(dtypes, &name, "dtypes")?,
         layers: need(layers, &name, "layers")?,

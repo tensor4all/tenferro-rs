@@ -73,7 +73,7 @@ fn eager_axis_ops_validate_before_recording_source_contract() {
         "borrowed product reduction must validate axes before recording"
     );
     let reverse = session_source
-        .split_once("pub fn reverse(&mut self, input: &EagerTensor, axes: &[usize])")
+        .split_once("pub fn reverse(&mut self, input: &EagerTensor, axes: &[isize])")
         .and_then(|(_, rest)| {
             rest.split_once("StdTensorOp::Reverse")
                 .map(|(before_op, _)| before_op)
@@ -138,17 +138,17 @@ fn eager_dot_general_surfaces_validate_config_before_dispatch_source_contract() 
     );
 
     let dot_general_with_conj = session_source
-        .split_once("pub fn dot_general_with_conj(")
+        .split_once("pub fn dot_general_with(")
         .and_then(|(_, rest)| rest.split_once("if !lhs.requires_grad"))
         .map(|(before_dispatch, _)| before_dispatch)
-        .expect("missing EagerSession::dot_general_with_conj source section");
+        .expect("missing EagerSession::dot_general_with source section");
     assert!(
         dot_general_with_conj.contains("config: DotGeneralConfig"),
         "EagerSession dot-general surfaces should consistently take owned configs"
     );
     assert!(
         dot_general_with_conj.contains("validate_dims_with_ranks("),
-        "EagerSession::dot_general_with_conj must validate DotGeneralConfig before fast-path dispatch"
+        "EagerSession::dot_general_with must validate DotGeneralConfig before fast-path dispatch"
     );
 }
 

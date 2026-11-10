@@ -184,7 +184,7 @@ fn grad_embed_diag_shifted_axis_restores_input_layout() {
     for (axis_a, axis_b, loss_rank) in [(0, 1, 3usize), (1, 1, 3)] {
         let y = x.embed_diag(axis_a, axis_b).unwrap();
         let loss = y
-            .reduce_sum(Some(&(0..loss_rank).collect::<Vec<_>>()))
+            .reduce_sum(Some(&(0..loss_rank as isize).collect::<Vec<_>>()))
             .unwrap();
         let grad = loss.grad(&x).unwrap();
         assert_eq!(grad.try_concrete_shape(), Some(vec![2, 3]));

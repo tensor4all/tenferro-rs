@@ -210,7 +210,10 @@ fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
                 let weighted = s.mul(&x, &weight)?;
                 let quadratic = s.mul(&weighted, &x)?;
                 let axes: Vec<_> = (0..quadratic.shape().len()).collect();
-                s.reduce_sum(&quadratic, Some(&axes))
+                s.reduce_sum(
+                    &quadratic,
+                    Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+                )
             })
             .unwrap();
         Fixture { x, loss }

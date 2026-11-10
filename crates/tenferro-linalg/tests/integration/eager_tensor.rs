@@ -134,7 +134,10 @@ fn weighted_square_sum(input: &EagerTensor, weights: Vec<f64>) -> EagerTensor {
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(input, input)?;
             let weighted = s.mul(&squared, &weights)?;
-            s.reduce_sum(&weighted, Some(&axes))
+            s.reduce_sum(
+                &weighted,
+                Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+            )
         })
         .unwrap()
 }

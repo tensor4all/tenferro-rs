@@ -658,7 +658,9 @@ pub(crate) fn lstsq(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> 
         },
     )?;
     let (q, r) = qr(a)?;
-    let qh = q.conj()?.transpose(&matrix_transpose_perm(q.rank()))?;
+    let qh = q
+        .conj()?
+        .transpose(&signed(&matrix_transpose_perm(q.rank())))?;
     let qh_b = matmul_preserve_trailing_batch(&qh, b)?;
     triangular_solve(&r, &qh_b, true, false, false, false)
 }
@@ -808,8 +810,12 @@ pub(crate) fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor
     let denom = (&s + &(&ones + &neg_mask)?)?;
     let s_inv = (&mask / &denom)?;
 
-    let v = vt.conj()?.transpose(&matrix_transpose_perm(vt.rank()))?;
-    let uh = u.conj()?.transpose(&matrix_transpose_perm(u.rank()))?;
+    let v = vt
+        .conj()?
+        .transpose(&signed(&matrix_transpose_perm(vt.rank())))?;
+    let uh = u
+        .conj()?
+        .transpose(&signed(&matrix_transpose_perm(u.rank())))?;
     // See the concrete builder: a complex input has real singular values, so
     // `s_inv` is real while `v` is complex, and the multiply requires one dtype
     // (#2049).
@@ -852,8 +858,10 @@ pub(crate) fn norm(
                 let abs = a.abs()?;
                 match ord {
                     None => frobenius_norm(&abs, &axes)?,
-                    Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&axes))?,
-                    Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(Some(&axes))?,
+                    Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&signed(&axes)[..]))?,
+                    Some(p) if p == f64::NEG_INFINITY => {
+                        abs.reduce_min(Some(&signed(&axes)[..]))?
+                    }
                     Some(0.0) => count_nonzero(&abs, &axes)?,
                     Some(p) => p_norm(&abs, &axes, p)?,
                 }
@@ -1089,7 +1097,7 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
 }
 
 fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
-    abs.reduce_sum_squares(Some(axes))?.sqrt()
+    abs.reduce_sum_squares(Some(&signed(axes)[..]))?.sqrt()
 }
 
 fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
@@ -1106,7 +1114,7 @@ fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
     }
     let power = abs.pow(&scalar_real(abs.context(), abs.dtype(), p)?)?;
     let inv_p = scalar_real(abs.context(), abs.dtype(), 1.0 / p)?;
-    power.reduce_sum(Some(axes))?.pow(&inv_p)
+    power.reduce_sum(Some(&signed(axes)[..]))?.pow(&inv_p)
 }
 
 fn reduced_axes_have_zero_extent(shape: &[usize], axes: &[usize]) -> bool {
@@ -1218,8 +1226,8 @@ fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> Result<Traced
     match ord {
         None => frobenius_norm(&abs, &[axis]),
         Some(0.0) => count_nonzero(&abs, &[axis]),
-        Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&[axis])),
-        Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(Some(&[axis])),
+        Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&signed(&[axis])[..])),
+        Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(Some(&signed(&[axis])[..])),
         Some(p) => p_norm(&abs, &[axis], p),
     }
 }
@@ -1310,7 +1318,7 @@ fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
     let is_zero = is_zero.convert(abs.dtype())?;
     let ones = ones_like(abs)?;
     let mask = (&ones - &is_zero)?;
-    mask.reduce_sum(Some(axes))
+    mask.reduce_sum(Some(&signed(axes)[..]))
 }
 
 fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> Result<TracedTensor> {
@@ -1348,7 +1356,7 @@ fn move_axes_to_front(tensor: &TracedTensor, axes: &[usize]) -> Result<TracedTen
             perm.push(axis);
         }
     }
-    tensor.transpose(&perm)
+    tensor.transpose(&signed(&perm))
 }
 
 fn restore_keepdim(
@@ -1365,6 +1373,14 @@ fn restore_keepdim(
         kept_shape[axis] = 1;
     }
     reduced.reshape(&kept_shape)
+}
+
+/// Signed form of internally computed (already normalized) axes, for the
+/// signed public core methods (#2552 §3.2). Axes are rank-bounded.
+fn signed(axes: &[usize]) -> Vec<isize> {
+    axes.iter()
+        .map(|&axis| isize::try_from(axis).unwrap_or(isize::MAX))
+        .collect()
 }
 
 #[cfg(test)]

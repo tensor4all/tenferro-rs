@@ -33,9 +33,7 @@ use tenferro_linalg::Qr;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::TracedLinalgOps;
-use tenferro_runtime::{
-    GraphCompiler, Prepared, Runtime, TensorSessionOpsExt, TraceContext, TracedTensor,
-};
+use tenferro_runtime::{CoreOps, GraphCompiler, Prepared, Runtime, TraceContext, TracedTensor};
 use tenferro_tensor::{Tensor, TypedTensor};
 
 struct CountingAllocator;

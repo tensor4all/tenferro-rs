@@ -6,9 +6,10 @@ use syn::{Ident, LitStr};
 
 use super::{error_text, markdown, tidy, GenLayer, LayerKind, Op, Receiver, Registry};
 
-/// Replaces the placeholder idents `V`/`R`/`C`/`I` (result types) and `S`
-/// (a layer-specific operand type, such as the input list of an N-ary op) in
-/// `ts` using the layer's `types`.
+/// Replaces every ident that is a key of the layer's `types` (`V`, `R`, `C`,
+/// `I`, `B`, `S`, ...) in `ts`. `V`/`R`/`C`/`I` (result types) and `S` (a
+/// layer-specific operand type, such as the input list of an N-ary op) must be
+/// mapped by every layer that uses them.
 fn substitute(
     ts: TokenStream,
     types: &[(Ident, syn::Type)],
@@ -23,6 +24,11 @@ fn substitute(
                 let mut ng = Group::new(g.delimiter(), inner);
                 ng.set_span(g.span());
                 out.extend([TokenTree::Group(ng)]);
+            }
+            TokenTree::Ident(id) if types.iter().any(|(k, _)| *k == id) => {
+                if let Some((_, ty)) = types.iter().find(|(k, _)| *k == id) {
+                    ty.to_tokens(&mut out);
+                }
             }
             TokenTree::Ident(id)
                 if matches!(id.to_string().as_str(), "V" | "R" | "C" | "I" | "S") =>
@@ -67,16 +73,14 @@ enum Form {
 
 fn method_doc(op: &Op, trait_name: &Ident, form: Form, example: &str) -> String {
     let n = op.name.to_string();
-    let opts = {
-        let p = &op.options;
-        tidy(&quote!(#p))
-    };
-    let sentence = match form {
-        Form::Plain => format!(
+    let opts = op.options.as_ref().map(|p| tidy(&quote!(#p)));
+    let sentence = match (form, &opts) {
+        (Form::Plain, None) => "This operation has no options.".to_string(),
+        (Form::Plain, Some(opts)) => format!(
             "Uses the default [`{opts}`]; same as [`{n}_with`]({trait_name}::{n}_with) with `&{opts}::default()`."
         ),
-        Form::With => format!("With explicit [`{opts}`]."),
-        Form::Into => {
+        (Form::With, opts) => format!("With explicit [`{}`].", opts.as_deref().unwrap_or("")),
+        (Form::Into, _) => {
             let modes = op
                 .into
                 .iter()
@@ -114,20 +118,15 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
     let t = &g.trait_name;
     let result = &g.result;
     let preds = &g.method_where;
-    let where_clause = if preds.is_empty() {
-        quote!()
-    } else {
-        quote!(where #(#preds),*)
-    };
     let forward = &g.forward;
     let family = reg.family.to_string();
     let trait_doc = g.trait_doc.value();
     let trait_def = &g.trait_def;
     let impl_def = &g.impl_def;
-    let (receiver, first_skip) = match g.receiver {
-        Receiver::SelfRef => (quote!(&self), 1usize),
-        Receiver::Session => (quote!(&mut self), 0usize),
-        Receiver::Context => (quote!(&self), 0usize),
+    let (layer_receiver, layer_first_skip) = match g.receiver {
+        Receiver::SelfRef => (quote!(&self,), 1usize),
+        Receiver::Session => (quote!(&mut self,), 0usize),
+        Receiver::Context => (quote!(&self,), 0usize),
     };
 
     let mut decls = Vec::new();
@@ -155,13 +154,34 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
         let n = &op.name;
         let n_with = format_ident!("{}_with", n);
         let n_into = format_ident!("{}_into", n);
-        let opts = &op.options;
+        let opts = op.options.as_ref();
+        let (receiver, first_skip, self_arg) = if op.associated {
+            (quote!(), 0usize, quote!())
+        } else {
+            (layer_receiver.clone(), layer_first_skip, quote!(self,))
+        };
+        let gen_params = match &op.generics {
+            Some(gn) => {
+                let params = &gn.params;
+                quote!(<#params>)
+            }
+            None => quote!(),
+        };
+        let mut all_preds: Vec<TokenStream> = preds.iter().map(|p| quote!(#p)).collect();
+        if op.associated {
+            all_preds.push(quote!(Self: ::core::marker::Sized));
+        }
+        let where_clause = if all_preds.is_empty() {
+            quote!()
+        } else {
+            quote!(where #(#all_preds),*)
+        };
 
         let mut operand_params = Vec::new();
         let mut operand_names = Vec::new();
         for (i, operand) in op.operands.iter().enumerate().skip(first_skip) {
             let nm = &operand.name;
-            // An operand's own type wins; it may name the layer placeholder `S`.
+            // An operand's own type wins; it may name a layer `types` key such as `S`.
             let ty = match (&operand.ty, i) {
                 (Some(t), _) => substitute(t.to_token_stream(), &g.types, op, name)?,
                 (None, 0) => match &g.first_arg {
@@ -175,12 +195,12 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
         }
         let exec_param = g.exec.as_ref().map(|e| quote!(exec: #e));
         let exec_name = g.exec.as_ref().map(|_| quote!(exec));
-        let opt_param = quote!(options: &#opts);
+        let opt_param = opts.map(|o| quote!(options: &#o));
 
         let mut build = |form: Form| {
             let mut params = operand_params.clone();
             let mut args = operand_names.clone();
-            if form != Form::Plain {
+            if let (true, Some(opt_param)) = (form != Form::Plain, &opt_param) {
                 params.push(opt_param.clone());
                 args.push(quote!(options));
             }
@@ -206,28 +226,28 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
                 Form::Into => n_into.clone(),
             };
             let doc = lit(&method_doc(op, t, form, &example));
-            let many = if params.len() + 1 > 7 {
+            let many = if params.len() + usize::from(!op.associated) > 7 {
                 quote!(#[allow(clippy::too_many_arguments)])
             } else {
                 quote!()
             };
-            let sig = quote!(fn #fname(#receiver, #(#params),*) -> #ret #where_clause);
+            let sig = quote!(fn #fname #gen_params (#receiver #(#params),*) -> #ret #where_clause);
             let fwd_fn = if form == Form::Into {
                 n_into.clone()
             } else {
                 n.clone()
             };
-            let body = match form {
-                Form::Plain => {
+            let body = match (form, opts) {
+                (Form::Plain, Some(opts)) => {
                     // Default options are inserted before `exec`.
                     let mut a = operand_names.clone();
                     a.push(quote!(&<#opts as ::core::default::Default>::default()));
                     if let Some(e) = &exec_name {
                         a.push(e.clone());
                     }
-                    quote!(<Self as #t>::#n_with(self, #(#a),*))
+                    quote!(<Self as #t>::#n_with(#self_arg #(#a),*))
                 }
-                _ => quote!(#forward::#fwd_fn(self, #(#args),*)),
+                _ => quote!(#forward::#fwd_fn(#self_arg #(#args),*)),
             };
             if form == Form::Into && g.dest.is_none() {
                 return;
@@ -236,7 +256,9 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
             impls.push(quote! { #many #sig { #body } });
         };
         build(Form::Plain);
-        build(Form::With);
+        if opts.is_some() {
+            build(Form::With);
+        }
         if !op.into.is_empty() {
             build(Form::Into);
         }
@@ -299,9 +321,9 @@ pub(crate) fn expand(reg: &Registry) -> syn::Result<TokenStream> {
                 None => n.to_string(),
             }
         });
-        let options = {
-            let p = &op.options;
-            tidy(&quote!(#p))
+        let options = match &op.options {
+            Some(p) => tidy(&quote!(#p)),
+            None => "none".to_string(),
         };
         let output = {
             let p = &op.output;

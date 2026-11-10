@@ -73,7 +73,13 @@ pub(crate) struct Op {
     pub name: Ident,
     pub summary: LitStr,
     pub operands: Vec<Operand>,
-    pub options: Path,
+    /// `None` for `options: none;`: the op has no options type and no `_with` form.
+    pub options: Option<Path>,
+    /// Method generics (`generics: <Y: Bound>;`), added to every generated method.
+    pub generics: Option<syn::Generics>,
+    /// `associated;`: no receiver; every operand is an argument and the method
+    /// requires `Self: Sized` (for example `concatenate(&[&Self], axis, exec)`).
+    pub associated: bool,
     pub output: Type,
     pub dtypes: LitStr,
     pub layers: Vec<Ident>,
@@ -194,6 +200,15 @@ impl Registry {
                         ),
                     ));
                 }
+            }
+            if op.options.is_none() && !op.into.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    &op.name,
+                    format!(
+                        "op `{}`: an `_into` form needs an options type; `options: none` cannot declare `into` modes",
+                        op.name
+                    ),
+                ));
             }
             if op.operands.is_empty() {
                 return Err(syn::Error::new_spanned(

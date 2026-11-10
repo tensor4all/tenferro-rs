@@ -10,7 +10,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, Tensor};
 
 /// `a` is a 1x8 constant row in the no-broadcast arm and a 1x1 row (the
 /// singleton broadcast source) in the broadcast arm.

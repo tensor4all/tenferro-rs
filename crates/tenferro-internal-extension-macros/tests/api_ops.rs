@@ -556,3 +556,98 @@ fn context_receiver_and_layer_operand_types() {
         &[("ctx", "CtxOps"), ("slice", "SliceOps")]
     );
 }
+
+/// `options: none` generates only the plain form; `generics` adds method
+/// generics; `associated` generates a receiver-less `Self: Sized` method.
+mod shapes {
+    pub struct Num(pub u32);
+    pub type Result<T> = ::std::result::Result<T, String>;
+
+    pub mod forward {
+        use super::*;
+        pub fn double(a: &Num, exec: &mut u32) -> Result<u32> {
+            *exec += 1;
+            Ok(a.0 * 2)
+        }
+        pub fn pick<Y: Copy>(a: &Num, on_true: &Y, on_false: &Y, _exec: &mut u32) -> Result<Y> {
+            Ok(if a.0 != 0 { *on_true } else { *on_false })
+        }
+        pub fn total(items: &[&Num], _exec: &mut u32) -> Result<u32> {
+            Ok(items.iter().map(|n| n.0).sum())
+        }
+    }
+
+    tenferro_extension_macros::api_ops! {
+        family: shapes;
+
+        layer concrete {
+            trait_doc: "Shapes.";
+            trait_def: pub trait ShapeOps;
+            impl_def: impl ShapeOps for Num;
+            method_where: [];
+            receiver: self;
+            tensor_arg: &Num;
+            exec: &mut u32;
+            result: Result;
+            types { V = u32 }
+            forward: self::forward;
+        }
+        op double {
+            summary: "Double.";
+            operands: (a);
+            options: none;
+            output: V;
+            dtypes: "u32";
+            layers: [concrete];
+            into: [];
+            layout: "None.";
+            errors: [Validation];
+            omissions: [];
+            example concrete: "let _ = 1;";
+        }
+        op pick {
+            summary: "Pick.";
+            generics: <Y: Copy>;
+            operands: (a, on_true: &Y, on_false: &Y);
+            options: none;
+            output: Y;
+            dtypes: "any";
+            layers: [concrete];
+            into: [];
+            layout: "None.";
+            errors: [Validation];
+            omissions: [];
+            example concrete: "let _ = 2;";
+        }
+        op total {
+            summary: "Total.";
+            associated;
+            operands: (items: &[&Self]);
+            options: none;
+            output: V;
+            dtypes: "u32";
+            layers: [concrete];
+            into: [];
+            layout: "None.";
+            errors: [Validation];
+            omissions: [];
+            example concrete: "let _ = 3;";
+        }
+    }
+}
+
+#[test]
+fn options_none_generics_and_associated_forms() {
+    use shapes::{Num, ShapeOps};
+    let mut exec = 0u32;
+    assert_eq!(Num(3).double(&mut exec).unwrap(), 6);
+    assert_eq!(exec, 1);
+    assert_eq!(Num(1).pick(&'a', &'b', &mut exec).unwrap(), 'a');
+    assert_eq!(Num(0).pick(&1.5_f64, &2.5, &mut exec).unwrap(), 2.5);
+    assert_eq!(Num::total(&[&Num(1), &Num(2)], &mut exec).unwrap(), 3);
+    assert_eq!(shapes::API_OPS[0].options, "none");
+    let md = shapes::api_ops_markdown();
+    assert!(md.contains("| `double` | ShapeOps | `double` |"), "{md}");
+    assert!(md.contains("- Options: none"));
+    assert!(!md.contains("double_with"));
+}

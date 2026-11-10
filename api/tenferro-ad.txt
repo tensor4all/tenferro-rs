@@ -549,7 +549,7 @@ pub fn tenferro_ad::EagerSession<'_>::broadcast_in_dim(&mut self, &tenferro_ad::
 pub fn tenferro_ad::EagerSession<'_>::cast(&mut self, &tenferro_ad::EagerTensor, tenferro_tensor_core::DType) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::clamp(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::compare(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::CompareDir) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::concatenate(&mut self, &[&tenferro_ad::EagerTensor], usize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::concatenate(&mut self, &[&tenferro_ad::EagerTensor], isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::conj(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::constant_from(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::constant_from_host(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
@@ -557,15 +557,15 @@ pub fn tenferro_ad::EagerSession<'_>::convert(&mut self, &tenferro_ad::EagerTens
 pub fn tenferro_ad::EagerSession<'_>::cos(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::div(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::dot_general(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::DotGeneralConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::dot_general_with_conj(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::DotGeneralConfig, bool, bool) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::dot_general_with(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::DotGeneralConfig, &tenferro_tensor::dest::DotGeneralOptions) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::duplicate_value(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_ad::EagerSession<'_>::dynamic_slice(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::embed_diag(&mut self, &tenferro_ad::EagerTensor, usize, usize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::embed_diag(&mut self, &tenferro_ad::EagerTensor, isize, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::engine(&mut self) -> &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine
 pub fn tenferro_ad::EagerSession<'_>::erf(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::exp(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::expm1(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::extract_diag(&mut self, &tenferro_ad::EagerTensor, usize, usize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::extract_diag(&mut self, &tenferro_ad::EagerTensor, isize, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::gather(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::GatherConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::log(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::log1p(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
@@ -576,14 +576,14 @@ pub fn tenferro_ad::EagerSession<'_>::mul(&mut self, &tenferro_ad::EagerTensor, 
 pub fn tenferro_ad::EagerSession<'_>::neg(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::pad(&mut self, &tenferro_ad::EagerTensor, tenferro_tensor::config::PadConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::pow(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::reduce_max(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[usize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::reduce_min(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[usize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::reduce_prod(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[usize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::reduce_sum(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[usize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::reduce_sum_squares(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[usize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_max(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_min(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_prod(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_sum(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_sum_squares(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::rem(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::reshape(&mut self, &tenferro_ad::EagerTensor, impl tenferro_tensor_core::IntoShapeVec) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::reverse(&mut self, &tenferro_ad::EagerTensor, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reverse(&mut self, &tenferro_ad::EagerTensor, &[isize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::rsqrt(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::scale_complex(&mut self, &tenferro_ad::EagerTensor, num_complex::Complex64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::scale_real(&mut self, &tenferro_ad::EagerTensor, f64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
@@ -595,7 +595,7 @@ pub fn tenferro_ad::EagerSession<'_>::slice(&mut self, &tenferro_ad::EagerTensor
 pub fn tenferro_ad::EagerSession<'_>::sqrt(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::sub(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::tanh(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::transpose(&mut self, &tenferro_ad::EagerTensor, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::transpose(&mut self, &tenferro_ad::EagerTensor, &[isize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::tril(&mut self, &tenferro_ad::EagerTensor, i64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::triu(&mut self, &tenferro_ad::EagerTensor, i64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::variable_from(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
@@ -603,34 +603,34 @@ pub fn tenferro_ad::EagerSession<'_>::where_select(&mut self, &tenferro_ad::Eage
 pub fn tenferro_ad::EagerSession<'_>::with_extension_caches<R>(&mut self, impl core::ops::function::FnOnce(&mut tenferro_runtime::extension_cache::ExtensionCacheStore) -> R) -> tenferro_runtime::error::Result<R>
 impl tenferro_ad::EagerSession<'_>
 pub fn tenferro_ad::EagerSession<'_>::index_select(&mut self, &tenferro_ad::EagerTensor, isize, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::slice_axis(&mut self, &tenferro_ad::EagerTensor, usize, core::ops::range::Range<usize>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::slice_axis(&mut self, &tenferro_ad::EagerTensor, isize, core::ops::range::Range<usize>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::stack(&mut self, &[&tenferro_ad::EagerTensor], isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::take_axis(&mut self, &tenferro_ad::EagerTensor, usize, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::take_axis(&mut self, &tenferro_ad::EagerTensor, isize, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::take_block(&mut self, &tenferro_ad::EagerTensor, &[usize], &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::take_cols(&mut self, &tenferro_ad::EagerTensor, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::take_rows(&mut self, &tenferro_ad::EagerTensor, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 impl<'a> tenferro_ad::EagerSession<'a>
 pub fn tenferro_ad::EagerSession<'a>::gelu(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'a>::gelu_tanh(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'a>::layer_norm(&mut self, &tenferro_ad::EagerTensor, usize, core::option::Option<&tenferro_ad::EagerTensor>, core::option::Option<&tenferro_ad::EagerTensor>, f64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'a>::log_softmax(&mut self, &tenferro_ad::EagerTensor, usize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'a>::masked_log_softmax(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, usize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'a>::masked_softmax(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, usize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'a>::reduce_mean(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[usize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'a>::rms_norm(&mut self, &tenferro_ad::EagerTensor, usize, core::option::Option<&tenferro_ad::EagerTensor>, core::option::Option<&tenferro_ad::EagerTensor>, f64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::layer_norm(&mut self, &tenferro_ad::EagerTensor, isize, core::option::Option<&tenferro_ad::EagerTensor>, core::option::Option<&tenferro_ad::EagerTensor>, f64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::log_softmax(&mut self, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::masked_log_softmax(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::masked_softmax(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::reduce_mean(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::rms_norm(&mut self, &tenferro_ad::EagerTensor, isize, core::option::Option<&tenferro_ad::EagerTensor>, core::option::Option<&tenferro_ad::EagerTensor>, f64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'a>::sigmoid(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'a>::silu(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'a>::softmax(&mut self, &tenferro_ad::EagerTensor, usize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::softmax(&mut self, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'a>::softplus(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'a>::take_along_axis(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, usize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::take_along_axis(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 impl core::fmt::Debug for tenferro_ad::EagerSession<'_>
 pub fn tenferro_ad::EagerSession<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_ad::EagerSliceBuilder<'a>
 impl<'a> tenferro_ad::EagerSliceBuilder<'a>
 pub fn tenferro_ad::EagerSliceBuilder<'a>::apply(self, &mut tenferro_ad::EagerSession<'_>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSliceBuilder<'a>::axis(self, usize, core::ops::range::Range<usize>) -> Self
-pub fn tenferro_ad::EagerSliceBuilder<'a>::axis_step(self, usize, core::ops::range::Range<usize>, usize) -> Self
-pub fn tenferro_ad::EagerSliceBuilder<'a>::take_axis(self, usize, &[usize]) -> Self
+pub fn tenferro_ad::EagerSliceBuilder<'a>::axis(self, isize, core::ops::range::Range<usize>) -> Self
+pub fn tenferro_ad::EagerSliceBuilder<'a>::axis_step(self, isize, core::ops::range::Range<usize>, usize) -> Self
+pub fn tenferro_ad::EagerSliceBuilder<'a>::take_axis(self, isize, &[usize]) -> Self
 impl<'a> core::clone::Clone for tenferro_ad::EagerSliceBuilder<'a>
 pub fn tenferro_ad::EagerSliceBuilder<'a>::clone(&self) -> tenferro_ad::EagerSliceBuilder<'a>
 impl<'a> core::fmt::Debug for tenferro_ad::EagerSliceBuilder<'a>

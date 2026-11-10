@@ -113,8 +113,7 @@ values and return typed results.
 ```rust
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{
-    CompareDir, TypedTensor, TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt,
-};
+    CompareDir, TypedTensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
@@ -217,7 +216,7 @@ should remain dynamic.
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_17 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
@@ -353,7 +352,7 @@ Ok(())
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_22 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(
@@ -395,7 +394,7 @@ Ok(())
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_24 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(
@@ -428,7 +427,7 @@ only where a consumer needs batch first.
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_dot_general_layout -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{DotGeneralConfig, Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{DotGeneralConfig, Tensor, CoreOps};
 
 // Attention scores: q[d, lq, b] and k[d, lk, b] (column-major, batch last).
 let (d, lq, lk, b) = (2, 3, 4, 2);

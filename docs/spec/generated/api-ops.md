@@ -321,6 +321,970 @@ Vector or matrix norm over the chosen axes, selected by `NormOrd`.
 
 <!-- api-ops:linalg:end -->
 
+<!-- api-ops:core:begin -->
+## core
+
+| Op | concrete | traced | eager | Suffixes |
+|---|---|---|---|---|
+| `exp` | CoreOps | described | described | `exp` |
+| `neg` | CoreOps | described | described | `neg` |
+| `sign` | CoreOps | described | described | `sign` |
+| `conj` | CoreOps | described | described | `conj` |
+| `log` | CoreOps | described | described | `log` |
+| `expm1` | CoreOps | described | described | `expm1` |
+| `log1p` | CoreOps | described | described | `log1p` |
+| `erf` | CoreOps | described | described | `erf` |
+| `sin` | CoreOps | described | described | `sin` |
+| `cos` | CoreOps | described | described | `cos` |
+| `tanh` | CoreOps | described | described | `tanh` |
+| `sqrt` | CoreOps | described | described | `sqrt` |
+| `rsqrt` | CoreOps | described | described | `rsqrt` |
+| `abs` | CoreOps | described | described | `abs` |
+| `sigmoid` | CoreOps | described | described | `sigmoid` |
+| `silu` | CoreOps | described | described | `silu` |
+| `softplus` | CoreOps | described | described | `softplus` |
+| `gelu` | CoreOps | described | described | `gelu` |
+| `gelu_tanh` | CoreOps | described | described | `gelu_tanh` |
+| `mul` | CoreOps | described | described | `mul` |
+| `sub` | CoreOps | described | described | `sub` |
+| `div` | CoreOps | described | described | `div` |
+| `rem` | CoreOps | described | described | `rem` |
+| `pow` | CoreOps | described | described | `pow` |
+| `maximum` | CoreOps | described | described | `maximum` |
+| `minimum` | CoreOps | described | described | `minimum` |
+| `add` | CoreOps | described | described | `add`, `add_with`, `add_into` (overwrite) |
+| `matmul` | CoreOps | described | described | `matmul` |
+| `compare` | CoreOps | described | described | `compare` |
+| `clamp` | CoreOps | described | described | `clamp` |
+| `where_select` | CoreOps | described | described | `where_select` |
+| `dot_general` | CoreOps | described | described | `dot_general`, `dot_general_with` |
+| `reduce_sum` | CoreOps | described | described | `reduce_sum` |
+| `reduce_max` | CoreOps | described | described | `reduce_max` |
+| `reduce_min` | CoreOps | described | described | `reduce_min` |
+| `reduce_prod` | CoreOps | described | described | `reduce_prod` |
+| `reduce_sum_squares` | CoreOps | described | described | `reduce_sum_squares` |
+| `reduce_mean` | CoreOps | described | described | `reduce_mean` |
+| `reshape` | CoreOps | described | described | `reshape` |
+| `broadcast_in_dim` | CoreOps | described | described | `broadcast_in_dim` |
+| `transpose` | CoreOps | described | described | `transpose` |
+| `reverse` | CoreOps | described | described | `reverse` |
+| `tril` | CoreOps | described | described | `tril` |
+| `triu` | CoreOps | described | described | `triu` |
+| `extract_diag` | CoreOps | described | described | `extract_diag` |
+| `embed_diag` | CoreOps | described | described | `embed_diag` |
+| `slice` | CoreOps | described | described | `slice` |
+| `pad` | CoreOps | described | described | `pad` |
+| `gather` | CoreOps | described | described | `gather` |
+| `scatter` | CoreOps | described | described | `scatter` |
+| `dynamic_slice` | CoreOps | described | described | `dynamic_slice` |
+| `dynamic_update_slice` | CoreOps | — | — | `dynamic_update_slice` |
+| `concatenate` | CoreOps | described | described | `concatenate` |
+| `convert` | CoreOps | described | described | `convert` |
+| `cast` | CoreOps | described | described | `cast` |
+| `scale_real` | CoreOps | described | described | `scale_real` |
+| `scale_complex` | CoreOps | described | described | `scale_complex` |
+| `softmax` | CoreOps | described | described | `softmax` |
+| `log_softmax` | CoreOps | described | described | `log_softmax` |
+| `masked_softmax` | CoreOps | described | described | `masked_softmax` |
+| `masked_log_softmax` | CoreOps | described | described | `masked_log_softmax` |
+| `take_along_axis` | CoreOps | described | described | `take_along_axis` |
+| `layer_norm` | CoreOps | described | described | `layer_norm` |
+| `rms_norm` | CoreOps | described | described | `rms_norm` |
+| `select` | — | described | described | `select` |
+| `stack` | — | described | described | `stack` |
+| `index_select` | — | described | described | `index_select` |
+| `slice_axis` | — | described | described | `slice_axis` |
+| `take_axis` | — | described | described | `take_axis` |
+| `take_rows` | — | — | described | `take_rows` |
+| `take_cols` | — | — | described | `take_cols` |
+| `take_block` | — | — | described | `take_block` |
+| `dynamic_truncate` | — | described | — | `dynamic_truncate` |
+| `pad_to_match` | — | described | — | `pad_to_match` |
+
+### exp
+
+Elementwise exponential.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### neg
+
+Elementwise negation.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### sign
+
+Elementwise sign.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### conj
+
+Elementwise complex conjugate (identity on real dtypes).
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### log
+
+Elementwise natural logarithm.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### expm1
+
+Elementwise `exp(x) - 1`.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### log1p
+
+Elementwise `log(1 + x)`.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### erf
+
+Elementwise error function.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### sin
+
+Elementwise sine.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### cos
+
+Elementwise cosine.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### tanh
+
+Elementwise hyperbolic tangent.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### sqrt
+
+Elementwise square root.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### rsqrt
+
+Elementwise reciprocal square root.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### abs
+
+Elementwise absolute value; complex inputs return their modulus.
+
+- Options: none
+- Output: `R`
+- Dtypes: Any numeric dtype; complex inputs return the real dtype of the same precision.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### sigmoid
+
+Logistic sigmoid.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32 or f64.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### silu
+
+SiLU (`x * sigmoid(x)`).
+
+- Options: none
+- Output: `V`
+- Dtypes: f32 or f64.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### softplus
+
+Softplus `log(1 + exp(x))`.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32 or f64.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### gelu
+
+GELU with the exact error function.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32 or f64.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### gelu_tanh
+
+GELU with the tanh approximation.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32 or f64.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### mul
+
+Elementwise product with broadcasting.
+
+- Options: none
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### sub
+
+Elementwise difference with broadcasting.
+
+- Options: none
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### div
+
+Elementwise quotient with broadcasting.
+
+- Options: none
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### rem
+
+Elementwise remainder with broadcasting.
+
+- Options: none
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### pow
+
+Elementwise power with broadcasting.
+
+- Options: none
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### maximum
+
+Elementwise maximum with broadcasting.
+
+- Options: none
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### minimum
+
+Elementwise minimum with broadcasting.
+
+- Options: none
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### add
+
+Elementwise sum with broadcasting.
+
+- Options: `AddOptions`
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `add_into` writes the result into the destination's storage.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - traced and eager: only `add`; `add_with` and `add_into` exist on the concrete layer
+
+### matmul
+
+Matrix product of the two leading axes, batched over trailing axes.
+
+- Options: none
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### compare
+
+Elementwise comparison with broadcasting; returns a `bool` tensor.
+
+- Options: none
+- Output: `B`
+- Dtypes: Both operands share a dtype; the result is `bool`.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### clamp
+
+Elementwise clamp to `[lower, upper]` with broadcasting.
+
+- Options: none
+- Output: `V`
+- Dtypes: All operands share a real dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### where_select
+
+Elementwise selection: `on_true` where the receiver is true, `on_false` elsewhere, with broadcasting. The receiver is the `bool` condition; a typed receiver must be `TypedTensor<bool>`.
+
+- Options: none
+- Output: `<Y::Repr as tenferro_tensor::Repr>::Value`
+- Dtypes: Receiver `bool`; the branches share a dtype, which is the result dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### dot_general
+
+General contraction with batch dimensions (`DotGeneralConfig`); `DotGeneralOptions` conjugates an operand.
+
+- Options: `tenferro_tensor::DotGeneralOptions`
+- Output: `V`
+- Dtypes: Both operands share a numeric dtype; the result has that dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - traced: no `dot_general_with`; conjugate an operand with `conj()` first
+
+### reduce_sum
+
+Sum over `axes` (`None`: every axis); axes are signed, `-1` is the last axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### reduce_max
+
+Maximum over `axes` (`None`: every axis); axes are signed, `-1` is the last axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### reduce_min
+
+Minimum over `axes` (`None`: every axis); axes are signed, `-1` is the last axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### reduce_prod
+
+Product over `axes` (`None`: every axis); axes are signed, `-1` is the last axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### reduce_sum_squares
+
+Sum of squared magnitudes over `axes` (`None`: every axis); axes are signed, `-1` is the last axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### reduce_mean
+
+Mean over `axes` (`None`: every axis); axes are signed, `-1` is the last axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### reshape
+
+Reshape to `shape` in column-major element order.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. A view that is not compact in column-major order is gathered by the engine; reshape is a data operation, not a metadata query.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### broadcast_in_dim
+
+Broadcast to `shape`; `dims[i]` is the output axis of input axis `i` (an IR-level dimension map, unsigned like the `*Config` structs).
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### transpose
+
+Permute axes; `perm` is signed (`-1` is the last axis).
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### reverse
+
+Reverse the order of elements along `axes` (signed).
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### tril
+
+Lower triangle of the two leading axes relative to diagonal `k`.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### triu
+
+Upper triangle of the two leading axes relative to diagonal `k`.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### extract_diag
+
+Extract the diagonal of axes `axis_a` and `axis_b` (signed).
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### embed_diag
+
+Embed axis `axis_a` of the receiver as the diagonal of a new axis pair; `axis_b` (signed, against the output rank) is the position of the inserted axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### slice
+
+Static strided slice (`SliceConfig`).
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### pad
+
+Pad with edge and interior padding (`PadConfig`).
+
+- Options: none
+- Output: `V`
+- Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### gather
+
+XLA-style gather (`GatherConfig`); `indices` is an integer tensor of any representation.
+
+- Options: none
+- Output: `V`
+- Dtypes: Operand: any dtype; indices: an integer dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### scatter
+
+XLA-style scatter (`ScatterConfig`); `indices` and `updates` may have any representation.
+
+- Options: none
+- Output: `V`
+- Dtypes: Operand and updates share a dtype; indices: an integer dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### dynamic_slice
+
+Slice of `sizes` starting at the run-time `starts` (an integer vector).
+
+- Options: none
+- Output: `V`
+- Dtypes: Operand: any dtype; starts: an integer dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### dynamic_update_slice
+
+Copy of the receiver with `update` written at the run-time `starts`.
+
+- Options: none
+- Output: `V`
+- Dtypes: Operand and update share a dtype; starts: an integer dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - traced and eager: not available
+
+### concatenate
+
+Concatenate `inputs` along `axis` (signed). Called as `CoreOps::concatenate(&[&a, &b], axis, exec)`.
+
+- Options: none
+- Output: `V`
+- Dtypes: All inputs share a dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### convert
+
+Checked dtype conversion along tenferro's promotion lattice. The result is a dtype-erased `Tensor` because its dtype is a run-time value.
+
+- Options: none
+- Output: `tenferro_tensor::Tensor`
+- Dtypes: Any source dtype the conversion supports; the result has dtype `to`.
+- Layout: An owned `Tensor` receiver is converted directly. Any other receiver (a borrowed view or a typed tensor) is first gathered once into a compact tensor of the same placement and dtype, because the engine conversion reads an owned tensor.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### cast
+
+Explicit, possibly lossy dtype projection. The result is a dtype-erased `Tensor` because its dtype is a run-time value.
+
+- Options: none
+- Output: `tenferro_tensor::Tensor`
+- Dtypes: Any source dtype the conversion supports; the result has dtype `to`.
+- Layout: An owned `Tensor` receiver is converted directly. Any other receiver (a borrowed view or a typed tensor) is first gathered once into a compact tensor of the same placement and dtype, because the engine conversion reads an owned tensor.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### scale_real
+
+Multiply by a real scalar.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### scale_complex
+
+Multiply by a complex scalar.
+
+- Options: none
+- Output: `V`
+- Dtypes: Complex32 or Complex64.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### softmax
+
+Softmax along `axis` (signed).
+
+- Options: none
+- Output: `V`
+- Dtypes: f32 or f64.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### log_softmax
+
+Log-softmax along `axis` (signed).
+
+- Options: none
+- Output: `V`
+- Dtypes: f32 or f64.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### masked_softmax
+
+Softmax along `axis` over the entries where `mask` is true.
+
+- Options: none
+- Output: `V`
+- Dtypes: Input f32 or f64; mask `bool` of any representation.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### masked_log_softmax
+
+Log-softmax along `axis` over the entries where `mask` is true.
+
+- Options: none
+- Output: `V`
+- Dtypes: Input f32 or f64; mask `bool` of any representation.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### take_along_axis
+
+Gather along `axis` (signed) with per-position integer `indices`.
+
+- Options: none
+- Output: `V`
+- Dtypes: Input: any dtype; indices: an integer dtype.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### layer_norm
+
+Layer normalization over `axis` (signed) with optional affine `weight` and `bias`.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32 or f64; weight and bias share the input representation.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### rms_norm
+
+RMS normalization over `axis` (signed) with optional affine `weight` and `bias`.
+
+- Options: none
+- Output: `V`
+- Dtypes: f32 or f64; weight and bias share the input representation.
+- Layout: Composed from core primitives inside the engine; operands are read through `TensorRead` and intermediates are engine allocations. A fused engine kernel is used when the engine offers one.
+- Errors: `Validation`, `Unsupported`
+- Omissions: none
+
+### select
+
+Alias of `where_select` with the condition as the first argument.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete: use `where_select`
+
+### stack
+
+Stack equally shaped tensors along a new signed axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete: not available; use `reshape` and `concatenate`
+
+### index_select
+
+Select positions along a signed axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete: not available; use `gather`
+
+### slice_axis
+
+Slice a range along a signed axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete: not available; use `slice`
+
+### take_axis
+
+Take the listed positions along a signed axis.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete: not available; use `gather`
+
+### take_rows
+
+Take the listed rows of a matrix.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete and traced: not available
+
+### take_cols
+
+Take the listed columns of a matrix.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete and traced: not available
+
+### take_block
+
+Take a block given row and column positions.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete and traced: not available
+
+### dynamic_truncate
+
+Truncate a signed axis to a run-time size.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete and eager: not available
+
+### pad_to_match
+
+Zero-pad a signed axis to the size of a reference tensor.
+
+- Options: none
+- Output: `V`
+- Dtypes: See the method documentation.
+- Layout: Recorded as graph operations (traced) or executed by the eager engine.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - concrete and eager: not available
+
+### Exceptions
+
+| ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |
+|---|---|---|---|---|---|---|---|---|
+| E03 | retained | `tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache`<br>`tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats` | plan-cache owner methods of the concrete einsum plan | cache owner \| inherent method | `tenferro_einsum::concrete` | a cache owner exposes its cache; these are not tensor operations | the einsum registry tests and the cache tests of tenferro-einsum | kept while ConcreteEinsumPlan owns a CPU cache |
+| E04 | retained | `tenferro_runtime::TraceContext`<br>`tenferro_runtime::GraphCompiler::compile`<br>`tenferro_runtime::GraphCompiler::compile_many`<br>`tenferro_runtime::Runtime::prepare`<br>`tenferro_runtime::Runtime::run`<br>`tenferro_runtime::TraceContext::finish` | trace, compile, prepare and run lifecycle | lifecycle \| builder | `tenferro_runtime::{trace, graph, runtime}` | program construction and execution are not tensor operations; their shapes are fixed by the public API snapshot (api/) | scripts/api-snapshot.sh --check and the runtime lifecycle tests | kept |
+| E05 | retained | `tenferro_tensor::Tensor::shape`<br>`tenferro_tensor::Tensor::dtype`<br>`tenferro_tensor::Tensor::into_dynamic`<br>`tenferro_tensor::TypedTensor::as_view`<br>`tenferro_tensor::TypedTensorView::transpose_view`<br>`tenferro_tensor::TypedTensorView::slice_view`<br>`tenferro_runtime::TracedTensor::rank`<br>`tenferro_runtime::TracedTensor::sym_size`<br>`tenferro_runtime::TracedTensor::axis_sym_dim`<br>`tenferro_runtime::TracedTensor::shape_of` | descriptor-only operations and metadata queries | metadata \| view | `tenferro_tensor, tenferro_runtime::traced` | they never touch element data, so they take no engine and are not operations of the grammar | tenferro-runtime `metadata_queries_and_views_do_not_copy` (pointer identity) | kept |
+| E06 | retained | `tenferro_cpu::with_borrowed_cpu_engine`<br>`tenferro_tensor::Dest::into_accumulation`<br>`num_complex::Complex` | approved external types and owner-scoped doc-hidden bridges | bridge \| external type | `tenferro_cpu, tenferro_tensor::dest` | the lane bridge lets tenferro-linalg reach the lane engine (#2552 S2b); into_accumulation maps a Dest to the backend accumulation descriptor (#2552 Q3); num_complex is the public complex scalar | listed symbol by symbol in api/allowlist.txt; the bridges are #[doc(hidden)] | kept while the owners need the bridge |
+| E09 | retained | `tenferro_einsum::Error`<br>`tenferro_einsum::PlanningError`<br>`tenferro_einsum::parse_einsum_subscripts`<br>`tenferro_einsum::parse_einsum_notation`<br>`tenferro_linalg::Error`<br>`tenferro_ad::EagerFftInPlaceError` | domain errors of parsers and planners, and failures that return ownership | error \| domain | `the owning family crates` | parsers and planners report domain errors; the operations wrap them as the `source()` of the layer error | the error-cause tests of each family | kept |
+| E10 | retained | `tenferro_tensor::Engine`<br>`tenferro_tensor::TensorDot`<br>`tenferro_tensor::TensorDot::dot_general_read_into_accum`<br>`tenferro_tensor::TensorElementwise::axpby_read_into_accum`<br>`tenferro_linalg::LinalgBackend`<br>`tenferro_fft::FftBackend` | backend and provider traits and their read/accumulate hooks | provider contract \| trait | `tenferro_tensor::backend and the family backends` | a provider-facing contract, not the user grammar; `*_read` and `*_read_into_accum` name backend hooks | the backend contract tests of each crate | kept |
+
+<!-- api-ops:core:end -->
+
+<!-- api-ops:einsum:begin -->
+## einsum
+
+| Op | concrete | concrete_tensordot | traced | traced_tensordot | eager | Suffixes |
+|---|---|---|---|---|---|---|
+| `einsum` | EinsumOps | — | TracedEinsumOps | — | EagerEinsumOps | `einsum`, `einsum_with`, `einsum_into` (overwrite, accumulate, scaled) |
+| `tensordot` | — | TensordotOps | — | TracedTensordotOps | EagerEinsumOps | `tensordot`, `tensordot_with` |
+
+### einsum
+
+Einstein summation over N inputs: contract, trace, transpose, reduce and broadcast as the spec says.
+
+- Options: `EinsumOptions`
+- Output: `V`
+- Dtypes: Every input has the same dtype (any numeric dtype the backend supports); the result has it too.
+- Layout: Strided inputs are read in place by the contraction kernels (any strides, including transposed and negative-stride views); an operand that a kernel cannot read is packed once into a compact buffer of the same placement and dtype. A two-input contraction that maps to one dot_general writes straight into the destination. Inputs stay on their device. `_into` checks the destination's dtype and shape before any write; `Accumulate` and `Scaled` read the destination, `Overwrite` and `Scaled` with `beta = 0` never read it.
+- Errors: `Validation`, `Unsupported`, `RuntimeState`
+- Omissions:
+  - `_into` is concrete only: traced and eager results are new values
+  - lanes (`CpuEngine::with_lanes`): einsum is unsupported in a lane
+  - `Scaled` needs `alpha` and `beta` of the input dtype
+
+### tensordot
+
+Contract `a` with `b` over the given axis pairs (or the last/first `n` axes); free axes of `a` come first.
+
+- Options: `TensordotOptions`
+- Output: `V`
+- Dtypes: `a` and `b` have the same dtype; the result has it too.
+- Layout: Lowered to one dot_general, which reads strided operands in place; an operand that the provider cannot read is packed once into a compact buffer of the same placement and dtype.
+- Errors: `Validation`, `Unsupported`
+- Omissions:
+  - lanes (`CpuEngine::with_lanes`): tensordot is unsupported in a lane
+
+### Exceptions
+
+| ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |
+|---|---|---|---|---|---|---|---|---|
+| E03 | retained | `tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache`<br>`tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats` | cache maintenance of a prepared concrete einsum plan | cache owner \| inherent method | `tenferro_einsum::concrete` | the plan owns its CPU numerical descriptor cache; clearing and inspecting it is not a tensor operation and has no options, inputs or destination | doctests of both methods; the plan's execute/execute_into follow the grammar (inputs, exec, dest) | retained while ConcreteEinsumPlan owns a CPU cache |
+| E07 | retired | `tenferro_einsum::TraceContextEinsumExt::einsum`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_notation`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_subscripts`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_with`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_notation_with`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_subscripts_with` | einsum entries that took and returned TraceValue on a `&mut TraceContext` | legacy \| trait | `tenferro_einsum::traced` | retired: replaced by TracedEinsumOps for TraceContext (`trace.einsum(&[&t1, &t2], spec)`), which takes and returns TracedTensor (#2552 decision 4) | retired: a temporary old-vs-new test recorded the same values before removal (#2552 S4) | met: the trait was removed in #2552 S4 |
+| E09 | retained | `tenferro_einsum::Error`<br>`tenferro_einsum::PlanningError`<br>`tenferro_einsum::parse_einsum_notation`<br>`tenferro_einsum::parse_einsum_subscripts`<br>`tenferro_einsum::ContractionTree::optimize`<br>`tenferro_einsum::ContractionTree::optimize_with_options`<br>`tenferro_einsum::ContractionTree::from_pairs` | the einsum parser and contraction planner | domain error \| free function | `tenferro_einsum::{error, subscripts, planning}` | parsing and planning are einsum-domain operations whose errors are einsum-domain; the grammar's operations wrap them (concrete: tenferro_tensor::Error::Extension, traced/eager: tenferro_runtime::Error::Extension) with the einsum error as source | error-cause tests reach tenferro_einsum::Error::InvalidSubscripts through source() on all three layers | retained |
+
+<!-- api-ops:einsum:end -->
+
 <!-- api-ops:fft:begin -->
 ## fft
 
@@ -439,47 +1403,3 @@ Inverse of `rfftn`.
 | E02 | retained | `tenferro_fft::FftExecutor::fft_with`<br>`tenferro_fft::FftExecutor::ifft_with`<br>`tenferro_fft::FftExecutor::rfft_with`<br>`tenferro_fft::FftExecutor::irfft_with`<br>`tenferro_fft::FftExecutor::fftn_with`<br>`tenferro_fft::FftExecutor::ifftn_with`<br>`tenferro_fft::FftExecutor::rfftn_with`<br>`tenferro_fft::FftExecutor::irfftn_with`<br>`tenferro_fft::FftExecutor::new`<br>`tenferro_fft::FftExecutor::plan_cache`<br>`tenferro_fft::FftExecutor::plan_cache_mut`<br>`tenferro_fft::FftExecutor::cache_stats`<br>`tenferro_fft::FftExecutor::clear_cache` | the caller-owned FFT plan cache and its transforms | cache owner | `tenferro_fft` | the receiver is the plan cache, not the input; the transforms take the input, the options and the engine in grammar order | src/api/tests/registry.rs: every `_with` equals the `FftOps` result bit for bit and fills the caller's plan cache | plan caches owned by the engine for every caller |
 
 <!-- api-ops:fft:end -->
-
-<!-- api-ops:einsum:begin -->
-## einsum
-
-| Op | concrete | concrete_tensordot | traced | traced_tensordot | eager | Suffixes |
-|---|---|---|---|---|---|---|
-| `einsum` | EinsumOps | — | TracedEinsumOps | — | EagerEinsumOps | `einsum`, `einsum_with`, `einsum_into` (overwrite, accumulate, scaled) |
-| `tensordot` | — | TensordotOps | — | TracedTensordotOps | EagerEinsumOps | `tensordot`, `tensordot_with` |
-
-### einsum
-
-Einstein summation over N inputs: contract, trace, transpose, reduce and broadcast as the spec says.
-
-- Options: `EinsumOptions`
-- Output: `V`
-- Dtypes: Every input has the same dtype (any numeric dtype the backend supports); the result has it too.
-- Layout: Strided inputs are read in place by the contraction kernels (any strides, including transposed and negative-stride views); an operand that a kernel cannot read is packed once into a compact buffer of the same placement and dtype. A two-input contraction that maps to one dot_general writes straight into the destination. Inputs stay on their device. `_into` checks the destination's dtype and shape before any write; `Accumulate` and `Scaled` read the destination, `Overwrite` and `Scaled` with `beta = 0` never read it.
-- Errors: `Validation`, `Unsupported`, `RuntimeState`
-- Omissions:
-  - `_into` is concrete only: traced and eager results are new values
-  - lanes (`CpuEngine::with_lanes`): einsum is unsupported in a lane
-  - `Scaled` needs `alpha` and `beta` of the input dtype
-
-### tensordot
-
-Contract `a` with `b` over the given axis pairs (or the last/first `n` axes); free axes of `a` come first.
-
-- Options: `TensordotOptions`
-- Output: `V`
-- Dtypes: `a` and `b` have the same dtype; the result has it too.
-- Layout: Lowered to one dot_general, which reads strided operands in place; an operand that the provider cannot read is packed once into a compact buffer of the same placement and dtype.
-- Errors: `Validation`, `Unsupported`
-- Omissions:
-  - lanes (`CpuEngine::with_lanes`): tensordot is unsupported in a lane
-
-### Exceptions
-
-| ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |
-|---|---|---|---|---|---|---|---|---|
-| E03 | retained | `tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache`<br>`tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats` | cache maintenance of a prepared concrete einsum plan | cache owner \| inherent method | `tenferro_einsum::concrete` | the plan owns its CPU numerical descriptor cache; clearing and inspecting it is not a tensor operation and has no options, inputs or destination | doctests of both methods; the plan's execute/execute_into follow the grammar (inputs, exec, dest) | retained while ConcreteEinsumPlan owns a CPU cache |
-| E07 | retired | `tenferro_einsum::TraceContextEinsumExt::einsum`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_notation`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_subscripts`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_with`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_notation_with`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_subscripts_with` | einsum entries that took and returned TraceValue on a `&mut TraceContext` | legacy \| trait | `tenferro_einsum::traced` | retired: replaced by TracedEinsumOps for TraceContext (`trace.einsum(&[&t1, &t2], spec)`), which takes and returns TracedTensor (#2552 decision 4) | retired: a temporary old-vs-new test recorded the same values before removal (#2552 S4) | met: the trait was removed in #2552 S4 |
-| E09 | retained | `tenferro_einsum::Error`<br>`tenferro_einsum::PlanningError`<br>`tenferro_einsum::parse_einsum_notation`<br>`tenferro_einsum::parse_einsum_subscripts`<br>`tenferro_einsum::ContractionTree::optimize`<br>`tenferro_einsum::ContractionTree::optimize_with_options`<br>`tenferro_einsum::ContractionTree::from_pairs` | the einsum parser and contraction planner | domain error \| free function | `tenferro_einsum::{error, subscripts, planning}` | parsing and planning are einsum-domain operations whose errors are einsum-domain; the grammar's operations wrap them (concrete: tenferro_tensor::Error::Extension, traced/eager: tenferro_runtime::Error::Extension) with the einsum error as source | error-cause tests reach tenferro_einsum::Error::InvalidSubscripts through source() on all three layers | retained |
-
-<!-- api-ops:einsum:end -->

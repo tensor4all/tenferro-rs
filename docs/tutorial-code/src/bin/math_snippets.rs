@@ -39,7 +39,7 @@ assert_eq!(x.as_slice::<f64>()?, &[2.0, 3.0]);
         // snippet-start:linear_algebra_2
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::LinalgOps;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -84,7 +84,7 @@ let ad = AdContext::builder()
         // snippet-start:linear_algebra_4
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{LinalgOps, Svd};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -236,7 +236,7 @@ assert_eq!(repeated.concrete_shape()?, vec![3]);
         // snippet-start:linear_algebra_7
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{LinalgOps, Qr, QrGauge, QrOptions};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -281,7 +281,7 @@ assert!(max_abs_diff(&qtq, &identity)? < 1.0e-12);
         // snippet-start:incremental_householder_qr
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{QrGauge, QrOptions, LinalgOps};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let initial = Tensor::from_vec_col_major(
     vec![3, 2],
@@ -321,7 +321,7 @@ assert!(error < 1.0e-12);
         // snippet-start:linear_algebra_8
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{Eigh, LinalgOps};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -430,7 +430,7 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 3.0]);
         // snippet-start:linear_algebra_11
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{FullPivLu, LinalgOps};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -485,8 +485,7 @@ use tenferro_cpu::CpuEngine;
 use tenferro_einsum::EinsumOps;
 use tenferro_tensor::{
     Tensor, TensorWrite, TypedTensor, TypedTensorView,
-    TypedTensorViewMut, TypedTensorWrite,
-};
+    TypedTensorViewMut, TypedTensorWrite};
 
 let lhs = Tensor::from_vec_col_major(
     vec![2, 3],
