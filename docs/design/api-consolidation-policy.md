@@ -58,8 +58,12 @@ read side's errors, so a CPU `_read_into` entry narrows its destination once and
 stays unparameterized, like `TensorRead`: its `Tensor(&mut Tensor)` arm holds an owner whose placement no type proves.
 
 **R8. An execution constraint travels as a value the caller passes, in the same position as the execution resources.** The materialization
-policy is its first instance: one `Copy` enum, `tenferro_tensor::MaterializationPolicy`, added as the last parameter of every public entry that
-executes numerical work (`*_with_exec`, the einsum trait methods, `FftExecutor` transforms). Graph-building entries do not take it. A provider
+policy is its first instance: one `Copy` enum, `tenferro_tensor::MaterializationPolicy`, added as the last parameter of the **operation
+entries whose caller already chooses an execution resource** — today the `*_with_exec` family, the einsum trait methods and the `FftExecutor`
+transforms. Internal wiring (backend helpers, `*_with_*` plumbing, runtime and AD surfaces) inherits the value; it does not take one of its own,
+and each of those surfaces is a separate decision, not an implication of this rule. Graph-building entries do not take it. The inventory is
+149 public functions that take an execution resource; the operation entries are a subset, and the rule is scoped to them deliberately: an
+inventory of the whole surface is a migration plan, not a rule. A provider
 selects the same dispatch under both values — `Forbid` is a gate on input normalization, never a selector of a different kernel — so the
 assertion cannot route a call to a different numerical path (it does not promise numerical identity: two runs of one parallel reduction may
 differ, and two different paths may agree bit for bit), and a call that could only succeed through a second numerical path must refuse instead. No `*Options` field,
