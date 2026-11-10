@@ -606,8 +606,11 @@ fn region_is_flat(region: &Region<'_>) -> bool {
 /// padding 1, vector width 1). Its source states the reason to keep it rather than pick a tile
 /// here: the entry's `__launch_bounds__` cap exists because, without it, ptxas costs "the
 /// default 16x8 tile 8-12 % of bandwidth on the A100" (`cuda/src/movement.cu:565-570` at the
-/// pinned revision). No member of the family has been measured for the layouts this repository
-/// sends, so choosing another would be a guess.
+/// pinned revision). The default has not been compared with the other members on the layouts
+/// this repository sends, so it stays the first choice. The one other member in use,
+/// [`tiled_transpose_wide_config`], is tried only for a geometry the default cannot launch. It
+/// was measured there on the A100 (`transpose_3d_1024_1024_512_201`, #2528), against the generic
+/// kernel the geometry would otherwise take, not against the default.
 const TILED_TRANSPOSE_CONFIG: TransposeConfig = TransposeConfig::DEFAULT;
 
 /// The tiling a geometry the default tile cannot launch runs with instead, `32 x 8`.
