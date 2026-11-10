@@ -237,6 +237,15 @@ r1..r5. Baseline `020d6911c`:
 | `transpose_3d_1024_1024_512_201` | destination-reuse | 84.966 | 85.065 | 84.981 | 84.991 | 84.954 | **84.981** (0.025) |
 | `transpose_3d_1024_1024_512_201` | to-contiguous | 29.751 | 29.751 | 29.750 | 29.753 | 29.751 | **29.751** (0.000) |
 | `transpose_3d_1024_1024_512_201` | transpose | 29.772 | 29.773 | 29.770 | 29.775 | 29.772 | **29.772** (0.001) |
+
+The `median` and `IQR` columns were computed from the runner's unrounded `median_ms` values, which the
+archive does not keep; only the three decimals shown are. Recomputing the IQR from the rounded samples above
+therefore disagrees in the last digit on 19 of the 68 rows, in both directions (`cyclic_18d_3`
+destination-reuse gives 0.000 against the stated 0.001). The differences are at most 0.001 ms. **Treat the
+medians as the reproducible quantity**; the IQR is here to show the spread stayed within about 1 % of the
+median (worst row: `cyclic_18d_3` / to-contiguous, 0.106 against 9.968 ms = 1.06 %; every other
+row below 0.81 %), not as a digit-exact statistic.
+
 Candidate `09089d0ec`:
 
 | problem_id | arm | r1 | r2 | r3 | r4 | r5 | median (IQR) |
