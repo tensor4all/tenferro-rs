@@ -164,7 +164,10 @@ fn the_environment_overrides_the_budget_in_mib() {
 }
 
 // The persistent artifact directory's bound (#2475).
-use super::{artifact_cache_max_bytes, write_best_effort_warning};
+use super::{
+    apply_artifact_cache_bound, artifact_cache_max_bytes, write_best_effort_warning,
+    ArtifactDirBound,
+};
 
 #[test]
 fn the_persistent_artifact_directory_is_bounded_by_default() {
@@ -191,12 +194,40 @@ fn the_environment_sets_the_artifact_directory_bound_in_mib() {
         artifact_cache_max_bytes(Some(OsStr::new(" 64\n"))),
         64 * MIB
     );
-    // Zero keeps reading what is there and publishes nothing new.
+    // Zero is a hard bound, not a read-only mode: the runtime trims the directory to it.
     assert_eq!(artifact_cache_max_bytes(Some(OsStr::new("0"))), 0);
     // An absurd value saturates rather than wrapping to a small bound.
     assert_eq!(
         artifact_cache_max_bytes(Some(OsStr::new("18446744073709551615"))),
         u64::MAX
+    );
+}
+
+#[test]
+fn an_open_applies_the_environment_bound_to_the_runtime_cache() {
+    // Stands in for the artifact cache behind a device, which a test without one cannot open:
+    // the test records what an open applies, not only what the decision returns.
+    struct Fake {
+        max_bytes: u64,
+    }
+    impl ArtifactDirBound for Fake {
+        fn set_artifact_dir_max_bytes(&mut self, max_bytes: u64) {
+            self.max_bytes = max_bytes;
+        }
+    }
+    let mut cache = Fake {
+        max_bytes: t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES,
+    };
+    apply_artifact_cache_bound(
+        &mut cache,
+        environment(&[("TENFERRO_CUDA_ARTIFACT_CACHE_MIB", "64")]),
+    );
+    assert_eq!(cache.max_bytes, 64 * MIB);
+    // Unset leaves the finite default in force rather than lifting the bound.
+    apply_artifact_cache_bound(&mut cache, no_variables);
+    assert_eq!(
+        cache.max_bytes,
+        t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES
     );
 }
 

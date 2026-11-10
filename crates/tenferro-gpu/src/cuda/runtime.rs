@@ -188,10 +188,11 @@ pub(crate) struct Detached {
 /// cache when no absolute per-user root is set or the directory cannot be created. A newly created
 /// directory is mode 0700 on Unix.
 ///
-/// The directory is bounded, never unlimited: at most [`artifact_cache_max_bytes`] of images,
-/// 256 MiB unless `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` says otherwise. Crossing the bound drops the
-/// least recently used images first; [`CudaRuntime::artifact_dir_evictions`] counts them, and
-/// [`CudaRuntime::artifact_dir_stats`] and [`CudaRuntime::clear_artifact_dir`] read and empty it.
+/// The directory is bounded, never unlimited: at most [`artifact_cache_max_bytes`] bytes of
+/// images, 256 MiB unless `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` says otherwise. Crossing the bound
+/// drops the least recently used images first; [`CudaRuntime::artifact_dir_evictions`] counts
+/// them, and [`CudaRuntime::artifact_dir_stats`] and [`CudaRuntime::clear_artifact_dir`] read and
+/// empty it.
 ///
 /// `TENFERRO_CUDA_POOL_RELEASE_MIB` overrides the allocation pool's retention budget, the idle
 /// device memory the pool keeps mapped instead of handing back to the driver. See
@@ -246,10 +247,14 @@ fn pool_release_threshold_from(override_mib: Option<u64>, total_memory_bytes: u6
 
 /// The bound on the persistent artifact directory, in bytes.
 ///
-/// `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` (`value`) sets it in MiB; `0` keeps reading existing images
-/// and publishes no new ones. Unset, or a value that is not a whole number of MiB, keeps
-/// [`t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES`] (256 MiB, the in-memory artifact budget):
-/// there is no spelling of "unlimited".
+/// `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` (`value`) sets it in MiB. `0` is a bound like any other, not
+/// a read-only mode: the runtime applies a bound through
+/// [`t4a_cuda_runtime::Runtime::set_artifact_dir_max_bytes`], which trims the directory as it
+/// records the bound, so a zero bound removes the images already there at the next open and
+/// publishes no new one — every image is compiled again. A process that wants no persistent
+/// directory asks for that with `TENFERRO_CUDA_ARTIFACT_CACHE=none`. Unset, or a value that is not
+/// a whole number of MiB, keeps [`t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES`] (256 MiB, the
+/// in-memory artifact budget): there is no spelling of "unlimited".
 fn artifact_cache_max_bytes(value: Option<&std::ffi::OsStr>) -> u64 {
     value
         .and_then(std::ffi::OsStr::to_str)
@@ -257,6 +262,31 @@ fn artifact_cache_max_bytes(value: Option<&std::ffi::OsStr>) -> u64 {
         .map_or(t4a_cuda_runtime::DEFAULT_ARTIFACT_DIR_BYTES, |mib| {
             mib.saturating_mul(1 << 20)
         })
+}
+
+/// The one operation opening a runtime performs on its artifact cache.
+///
+/// The cache lives behind a device, so the open applies the bound through this trait and a test
+/// drives a fake instead: a compile of the decision alone would not show that it is applied.
+trait ArtifactDirBound {
+    fn set_artifact_dir_max_bytes(&mut self, max_bytes: u64);
+}
+
+impl ArtifactDirBound for t4a_cuda_runtime::Runtime {
+    fn set_artifact_dir_max_bytes(&mut self, max_bytes: u64) {
+        // The dependency's own method, not this trait's: no recursion.
+        t4a_cuda_runtime::Runtime::set_artifact_dir_max_bytes(self, max_bytes);
+    }
+}
+
+/// Apply `TENFERRO_CUDA_ARTIFACT_CACHE_MIB` to `cache`, the open's only cache mutation.
+fn apply_artifact_cache_bound(
+    cache: &mut dyn ArtifactDirBound,
+    read: impl Fn(&str) -> Option<std::ffi::OsString>,
+) {
+    cache.set_artifact_dir_max_bytes(artifact_cache_max_bytes(
+        read("TENFERRO_CUDA_ARTIFACT_CACHE_MIB").as_deref(),
+    ));
 }
 
 /// `tenferro`'s directory under the user's cache root, which holds compiled kernel images.
@@ -380,11 +410,7 @@ impl CudaRuntime {
             .map(crate::cuda::CudaDeviceInfo::total_memory_bytes)
             .unwrap_or(0);
         let runtime = Self::with_config(device_id, default_config(total_memory))?;
-        runtime
-            .submit()
-            .set_artifact_dir_max_bytes(artifact_cache_max_bytes(
-                std::env::var_os("TENFERRO_CUDA_ARTIFACT_CACHE_MIB").as_deref(),
-            ));
+        apply_artifact_cache_bound(&mut *runtime.submit(), |name| std::env::var_os(name));
         Ok(runtime)
     }
 
