@@ -2,6 +2,8 @@
 
 **[Open the illustrated proposal →](./api-grammar/proposal.html)** (Japanese, one page)
 
+**[Implementation instructions →](./api-grammar/implementation.md)** (Japanese): what to build and delete, in which order, and the definition of done.
+
 The proposal for one call grammar across the whole public API
 ([#2552](https://github.com/tensor4all/tenferro-rs/issues/2552)), drawn for human readers:
 the grammar strip, before/after examples for each layer, the seven rules and the mechanism
