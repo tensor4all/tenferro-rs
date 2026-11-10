@@ -2,11 +2,15 @@
   {
     "number": 24,
     "title": "oracle-replay-nightly is failing on macOS",
-    "labels": []
+    "labels": [],
+    "body": "- Commit: `__TRACKER_SHA__`\n",
+    "comments": []
   },
   {
     "number": 23,
     "title": "oracle-replay-nightly is failing",
-    "labels": [{ "name": "enhancement" }]
+    "labels": [{ "name": "enhancement" }],
+    "body": "- Commit: `__TRACKER_SHA__`\n",
+    "comments": []
   }
 ]

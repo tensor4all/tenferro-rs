@@ -34,5 +34,11 @@
     "REPLAY_RESULT": "failure",
     "RUN_ORACLE": "true",
     "log": "replay-log-failure-complex.txt"
+  },
+  "failed_replay_tokens": {
+    "RECENT_RESULT": "success",
+    "REPLAY_RESULT": "failure",
+    "RUN_ORACLE": "true",
+    "log": "replay-log-failure-tokens.txt"
   }
 }
