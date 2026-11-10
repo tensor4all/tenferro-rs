@@ -791,6 +791,7 @@ impl PrimitiveRuleBuilder for SemanticRuleBuilder<'_, '_> {
                     &resolved,
                     self.shape_sources,
                     self.builder,
+                    None,
                     self.role,
                 )
             });
@@ -850,8 +851,14 @@ impl SemanticLinearFragmentBuilder {
         builder: &mut SemanticProgramBuilder,
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
         let role = SemanticAdRuleRole::LinearTranspose;
-        let fixed_locals =
-            self.emit_fixed_primal_ops(external_values, shape_sources, builder, role)?;
+        let mut fixed_ops = FixedCoreOps::default();
+        let fixed_locals = self.emit_fixed_primal_ops(
+            external_values,
+            shape_sources,
+            builder,
+            &mut fixed_ops,
+            role,
+        )?;
         let mut cotangents = HashMap::<LocalValueId, ProgramValue>::new();
         for (tangent, cotangent) in tangent_outputs
             .iter()
@@ -890,6 +897,7 @@ impl SemanticLinearFragmentBuilder {
                 active_mask,
                 &context,
                 builder,
+                &mut fixed_ops,
             )?;
             for ((input, active), cotangent) in operation
                 .inputs
@@ -932,6 +940,7 @@ impl SemanticLinearFragmentBuilder {
         external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
         shape_sources: &[ProgramValue],
         builder: &mut SemanticProgramBuilder,
+        fixed_ops: &mut FixedCoreOps,
         role: SemanticAdRuleRole,
     ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
         let mut locals = vec![None; self.next_local];
@@ -952,6 +961,7 @@ impl SemanticLinearFragmentBuilder {
                 &inputs,
                 shape_sources,
                 builder,
+                Some(&mut *fixed_ops),
                 role,
             )?;
             for (local, value) in operation
@@ -994,6 +1004,87 @@ fn linear_active_mask(role: &OperationRole) -> Option<&[bool]> {
     }
 }
 
+/// Core operations one linear-transpose call has emitted on fixed (primal)
+/// values, so a structurally identical request reuses the earlier value.
+///
+/// A rule's linearization and the generic pullback of its matrix products both
+/// emit transposes of the same fixed factors: `linearize_eigh_values` builds
+/// `V^H` and `V^T` from one `V`, and `transpose_matrix_dot` adjoints the fixed
+/// operand again. Every core semantic operation is pure, so reusing an equal
+/// `(op, inputs)` result is exact. Scope is one transpose call: values emitted
+/// for different extension operations are never shared through this memo.
+#[derive(Default)]
+struct FixedCoreOps {
+    emitted: Vec<FixedCoreOp>,
+}
+
+struct FixedCoreOp {
+    op: CoreSemanticOp,
+    inputs: Box<[ProgramValue]>,
+    outputs: Box<[ProgramValue]>,
+}
+
+impl FixedCoreOps {
+    fn add_op(
+        &mut self,
+        builder: &mut SemanticProgramBuilder,
+        op: CoreSemanticOp,
+        inputs: &[ProgramValue],
+    ) -> Result<Box<[ProgramValue]>, SemanticAdError> {
+        if let Some(emitted) = self
+            .emitted
+            .iter()
+            .find(|emitted| emitted.op == op && *emitted.inputs == *inputs)
+        {
+            return Ok(emitted.outputs.clone());
+        }
+        let outputs = builder.add_op(op.clone(), inputs)?;
+        self.emitted.push(FixedCoreOp {
+            op,
+            inputs: inputs.into(),
+            outputs: outputs.clone(),
+        });
+        Ok(outputs)
+    }
+
+    /// Adjoint of a fixed matrix operand. A real `x` that this memo produced as
+    /// the leading-axes transpose of `y` adjoints back to `y` itself instead of
+    /// a second transpose.
+    fn matrix_adjoint(
+        &mut self,
+        builder: &mut SemanticProgramBuilder,
+        value: ProgramValue,
+        rank: usize,
+    ) -> Result<ProgramValue, SemanticAdError> {
+        let mut perm: Vec<_> = (0..rank).collect();
+        perm.swap(0, 1);
+        let complex = matches!(
+            builder.value_metadata(value)?.dtype(),
+            tenferro_tensor::DType::C32 | tenferro_tensor::DType::C64
+        );
+        if !complex
+            && let Some(source) = self.emitted.iter().find_map(|emitted| {
+                match (&emitted.op, &*emitted.inputs, &*emitted.outputs) {
+                    (CoreSemanticOp::Transpose { perm: emitted_perm }, [source], [output])
+                        if *output == value && *emitted_perm == perm =>
+                    {
+                        Some(*source)
+                    }
+                    _ => None,
+                }
+            })
+        {
+            return Ok(source);
+        }
+        let value = if complex {
+            self.add_op(builder, CoreSemanticOp::Conj, &[value])?[0]
+        } else {
+            value
+        };
+        Ok(self.add_op(builder, CoreSemanticOp::Transpose { perm }, &[value])?[0])
+    }
+}
+
 struct SemanticLinearFragmentTransposeContext<'a> {
     fragment: &'a SemanticLinearFragmentBuilder,
     external_values: &'a HashMap<ValueKey<StdTensorOp>, ProgramValue>,
@@ -1028,6 +1119,7 @@ fn emit_semantic_linear_fragment_operation(
     inputs: &[ProgramValue],
     shape_sources: &[ProgramValue],
     builder: &mut SemanticProgramBuilder,
+    fixed_ops: Option<&mut FixedCoreOps>,
     role: SemanticAdRuleRole,
 ) -> Result<Box<[ProgramValue]>, SemanticAdError> {
     match operation {
@@ -1052,7 +1144,10 @@ fn emit_semantic_linear_fragment_operation(
                         },
                         other => other,
                     })?;
-            Ok(builder.add_op(core, &inputs)?)
+            match fixed_ops {
+                Some(fixed_ops) => fixed_ops.add_op(builder, core, &inputs),
+                None => Ok(builder.add_op(core, &inputs)?),
+            }
         }
         SemanticLinearFragmentOp::Unsupported(operation) => Err(semantic_internal(
             role,
@@ -1245,6 +1340,7 @@ fn transpose_semantic_linear_fragment_operation(
     active_mask: &[bool],
     context: &SemanticLinearFragmentTransposeContext<'_>,
     builder: &mut SemanticProgramBuilder,
+    fixed_ops: &mut FixedCoreOps,
 ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
     let Some(cotangent) = cotangent_outputs.first().copied().flatten() else {
         return Ok(vec![None; operation.inputs.len()]);
@@ -1298,6 +1394,7 @@ fn transpose_semantic_linear_fragment_operation(
                 active_mask,
                 &fixed,
                 builder,
+                fixed_ops,
                 context.role,
             )
         }
@@ -1725,6 +1822,7 @@ fn transpose_matrix_dot(
     active_mask: &[bool],
     fixed: &impl Fn(usize) -> Option<ProgramValue>,
     builder: &mut SemanticProgramBuilder,
+    fixed_ops: &mut FixedCoreOps,
     role: SemanticAdRuleRole,
 ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
     let rank = 2 + config.lhs_batch_dims.len();
@@ -1744,7 +1842,7 @@ fn transpose_matrix_dot(
         let rhs = fixed(1).ok_or_else(|| {
             semantic_internal(role, "linear matrix product is missing its fixed rhs")
         })?;
-        let rhs_h = matrix_adjoint(builder, rhs, rank)?;
+        let rhs_h = fixed_ops.matrix_adjoint(builder, rhs, rank)?;
         result[0] = Some(
             builder.add_op(
                 CoreSemanticOp::DotGeneral {
@@ -1758,7 +1856,7 @@ fn transpose_matrix_dot(
         let lhs = fixed(0).ok_or_else(|| {
             semantic_internal(role, "linear matrix product is missing its fixed lhs")
         })?;
-        let lhs_h = matrix_adjoint(builder, lhs, rank)?;
+        let lhs_h = fixed_ops.matrix_adjoint(builder, lhs, rank)?;
         result[1] = Some(
             builder.add_op(
                 CoreSemanticOp::DotGeneral {

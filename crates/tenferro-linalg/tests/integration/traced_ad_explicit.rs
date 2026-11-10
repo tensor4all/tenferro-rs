@@ -1293,11 +1293,14 @@ matmul and a Hadamard scale, not two matmuls: {summary:?}"
         summary.counts.get("Extension").copied().unwrap_or(0) <= 2,
         "compiled eigvalsh VJP should not retain extra extension ops from the zero tangent chain: {summary:?}"
     );
-    // 14 rather than the pre-cut-over 13: the traced-over-context layer emits one
-    // extra `Transpose` between the Hadamard factor and the coefficient matmul
-    // (#2429). The assertions above still pin the compact pullback itself.
-    assert!(
-        summary.instruction_count <= 14,
+    // Exactly 12, with `Transpose` 2 (the factor `V^T` and the pullback of the
+    // self-adjoint projection). Before #2429 the semantic linear transpose emitted
+    // `V^T` twice (for `V^H` and for the Hadamard factor) and then `(V^H)^H` for
+    // the coefficient matmul, giving 14; `FixedCoreOps` in
+    // `tenferro-linalg/src/ad/semantic.rs` now reuses equal fixed ops and adjoints
+    // a fixed transpose back to its source. Kept exact so a regression shows.
+    assert_eq!(
+        summary.instruction_count, 12,
         "compiled eigvalsh VJP should stay compact after linearize+transpose: {summary:?}"
     );
 }
