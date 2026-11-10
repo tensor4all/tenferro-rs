@@ -1,0 +1,11 @@
+[
+  {
+    "number": 17,
+    "title": "oracle-replay-nightly is failing",
+    "labels": [{ "name": "nightly-oracle-failure" }],
+    "body": "- Commit: `__TRACKER_SHA__`\n",
+    "comments": [
+      { "body": "- Commit: `1111111111111111111111111111111111111111`\n" }
+    ]
+  }
+]

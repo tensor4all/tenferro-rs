@@ -2,11 +2,15 @@
   {
     "number": 40,
     "title": "oracle-replay-nightly is failing but this is not the tracker",
-    "labels": [{ "name": "nightly-oracle-failure" }]
+    "labels": [{ "name": "nightly-oracle-failure" }],
+    "body": "- Commit: `__TRACKER_SHA__`\n",
+    "comments": []
   },
   {
     "number": 41,
     "title": "oracle-replay-nightly is failing",
-    "labels": [{ "name": "nightly-oracle-failure" }]
+    "labels": [{ "name": "nightly-oracle-failure" }],
+    "body": "- Commit: `__TRACKER_SHA__`\n",
+    "comments": []
   }
 ]

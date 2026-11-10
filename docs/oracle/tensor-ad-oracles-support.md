@@ -47,10 +47,19 @@ On failure:
   `nightly-oracle-failure`; a later failure comments on the same issue instead of opening a
   second one. An issue filed before the label existed is still found by its exact title and
   adopts the label.
+- A tracker is identified by the label, then by its exact title, then — when exactly one issue
+  carries the label — by the label alone, so a renamed tracker is still found. When several
+  labelled issues exist and none has the title, or when a search returns a full page of 1000
+  results without a title match, the run refuses to act: it fails with the candidate issue
+  numbers instead of filing a third tracker.
 - The issue body carries the run URL, the commit, the failed job names, the failing oracle
   `case_id`s parsed from the `oracle-replay-<run id>` log artifact, and the identity of the
-  replayed database. When a run fails before replaying a record (a build, infrastructure or
-  gate failure) there is no case ID, and the body says so instead of omitting the field.
+  replayed database. Every later failing night adds the same body as a comment, so the tracker's
+  comments are its failure history; the `- Commit:` line in them is what recovery reads back.
+  Case IDs are matched as whole tokens, so a longer record name, a `__`-prefixed op name or a
+  path that merely looks like one is not reported. When a run fails before replaying a record (a
+  build, infrastructure or gate failure, or a missing artifact) there is no case ID, and the
+  body says so instead of omitting the field.
 - The database identity is the vendored `third_party/tensor-ad-oracles` tree recorded in the
   commit (`git rev-parse <commit>:third_party/tensor-ad-oracles`) plus the `torch==` pin in
   `third_party/tensor-ad-oracles/pyproject.toml`. No upstream revision of the oracle repository
@@ -62,6 +71,11 @@ On recovery:
   `run_oracle=true` **and** the `oracle-replay` job concluded `success`. The recovery comment
   records the run URL, the commit and the database identity before the issue is closed, so the
   provenance survives the close.
+- Recovery evidence must not be older than the failure it would close. The script reads the
+  newest `- Commit:` marker the tracker records (body first, then every comment) and requires
+  the recovering commit to be that commit or a descendant of it. A re-run of an older `main`
+  commit — still `refs/heads/main`, but older evidence — therefore comments that its evidence is
+  older than the tracked failure and leaves the issue open.
 - A run that skipped the replay (24-hour gate), a cancelled run, and any run whose replay was
   not requested leave the issue open.
 

@@ -2,7 +2,7 @@
 # Report and clear the oracle nightly failure issue.
 #
 # The workflow hands the job results in and decides nothing itself: this script
-# owns the issue body, the deduplication and the recovery decision.
+# owns the issue body, the tracker selection and the recovery decision.
 #
 # Inputs (environment):
 #   RUN_URL        URL of the workflow run
@@ -11,31 +11,46 @@
 #   RECENT_RESULT  recent-commits job result
 #   REPLAY_RESULT  oracle-replay job result
 #   ORACLE_LOG     replay log captured by the oracle-replay job (may be absent)
+# The checkout must contain the tracker's recorded failure commit, so the
+# workflow checks out full history; the ancestry test needs it.
 set -euo pipefail
 
 ISSUE_TITLE="oracle-replay-nightly is failing"
 ISSUE_LABEL="nightly-oracle-failure"
 ISSUE_SEARCH="oracle-replay-nightly is failing in:title"
+TITLE_FILTER='[.[] | select(.title == $title)][0].number // empty'
+# One page of `gh issue list` results. Hitting it means the search cannot be
+# trusted to contain a tracker, so the script refuses to act instead of
+# creating a duplicate.
+PAGE_LIMIT=1000
 DB_ROOT="third_party/tensor-ad-oracles"
 TORCH_PIN="${DB_ROOT}/pyproject.toml"
 # Records are named <op>_<dtype>_<family>_<number>; the replay error strings carry
-# the failing record's case_id verbatim. Replay workers run every record and the
-# runner returns the first error it collects, so the log holds the first failure
-# rather than an inventory.
-CASE_ID_PATTERN='[a-z][a-z0-9_]*_(f32|f64|c32|c64|c128)_[a-z0-9_]+_[0-9]{3}'
+# the failing record's case_id verbatim. The replay runner reports the first error
+# it collects, so this is the first failing record rather than an inventory. No
+# `__`-prefixed op is in the replay support table, so those report as "no case ID"
+# rather than being guessed at.
+CASE_ID_RE='[A-Za-z][A-Za-z0-9_]*_(?:f32|f64|c64|c128)_[A-Za-z0-9_]+_[0-9]{3}'
 CASE_ID_LIMIT=20
-TITLE_FILTER='[.[] | select(.title == $title)][0].number // empty'
+
+TRACKER_NUMBER=""
+TRACKER_LABELLED=0
+AMBIGUOUS=""
 
 log() { printf '%s\n' "$*"; }
+
+die_ambiguous() {
+  printf 'ambiguous nightly failure trackers: %s; refusing to %s\n' "${AMBIGUOUS}" "$1" >&2
+  exit 1
+}
 
 # The vendored database carries no upstream revision pin, so name what is
 # actually pinned instead of inventing a revision.
 oracle_db_line() {
-  local ref commit tree torch_line torch_version
-  ref="${HEAD_SHA:-HEAD}"
-  commit="$(git rev-parse --short=12 "${ref}" 2>/dev/null || echo unknown)"
-  tree="$(git rev-parse "${ref}:${DB_ROOT}" 2>/dev/null || echo unknown)"
-  torch_line="$(grep -n '"torch==' "${TORCH_PIN}" 2>/dev/null | head -n 1 | cut -d: -f1 || true)"
+  local commit tree torch_line torch_version
+  commit="$(git rev-parse --short=12 "${HEAD_SHA:-HEAD}" 2>/dev/null || echo unknown)"
+  tree="$(git rev-parse "${HEAD_SHA:-HEAD}:${DB_ROOT}" 2>/dev/null || echo unknown)"
+  torch_line="$(grep -n '"torch==' -- "${TORCH_PIN}" 2>/dev/null | head -n 1 | cut -d: -f1 || true)"
   torch_version="$(sed -n 's/^[[:space:]]*"torch==\([^"]*\)".*$/\1/p' "${TORCH_PIN}" 2>/dev/null | head -n 1 || true)"
   printf 'Oracle DB: `%s` as vendored at commit `%s` (tree `%s`); no upstream revision pin is recorded in this repository; the vendored generator requires `torch==%s` (`%s:%s`).\n' \
     "${DB_ROOT}" "${commit}" "${tree}" "${torch_version:-unknown}" \
@@ -45,7 +60,20 @@ oracle_db_line() {
 extract_case_ids() {
   local log_file="${1:-}"
   [ -n "${log_file}" ] && [ -f "${log_file}" ] || return 0
-  grep -oE "${CASE_ID_PATTERN}" "${log_file}" | sort -u || true
+  # The whole-token test is done on the match offsets instead of with lookaround
+  # assertions: BSD grep (macOS) has no `grep -P`, and this must give the same
+  # answer with the `perl` that ships with macOS. A match must not be preceded by
+  # a word character or a path separator, so `…_0012`, a `__`-prefixed op name and
+  # a path component are not reported as a different case ID.
+  perl -ne '
+    my $re = qr/('"${CASE_ID_RE}"')/;
+    while (/$re/g) {
+      my ($id, $start, $end) = ($1, $-[1], $+[1]);
+      next if $start > 0 && substr($_, $start - 1, 1) =~ m{[A-Za-z0-9_/]};
+      next if $end < length($_) && substr($_, $end, 1) =~ m{[A-Za-z0-9_]};
+      print "$id\n";
+    }
+  ' < "${log_file}" | sort -u || true
 }
 
 case_id_section() {
@@ -83,6 +111,8 @@ failure_body() {
   local case_ids
   case_ids="$(extract_case_ids "${ORACLE_LOG:-}")"
   printf 'The scheduled `oracle-replay-nightly` run failed.\n\n'
+  # `- Commit:` is also the marker recovery reads back to relate its evidence to
+  # the currently tracked failure, so keep the line in this exact shape.
   printf -- '- Run: %s\n' "${RUN_URL}"
   printf -- '- Commit: `%s`\n' "${HEAD_SHA}"
   printf -- '- Gate: recent-commits=%s, run_oracle=%s, oracle-replay=%s\n' \
@@ -104,48 +134,141 @@ recovery_body() {
   printf '%s\n' "$(oracle_db_line)"
 }
 
-# The label scopes the search and is the failure marker; the exact title keeps it
-# unambiguous. `gh issue list --label` fails when the label does not exist yet
-# (the first failure ever): that one error means "absent" and the title search in
-# the next step still finds an issue filed before the label existed. Any other
-# lookup failure aborts instead of reporting a second issue.
-find_open_issue() {
-  local labelled err number
-  err="$(mktemp)"
-  if ! labelled="$(gh issue list --state open --label "${ISSUE_LABEL}" --limit 50 \
-    --json number,title 2>"${err}")"; then
-    if grep -qiE 'not found|unknown label' "${err}"; then
-      labelled=""
-    else
-      printf 'labelled issue lookup failed: %s\n' "$(cat "${err}")" >&2
-      rm -f "${err}"
-      return 1
-    fi
-  fi
-  rm -f "${err}"
-  number="$(printf '%s' "${labelled}" \
-    | jq -r --arg title "${ISSUE_TITLE}" "${TITLE_FILTER}" 2>/dev/null || true)"
-  if [ -n "${number}" ]; then
-    printf '%s\n' "${number}"
-    return 0
-  fi
-  # One issue under the label is the failure issue even if its title was edited;
-  # several are ambiguous and only the exact title may match.
-  number="$(printf '%s' "${labelled}" \
-    | jq -r 'if length == 1 then .[0].number else empty end' 2>/dev/null || true)"
-  if [ -n "${number}" ]; then
-    printf '%s\n' "${number}"
-    return 0
-  fi
-  gh issue list --state open --search "${ISSUE_SEARCH}" --limit 50 --json number,title \
-    | jq -r --arg title "${ISSUE_TITLE}" "${TITLE_FILTER}"
+stale_recovery_body() {
+  printf 'Recovery evidence is older than the tracked failure, so this issue stays open.\n\n'
+  printf -- '- Recovering run: %s\n' "${RUN_URL}"
+  printf -- '- Recovering commit: `%s`\n' "${HEAD_SHA}"
+  printf -- '- Tracked failure commit: `%s`\n\n' "$1"
+  printf 'The nightly replay passed on `%s`, which is not the tracked failure commit or a\n' "${HEAD_SHA}"
+  printf 'descendant of it, so it does not show that the tracked failure is fixed.\n'
 }
 
-# `gh issue create --label` and `gh issue edit --add-label` both fail when the
-# label is absent, so it is ensured before either is used.
+unrelatable_recovery_body() {
+  printf 'Recovery evidence cannot be related to the tracked failure, so this issue stays open.\n\n'
+  printf -- '- Recovering run: %s\n' "${RUN_URL}"
+  printf -- '- Recovering commit: `%s`\n\n' "${HEAD_SHA}"
+  printf 'The tracker records failures that cannot be ordered against this commit (a commit\n'
+  printf 'this checkout does not have, or unrelated history), so this run does not show\n'
+  printf 'that they are fixed.\n'
+}
+
+# `gh issue list --label` fails when the label does not exist yet (the first
+# failure ever). That one error means "absent", and the title search covers it.
+# Anything else (auth, HTTP, rate limit) must not look like "no tracker".
+list_labelled() {
+  local err
+  err="$(mktemp)"
+  if ! gh issue list --state open --label "${ISSUE_LABEL}" --limit "${PAGE_LIMIT}" \
+    --json number,title 2>"${err}"; then
+    if grep -qiE 'not found|unknown label' "${err}"; then
+      rm -f "${err}"
+      printf '[]\n'
+      return 0
+    fi
+    printf 'labelled issue lookup failed: %s\n' "$(cat "${err}")" >&2
+    rm -f "${err}"
+    return 1
+  fi
+  rm -f "${err}"
+}
+
+count_of() { printf '%s' "${1:-[]}" | jq -r 'length' 2>/dev/null || echo 0; }
+
+# Sets TRACKER_NUMBER (empty when there is none), TRACKER_LABELLED and AMBIGUOUS.
+# "Trackers exist but none is identifiable" is ambiguous, never "no tracker":
+# the caller must not create a third issue in that state.
+resolve_tracker() {
+  local labelled exact count
+  TRACKER_NUMBER=""
+  TRACKER_LABELLED=0
+  AMBIGUOUS=""
+  labelled="$(list_labelled)"
+  exact="$(printf '%s' "${labelled}" | jq -r --arg title "${ISSUE_TITLE}" "${TITLE_FILTER}" 2>/dev/null || true)"
+  if [ -n "${exact}" ]; then
+    TRACKER_NUMBER="${exact}"
+    TRACKER_LABELLED=1
+    return 0
+  fi
+  count="$(count_of "${labelled}")"
+  if [ "${count}" -eq 1 ]; then
+    # One labelled issue is the tracker even when its title was edited.
+    TRACKER_NUMBER="$(printf '%s' "${labelled}" | jq -r '.[0].number')"
+    TRACKER_LABELLED=1
+    return 0
+  fi
+  if [ "${count}" -gt 1 ]; then
+    AMBIGUOUS="$(printf '%s' "${labelled}" | jq -r '.[].number' | sed 's/^/#/' | paste -sd' ' -)"
+    return 0
+  fi
+  labelled="$(gh issue list --state open --search "${ISSUE_SEARCH}" --limit "${PAGE_LIMIT}" \
+    --json number,title)"
+  exact="$(printf '%s' "${labelled}" | jq -r --arg title "${ISSUE_TITLE}" "${TITLE_FILTER}" 2>/dev/null || true)"
+  if [ -n "${exact}" ]; then
+    TRACKER_NUMBER="${exact}"
+    return 0
+  fi
+  if [ "$(count_of "${labelled}")" -ge "${PAGE_LIMIT}" ]; then
+    AMBIGUOUS="the title search returned a full page of ${PAGE_LIMIT} issues without an exact match"
+  fi
+}
+
 ensure_label() {
   gh label create "${ISSUE_LABEL}" --force \
     --description "Oracle nightly replay is failing" --color B60205 >/dev/null
+}
+
+# Every `- Commit:` marker the tracker records, in arrival order: the issue body
+# holds the first report and each later one is a comment, fully paginated. Either
+# read failing fails the whole function: a partial history can hide the newest
+# failure, and the caller must not then treat what it has as complete.
+tracker_failure_markers() {
+  local number="$1" body comments
+  if ! body="$(gh api "repos/${GH_REPO}/issues/${number}" --jq '.body')"; then
+    printf 'could not read the body of issue #%s\n' "${number}" >&2
+    return 1
+  fi
+  if ! comments="$(gh api --paginate "repos/${GH_REPO}/issues/${number}/comments" --jq '.[].body')"; then
+    printf 'could not read the comments of issue #%s\n' "${number}" >&2
+    return 1
+  fi
+  {
+    printf '%s\n' "${body}"
+    printf '%s\n' "${comments}"
+  } | sed -n 's/^- Commit: `\([0-9a-f]\{7,40\}\)`$/\1/p'
+}
+
+# The newest recorded failure, ordered by ancestry rather than by arrival: a
+# re-failure of an older commit is appended after a newer one, so "last comment
+# wins" would let a success on the older commit close an unresolved newer failure.
+# Fails when the markers cannot be read or ordered (unknown commit, unrelated
+# history); the caller then leaves the issue open.
+tracker_failure_sha() {
+  local number="$1" markers best="" candidate
+  if ! markers="$(tracker_failure_markers "${number}")"; then
+    return 1
+  fi
+  while IFS= read -r candidate; do
+    [ -n "${candidate}" ] || continue
+    git cat-file -e "${candidate}^{commit}" 2>/dev/null || return 1
+    if [ -z "${best}" ] || [ "${candidate}" = "${best}" ]; then
+      best="${candidate}"
+    elif git merge-base --is-ancestor "${best}" "${candidate}" 2>/dev/null; then
+      best="${candidate}"
+    elif ! git merge-base --is-ancestor "${candidate}" "${best}" 2>/dev/null; then
+      return 1
+    fi
+  done <<< "${markers}"
+  [ -n "${best}" ] || return 1
+  printf '%s\n' "${best}"
+}
+
+# Recovery evidence must not be older than the failure it would close: the
+# recovering commit has to be the tracked failure commit or a descendant.
+recovery_covers() {
+  local failure_sha="${1:-}"
+  [ -n "${failure_sha}" ] || return 1
+  [ "${failure_sha}" = "${HEAD_SHA}" ] && return 0
+  git merge-base --is-ancestor "${failure_sha}" "${HEAD_SHA}" 2>/dev/null
 }
 
 should_report() {
@@ -160,28 +283,45 @@ should_recover() {
 }
 
 report() {
-  local number
-  number="$(find_open_issue)"
-  ensure_label
-  if [ -z "${number}" ]; then
+  resolve_tracker
+  [ -n "${AMBIGUOUS}" ] && die_ambiguous "file a failure"
+  if [ -z "${TRACKER_NUMBER}" ]; then
+    ensure_label
     gh issue create --title "${ISSUE_TITLE}" --label "${ISSUE_LABEL}" \
       --body "$(failure_body)"
     return 0
   fi
-  gh issue comment "${number}" --body "$(failure_body)"
-  gh issue edit "${number}" --add-label "${ISSUE_LABEL}" >/dev/null
+  local body
+  body="$(failure_body)"
+  gh issue comment "${TRACKER_NUMBER}" --body "${body}"
+  if [ "${TRACKER_LABELLED}" -eq 0 ]; then
+    # A tracker filed before the label existed adopts it, once.
+    ensure_label
+    gh issue edit "${TRACKER_NUMBER}" --add-label "${ISSUE_LABEL}" >/dev/null
+  fi
 }
 
 recover() {
-  local number
-  number="$(find_open_issue)"
-  if [ -z "${number}" ]; then
+  resolve_tracker
+  [ -n "${AMBIGUOUS}" ] && die_ambiguous "close a failure"
+  if [ -z "${TRACKER_NUMBER}" ]; then
     log "no open failure issue to close"
     return 0
   fi
-  gh issue comment "${number}" --body "$(recovery_body)"
-  gh issue close "${number}"
-  log "closed #${number} after a successful replay"
+  local failure_sha
+  if ! failure_sha="$(tracker_failure_sha "${TRACKER_NUMBER}")"; then
+    gh issue comment "${TRACKER_NUMBER}" --body "$(unrelatable_recovery_body)"
+    log "the tracker's recorded failures cannot be ordered; issue left open"
+    return 0
+  fi
+  if ! recovery_covers "${failure_sha}"; then
+    gh issue comment "${TRACKER_NUMBER}" --body "$(stale_recovery_body "${failure_sha}")"
+    log "recovery evidence does not cover the tracked failure (${failure_sha}); issue left open"
+    return 0
+  fi
+  gh issue comment "${TRACKER_NUMBER}" --body "$(recovery_body)"
+  gh issue close "${TRACKER_NUMBER}"
+  log "closed #${TRACKER_NUMBER} after a successful replay"
 }
 
 if should_recover; then

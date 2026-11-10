@@ -220,6 +220,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("RECENT_RESULT: ${{ needs.recent-commits.result }}", reporter)
         self.assertIn("REPLAY_RESULT: ${{ needs.oracle-replay.result }}", reporter)
         self.assertIn("gh run download", reporter)
+        # Only a confirmed-absent artifact may be treated as "no log"; the run's
+        # artifact list is checked first so other download failures stay fatal.
+        self.assertIn("/actions/runs/${GITHUB_RUN_ID}/artifacts", reporter)
+        # A stray ANSI-C quote after the command substitution made the artifact name
+        # read as `oracle-replay-<id>$'`, so the log was never downloaded.
+        self.assertNotIn(")$'", reporter)
+        # Recovery compares commits with `git merge-base --is-ancestor`.
+        self.assertIn("fetch-depth: 0", reporter)
         self.assertIn("if: always() && github.ref == 'refs/heads/main'", text)
         self.assertNotIn("pull_request_target", text)
         # `issues: write` belongs to the reporting job only; the replay keeps read.

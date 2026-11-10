@@ -121,7 +121,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          # Full history: recovery relates its commit to the tracked failure with
+          # `git merge-base --is-ancestor`.
+          fetch-depth: 0
       - name: Collect the replay log
         env:
           GH_TOKEN: ${{ github.token }}
@@ -129,10 +131,20 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/oracle-replay
-          if ! gh run download "${GITHUB_RUN_ID}" --name "oracle-replay-${GITHUB_RUN_ID}" \
-            --dir target/oracle-replay; then
-            echo "no oracle-replay artifact for this run; case IDs will be reported as unavailable"
+          name="oracle-replay-${GITHUB_RUN_ID}"
+          # Tolerate confirmed absence only. A run that skipped the replay has no
+          # artifact by design; a listing or download failure is a real problem
+          # and must not be reported as "no log".
+          if ! artifacts="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            --jq '.artifacts[].name')"; then
+            echo "could not list the artifacts of run ${GITHUB_RUN_ID}" >&2
+            exit 1
           fi
+          if ! printf '%s\n' "${artifacts}" | grep -qxF -- "${name}"; then
+            echo "run ${GITHUB_RUN_ID} has no ${name} artifact (the replay did not run); case IDs will be reported as unavailable"
+            exit 0
+          fi
+          gh run download "${GITHUB_RUN_ID}" --name "${name}" --dir target/oracle-replay
       - name: Report or clear the failure issue
         env:
           GH_TOKEN: ${{ github.token }}
