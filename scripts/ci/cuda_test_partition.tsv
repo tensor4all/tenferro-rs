@@ -777,6 +777,7 @@ host	tenferro-einsum	api::tests::registry::a_traced_input_from_another_trace_is_
 host	tenferro-einsum	api::tests::registry::an_invalid_spec_has_one_kind_and_cause_on_every_layer
 host	tenferro-einsum	api::tests::registry::api_docs_are_current
 host	tenferro-einsum	api::tests::registry::conjugation_mask_conjugates_the_selected_operands_on_every_layer
+host	tenferro-einsum	api::tests::registry::conjugation_mask_into_matches_owned_bit_for_bit_in_every_mode
 host	tenferro-einsum	api::tests::registry::einsum_in_a_lane_is_unsupported_and_leaves_the_destination
 host	tenferro-einsum	api::tests::registry::einsum_into_honours_every_destination_mode
 host	tenferro-einsum	api::tests::registry::every_input_kind_returns_the_owned_result
@@ -1430,6 +1431,7 @@ host	tenferro-linalg	api::tests::registry::every_registry_entry_has_a_forwarding
 host	tenferro-linalg	api::tests::registry::only_solve_declares_into_and_only_overwrite
 host	tenferro-linalg	api::tests::registry::op_and_op_with_default_options_agree_bit_for_bit
 host	tenferro-linalg	api::tests::registry::solve_into_overwrite_never_reads_the_destination
+host	tenferro-linalg	api::tests::registry::typed_complex_lu_matches_erased_and_full_piv_lu_is_a_declared_omission
 host	tenferro-linalg	api::tests::registry::undeclared_into_modes_are_unsupported_before_any_write
 host	tenferro-linalg::cpu_linalg_allocation	borrowed_entries_keep_their_steady_state_allocation_counts
 host	tenferro-linalg::cpu_linalg_allocation	cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool
