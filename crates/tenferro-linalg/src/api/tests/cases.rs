@@ -1,5 +1,7 @@
-//! One forwarding case per (operation, layer): the plain call and the call
-//! with default options must agree bit for bit.
+//! One forwarding case per (operation, layer). For an operation with options
+//! the plain call and the call with default options must agree bit for bit;
+//! an operation without options has no `_with` form, so its case runs the same
+//! plain call twice and requires identical bits (a determinism check).
 //!
 //! The list is checked against `API_OPS` by
 //! `every_registry_entry_has_a_forwarding_case`, so a new registry entry
@@ -13,11 +15,8 @@ use super::support::*;
 #[cfg(feature = "autodiff")]
 use crate::EagerLinalgOps;
 use crate::{
-    CholeskyOptions, DetOptions, EigOptions, EighOptions, EigvalsOptions, EigvalshOptions,
-    FullPivLuOptions, FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, LinalgOps,
-    LstsqOptions, LuOptions, NormOptions, PinvOptions, QrOptions, RankRevealingQrOptions,
-    SlogdetOptions, SolveOptions, SvdOptions, SvdvalsOptions, TracedLinalgOps,
-    TriangularSolveOptions,
+    CholeskyOptions, EighOptions, EigvalshOptions, LinalgOps, NormOptions, PinvOptions, QrOptions,
+    RankRevealingQrOptions, SvdOptions, SvdvalsOptions, TracedLinalgOps, TriangularSolveOptions,
 };
 
 /// A forwarding case for one operation on one layer; `run` holds the
@@ -119,7 +118,7 @@ fn concrete_householder_qr<T: Sample>() -> TestResult<Pair> {
     let a = tensor::<T>(tall::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.householder_qr(&mut e)?;
-    let w = a.householder_qr_with(&HouseholderQrOptions::default(), &mut e)?;
+    let w = a.householder_qr(&mut e)?;
     let rp = p.r(QrOptions::default(), &mut e)?;
     let qp = p.q_columns(0..2, QrOptions::default(), &mut e)?;
     let rw = w.r(QrOptions::default(), &mut e)?;
@@ -135,7 +134,7 @@ fn traced_householder_qr<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = tall::<T>();
     let a = trace.from_vec_col_major(shape, values)?;
     let p = a.householder_qr()?;
-    let w = a.householder_qr_with(&HouseholderQrOptions::default())?;
+    let w = a.householder_qr()?;
     traced_pair(&[p.r(QrOptions::default())?], &[w.r(QrOptions::default())?])
 }
 
@@ -145,7 +144,7 @@ fn eager_householder_qr<T: Sample>() -> TestResult<Pair> {
     let (p, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
         let a = s.constant_from(raw::<T>(tall::<T>())?)?;
         let p = s.householder_qr(&a)?;
-        let w = s.householder_qr_with(&a, &HouseholderQrOptions::default())?;
+        let w = s.householder_qr(&a)?;
         let rp = p.r(QrOptions::default(), s)?;
         let rw = w.r(QrOptions::default(), s)?;
         Ok::<_, tenferro_ad::Error>((rp, rw))
@@ -186,7 +185,7 @@ fn concrete_lu<T: Sample>() -> TestResult<Pair> {
     let a = tensor::<T>(sq::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.lu(&mut e)?;
-    let w = a.lu_with(&LuOptions::default(), &mut e)?;
+    let w = a.lu(&mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -195,7 +194,7 @@ fn traced_lu<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = sq::<T>();
     let a = trace.from_vec_col_major(shape, values)?;
     let p = a.lu()?;
-    let w = a.lu_with(&LuOptions::default())?;
+    let w = a.lu()?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -205,7 +204,7 @@ fn eager_lu<T: Sample>() -> TestResult<Pair> {
     let (p, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
         let a = s.constant_from(raw::<T>(sq::<T>())?)?;
         let p = s.lu(&a)?;
-        let w = s.lu_with(&a, &LuOptions::default())?;
+        let w = s.lu(&a)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))
@@ -215,7 +214,7 @@ fn concrete_full_piv_lu<T: Sample>() -> TestResult<Pair> {
     let a = tensor::<T>(sq::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.full_piv_lu(&mut e)?;
-    let w = a.full_piv_lu_with(&FullPivLuOptions::default(), &mut e)?;
+    let w = a.full_piv_lu(&mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -224,7 +223,7 @@ fn traced_full_piv_lu<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = sq::<T>();
     let a = trace.from_vec_col_major(shape, values)?;
     let p = a.full_piv_lu()?;
-    let w = a.full_piv_lu_with(&FullPivLuOptions::default())?;
+    let w = a.full_piv_lu()?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -234,7 +233,7 @@ fn eager_full_piv_lu<T: Sample>() -> TestResult<Pair> {
     let (p, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
         let a = s.constant_from(raw::<T>(sq::<T>())?)?;
         let p = s.full_piv_lu(&a)?;
-        let w = s.full_piv_lu_with(&a, &FullPivLuOptions::default())?;
+        let w = s.full_piv_lu(&a)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))
@@ -245,7 +244,7 @@ fn concrete_full_piv_lu_solve<T: Sample>() -> TestResult<Pair> {
     let b = tensor::<T>(rhs::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.full_piv_lu_solve(&b, &mut e)?;
-    let w = a.full_piv_lu_solve_with(&b, &FullPivLuSolveOptions::default(), &mut e)?;
+    let w = a.full_piv_lu_solve(&b, &mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -256,7 +255,7 @@ fn traced_full_piv_lu_solve<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = rhs::<T>();
     let b = trace.from_vec_col_major(shape, values)?;
     let p = a.full_piv_lu_solve(&b)?;
-    let w = a.full_piv_lu_solve_with(&b, &FullPivLuSolveOptions::default())?;
+    let w = a.full_piv_lu_solve(&b)?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -267,7 +266,7 @@ fn eager_full_piv_lu_solve<T: Sample>() -> TestResult<Pair> {
         let a = s.constant_from(raw::<T>(sq::<T>())?)?;
         let b = s.constant_from(raw::<T>(rhs::<T>())?)?;
         let p = s.full_piv_lu_solve(&a, &b)?;
-        let w = s.full_piv_lu_solve_with(&a, &b, &FullPivLuSolveOptions::default())?;
+        let w = s.full_piv_lu_solve(&a, &b)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))
@@ -278,7 +277,7 @@ fn concrete_solve<T: Sample>() -> TestResult<Pair> {
     let b = tensor::<T>(rhs::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.solve(&b, &mut e)?;
-    let w = a.solve_with(&b, &SolveOptions::default(), &mut e)?;
+    let w = a.solve(&b, &mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -289,7 +288,7 @@ fn traced_solve<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = rhs::<T>();
     let b = trace.from_vec_col_major(shape, values)?;
     let p = a.solve(&b)?;
-    let w = a.solve_with(&b, &SolveOptions::default())?;
+    let w = a.solve(&b)?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -300,7 +299,7 @@ fn eager_solve<T: Sample>() -> TestResult<Pair> {
         let a = s.constant_from(raw::<T>(sq::<T>())?)?;
         let b = s.constant_from(raw::<T>(rhs::<T>())?)?;
         let p = s.solve(&a, &b)?;
-        let w = s.solve_with(&a, &b, &SolveOptions::default())?;
+        let w = s.solve(&a, &b)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))
@@ -311,7 +310,7 @@ fn concrete_lstsq<T: Sample>() -> TestResult<Pair> {
     let b = tensor::<T>(rhs_tall::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.lstsq(&b, &mut e)?;
-    let w = a.lstsq_with(&b, &LstsqOptions::default(), &mut e)?;
+    let w = a.lstsq(&b, &mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -322,7 +321,7 @@ fn traced_lstsq<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = rhs_tall::<T>();
     let b = trace.from_vec_col_major(shape, values)?;
     let p = a.lstsq(&b)?;
-    let w = a.lstsq_with(&b, &LstsqOptions::default())?;
+    let w = a.lstsq(&b)?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -333,7 +332,7 @@ fn eager_lstsq<T: Sample>() -> TestResult<Pair> {
         let a = s.constant_from(raw::<T>(tall::<T>())?)?;
         let b = s.constant_from(raw::<T>(rhs_tall::<T>())?)?;
         let p = s.lstsq(&a, &b)?;
-        let w = s.lstsq_with(&a, &b, &LstsqOptions::default())?;
+        let w = s.lstsq(&a, &b)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))
@@ -405,7 +404,7 @@ fn concrete_eig<T: Sample>() -> TestResult<Pair> {
     let a = tensor::<T>(sq::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.eig(&mut e)?;
-    let w = a.eig_with(&EigOptions::default(), &mut e)?;
+    let w = a.eig(&mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -414,7 +413,7 @@ fn traced_eig<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = sq::<T>();
     let a = trace.from_vec_col_major(shape, values)?;
     let p = a.eig()?;
-    let w = a.eig_with(&EigOptions::default())?;
+    let w = a.eig()?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -424,7 +423,7 @@ fn eager_eig<T: Sample>() -> TestResult<Pair> {
     let (p, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
         let a = s.constant_from(raw::<T>(sq::<T>())?)?;
         let p = s.eig(&a)?;
-        let w = s.eig_with(&a, &EigOptions::default())?;
+        let w = s.eig(&a)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))
@@ -434,7 +433,7 @@ fn concrete_eigvals<T: Sample>() -> TestResult<Pair> {
     let a = tensor::<T>(sq::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.eigvals(&mut e)?;
-    let w = a.eigvals_with(&EigvalsOptions::default(), &mut e)?;
+    let w = a.eigvals(&mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -443,7 +442,7 @@ fn traced_eigvals<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = sq::<T>();
     let a = trace.from_vec_col_major(shape, values)?;
     let p = a.eigvals()?;
-    let w = a.eigvals_with(&EigvalsOptions::default())?;
+    let w = a.eigvals()?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -453,7 +452,7 @@ fn eager_eigvals<T: Sample>() -> TestResult<Pair> {
     let (p, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
         let a = s.constant_from(raw::<T>(sq::<T>())?)?;
         let p = s.eigvals(&a)?;
-        let w = s.eigvals_with(&a, &EigvalsOptions::default())?;
+        let w = s.eigvals(&a)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))
@@ -521,7 +520,7 @@ fn concrete_slogdet<T: Sample>() -> TestResult<Pair> {
     let a = tensor::<T>(sq::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.slogdet(&mut e)?;
-    let w = a.slogdet_with(&SlogdetOptions::default(), &mut e)?;
+    let w = a.slogdet(&mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -530,7 +529,7 @@ fn traced_slogdet<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = sq::<T>();
     let a = trace.from_vec_col_major(shape, values)?;
     let p = a.slogdet()?;
-    let w = a.slogdet_with(&SlogdetOptions::default())?;
+    let w = a.slogdet()?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -540,7 +539,7 @@ fn eager_slogdet<T: Sample>() -> TestResult<Pair> {
     let (p, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
         let a = s.constant_from(raw::<T>(sq::<T>())?)?;
         let p = s.slogdet(&a)?;
-        let w = s.slogdet_with(&a, &SlogdetOptions::default())?;
+        let w = s.slogdet(&a)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))
@@ -550,7 +549,7 @@ fn concrete_det<T: Sample>() -> TestResult<Pair> {
     let a = tensor::<T>(sq::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.det(&mut e)?;
-    let w = a.det_with(&DetOptions::default(), &mut e)?;
+    let w = a.det(&mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -559,7 +558,7 @@ fn traced_det<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = sq::<T>();
     let a = trace.from_vec_col_major(shape, values)?;
     let p = a.det()?;
-    let w = a.det_with(&DetOptions::default())?;
+    let w = a.det()?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -569,7 +568,7 @@ fn eager_det<T: Sample>() -> TestResult<Pair> {
     let (p, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
         let a = s.constant_from(raw::<T>(sq::<T>())?)?;
         let p = s.det(&a)?;
-        let w = s.det_with(&a, &DetOptions::default())?;
+        let w = s.det(&a)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))
@@ -579,7 +578,7 @@ fn concrete_inv<T: Sample>() -> TestResult<Pair> {
     let a = tensor::<T>(sq::<T>())?;
     let mut e = CpuEngine::serial();
     let p = a.inv(&mut e)?;
-    let w = a.inv_with(&InvOptions::default(), &mut e)?;
+    let w = a.inv(&mut e)?;
     Ok((p.bits()?, w.bits()?))
 }
 
@@ -588,7 +587,7 @@ fn traced_inv<T: Sample>() -> TestResult<Pair> {
     let (shape, values) = sq::<T>();
     let a = trace.from_vec_col_major(shape, values)?;
     let p = a.inv()?;
-    let w = a.inv_with(&InvOptions::default())?;
+    let w = a.inv()?;
     traced_pair(&p.leaves(), &w.leaves())
 }
 
@@ -598,7 +597,7 @@ fn eager_inv<T: Sample>() -> TestResult<Pair> {
     let (p, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
         let a = s.constant_from(raw::<T>(sq::<T>())?)?;
         let p = s.inv(&a)?;
-        let w = s.inv_with(&a, &InvOptions::default())?;
+        let w = s.inv(&a)?;
         Ok::<_, tenferro_ad::Error>((p, w))
     })?;
     Ok((p.bits()?, w.bits()?))

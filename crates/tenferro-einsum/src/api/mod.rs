@@ -18,7 +18,7 @@ pub(crate) mod traced;
 pub use registry::EagerEinsumOps;
 pub use registry::{EinsumOps, TensordotOps, TracedEinsumOps, TracedTensordotOps};
 
-pub use options::{ConjMask, EinsumInputs, EinsumOptions, EinsumSpec, Spec, TensordotOptions};
+pub use options::{ConjMask, EinsumInputs, EinsumOptions, EinsumSpec, Spec};
 
 #[cfg(test)]
 mod tests;

@@ -2,8 +2,7 @@ use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
     Eig, EighOptions, KeepDims, LinalgBackend, LinalgOps, NormOptions, NormOrd, PinvOptions, Qr,
-    QrOptions, RankRevealingQrOptions, Slogdet, SolveOptions, Svd, SvdOptions,
-    TriangularSolveOptions, Uplo,
+    QrOptions, RankRevealingQrOptions, Slogdet, Svd, SvdOptions, TriangularSolveOptions, Uplo,
 };
 use tenferro_tensor::{AxisVec, Dest, Tensor, TensorRead, TensorScalar, TypedTensor};
 
@@ -538,7 +537,6 @@ fn read_surface_solve_into_writes_the_caller_buffer_directly() {
     {
         TensorRead::from_tensor(&a).solve_into(
             &TensorRead::from_tensor(&b),
-            &SolveOptions::default(),
             &mut host,
             Dest::overwrite(tenferro_tensor::TensorWrite::from_tensor(&mut owned)),
         )
@@ -555,7 +553,6 @@ fn read_surface_solve_into_writes_the_caller_buffer_directly() {
     {
         TensorRead::from_tensor(&a).solve_into(
             &TensorRead::from_tensor(&b),
-            &SolveOptions::default(),
             &mut host,
             Dest::overwrite(tenferro_tensor::TensorWrite::from_view(
                 tenferro_tensor::TensorViewMut::F64(view),

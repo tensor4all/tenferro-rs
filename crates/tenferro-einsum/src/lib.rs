@@ -116,7 +116,7 @@ pub(crate) mod util;
 pub use api::EagerEinsumOps;
 pub use api::{
     ConjMask, EinsumInputs, EinsumOps, EinsumOptions, EinsumSpec, Spec, TensordotOps,
-    TensordotOptions, TracedEinsumOps, TracedTensordotOps,
+    TracedEinsumOps, TracedTensordotOps,
 };
 pub use cache::EINSUM_EXTENSION_FAMILY_ID;
 pub use concrete::ConcreteEinsumPlan;

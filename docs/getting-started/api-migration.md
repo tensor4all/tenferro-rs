@@ -15,8 +15,8 @@ omissions.
 
 ```text
 recv.op(operands…, exec)                     // concrete, default options
-recv.op_with(operands…, &opts, exec)         // concrete, explicit XxxOptions
-recv.op_into(operands…, &opts, exec, dest)   // concrete, only where declared
+recv.op_with(operands…, &opts, exec)         // concrete, explicit XxxOptions (only ops with options)
+recv.op_into(operands…, [&opts,] exec, dest) // concrete, only where declared; no &opts for ops without options
 session.op(&x, operands…)                    // eager: the session is the receiver
 traced.op_with(operands…, &opts)             // traced: no exec; run with prepare → run
 ```
@@ -26,6 +26,10 @@ traced.op_with(operands…, &opts)             // traced: no exec; run with prep
   `TypedTensor<T>`, `TypedTensorView<T>`, or a reference to one. The `_read`
   spellings are gone; pass the view to the unsuffixed method. Typed receivers
   return typed results.
+- An operation has an `XxxOptions` type and an `_with` form only when it has
+  semantic options; `solve`, `lstsq`, `householder_qr`, `lu`, `full_piv_lu`,
+  `full_piv_lu_solve`, `eig`, `eigvals`, `slogdet`, `det`, `inv` and `add` have
+  none, so their `_into` forms take no options (#2552 Q14).
 - The only suffixes are `_with` (explicit options) and `_into` (a caller
   destination `Dest`); `_in_place` remains only for the consuming eager FFT.
 - Options types are `#[non_exhaustive]`: build them with
@@ -69,7 +73,7 @@ its new traits.
 | `a.pinv_with_rtol(rtol, exec)` | `a.pinv_with(&PinvOptions::default().rtol(Some(rtol)), exec)` |
 | `a.triangular_solve(&b, left_side, lower, transpose_a, unit_diagonal, exec)` | `a.triangular_solve_with(&b, &TriangularSolveOptions::default().side(..).uplo(..).op(..).diag(..), exec)` with `Side::{Left, Right}`, `Uplo::{Lower, Upper}`, `MatOp::{None, Transpose}`, `Diag::{NonUnit, Unit}`; `a.triangular_solve(&b, exec)` is left, lower, no transpose, non-unit |
 | `a.norm(ord, dim, keepdim, exec)` | `a.norm(exec)` for the Frobenius default, otherwise `a.norm_with(&NormOptions::default().ord(NormOrd::..).axes(Some([0].into())).keep_dims(KeepDims::Yes), exec)`; `None → NormOrd::Frobenius`, `Some(0.0) → NormOrd::Zero`, `Some(±∞) → NormOrd::Inf` / `NegInf`, other `Some(p) → NormOrd::P(p)` |
-| `r.solve_read_into(b, out, exec)` | `r.solve_into(&b, &SolveOptions::default(), exec, Dest::overwrite(out))` (overwrite only) |
+| `r.solve_read_into(b, out, exec)` | `r.solve_into(&b, exec, Dest::overwrite(out))` (overwrite only) |
 | `ctx.svd(value)` (`TraceContextLinalgExt` on `TraceValue`) | `t.svd()` on a `TracedTensor` |
 | `t.svd_full()`, `t.norm(ord, dim, keepdim)`, `t.triangular_solve(&b, ..)` (traced) | `t.svd_with(&..)`, `t.norm_with(&NormOptions ..)`, `t.triangular_solve_with(&b, &TriangularSolveOptions ..)` |
 | `x.solve(engine, &b)` (`EagerTensorLinalgExt`) | `runtime.with_eager_session(&mut engine, \|s\| s.solve(&x, &b))` |
@@ -89,7 +93,7 @@ its new traits.
 | `[&a, &b].einsum_notation(&n, exec)`, `einsum_subscripts(&s, exec)` | `[&a, &b].einsum(&n, exec)`, `[&a, &b].einsum(&s, exec)`: the spec argument accepts a string, an `EinsumNotation`, or `EinsumSubscripts` |
 | `[r1, r2].einsum_read(spec, exec)` and typed-read variants | `[r1, r2].einsum(spec, exec)` |
 | `[r1, r2].einsum_read_into("ij,jk->ik", exec, out)`, `einsum_into(spec, exec, out)` | `[r1, r2].einsum_into("ij,jk->ik", &EinsumOptions::default(), exec, Dest::overwrite(out))` |
-| `a.tensordot(&b, axes, exec)` (`TensorTensordotExt`) | the same call through `TensordotOps`; `tensordot_with(&b, axes, &TensordotOptions::default(), exec)` |
+| `a.tensordot(&b, axes, exec)` (`TensorTensordotExt`) | the same call through `TensordotOps` (`tensordot` has no options, so no `tensordot_with`) |
 | `ConcreteEinsumPlan::prepare(inputs, spec)`, `prepare_notation`, `prepare_subscripts`, `prepare_typed*`, `prepare_read*` | `ConcreteEinsumPlan::prepare(inputs, spec, &EinsumOptions::default())` |
 | `plan.execute_typed(..)`, `execute_read(..)`, `execute_typed_into(.., out)`, `execute_read_into(.., out)` | `plan.execute(inputs, exec)`, `plan.execute_into(inputs, exec, Dest::overwrite(out))` |
 | `plan.execute_read_into_accum(inputs, exec, acc, out)` | `plan.execute_into(inputs, exec, Dest::accumulate(out))` or `Dest::scaled(out, alpha, beta)`; per-operand conjugation is fixed when the plan is prepared, through `EinsumOptions::conj` |
@@ -137,7 +141,7 @@ Error labels follow the new names, for example `fft` instead of
 | `Tensor::concatenate(&[&a, &b], axis, exec)`, `TypedTensor::<T>::concatenate(..)` | `CoreOps::concatenate(&[&a, &b], axis, exec)` with `axis: isize` |
 | `a.dot_general_with_conj(&b, cfg, true, false, exec)` | `a.dot_general_with(&b, cfg, &DotGeneralOptions::default().lhs(Conj::Yes), exec)` |
 | `session.dot_general_with_conj(&a, &b, cfg, lhs, rhs)` (eager) | `session.dot_general_with(&a, &b, cfg, &DotGeneralOptions ..)` |
-| `a.add_into(&rhs, &mut out, exec)` (typed) | `a.add_into(&rhs, &AddOptions::default(), exec, Dest::overwrite(&mut out))` (overwrite only) |
+| `a.add_into(&rhs, &mut out, exec)` (typed) | `a.add_into(&rhs, exec, Dest::overwrite(&mut out))` (overwrite only) |
 | `a.reduce_sum(Some(&[0usize]), exec)` and every other `usize` / `&[usize]` axis argument | `a.reduce_sum(Some(&[0isize]), exec)`; `-1` names the last axis. This applies to `CoreOps`, `TracedTensor` (including `slice_axis`, `take_axis`, `concatenate`, `extract_diag`, `embed_diag`, `shape_of`, `sym_size`, `dynamic_truncate`, `pad_to_match`), and `EagerSession` |
 
 A repeated axis in a concrete reduction, `transpose`, or `reverse` is rejected

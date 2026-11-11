@@ -8,11 +8,9 @@
 use tenferro_extension_macros::api_ops;
 
 use crate::{
-    CholeskyOptions, DetOptions, Eig, EigOptions, Eigh, EighOptions, EigvalsOptions,
-    EigvalshOptions, FullPivLu, FullPivLuOptions, FullPivLuSolveOptions, HouseholderQr,
-    HouseholderQrOptions, InvOptions, LstsqOptions, Lu, LuOptions, NormOptions, PinvOptions, Qr,
-    QrOptions, RankRevealingQrOptions, RankRevealingQrResult, Slogdet, SlogdetOptions,
-    SolveOptions, Svd, SvdOptions, SvdvalsOptions, TriangularSolveOptions,
+    CholeskyOptions, Eig, Eigh, EighOptions, EigvalshOptions, FullPivLu, HouseholderQr, Lu,
+    NormOptions, PinvOptions, Qr, QrOptions, RankRevealingQrOptions, RankRevealingQrResult,
+    Slogdet, Svd, SvdOptions, SvdvalsOptions, TriangularSolveOptions,
 };
 
 api_ops! {
@@ -317,7 +315,7 @@ assert!(r[0] > 0.0 && r[3] > 0.0);
     op householder_qr {
         summary: "Compact Householder QR: an opaque factorization state from which `r` and `q_columns` are extracted.";
         operands: (a);
-        options: HouseholderQrOptions;
+        options: none;
         output: HouseholderQr<V>;
         dtypes: "`a`: f32, f64, Complex32 or Complex64.";
         layers: [concrete, traced, eager];
@@ -326,31 +324,26 @@ assert!(r[0] > 0.0 && r[3] > 0.0);
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, HouseholderQrOptions, QrOptions};
+use tenferro_linalg::{LinalgOps, QrOptions};
 use tenferro_tensor::{Tensor};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.householder_qr(&mut engine)?;
-let w = a.householder_qr_with(&HouseholderQrOptions::default(), &mut engine)?;
 let rt = r.r(QrOptions::default(), &mut engine)?;
-let wt = w.r(QrOptions::default(), &mut engine)?;
 assert_eq!(rt.shape(), &[2, 2]);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, HouseholderQrOptions, QrOptions};
+use tenferro_linalg::{TracedLinalgOps, QrOptions};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.householder_qr()?;
-let w = a.householder_qr_with(&HouseholderQrOptions::default())?;
 let rt = r.r(QrOptions::default())?;
-let wt = w.r(QrOptions::default())?;
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -365,26 +358,21 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 assert_eq!(rt.shape(), &[2, 2]);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, HouseholderQrOptions, QrOptions};
+use tenferro_linalg::{EagerLinalgOps, QrOptions};
 use tenferro_tensor::{Tensor};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let r = s.householder_qr(&a)?;
-    let w = s.householder_qr_with(&a, &HouseholderQrOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r.r(QrOptions::default(), s)?, w.r(QrOptions::default(), s)?))
+    Ok::<_, tenferro_ad::Error>(r.r(QrOptions::default(), s)?)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 assert_eq!(rt.shape(), &[2, 2]);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op rank_revealing_qr {
@@ -466,7 +454,7 @@ assert_eq!(wt.as_slice::<i64>()?, &[2]);
     op lu {
         summary: "Partial-pivot LU `a = p l u`; `p` is a permutation matrix and `parity` is the real sign of the permutation.";
         operands: (a);
-        options: LuOptions;
+        options: none;
         output: Lu<V>;
         dtypes: "`a`: f32, f64, Complex32 or Complex64. `p`, `l`, `u` and `parity` (+1 or -1) have the dtype of `a`.";
         layers: [concrete, traced, eager];
@@ -475,33 +463,28 @@ assert_eq!(wt.as_slice::<i64>()?, &[2]);
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, LuOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.lu(&mut engine)?;
-let w = a.lu_with(&LuOptions::default(), &mut engine)?;
 let rt = &r.l;
-let wt = &w.l;
 assert_eq!(rt.shape(), &[2, 2]);
 // `l` is unit lower triangular.
 assert_eq!(rt.as_slice::<f64>()?[0], 1.0);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, LuOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.lu()?;
-let w = a.lu_with(&LuOptions::default())?;
 let rt = r.l.clone();
-let wt = w.l.clone();
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -516,36 +499,31 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 assert_eq!(rt.shape(), &[2, 2]);
 // `l` is unit lower triangular.
 assert_eq!(rt.as_slice::<f64>()?[0], 1.0);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, LuOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let r = s.lu(&a)?;
-    let w = s.lu_with(&a, &LuOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r.l, w.l))
+    Ok::<_, tenferro_ad::Error>(r.l)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 assert_eq!(rt.shape(), &[2, 2]);
 // `l` is unit lower triangular.
 assert_eq!(rt.as_slice::<f64>()?[0], 1.0);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op full_piv_lu {
         summary: "Complete-pivot LU `a = p l u q`; `p` and `q` are permutation matrices and `parity` is the real sign of the permutations.";
         operands: (a);
-        options: FullPivLuOptions;
+        options: none;
         output: FullPivLu<V, R>;
         dtypes: "`a`: f32, f64, Complex32 or Complex64. `p`, `l`, `u` and `q` have the dtype of `a`; `parity` (+1 or -1) is real for an owned `Tensor` and has the dtype of `a` on the borrowed route (#2552 Q21).";
         layers: [concrete, traced, eager];
@@ -554,31 +532,26 @@ assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`", "typed Complex32/Complex64 input: returns `Unsupported`; the borrowed route returns `parity` in the input dtype while the owned route and the typed result type have it real (#2552 Q21); erased inputs keep the dtype their route returns"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, FullPivLuOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.full_piv_lu(&mut engine)?;
-let w = a.full_piv_lu_with(&FullPivLuOptions::default(), &mut engine)?;
 let rt = &r.u;
-let wt = &w.u;
 assert_eq!(rt.shape(), &[2, 2]);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, FullPivLuOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.full_piv_lu()?;
-let w = a.full_piv_lu_with(&FullPivLuOptions::default())?;
 let rt = r.u.clone();
-let wt = w.u.clone();
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -593,32 +566,27 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 assert_eq!(rt.shape(), &[2, 2]);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, FullPivLuOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let r = s.full_piv_lu(&a)?;
-    let w = s.full_piv_lu_with(&a, &FullPivLuOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r.u, w.u))
+    Ok::<_, tenferro_ad::Error>(r.u)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 assert_eq!(rt.shape(), &[2, 2]);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op full_piv_lu_solve {
         summary: "Solves `a x = b` through the complete-pivot LU of `a`; a rank-deficient system is rejected.";
         operands: (a, b);
-        options: FullPivLuSolveOptions;
+        options: none;
         output: V;
         dtypes: "`a` and `b`: the same dtype, one of f32, f64, Complex32 or Complex64. `x` has that dtype.";
         layers: [concrete, traced, eager];
@@ -627,37 +595,32 @@ assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
         errors: [Validation, Unsupported, NumericalFailure(Singular)];
         omissions: ["lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, FullPivLuSolveOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let b = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
 let r = a.full_piv_lu_solve(&b, &mut engine)?;
-let w = a.full_piv_lu_solve_with(&b, &FullPivLuSolveOptions::default(), &mut engine)?;
 let rt = &r;
-let wt = &w;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 1]);
 // [[4, 2], [2, 3]] x = [1, 2] has the solution [-1/8, 3/4].
 let x = rt.as_slice::<f64>()?;
 assert!(close(x[0], -0.125) && close(x[1], 0.75));
-assert_eq!(wt.as_slice::<f64>()?, x);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, FullPivLuSolveOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let b = trace.from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
 let r = a.full_piv_lu_solve(&b)?;
-let w = a.full_piv_lu_solve_with(&b, &FullPivLuSolveOptions::default())?;
 let rt = r;
-let wt = w;
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -672,41 +635,36 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 1]);
 // [[4, 2], [2, 3]] x = [1, 2] has the solution [-1/8, 3/4].
 let x = rt.as_slice::<f64>()?;
 assert!(close(x[0], -0.125) && close(x[1], 0.75));
-assert_eq!(wt.as_slice::<f64>()?, x);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, FullPivLuSolveOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let b = s.constant_from(Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?)?;
     let r = s.full_piv_lu_solve(&a, &b)?;
-    let w = s.full_piv_lu_solve_with(&a, &b, &FullPivLuSolveOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r, w))
+    Ok::<_, tenferro_ad::Error>(r)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 1]);
 // [[4, 2], [2, 3]] x = [1, 2] has the solution [-1/8, 3/4].
 let x = rt.as_slice::<f64>()?;
 assert!(close(x[0], -0.125) && close(x[1], 0.75));
-assert_eq!(wt.as_slice::<f64>()?, x);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op solve {
         summary: "Solves `a x = b` with a partial-pivot LU of `a`; `solve_into` overwrites a destination.";
         operands: (a, b);
-        options: SolveOptions;
+        options: none;
         output: V;
         dtypes: "`a` and `b`: the same dtype, one of f32, f64, Complex32 or Complex64. `x` has that dtype.";
         layers: [concrete, traced, eager];
@@ -715,42 +673,37 @@ assert_eq!(wt.as_slice::<f64>()?, x);
         errors: [Validation, Unsupported, NumericalFailure(Singular)];
         omissions: ["`solve_into` accepts only `Dest::Overwrite`; `Accumulate` and `Scaled` return `Unsupported` before `dest` is touched", "lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, SolveOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor, Dest};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let b = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
 let r = a.solve(&b, &mut engine)?;
-let w = a.solve_with(&b, &SolveOptions::default(), &mut engine)?;
 let rt = &r;
-let wt = &w;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 1]);
 // [[4, 2], [2, 3]] x = [1, 2] has the solution [-1/8, 3/4].
 let x = rt.as_slice::<f64>()?;
 assert!(close(x[0], -0.125) && close(x[1], 0.75));
-assert_eq!(wt.as_slice::<f64>()?, x);
 
 // `solve_into` overwrites the destination, whatever it held before.
 let mut out = Tensor::from_vec_col_major(vec![2, 1], vec![f64::NAN; 2])?;
-a.solve_into(&b, &SolveOptions::default(), &mut engine, Dest::overwrite(&mut out))?;
+a.solve_into(&b, &mut engine, Dest::overwrite(&mut out))?;
 assert_eq!(out.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, SolveOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let b = trace.from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
 let r = a.solve(&b)?;
-let w = a.solve_with(&b, &SolveOptions::default())?;
 let rt = r;
-let wt = w;
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -765,41 +718,36 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 1]);
 // [[4, 2], [2, 3]] x = [1, 2] has the solution [-1/8, 3/4].
 let x = rt.as_slice::<f64>()?;
 assert!(close(x[0], -0.125) && close(x[1], 0.75));
-assert_eq!(wt.as_slice::<f64>()?, x);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, SolveOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let b = s.constant_from(Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?)?;
     let r = s.solve(&a, &b)?;
-    let w = s.solve_with(&a, &b, &SolveOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r, w))
+    Ok::<_, tenferro_ad::Error>(r)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 1]);
 // [[4, 2], [2, 3]] x = [1, 2] has the solution [-1/8, 3/4].
 let x = rt.as_slice::<f64>()?;
 assert!(close(x[0], -0.125) && close(x[1], 0.75));
-assert_eq!(wt.as_slice::<f64>()?, x);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op lstsq {
         summary: "Least-squares solution of `a x = b` for a tall or square, full-column-rank `a` (thin QR, then a triangular solve).";
         operands: (a, b);
-        options: LstsqOptions;
+        options: none;
         output: V;
         dtypes: "`a` and `b`: the same dtype, one of f32, f64, Complex32 or Complex64. `x` has that dtype.";
         layers: [concrete, traced, eager];
@@ -808,37 +756,32 @@ assert_eq!(wt.as_slice::<f64>()?, x);
         errors: [Validation, Unsupported];
         omissions: ["an underdetermined (wide, `rows < cols`) system returns a `Validation` error", "lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, LstsqOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 0.0, 0.0, 0.0, 1.0, 0.0])?;
 let b = Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0])?;
 let r = a.lstsq(&b, &mut engine)?;
-let w = a.lstsq_with(&b, &LstsqOptions::default(), &mut engine)?;
 let rt = &r;
-let wt = &w;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 1]);
 // The columns of `a` are the first two unit vectors, so x = [1, 2].
 let x = rt.as_slice::<f64>()?;
 assert!(close(x[0], 1.0) && close(x[1], 2.0));
-assert_eq!(wt.as_slice::<f64>()?, x);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, LstsqOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![3, 2], vec![1.0_f64, 0.0, 0.0, 0.0, 1.0, 0.0])?;
 let b = trace.from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0])?;
 let r = a.lstsq(&b)?;
-let w = a.lstsq_with(&b, &LstsqOptions::default())?;
 let rt = r;
-let wt = w;
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -853,35 +796,30 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 1]);
 // The columns of `a` are the first two unit vectors, so x = [1, 2].
 let x = rt.as_slice::<f64>()?;
 assert!(close(x[0], 1.0) && close(x[1], 2.0));
-assert_eq!(wt.as_slice::<f64>()?, x);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, LstsqOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 0.0, 0.0, 0.0, 1.0, 0.0])?)?;
     let b = s.constant_from(Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0])?)?;
     let r = s.lstsq(&a, &b)?;
-    let w = s.lstsq_with(&a, &b, &LstsqOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r, w))
+    Ok::<_, tenferro_ad::Error>(r)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 1]);
 // The columns of `a` are the first two unit vectors, so x = [1, 2].
 let x = rt.as_slice::<f64>()?;
 assert!(close(x[0], 1.0) && close(x[1], 2.0));
-assert_eq!(wt.as_slice::<f64>()?, x);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op triangular_solve {
@@ -1063,7 +1001,7 @@ assert_eq!(wt.as_slice::<f64>()?, l);
     op eig {
         summary: "General eigendecomposition `a v = v diag(values)`; eigenvectors have unit 2-norm.";
         operands: (a);
-        options: EigOptions;
+        options: none;
         output: Eig<C>;
         dtypes: "`a`: f32, f64, Complex32 or Complex64. `values` and `vectors` are complex (Complex32 for f32 and Complex32 input, Complex64 otherwise).";
         layers: [concrete, traced, eager];
@@ -1072,32 +1010,27 @@ assert_eq!(wt.as_slice::<f64>()?, l);
         errors: [Validation, Unsupported, NumericalFailure(NonConvergence), NumericalFailure(NonFinite)];
         omissions: ["lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, EigOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor, Complex64};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.eig(&mut engine)?;
-let w = a.eig_with(&EigOptions::default(), &mut engine)?;
 let rt = &r.values;
-let wt = &w.values;
 assert_eq!(rt.shape(), &[2]);
-assert_eq!(wt.as_slice::<Complex64>()?, rt.as_slice::<Complex64>()?);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, EigOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 use tenferro_tensor::{Complex64};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.eig()?;
-let w = a.eig_with(&EigOptions::default())?;
 let rt = r.values.clone();
-let wt = w.values.clone();
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -1112,32 +1045,27 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 assert_eq!(rt.shape(), &[2]);
-assert_eq!(wt.as_slice::<Complex64>()?, rt.as_slice::<Complex64>()?);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, EigOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor, Complex64};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let r = s.eig(&a)?;
-    let w = s.eig_with(&a, &EigOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r.values, w.values))
+    Ok::<_, tenferro_ad::Error>(r.values)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 assert_eq!(rt.shape(), &[2]);
-assert_eq!(wt.as_slice::<Complex64>()?, rt.as_slice::<Complex64>()?);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op eigvals {
         summary: "Eigenvalues of a general matrix, as complex numbers.";
         operands: (a);
-        options: EigvalsOptions;
+        options: none;
         output: C;
         dtypes: "`a`: f32, f64, Complex32 or Complex64. The result is complex.";
         layers: [concrete, traced, eager];
@@ -1146,32 +1074,27 @@ assert_eq!(wt.as_slice::<Complex64>()?, rt.as_slice::<Complex64>()?);
         errors: [Validation, Unsupported, NumericalFailure(NonConvergence), NumericalFailure(NonFinite)];
         omissions: [];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, EigvalsOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor, Complex64};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.eigvals(&mut engine)?;
-let w = a.eigvals_with(&EigvalsOptions::default(), &mut engine)?;
 let rt = &r;
-let wt = &w;
 assert_eq!(rt.shape(), &[2]);
-assert_eq!(wt.as_slice::<Complex64>()?, rt.as_slice::<Complex64>()?);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, EigvalsOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 use tenferro_tensor::{Complex64};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.eigvals()?;
-let w = a.eigvals_with(&EigvalsOptions::default())?;
 let rt = r;
-let wt = w;
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -1186,26 +1109,21 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 assert_eq!(rt.shape(), &[2]);
-assert_eq!(wt.as_slice::<Complex64>()?, rt.as_slice::<Complex64>()?);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, EigvalsOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor, Complex64};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let r = s.eigvals(&a)?;
-    let w = s.eigvals_with(&a, &EigvalsOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r, w))
+    Ok::<_, tenferro_ad::Error>(r)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 assert_eq!(rt.shape(), &[2]);
-assert_eq!(wt.as_slice::<Complex64>()?, rt.as_slice::<Complex64>()?);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op eigh {
@@ -1381,7 +1299,7 @@ assert_eq!(wt.as_slice::<f64>()?, v);
     op slogdet {
         summary: "Sign and natural log of the absolute determinant of a square matrix.";
         operands: (a);
-        options: SlogdetOptions;
+        options: none;
         output: Slogdet<V, R>;
         dtypes: "`a`: f32, f64, Complex32 or Complex64. `sign` has the dtype of `a`; `log_abs_det` is real.";
         layers: [concrete, traced, eager];
@@ -1390,33 +1308,28 @@ assert_eq!(wt.as_slice::<f64>()?, v);
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, SlogdetOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.slogdet(&mut engine)?;
-let w = a.slogdet_with(&SlogdetOptions::default(), &mut engine)?;
 let rt = &r.log_abs_det;
-let wt = &w.log_abs_det;
 assert!(rt.shape().is_empty());
 // det = 4 * 3 - 2 * 2 = 8.
 assert!((rt.as_slice::<f64>()?[0] - 8.0_f64.ln()).abs() < 1e-12);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, SlogdetOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.slogdet()?;
-let w = a.slogdet_with(&SlogdetOptions::default())?;
 let rt = r.log_abs_det.clone();
-let wt = w.log_abs_det.clone();
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -1431,36 +1344,31 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 assert!(rt.shape().is_empty());
 // det = 4 * 3 - 2 * 2 = 8.
 assert!((rt.as_slice::<f64>()?[0] - 8.0_f64.ln()).abs() < 1e-12);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, SlogdetOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let r = s.slogdet(&a)?;
-    let w = s.slogdet_with(&a, &SlogdetOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r.log_abs_det, w.log_abs_det))
+    Ok::<_, tenferro_ad::Error>(r.log_abs_det)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 assert!(rt.shape().is_empty());
 // det = 4 * 3 - 2 * 2 = 8.
 assert!((rt.as_slice::<f64>()?[0] - 8.0_f64.ln()).abs() < 1e-12);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op det {
         summary: "Determinant of a square matrix, computed as `sign * exp(log_abs_det)`.";
         operands: (a);
-        options: DetOptions;
+        options: none;
         output: V;
         dtypes: "`a`: f32, f64, Complex32 or Complex64. The result has the dtype of `a`.";
         layers: [concrete, traced, eager];
@@ -1469,32 +1377,27 @@ assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, DetOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.det(&mut engine)?;
-let w = a.det_with(&DetOptions::default(), &mut engine)?;
 let rt = &r;
-let wt = &w;
 assert!(rt.shape().is_empty());
 assert!((rt.as_slice::<f64>()?[0] - 8.0).abs() < 1e-10);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, DetOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.det()?;
-let w = a.det_with(&DetOptions::default())?;
 let rt = r;
-let wt = w;
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -1509,34 +1412,29 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 assert!(rt.shape().is_empty());
 assert!((rt.as_slice::<f64>()?[0] - 8.0).abs() < 1e-10);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, DetOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let r = s.det(&a)?;
-    let w = s.det_with(&a, &DetOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r, w))
+    Ok::<_, tenferro_ad::Error>(r)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 assert!(rt.shape().is_empty());
 assert!((rt.as_slice::<f64>()?[0] - 8.0).abs() < 1e-10);
-assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op inv {
         summary: "Inverse of a square matrix (a solve against the identity).";
         operands: (a);
-        options: InvOptions;
+        options: none;
         output: V;
         dtypes: "`a`: f32, f64, Complex32 or Complex64. The result has the dtype of `a`.";
         layers: [concrete, traced, eager];
@@ -1545,35 +1443,30 @@ assert_eq!(wt.as_slice::<f64>()?, rt.as_slice::<f64>()?);
         errors: [Validation, Unsupported, NumericalFailure(Singular)];
         omissions: ["lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{LinalgOps, InvOptions};
+use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.inv(&mut engine)?;
-let w = a.inv_with(&InvOptions::default(), &mut engine)?;
 let rt = &r;
-let wt = &w;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 2]);
 // inv([[4, 2], [2, 3]]) = [[3, -2], [-2, 4]] / 8.
 let m = rt.as_slice::<f64>()?;
 assert!(close(m[0], 0.375) && close(m[1], -0.25) && close(m[3], 0.5));
-assert_eq!(wt.as_slice::<f64>()?, m);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{TracedLinalgOps, InvOptions};
+use tenferro_linalg::{TracedLinalgOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
 let r = a.inv()?;
-let w = a.inv_with(&InvOptions::default())?;
 let rt = r;
-let wt = w;
 
 // Build the graph, then run it.
-let program = GraphCompiler::new().compile_many(&[&rt, &wt])?;
+let program = GraphCompiler::new().compile_many(&[&rt])?;
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
@@ -1588,34 +1481,29 @@ let outputs = {
 };
 let mut outputs = outputs.into_iter();
 let rt = outputs.next().ok_or("missing first output")?.into_tensor(&mut engine)?;
-let wt = outputs.next().ok_or("missing second output")?.into_tensor(&mut engine)?;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 2]);
 // inv([[4, 2], [2, 3]]) = [[3, -2], [-2, 4]] / 8.
 let m = rt.as_slice::<f64>()?;
 assert!(close(m[0], 0.375) && close(m[1], -0.25) && close(m[3], 0.5));
-assert_eq!(wt.as_slice::<f64>()?, m);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{EagerLinalgOps, InvOptions};
+use tenferro_linalg::{EagerLinalgOps};
 use tenferro_tensor::{Tensor};
 
 let runtime = EagerRuntime::new()?;
-let (r, w) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+let r = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
     let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?)?;
     let r = s.inv(&a)?;
-    let w = s.inv_with(&a, &InvOptions::default())?;
-    Ok::<_, tenferro_ad::Error>((r, w))
+    Ok::<_, tenferro_ad::Error>(r)
 })?;
 let rt = r.value()?;
-let wt = w.value()?;
 let close = |x: f64, y: f64| (x - y).abs() < 1e-9;
 assert_eq!(rt.shape(), &[2, 2]);
 // inv([[4, 2], [2, 3]]) = [[3, -2], [-2, 4]] / 8.
 let m = rt.as_slice::<f64>()?;
 assert!(close(m[0], 0.375) && close(m[1], -0.25) && close(m[3], 0.5));
-assert_eq!(wt.as_slice::<f64>()?, m);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op pinv {

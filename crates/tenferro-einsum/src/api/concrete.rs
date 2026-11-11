@@ -12,7 +12,7 @@ use tenferro_tensor::{
     AsView, Conj, Dest, DestMode, Engine, Repr, Tensor, TensorRead, TensorWrite,
 };
 
-use super::options::{ConjMask, EinsumInputs, EinsumOptions, EinsumSpec, Spec, TensordotOptions};
+use super::options::{ConjMask, EinsumInputs, EinsumOptions, EinsumSpec, Spec};
 use crate::concrete::{
     read_input_specs, resolve_read_notation, OwnedEinsum, OwnedEinsumInto, ReadEinsum,
     ReadEinsumInto,
@@ -270,7 +270,6 @@ pub(crate) fn tensordot<X: AsView + ?Sized>(
     a: &X,
     b: &impl AsView<Repr = X::Repr>,
     axes: TensorDotAxes<'_>,
-    _options: &TensordotOptions,
     exec: &mut dyn Engine,
 ) -> Res<<X::Repr as Repr>::Value> {
     let (a, b) = (a.as_read(), b.as_read());

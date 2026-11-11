@@ -198,7 +198,8 @@ pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
 ///         output: Svd<V, R>;         // `V`/`R`/... are the layer's `types` keys
 ///         dtypes: "...";
 ///         layers: [concrete];
-///         into: [];                  // overwrite | accumulate | scaled
+///         into: [];                  // overwrite | accumulate | scaled; with
+///                                    // `options: none;` the `_into` form takes no options
 ///         layout: "...";
 ///         errors: [Validation, NumericalFailure(NonConvergence)];
 ///         omissions: [];

@@ -7,11 +7,9 @@
 pub(crate) mod axes;
 mod body;
 pub(crate) mod concrete;
-mod options;
 mod registry;
 mod repr;
 
-pub use options::AddOptions;
 pub use registry::CoreOps;
 pub use repr::{CoreRepr, SelectCondition, SelectOperand};
 

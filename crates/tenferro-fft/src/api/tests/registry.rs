@@ -335,3 +335,65 @@ fn api_docs_are_current() {
          `UPDATE_API_DOCS=1 cargo test -p tenferro-fft --features autodiff api_docs_are_current`"
     );
 }
+
+// ------------------------------------------------ options only where they mean something
+
+/// #2552 Q14: an operation has an options type and an `_with` form only when
+/// it has semantic options. The set of options-bearing operations is fixed, every
+/// options type has at least one field, and the generated method names of each
+/// operation are exactly `op`, `op_with` (iff options) and `op_into` (iff `into`).
+#[test]
+fn options_exist_exactly_for_the_operations_that_declare_them() {
+    use crate::api::registry::api_ops_markdown;
+
+    let mut with_options: Vec<&str> = API_OPS
+        .iter()
+        .filter(|op| op.options != "none")
+        .map(|op| op.name)
+        .collect();
+    with_options.sort_unstable();
+    assert_eq!(
+        with_options,
+        ["fft", "fftn", "ifft", "ifftn", "irfft", "irfftn", "rfft", "rfftn"]
+    );
+
+    // Every declared options type is non-empty: a derived `Debug` prints
+    // `Name { field: .. }` for a struct with fields and only `Name` for an
+    // empty one.
+    let defaults: &[(&str, String)] = &[
+        ("FftOptions", format!("{:?}", crate::FftOptions::default())),
+        (
+            "FftnOptions",
+            format!("{:?}", crate::FftnOptions::default()),
+        ),
+    ];
+    for op in API_OPS.iter().filter(|op| op.options != "none") {
+        let name = op.options.rsplit("::").next().unwrap_or(op.options);
+        let (_, shown) = defaults
+            .iter()
+            .find(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("no default for options type {name} of {}", op.name));
+        assert!(
+            shown.contains(" { "),
+            "{name} of {} has no field: {shown}",
+            op.name
+        );
+    }
+
+    let md = api_ops_markdown();
+    for op in API_OPS {
+        let mut want = vec![format!("`{}`", op.name)];
+        if op.options != "none" {
+            want.push(format!("`{}_with`", op.name));
+        }
+        if !op.into.is_empty() {
+            want.push(format!("`{}_into` ({})", op.name, op.into.join(", ")));
+        }
+        let row = md
+            .lines()
+            .find(|line| line.starts_with(&format!("| `{}` |", op.name)))
+            .unwrap_or_else(|| panic!("no table row for {}", op.name));
+        let cell = row.trim_end_matches(" |").rsplit("| ").next().unwrap_or("");
+        assert_eq!(cell, want.join(", "), "{}", op.name);
+    }
+}

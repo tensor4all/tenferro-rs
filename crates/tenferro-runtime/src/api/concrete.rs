@@ -13,7 +13,7 @@ use tenferro_tensor::{
 };
 
 use super::{axes, body};
-use crate::{AddOptions, CoreRepr, SelectOperand};
+use crate::{CoreRepr, SelectOperand};
 
 type Res<T> = tenferro_tensor::Result<T>;
 type Val<X> = <<X as AsView>::Repr as Repr>::Value;
@@ -44,7 +44,6 @@ where
 pub(crate) fn add_into<X: AsView + ?Sized>(
     a: &X,
     b: &impl AsView<Repr = X::Repr>,
-    _options: &AddOptions,
     e: &mut dyn Engine,
     dest: Dest<<X::Repr as Repr>::Write<'_>>,
 ) -> Res<()>
@@ -324,7 +323,6 @@ where
 pub(crate) fn add<X: AsView + ?Sized>(
     a: &X,
     b: &impl AsView<Repr = X::Repr>,
-    _options: &AddOptions,
     e: &mut dyn Engine,
 ) -> Res<Val<X>>
 where

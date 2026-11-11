@@ -14,7 +14,7 @@ use tenferro_tensor::{
 use crate::api::registry::{api_docs_sync, API_OPS};
 use crate::{
     ConcreteEinsumPlan, ConjMask, EinsumOps, EinsumOptimize, EinsumOptions, TensorDotAxes,
-    TensordotOps, TensordotOptions, TracedEinsumOps, TracedTensordotOps,
+    TensordotOps, TracedEinsumOps, TracedTensordotOps,
 };
 
 type R<T> = Result<T, Box<dyn StdError>>;
@@ -127,12 +127,7 @@ fn forwarding(op: &str, layer: &str, complex: bool) -> R<(Vec<u64>, Vec<u64>)> {
         )),
         ("tensordot", "concrete_tensordot") => Ok((
             bits(&a.tensordot(&b, TensorDotAxes::Count(1), &mut e)?)?,
-            bits(&a.tensordot_with(
-                &b,
-                TensorDotAxes::Count(1),
-                &TensordotOptions::default(),
-                &mut e,
-            )?)?,
+            bits(&a.tensordot(&b, TensorDotAxes::Count(1), &mut e)?)?,
         )),
         ("einsum", "traced") => {
             let trace = TraceContext::new();
@@ -151,8 +146,7 @@ fn forwarding(op: &str, layer: &str, complex: bool) -> R<(Vec<u64>, Vec<u64>)> {
             let trace = TraceContext::new();
             let (ta, tb) = (traced_of(&trace, &a)?, traced_of(&trace, &b)?);
             let p = ta.tensordot(&tb, TensorDotAxes::Count(1))?;
-            let w =
-                ta.tensordot_with(&tb, TensorDotAxes::Count(1), &TensordotOptions::default())?;
+            let w = ta.tensordot(&tb, TensorDotAxes::Count(1))?;
             let out = run_traced(&[&p, &w])?;
             Ok((bits(&out[0])?, bits(&out[1])?))
         }
@@ -172,12 +166,7 @@ fn forwarding(op: &str, layer: &str, complex: bool) -> R<(Vec<u64>, Vec<u64>)> {
                 } else {
                     Ok((
                         s.tensordot(&xa, &xb, TensorDotAxes::Count(1))?,
-                        s.tensordot_with(
-                            &xa,
-                            &xb,
-                            TensorDotAxes::Count(1),
-                            &TensordotOptions::default(),
-                        )?,
+                        s.tensordot(&xa, &xb, TensorDotAxes::Count(1))?,
                     ))
                 }
             })?;
@@ -654,4 +643,60 @@ fn conjugation_mask_into_matches_explicit_conjugation_bit_for_bit_in_every_mode(
         }
     }
     Ok(())
+}
+
+// ------------------------------------------------ options only where they mean something
+
+/// #2552 Q14: an operation has an options type and an `_with` form only when
+/// it has semantic options. The set of options-bearing operations is fixed, every
+/// options type has at least one field, and the generated method names of each
+/// operation are exactly `op`, `op_with` (iff options) and `op_into` (iff `into`).
+#[test]
+fn options_exist_exactly_for_the_operations_that_declare_them() {
+    use crate::api::registry::api_ops_markdown;
+
+    let mut with_options: Vec<&str> = API_OPS
+        .iter()
+        .filter(|op| op.options != "none")
+        .map(|op| op.name)
+        .collect();
+    with_options.sort_unstable();
+    assert_eq!(with_options, ["einsum"]);
+
+    // Every declared options type is non-empty: a derived `Debug` prints
+    // `Name { field: .. }` for a struct with fields and only `Name` for an
+    // empty one.
+    let defaults: &[(&str, String)] = &[(
+        "EinsumOptions",
+        format!("{:?}", crate::EinsumOptions::default()),
+    )];
+    for op in API_OPS.iter().filter(|op| op.options != "none") {
+        let name = op.options.rsplit("::").next().unwrap_or(op.options);
+        let (_, shown) = defaults
+            .iter()
+            .find(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("no default for options type {name} of {}", op.name));
+        assert!(
+            shown.contains(" { "),
+            "{name} of {} has no field: {shown}",
+            op.name
+        );
+    }
+
+    let md = api_ops_markdown();
+    for op in API_OPS {
+        let mut want = vec![format!("`{}`", op.name)];
+        if op.options != "none" {
+            want.push(format!("`{}_with`", op.name));
+        }
+        if !op.into.is_empty() {
+            want.push(format!("`{}_into` ({})", op.name, op.into.join(", ")));
+        }
+        let row = md
+            .lines()
+            .find(|line| line.starts_with(&format!("| `{}` |", op.name)))
+            .unwrap_or_else(|| panic!("no table row for {}", op.name));
+        let cell = row.trim_end_matches(" |").rsplit("| ").next().unwrap_or("");
+        assert_eq!(cell, want.join(", "), "{}", op.name);
+    }
 }

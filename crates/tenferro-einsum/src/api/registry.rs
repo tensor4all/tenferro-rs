@@ -1,6 +1,6 @@
 //! The einsum operation registry: one `api_ops!` invocation, the single
 //! source of the public einsum grammar (`einsum`, `einsum_with`,
-//! `einsum_into`, `tensordot`, `tensordot_with`).
+//! `einsum_into`, `tensordot`).
 //!
 //! The macro generates the traits, the forwarding impls, the rustdoc and the
 //! metadata constants; the bodies are the hand-written functions of
@@ -8,7 +8,7 @@
 
 use tenferro_extension_macros::api_ops;
 
-use crate::{EinsumOptions, TensordotOptions};
+use crate::EinsumOptions;
 
 api_ops! {
     family: einsum;
@@ -154,7 +154,7 @@ assert_eq!(d.value()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
     op tensordot {
         summary: "Contract `a` with `b` over the given axis pairs (or the last/first `n` axes); free axes of `a` come first.";
         operands: (a, b, axes: crate::TensorDotAxes<'_>);
-        options: TensordotOptions;
+        options: none;
         output: V;
         dtypes: "`a` and `b` have the same dtype; the result has it too.";
         layers: [concrete_tensordot, traced_tensordot, eager];
@@ -163,26 +163,24 @@ assert_eq!(d.value()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): tensordot is unsupported in a lane"];
         example concrete_tensordot: r#"use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{TensorDotAxes, TensordotOps, TensordotOptions};
+use tenferro_einsum::{TensorDotAxes, TensordotOps};
 use tenferro_tensor::Tensor;
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?;
 let b = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12])?;
 let c = a.tensordot(&b, TensorDotAxes::Count(1), &mut engine)?;
-let d = a.tensordot_with(&b, TensorDotAxes::Count(1), &TensordotOptions::default(), &mut engine)?;
 assert_eq!(c.shape(), &[2, 4]);
-assert_eq!(c.as_slice::<f64>()?, d.as_slice::<f64>()?);
+assert_eq!(c.as_slice::<f64>()?, &[3.0; 8]);
 # Ok::<(), tenferro_tensor::Error>(())"#;
-        example traced_tensordot: r#"use tenferro_einsum::{TensorDotAxes, TracedTensordotOps, TensordotOptions};
+        example traced_tensordot: r#"use tenferro_einsum::{TensorDotAxes, TracedTensordotOps};
 use tenferro_runtime::TraceContext;
 
 let trace = TraceContext::new();
 let a = trace.from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?;
 let b = trace.from_vec_col_major(vec![3, 4], vec![1.0_f64; 12])?;
 let c = a.tensordot(&b, TensorDotAxes::Count(1))?;
-let d = a.tensordot_with(&b, TensorDotAxes::Count(1), &TensordotOptions::default())?;
-assert_eq!((c.rank(), d.rank()), (2, 2));
+assert_eq!(c.rank(), 2);
 # Ok::<(), Box<dyn std::error::Error>>(())"#;
         example eager: r#"use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;

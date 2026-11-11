@@ -19,6 +19,21 @@
 //! <https://tensor4all.org/tenferro-rs/guides/choosing-an-api.html> and
 //! <https://tensor4all.org/tenferro-rs/guides/execution-models.html>.
 //!
+//! `add` has no settings, so it has no options type and no `_with` form; only
+//! operations with semantic options (such as `dot_general`) have one:
+//!
+//! ```compile_fail,E0599
+//! use tenferro_cpu::CpuEngine;
+//! use tenferro_runtime::{CoreOps, Tensor};
+//!
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let _ = a.add_with(&a, &mut CpuEngine::serial());
+//! ```
+//!
+//! ```compile_fail,E0432
+//! use tenferro_runtime::AddOptions;
+//! ```
+//!
 //! # Examples
 //!
 //! ```rust
@@ -80,7 +95,7 @@ mod trace_ops;
 pub mod traced;
 mod typed_tensor;
 
-pub use api::{AddOptions, CoreOps, CoreRepr, SelectCondition, SelectOperand};
+pub use api::{CoreOps, CoreRepr, SelectCondition, SelectOperand};
 pub use compiler::{CompilerOptions, OptimizerConfig};
 pub use error::{
     ContextId, Error, ErrorPhase, Result, RuntimeFailureReasonRef, ShapeConstraintEvalError,

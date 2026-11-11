@@ -9,8 +9,6 @@
 
 use tenferro_extension_macros::api_ops;
 
-use crate::AddOptions;
-
 api_ops! {
     family: core;
 
@@ -583,14 +581,14 @@ assert_eq!(y.shape(), &[2, 2]);
     op add {
         summary: "Elementwise sum with broadcasting.";
         operands: (a, b);
-        options: AddOptions;
+        options: none;
         output: V;
         dtypes: "Both operands share a numeric dtype; the result has that dtype.";
         layers: [concrete, traced, eager];
         into: [overwrite];
         layout: "Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `add_into` writes the result into the destination's storage.";
         errors: [Validation, Unsupported];
-        omissions: ["traced and eager: only `add`; `add_with` and `add_into` exist on the concrete layer"];
+        omissions: ["traced and eager: only `add`; `add_into` exists on the concrete layer"];
         example concrete: r#"use tenferro_cpu::CpuEngine;
 use tenferro_runtime::CoreOps;
 use tenferro_tensor::{Tensor};

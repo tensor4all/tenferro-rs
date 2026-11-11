@@ -16,8 +16,7 @@ use std::error::Error as _;
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine};
 use tenferro_linalg::{
-    EighGauge, EighOptions, LinalgOps, LinalgScalar, SolveOptions, Svd, SvdGauge, SvdOptions,
-    SvdShape,
+    EighGauge, EighOptions, LinalgOps, LinalgScalar, Svd, SvdGauge, SvdOptions, SvdShape,
 };
 use tenferro_tensor::{
     DType, Engine, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TypedTensor, TypedTensorView,
@@ -481,12 +480,6 @@ fn every_other_operation_on_a_lane_is_unsupported() {
     on_lane(|lane| {
         let refused: Vec<(&str, tenferro_tensor::Error)> = vec![
             ("solve", square.solve(&square, lane).unwrap_err()),
-            (
-                "solve_with",
-                square
-                    .solve_with(&square, &SolveOptions::default(), lane)
-                    .unwrap_err(),
-            ),
             ("cholesky", square.cholesky(lane).unwrap_err()),
             ("lu", square.lu(lane).map(|_| ()).unwrap_err()),
             ("eig", square.eig(lane).map(|_| ()).unwrap_err()),

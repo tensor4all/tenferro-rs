@@ -9,7 +9,7 @@ use tenferro_tensor::{
 };
 
 use crate::api::registry::{api_docs_sync, API_EXCEPTIONS, API_OPS};
-use crate::{AddOptions, CoreOps};
+use crate::CoreOps;
 
 type TR<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -46,16 +46,12 @@ fn ops_with_options_forward_to_op_with_default_options() -> TR<()> {
         .collect();
     assert_eq!(
         with_options,
-        ["add", "dot_general"],
+        ["dot_general"],
         "every op with options needs a case"
     );
 
     let mut e = CpuEngine::serial();
     let a = Tensor::from_typed(base()?);
-    assert_eq!(
-        bits(&a.add(&a, &mut e)?)?,
-        bits(&a.add_with(&a, &AddOptions::default(), &mut e)?)?
-    );
     let s = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     let cfg = DotGeneralConfig {
         lhs_contracting_dims: [1usize].into_iter().collect(),
@@ -68,17 +64,6 @@ fn ops_with_options_forward_to_op_with_default_options() -> TR<()> {
         bits(&s.dot_general_with(&a, cfg, &DotGeneralOptions::default(), &mut e)?)?
     );
     Ok(())
-}
-
-#[test]
-fn ops_without_options_have_no_with_form_in_the_registry() {
-    for op in API_OPS.iter().filter(|op| op.options == "none") {
-        assert!(
-            op.into.is_empty(),
-            "{} declares into without options",
-            op.name
-        );
-    }
 }
 
 // ---------------------------------------------------------- 2. input shapes
@@ -183,12 +168,7 @@ fn add_into_overwrite_never_reads_the_destination() -> TR<()> {
     let want = Tensor::from_typed(a.add(&a, &mut e)?);
     for poison in [f64::NAN, -0.0, f64::INFINITY] {
         let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![poison; 6])?;
-        a.add_into(
-            &a,
-            &AddOptions::default(),
-            &mut e,
-            Dest::overwrite(&mut out),
-        )?;
+        a.add_into(&a, &mut e, Dest::overwrite(&mut out))?;
         assert_eq!(
             bits(&Tensor::from_typed(out))?,
             bits(&want)?,
@@ -212,9 +192,7 @@ fn undeclared_into_modes_are_unsupported_before_any_write() -> TR<()> {
     ];
     for (label, mk) in modes {
         let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], sentinel.clone())?;
-        let err = a
-            .add_into(&a, &AddOptions::default(), &mut e, mk(&mut out))
-            .expect_err(label);
+        let err = a.add_into(&a, &mut e, mk(&mut out)).expect_err(label);
         assert_eq!(err.kind(), ErrorKind::Unsupported, "{label}: {err}");
         assert_eq!(
             out.host_data()?,
@@ -346,4 +324,60 @@ fn api_docs_are_current() {
         "docs/spec/generated/api-ops.md is stale; run \
          `UPDATE_API_DOCS=1 cargo test -p tenferro-runtime api_docs_are_current`"
     );
+}
+
+// ------------------------------------------------ options only where they mean something
+
+/// #2552 Q14: an operation has an options type and an `_with` form only when
+/// it has semantic options. The set of options-bearing operations is fixed, every
+/// options type has at least one field, and the generated method names of each
+/// operation are exactly `op`, `op_with` (iff options) and `op_into` (iff `into`).
+#[test]
+fn options_exist_exactly_for_the_operations_that_declare_them() {
+    use crate::api::registry::api_ops_markdown;
+
+    let mut with_options: Vec<&str> = API_OPS
+        .iter()
+        .filter(|op| op.options != "none")
+        .map(|op| op.name)
+        .collect();
+    with_options.sort_unstable();
+    assert_eq!(with_options, ["dot_general"]);
+
+    // Every declared options type is non-empty: a derived `Debug` prints
+    // `Name { field: .. }` for a struct with fields and only `Name` for an
+    // empty one.
+    let defaults: &[(&str, String)] = &[(
+        "DotGeneralOptions",
+        format!("{:?}", tenferro_tensor::DotGeneralOptions::default()),
+    )];
+    for op in API_OPS.iter().filter(|op| op.options != "none") {
+        let name = op.options.rsplit("::").next().unwrap_or(op.options);
+        let (_, shown) = defaults
+            .iter()
+            .find(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("no default for options type {name} of {}", op.name));
+        assert!(
+            shown.contains(" { "),
+            "{name} of {} has no field: {shown}",
+            op.name
+        );
+    }
+
+    let md = api_ops_markdown();
+    for op in API_OPS {
+        let mut want = vec![format!("`{}`", op.name)];
+        if op.options != "none" {
+            want.push(format!("`{}_with`", op.name));
+        }
+        if !op.into.is_empty() {
+            want.push(format!("`{}_into` ({})", op.name, op.into.join(", ")));
+        }
+        let row = md
+            .lines()
+            .find(|line| line.starts_with(&format!("| `{}` |", op.name)))
+            .unwrap_or_else(|| panic!("no table row for {}", op.name));
+        let cell = row.trim_end_matches(" |").rsplit("| ").next().unwrap_or("");
+        assert_eq!(cell, want.join(", "), "{}", op.name);
+    }
 }

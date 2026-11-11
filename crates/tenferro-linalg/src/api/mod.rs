@@ -17,9 +17,8 @@ pub use registry::EagerLinalgOps;
 pub use registry::{LinalgOps, TracedLinalgOps};
 
 pub use options::{
-    CholeskyOptions, DetOptions, EigOptions, EigvalsOptions, EigvalshOptions, FullPivLuOptions,
-    FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, LstsqOptions, LuOptions, NormOptions,
-    NormOrd, PinvOptions, SlogdetOptions, SolveOptions, SvdvalsOptions, TriangularSolveOptions,
+    CholeskyOptions, EigvalshOptions, NormOptions, NormOrd, PinvOptions, SvdvalsOptions,
+    TriangularSolveOptions,
 };
 pub use repr::LinalgRepr;
 

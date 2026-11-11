@@ -11,8 +11,8 @@ use super::cases;
 use super::support::*;
 use crate::api::registry::{api_docs_sync, API_LAYERS, API_OPS};
 use crate::{
-    CholeskyOptions, LinalgOps, MatOp, SolveOptions, Svd, SvdGauge, SvdOptions, SvdShape,
-    TriangularSolveOptions, Uplo,
+    CholeskyOptions, LinalgOps, MatOp, Svd, SvdGauge, SvdOptions, SvdShape, TriangularSolveOptions,
+    Uplo,
 };
 
 // ------------------------------------------------------------ 1. forwarding
@@ -222,12 +222,7 @@ fn solve_into_overwrite_never_reads_the_destination() -> TestResult<()> {
     let want = a.solve(&b, &mut e)?;
     for poison in [f64::NAN, -0.0, f64::INFINITY] {
         let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![poison; 2])?;
-        a.solve_into(
-            &b,
-            &SolveOptions::default(),
-            &mut e,
-            Dest::overwrite(&mut out),
-        )?;
+        a.solve_into(&b, &mut e, Dest::overwrite(&mut out))?;
         let got: Vec<u64> = out.host_data()?.iter().map(|x| x.to_bits()).collect();
         let exp: Vec<u64> = want.host_data()?.iter().map(|x| x.to_bits()).collect();
         assert_eq!(got, exp, "poison {poison} leaked into the overwrite result");
@@ -241,12 +236,7 @@ fn solve_into_overwrite_never_reads_the_destination() -> TestResult<()> {
         vec![2, 1],
         vec![f64::NAN; 2],
     )?);
-    ea.solve_into(
-        &eb,
-        &SolveOptions::default(),
-        &mut e,
-        Dest::overwrite(&mut out),
-    )?;
+    ea.solve_into(&eb, &mut e, Dest::overwrite(&mut out))?;
     assert_eq!(out.bits()?, Tensor::from_typed(want).bits()?);
     Ok(())
 }
@@ -266,9 +256,7 @@ fn undeclared_into_modes_are_unsupported_before_any_write() -> TestResult<()> {
     ];
     for (label, mk) in modes {
         let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], sentinel.clone())?;
-        let err = a
-            .solve_into(&b, &SolveOptions::default(), &mut e, mk(&mut out))
-            .expect_err(label);
+        let err = a.solve_into(&b, &mut e, mk(&mut out)).expect_err(label);
         assert_eq!(err.kind(), ErrorKind::Unsupported, "{label}: {err}");
         assert_eq!(
             out.host_data()?,
@@ -398,4 +386,106 @@ fn typed_complex_lu_matches_erased_and_full_piv_lu_is_a_declared_omission() -> T
     let real = typed::<f64>(sq::<f64>())?.full_piv_lu(&mut e)?;
     assert_eq!(real.parity.host_data()?.len(), 1);
     Ok(())
+}
+
+// ------------------------------------------------ options only where they mean something
+
+/// #2552 Q14: an operation has an options type and an `_with` form only when
+/// it has semantic options. The set of options-bearing operations is fixed, every
+/// options type has at least one field, and the generated method names of each
+/// operation are exactly `op`, `op_with` (iff options) and `op_into` (iff `into`).
+#[test]
+fn options_exist_exactly_for_the_operations_that_declare_them() {
+    use crate::api::registry::api_ops_markdown;
+
+    let mut with_options: Vec<&str> = API_OPS
+        .iter()
+        .filter(|op| op.options != "none")
+        .map(|op| op.name)
+        .collect();
+    with_options.sort_unstable();
+    assert_eq!(
+        with_options,
+        [
+            "cholesky",
+            "eigh",
+            "eigvalsh",
+            "norm",
+            "pinv",
+            "qr",
+            "rank_revealing_qr",
+            "svd",
+            "svdvals",
+            "triangular_solve"
+        ]
+    );
+
+    // Every declared options type is non-empty: a derived `Debug` prints
+    // `Name { field: .. }` for a struct with fields and only `Name` for an
+    // empty one.
+    let defaults: &[(&str, String)] = &[
+        (
+            "CholeskyOptions",
+            format!("{:?}", crate::CholeskyOptions::default()),
+        ),
+        (
+            "EighOptions",
+            format!("{:?}", crate::EighOptions::default()),
+        ),
+        (
+            "EigvalshOptions",
+            format!("{:?}", crate::EigvalshOptions::default()),
+        ),
+        (
+            "NormOptions",
+            format!("{:?}", crate::NormOptions::default()),
+        ),
+        (
+            "PinvOptions",
+            format!("{:?}", crate::PinvOptions::default()),
+        ),
+        ("QrOptions", format!("{:?}", crate::QrOptions::default())),
+        (
+            "RankRevealingQrOptions",
+            format!("{:?}", crate::RankRevealingQrOptions::default()),
+        ),
+        ("SvdOptions", format!("{:?}", crate::SvdOptions::default())),
+        (
+            "SvdvalsOptions",
+            format!("{:?}", crate::SvdvalsOptions::default()),
+        ),
+        (
+            "TriangularSolveOptions",
+            format!("{:?}", crate::TriangularSolveOptions::default()),
+        ),
+    ];
+    for op in API_OPS.iter().filter(|op| op.options != "none") {
+        let name = op.options.rsplit("::").next().unwrap_or(op.options);
+        let (_, shown) = defaults
+            .iter()
+            .find(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("no default for options type {name} of {}", op.name));
+        assert!(
+            shown.contains(" { "),
+            "{name} of {} has no field: {shown}",
+            op.name
+        );
+    }
+
+    let md = api_ops_markdown();
+    for op in API_OPS {
+        let mut want = vec![format!("`{}`", op.name)];
+        if op.options != "none" {
+            want.push(format!("`{}_with`", op.name));
+        }
+        if !op.into.is_empty() {
+            want.push(format!("`{}_into` ({})", op.name, op.into.join(", ")));
+        }
+        let row = md
+            .lines()
+            .find(|line| line.starts_with(&format!("| `{}` |", op.name)))
+            .unwrap_or_else(|| panic!("no table row for {}", op.name));
+        let cell = row.trim_end_matches(" |").rsplit("| ").next().unwrap_or("");
+        assert_eq!(cell, want.join(", "), "{}", op.name);
+    }
 }

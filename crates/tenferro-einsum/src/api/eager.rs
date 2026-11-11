@@ -7,7 +7,7 @@
 
 use tenferro_ad::{EagerSession, EagerTensor, Result};
 
-use super::options::{EinsumOptions, EinsumSpec, TensordotOptions};
+use super::options::{EinsumOptions, EinsumSpec};
 use super::traced::runtime_err;
 use crate::{Error, TensorDotAxes};
 
@@ -57,7 +57,6 @@ pub(crate) fn tensordot(
     a: &EagerTensor,
     b: &EagerTensor,
     axes: TensorDotAxes<'_>,
-    _options: &TensordotOptions,
 ) -> Result<EagerTensor> {
     crate::eager_ad::tensordot(session, a, b, axes).map_err(|e| runtime_err(e, "tensordot"))
 }

@@ -277,21 +277,6 @@ impl EinsumOptions {
     }
 }
 
-/// Options of [`tensordot`](crate::TensordotOps::tensordot_with). There is
-/// nothing to choose yet; the type exists so every operation has an options
-/// argument.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_einsum::TensordotOptions;
-///
-/// let _ = TensordotOptions::default();
-/// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct TensordotOptions {}
-
 mod sealed {
     pub trait Sealed {}
 }

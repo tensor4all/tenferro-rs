@@ -135,13 +135,8 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
         // only because the warmed pool serves its checkout.
         let mut out = TypedTensor::<f64>::from_vec_col_major(vec![LEN], vec![0.0; LEN]).unwrap();
         let ((), into_allocations, into_bytes) = measure(|| {
-            a.add_into(
-                &b,
-                &tenferro_runtime::AddOptions::default(),
-                session,
-                tenferro_tensor::Dest::overwrite(&mut out),
-            )
-            .unwrap()
+            a.add_into(&b, session, tenferro_tensor::Dest::overwrite(&mut out))
+                .unwrap()
         });
         eprintln!("typed add_into n=16: {into_allocations} allocations, {into_bytes} bytes");
         assert_eq!(
@@ -153,12 +148,7 @@ fn typed_elementwise_allocates_no_heap_metadata_at_small_rank() {
         let mut wrong =
             TypedTensor::<f64>::from_vec_col_major(vec![LEN + 1], vec![9.0; LEN + 1]).unwrap();
         assert!(a
-            .add_into(
-                &b,
-                &tenferro_runtime::AddOptions::default(),
-                session,
-                tenferro_tensor::Dest::overwrite(&mut wrong),
-            )
+            .add_into(&b, session, tenferro_tensor::Dest::overwrite(&mut wrong),)
             .is_err());
         assert_eq!(wrong.host_data().unwrap(), &[9.0; LEN + 1]);
         budget!("mul n=16", POOL_ACCOUNTING_ALLOCATIONS, |s| a.mul(&b, s));

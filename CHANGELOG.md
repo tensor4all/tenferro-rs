@@ -23,6 +23,11 @@ layer, generated from a per-family registry. The operation list, options,
   strided inputs call the same method, and typed inputs return typed results.
   Options are `#[non_exhaustive]` structs built with setters
   (`SvdOptions::default().shape(SvdShape::Full)`).
+  An operation has an `XxxOptions` type and an `op_with` form only when it has
+  semantic options: `add`, `solve`, `lstsq`, `householder_qr`, `lu`,
+  `full_piv_lu`, `full_piv_lu_solve`, `eig`, `eigvals`, `slogdet`, `det`, `inv`
+  and `tensordot` have none, so their `_into` forms (`solve_into`, `add_into`)
+  take no options either (#2552 Q14).
 - **New traits.** `CoreOps` (tenferro-runtime), `LinalgOps`, `TracedLinalgOps`,
   `EagerLinalgOps`, `EinsumOps` (on `[X]` / `[X; N]`), `TensordotOps`,
   `TracedEinsumOps` (on `TraceContext`), `TracedTensordotOps`, `EagerEinsumOps`,

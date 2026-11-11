@@ -21,8 +21,9 @@ not when changing tenferro itself.
    traced values; `EagerLinalgOps`, `EagerEinsumOps`, `EagerFftOps` on an
    `EagerSession`. An E0599 saying that a method does not exist usually means
    the right operation trait is missing. Every family follows one grammar:
-   `x.op(…, exec)`, `x.op_with(…, &opts, exec)` and, where declared,
-   `x.op_into(…, &opts, exec, dest)`.
+   `x.op(…, exec)`, `x.op_with(…, &opts, exec)` (only for an operation with
+   options) and, where declared, `x.op_into(…, &opts, exec, dest)` (no `&opts`
+   for an operation without options, e.g. `a.solve_into(&b, exec, dest)`).
 4. If an older example mentions a removed module/free function or a
    constructor signature that no longer compiles, read the [API migration
    guide](../../../docs/getting-started/api-migration.md).

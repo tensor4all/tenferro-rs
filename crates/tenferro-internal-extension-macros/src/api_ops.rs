@@ -201,15 +201,6 @@ impl Registry {
                     ));
                 }
             }
-            if op.options.is_none() && !op.into.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    &op.name,
-                    format!(
-                        "op `{}`: an `_into` form needs an options type; `options: none` cannot declare `into` modes",
-                        op.name
-                    ),
-                ));
-            }
             if op.operands.is_empty() {
                 return Err(syn::Error::new_spanned(
                     &op.name,

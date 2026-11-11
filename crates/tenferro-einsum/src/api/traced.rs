@@ -7,7 +7,7 @@
 
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase, Result, TraceContext, TracedTensor};
 
-use super::options::{EinsumOptions, EinsumSpec, TensordotOptions};
+use super::options::{EinsumOptions, EinsumSpec};
 use crate::{Error, TensorDotAxes, EINSUM_EXTENSION_FAMILY_ID};
 
 /// Converts an einsum-domain error into the runtime error every traced and
@@ -76,7 +76,6 @@ pub(crate) fn tensordot(
     a: &TracedTensor,
     b: &TracedTensor,
     axes: TensorDotAxes<'_>,
-    _options: &TensordotOptions,
 ) -> Result<TracedTensor> {
     crate::traced::tensordot(a, b, axes).map_err(|e| runtime_err(e, "tensordot"))
 }

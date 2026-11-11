@@ -17,9 +17,8 @@
 use tenferro_tensor::{AsView, Dest, DestMode, Engine, Error, Repr, Tensor, TensorRead};
 
 use super::options::{
-    CholeskyOptions, DetOptions, EigOptions, EigvalsOptions, EigvalshOptions, FullPivLuOptions,
-    FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, LstsqOptions, LuOptions, NormOptions,
-    PinvOptions, SlogdetOptions, SolveOptions, SvdvalsOptions, TriangularSolveOptions,
+    CholeskyOptions, EigvalshOptions, NormOptions, PinvOptions, SvdvalsOptions,
+    TriangularSolveOptions,
 };
 use super::repr::LinalgRepr;
 use crate::extension::{EighOptions, QrOptions, SvdDriver, SvdOptions};
@@ -209,11 +208,7 @@ where
     })
 }
 
-fn householder_qr_body(
-    a: TensorRead<'_>,
-    _o: &HouseholderQrOptions,
-    e: &mut dyn Engine,
-) -> Res<HouseholderQr<Tensor>> {
+fn householder_qr_body(a: TensorRead<'_>, e: &mut dyn Engine) -> Res<HouseholderQr<Tensor>> {
     route(
         a,
         e,
@@ -224,13 +219,12 @@ fn householder_qr_body(
 
 pub(crate) fn householder_qr<X: AsView + ?Sized>(
     a: &X,
-    o: &HouseholderQrOptions,
     e: &mut dyn Engine,
 ) -> Res<HouseholderQr<Val<X>>>
 where
     X::Repr: LinalgRepr,
 {
-    let r = householder_qr_body(a.as_read(), o, e)?;
+    let r = householder_qr_body(a.as_read(), e)?;
     Ok(HouseholderQr {
         packed: val::<X>(r.packed)?,
         coeff: val::<X>(r.coeff)?,
@@ -269,7 +263,7 @@ where
 
 // ------------------------------------------------------------------------- lu
 
-fn lu_body(a: TensorRead<'_>, _o: &LuOptions, e: &mut dyn Engine) -> Res<Lu<Tensor>> {
+fn lu_body(a: TensorRead<'_>, e: &mut dyn Engine) -> Res<Lu<Tensor>> {
     let (p, l, u, parity) = route(
         a,
         e,
@@ -279,11 +273,11 @@ fn lu_body(a: TensorRead<'_>, _o: &LuOptions, e: &mut dyn Engine) -> Res<Lu<Tens
     Ok(Lu { p, l, u, parity })
 }
 
-pub(crate) fn lu<X: AsView + ?Sized>(a: &X, o: &LuOptions, e: &mut dyn Engine) -> Res<Lu<Val<X>>>
+pub(crate) fn lu<X: AsView + ?Sized>(a: &X, e: &mut dyn Engine) -> Res<Lu<Val<X>>>
 where
     X::Repr: LinalgRepr,
 {
-    let r = lu_body(a.as_read(), o, e)?;
+    let r = lu_body(a.as_read(), e)?;
     Ok(Lu {
         p: val::<X>(r.p)?,
         l: val::<X>(r.l)?,
@@ -292,11 +286,7 @@ where
     })
 }
 
-fn full_piv_lu_body(
-    a: TensorRead<'_>,
-    _o: &FullPivLuOptions,
-    e: &mut dyn Engine,
-) -> Res<FullPivLu<Tensor>> {
+fn full_piv_lu_body(a: TensorRead<'_>, e: &mut dyn Engine) -> Res<FullPivLu<Tensor>> {
     let (p, l, u, q, parity) = route(
         a,
         e,
@@ -308,13 +298,12 @@ fn full_piv_lu_body(
 
 pub(crate) fn full_piv_lu<X: AsView + ?Sized>(
     a: &X,
-    o: &FullPivLuOptions,
     e: &mut dyn Engine,
 ) -> Res<FullPivLu<Val<X>, Re<X>>>
 where
     X::Repr: LinalgRepr,
 {
-    let r = full_piv_lu_body(a.as_read(), o, e)?;
+    let r = full_piv_lu_body(a.as_read(), e)?;
     // The owned route returns `parity` in the real dtype, the borrowed route
     // (which every typed input takes) in the input dtype for complex inputs
     // (#2552 Q21). A typed complex call cannot be given a single static
@@ -340,12 +329,7 @@ where
 
 // ---------------------------------------------------------------------- solves
 
-fn full_piv_lu_solve_body(
-    a: TensorRead<'_>,
-    b: TensorRead<'_>,
-    _o: &FullPivLuSolveOptions,
-    e: &mut dyn Engine,
-) -> Res<Tensor> {
+fn full_piv_lu_solve_body(a: TensorRead<'_>, b: TensorRead<'_>, e: &mut dyn Engine) -> Res<Tensor> {
     route2(
         a,
         b,
@@ -358,21 +342,15 @@ fn full_piv_lu_solve_body(
 pub(crate) fn full_piv_lu_solve<X: AsView + ?Sized>(
     a: &X,
     b: &impl AsView<Repr = X::Repr>,
-    o: &FullPivLuSolveOptions,
     e: &mut dyn Engine,
 ) -> Res<Val<X>>
 where
     X::Repr: LinalgRepr,
 {
-    val::<X>(full_piv_lu_solve_body(a.as_read(), b.as_read(), o, e)?)
+    val::<X>(full_piv_lu_solve_body(a.as_read(), b.as_read(), e)?)
 }
 
-fn solve_body(
-    a: TensorRead<'_>,
-    b: TensorRead<'_>,
-    _o: &SolveOptions,
-    e: &mut dyn Engine,
-) -> Res<Tensor> {
+fn solve_body(a: TensorRead<'_>, b: TensorRead<'_>, e: &mut dyn Engine) -> Res<Tensor> {
     route2(
         a,
         b,
@@ -385,19 +363,17 @@ fn solve_body(
 pub(crate) fn solve<X: AsView + ?Sized>(
     a: &X,
     b: &impl AsView<Repr = X::Repr>,
-    o: &SolveOptions,
     e: &mut dyn Engine,
 ) -> Res<Val<X>>
 where
     X::Repr: LinalgRepr,
 {
-    val::<X>(solve_body(a.as_read(), b.as_read(), o, e)?)
+    val::<X>(solve_body(a.as_read(), b.as_read(), e)?)
 }
 
 pub(crate) fn solve_into<X: AsView + ?Sized>(
     a: &X,
     b: &impl AsView<Repr = X::Repr>,
-    _o: &SolveOptions,
     e: &mut dyn Engine,
     dest: Dest<<X::Repr as Repr>::Write<'_>>,
 ) -> Res<()>
@@ -418,25 +394,19 @@ where
     ReadLinalg::solve_read_into(a.as_read(), b.as_read(), out, e)
 }
 
-fn lstsq_body(
-    a: TensorRead<'_>,
-    b: TensorRead<'_>,
-    _o: &LstsqOptions,
-    e: &mut dyn Engine,
-) -> Res<Tensor> {
+fn lstsq_body(a: TensorRead<'_>, b: TensorRead<'_>, e: &mut dyn Engine) -> Res<Tensor> {
     crate::tensor_ext::lstsq_read(a, b, e)
 }
 
 pub(crate) fn lstsq<X: AsView + ?Sized>(
     a: &X,
     b: &impl AsView<Repr = X::Repr>,
-    o: &LstsqOptions,
     e: &mut dyn Engine,
 ) -> Res<Val<X>>
 where
     X::Repr: LinalgRepr,
 {
-    val::<X>(lstsq_body(a.as_read(), b.as_read(), o, e)?)
+    val::<X>(lstsq_body(a.as_read(), b.as_read(), e)?)
 }
 
 /// The former `(left_side, lower, transpose_a, unit_diagonal)` flags of
@@ -525,7 +495,7 @@ where
 
 // ------------------------------------------------------------------ eigensolvers
 
-fn eig_body(a: TensorRead<'_>, _o: &EigOptions, e: &mut dyn Engine) -> Res<Eig<Tensor>> {
+fn eig_body(a: TensorRead<'_>, e: &mut dyn Engine) -> Res<Eig<Tensor>> {
     let (values, vectors) = route(
         a,
         e,
@@ -535,18 +505,18 @@ fn eig_body(a: TensorRead<'_>, _o: &EigOptions, e: &mut dyn Engine) -> Res<Eig<T
     Ok(Eig { values, vectors })
 }
 
-pub(crate) fn eig<X: AsView + ?Sized>(a: &X, o: &EigOptions, e: &mut dyn Engine) -> Res<Eig<Cx<X>>>
+pub(crate) fn eig<X: AsView + ?Sized>(a: &X, e: &mut dyn Engine) -> Res<Eig<Cx<X>>>
 where
     X::Repr: LinalgRepr,
 {
-    let r = eig_body(a.as_read(), o, e)?;
+    let r = eig_body(a.as_read(), e)?;
     Ok(Eig {
         values: cx::<X>(r.values)?,
         vectors: cx::<X>(r.vectors)?,
     })
 }
 
-fn eigvals_body(a: TensorRead<'_>, _o: &EigvalsOptions, e: &mut dyn Engine) -> Res<Tensor> {
+fn eigvals_body(a: TensorRead<'_>, e: &mut dyn Engine) -> Res<Tensor> {
     route(
         a,
         e,
@@ -555,15 +525,11 @@ fn eigvals_body(a: TensorRead<'_>, _o: &EigvalsOptions, e: &mut dyn Engine) -> R
     )
 }
 
-pub(crate) fn eigvals<X: AsView + ?Sized>(
-    a: &X,
-    o: &EigvalsOptions,
-    e: &mut dyn Engine,
-) -> Res<Cx<X>>
+pub(crate) fn eigvals<X: AsView + ?Sized>(a: &X, e: &mut dyn Engine) -> Res<Cx<X>>
 where
     X::Repr: LinalgRepr,
 {
-    cx::<X>(eigvals_body(a.as_read(), o, e)?)
+    cx::<X>(eigvals_body(a.as_read(), e)?)
 }
 
 fn eigh_body(a: TensorRead<'_>, o: &EighOptions, e: &mut dyn Engine) -> Res<Eigh<Tensor>> {
@@ -630,11 +596,7 @@ where
 
 // ------------------------------------------------------------ determinant family
 
-fn slogdet_body(
-    a: TensorRead<'_>,
-    _o: &SlogdetOptions,
-    e: &mut dyn Engine,
-) -> Res<Slogdet<Tensor>> {
+fn slogdet_body(a: TensorRead<'_>, e: &mut dyn Engine) -> Res<Slogdet<Tensor>> {
     let (sign, log_abs_det) = route(
         a,
         e,
@@ -644,22 +606,18 @@ fn slogdet_body(
     Ok(Slogdet { sign, log_abs_det })
 }
 
-pub(crate) fn slogdet<X: AsView + ?Sized>(
-    a: &X,
-    o: &SlogdetOptions,
-    e: &mut dyn Engine,
-) -> Res<Slogdet<Val<X>, Re<X>>>
+pub(crate) fn slogdet<X: AsView + ?Sized>(a: &X, e: &mut dyn Engine) -> Res<Slogdet<Val<X>, Re<X>>>
 where
     X::Repr: LinalgRepr,
 {
-    let r = slogdet_body(a.as_read(), o, e)?;
+    let r = slogdet_body(a.as_read(), e)?;
     Ok(Slogdet {
         sign: val::<X>(r.sign)?,
         log_abs_det: re::<X>(r.log_abs_det)?,
     })
 }
 
-fn det_body(a: TensorRead<'_>, _o: &DetOptions, e: &mut dyn Engine) -> Res<Tensor> {
+fn det_body(a: TensorRead<'_>, e: &mut dyn Engine) -> Res<Tensor> {
     route(
         a,
         e,
@@ -668,14 +626,14 @@ fn det_body(a: TensorRead<'_>, _o: &DetOptions, e: &mut dyn Engine) -> Res<Tenso
     )
 }
 
-pub(crate) fn det<X: AsView + ?Sized>(a: &X, o: &DetOptions, e: &mut dyn Engine) -> Res<Val<X>>
+pub(crate) fn det<X: AsView + ?Sized>(a: &X, e: &mut dyn Engine) -> Res<Val<X>>
 where
     X::Repr: LinalgRepr,
 {
-    val::<X>(det_body(a.as_read(), o, e)?)
+    val::<X>(det_body(a.as_read(), e)?)
 }
 
-fn inv_body(a: TensorRead<'_>, _o: &InvOptions, e: &mut dyn Engine) -> Res<Tensor> {
+fn inv_body(a: TensorRead<'_>, e: &mut dyn Engine) -> Res<Tensor> {
     route(
         a,
         e,
@@ -684,11 +642,11 @@ fn inv_body(a: TensorRead<'_>, _o: &InvOptions, e: &mut dyn Engine) -> Res<Tenso
     )
 }
 
-pub(crate) fn inv<X: AsView + ?Sized>(a: &X, o: &InvOptions, e: &mut dyn Engine) -> Res<Val<X>>
+pub(crate) fn inv<X: AsView + ?Sized>(a: &X, e: &mut dyn Engine) -> Res<Val<X>>
 where
     X::Repr: LinalgRepr,
 {
-    val::<X>(inv_body(a.as_read(), o, e)?)
+    val::<X>(inv_body(a.as_read(), e)?)
 }
 
 fn pinv_body(a: TensorRead<'_>, o: &PinvOptions, e: &mut dyn Engine) -> Res<Tensor> {

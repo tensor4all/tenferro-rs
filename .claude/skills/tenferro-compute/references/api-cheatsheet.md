@@ -12,9 +12,9 @@ Every operation family (core, linalg, einsum, FFT) uses one grammar:
 
 | Layer | Spelling | Trait |
 | --- | --- | --- |
-| concrete | `x.op(…, exec)`, `x.op_with(…, &opts, exec)`, `x.op_into(…, &opts, exec, dest)` where declared | `CoreOps`, `LinalgOps`, `EinsumOps` (on `[X]` / `[X; N]`), `TensordotOps`, `FftOps` |
-| traced | `t.op(…)`, `t.op_with(…, &opts)` | inherent core methods on `TracedTensor`; `TracedLinalgOps`, `TracedFftOps`, `TracedTensordotOps` on `TracedTensor`; `TracedEinsumOps` on `TraceContext` |
-| eager | `s.op(&x, …)`, `s.op_with(&x, …, &opts)` | inherent core methods on `EagerSession`; `EagerLinalgOps`, `EagerEinsumOps`, `EagerFftOps` |
+| concrete | `x.op(…, exec)`, `x.op_with(…, &opts, exec)` (only ops with options), `x.op_into(…, [&opts,] exec, dest)` where declared | `CoreOps`, `LinalgOps`, `EinsumOps` (on `[X]` / `[X; N]`), `TensordotOps`, `FftOps` |
+| traced | `t.op(…)`, `t.op_with(…, &opts)` (only ops with options) | inherent core methods on `TracedTensor`; `TracedLinalgOps`, `TracedFftOps`, `TracedTensordotOps` on `TracedTensor`; `TracedEinsumOps` on `TraceContext` |
+| eager | `s.op(&x, …)`, `s.op_with(&x, …, &opts)` (only ops with options) | inherent core methods on `EagerSession`; `EagerLinalgOps`, `EagerEinsumOps`, `EagerFftOps` |
 
 - `exec` (`&mut dyn Engine`) is always the last argument, after the options.
 - A concrete receiver is anything that is `AsView`: `Tensor`, `TensorRead`,

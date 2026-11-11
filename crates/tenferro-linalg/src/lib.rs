@@ -7,15 +7,33 @@
 //!
 //! | Layer | Trait | Receiver | Spellings |
 //! |---|---|---|---|
-//! | concrete | [`LinalgOps`] | anything that implements [`AsView`](tenferro_tensor::AsView): `Tensor`, `TensorRead`, `TypedTensor<T>`, `TypedTensorView<T>` | `a.svd(exec)`, `a.svd_with(&opts, exec)`, `a.solve_into(&b, &opts, exec, dest)` |
+//! | concrete | [`LinalgOps`] | anything that implements [`AsView`](tenferro_tensor::AsView): `Tensor`, `TensorRead`, `TypedTensor<T>`, `TypedTensorView<T>` | `a.svd(exec)`, `a.svd_with(&opts, exec)`, `a.solve_into(&b, exec, dest)` |
 //! | traced | [`TracedLinalgOps`] | [`TracedTensor`](tenferro_runtime::TracedTensor) | `t.svd()`, `t.svd_with(&opts)` |
 //! | eager (`autodiff`) | `EagerLinalgOps` | `EagerSession` | `sess.svd(&x)`, `sess.svd_with(&x, &opts)` |
 //!
-//! Every operation has an options type (`SvdOptions`, `DetOptions`, ...);
+//! An operation has an options type (`SvdOptions`, `PinvOptions`, ...) only
+//! when it has semantic options; `solve`, `lstsq`, `lu`, `eig`, `det`, `inv`
+//! and the other operations without settings have neither an options type nor
+//! a `_with` form;
 //! factorizations return named structs ([`Svd`], [`Qr`], [`Lu`], ...) that are
 //! destructured by field. The generated registry page
 //! (`docs/spec/generated/api-ops.md`) lists the operations, their layout
 //! handling, errors and omissions.
+//!
+//! An operation without options has no `_with` form and no options type:
+//!
+//! ```compile_fail,E0599
+//! use tenferro_cpu::CpuEngine;
+//! use tenferro_linalg::LinalgOps;
+//! use tenferro_tensor::Tensor;
+//!
+//! let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0]).unwrap();
+//! let _ = a.solve_with(&a, &mut CpuEngine::serial());
+//! ```
+//!
+//! ```compile_fail,E0432
+//! use tenferro_linalg::SolveOptions;
+//! ```
 //!
 //! # Examples
 //!
@@ -165,10 +183,8 @@ pub use ad::support::{
 #[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub use api::EagerLinalgOps;
 pub use api::{
-    CholeskyOptions, DetOptions, EigOptions, EigvalsOptions, EigvalshOptions, FullPivLuOptions,
-    FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, LinalgOps, LinalgRepr, LstsqOptions,
-    LuOptions, NormOptions, NormOrd, PinvOptions, SlogdetOptions, SolveOptions, SvdvalsOptions,
-    TracedLinalgOps, TriangularSolveOptions,
+    CholeskyOptions, EigvalshOptions, LinalgOps, LinalgRepr, NormOptions, NormOrd, PinvOptions,
+    SvdvalsOptions, TracedLinalgOps, TriangularSolveOptions,
 };
 pub use backend::LinalgBackend;
 // The CPU linalg route is compiled per backend; a build with neither is a

@@ -79,6 +79,17 @@ mod dummy {
             *dest = add(a, b, o, e)?;
             Ok(())
         }
+        pub fn negate<X: AsView + ?Sized>(a: &X, _e: &mut dyn Engine) -> Result<Vec<f64>> {
+            Ok(a.values().iter().map(|x| -x).collect())
+        }
+        pub fn negate_into<X: AsView + ?Sized>(
+            a: &X,
+            e: &mut dyn Engine,
+            dest: &mut Vec<f64>,
+        ) -> Result<()> {
+            *dest = negate(a, e)?;
+            Ok(())
+        }
         pub fn roll<X: AsView + ?Sized>(
             a: &X,
             axes: Vec<isize>,
@@ -117,6 +128,10 @@ mod dummy {
                 .zip(&b.0)
                 .map(|(x, y)| x + y + o.offset)
                 .collect())
+        }
+        pub fn negate(s: &mut Session, a: &Vecf) -> Result<Vec<f64>> {
+            s.calls.push("negate".into());
+            Ok(a.0.iter().map(|x| -x).collect())
         }
         pub fn roll(
             s: &mut Session,
@@ -192,6 +207,20 @@ let _ = 1;
             omissions: ["layer session: no destination support"];
             example concrete: "let _ = 3;";
             example session: "let _ = 4;";
+        }
+        op negate {
+            summary: "Elementwise negation; it has no settings, so no options type and no `_with`.";
+            operands: (a);
+            options: none;
+            output: V;
+            dtypes: "real";
+            layers: [concrete, session];
+            into: [overwrite];
+            layout: "Compact.";
+            errors: [Validation];
+            omissions: [];
+            example concrete: "let _ = 9;";
+            example session: "let _ = 10;";
         }
         op roll {
             summary: "Rotate left.";
@@ -288,6 +317,54 @@ fn into_forwards_and_returns_body_result() {
 }
 
 #[test]
+fn an_op_without_options_has_no_with_form_and_its_into_takes_no_options() {
+    let a = v(&[1.0, -2.0]);
+    let mut e = Cpu(0);
+    assert_eq!(a.negate(&mut e).unwrap(), vec![-1.0, 2.0]);
+    let mut dest = vec![];
+    let r: Result<()> = a.negate_into(&mut e, &mut dest);
+    assert_eq!(r, Ok(()));
+    assert_eq!(dest, vec![-1.0, 2.0]);
+    let mut s = Session { calls: vec![] };
+    assert_eq!(s.negate(&a).unwrap(), vec![-1.0, 2.0]);
+
+    let negate = API_OPS.iter().find(|o| o.name == "negate").unwrap();
+    assert_eq!(negate.options, "none");
+    let md = api_ops_markdown();
+    assert!(md.contains("`negate`, `negate_into` (overwrite)"));
+    assert!(!md.contains("negate_with"));
+}
+
+/// The generated method names of every op are exactly `op`, `op_with` (iff the
+/// op declares an options type) and `op_into` (iff it declares `into` modes).
+#[test]
+fn generated_method_names_follow_options_and_into() {
+    let md = api_ops_markdown();
+    for op in API_OPS {
+        let mut want = vec![format!("`{}`", op.name)];
+        if op.options != "none" {
+            want.push(format!("`{}_with`", op.name));
+        }
+        if !op.into.is_empty() {
+            want.push(format!("`{}_into` ({})", op.name, op.into.join(", ")));
+        }
+        let row = md
+            .lines()
+            .find(|l| l.starts_with(&format!("| `{}` |", op.name)))
+            .unwrap_or_else(|| panic!("no table row for {}", op.name));
+        let cell = row.trim_end_matches(" |").rsplit("| ").next().unwrap();
+        assert_eq!(cell, want.join(", "), "{}", op.name);
+    }
+    // Options-bearing ops of this family, fixed.
+    let with_options: Vec<_> = API_OPS
+        .iter()
+        .filter(|o| o.options != "none")
+        .map(|o| o.name)
+        .collect();
+    assert_eq!(with_options, ["norm", "add", "roll", "split"]);
+}
+
+#[test]
 fn session_layer_passes_first_operand() {
     let mut s = Session { calls: vec![] };
     let a = v(&[1.0, 2.0]);
@@ -324,7 +401,7 @@ fn metadata_holds_declared_data() {
         ]
     );
     let names: Vec<_> = API_OPS.iter().map(|o| o.name).collect();
-    assert_eq!(names, ["norm", "add", "roll", "split"]);
+    assert_eq!(names, ["norm", "add", "negate", "roll", "split"]);
     let add = &API_OPS[1];
     assert_eq!(add.family, "dummy");
     assert_eq!(add.operands, ["a", "b"]);
@@ -332,9 +409,9 @@ fn metadata_holds_declared_data() {
     assert_eq!(add.layers, ["concrete", "session"]);
     assert_eq!(add.omissions, ["layer session: no destination support"]);
     assert_eq!(add.options, "AddOptions");
-    assert_eq!(API_OPS[2].operands, ["a", "axes: Vec<isize>"]);
-    assert_eq!(API_OPS[3].output, "Pair<V, R>");
-    assert_eq!(API_OPS[3].layers, ["concrete", "session", "core_eager"]);
+    assert_eq!(API_OPS[3].operands, ["a", "axes: Vec<isize>"]);
+    assert_eq!(API_OPS[4].output, "Pair<V, R>");
+    assert_eq!(API_OPS[4].layers, ["concrete", "session", "core_eager"]);
     assert_eq!(
         API_OPS[0].errors,
         ["Validation", "NumericalFailure(NonConvergence)"]

@@ -9,9 +9,8 @@ use tenferro_ad::{EagerSession, EagerTensor, Error, Result};
 
 use super::concrete::{require_lower, triangular_flags};
 use super::options::{
-    CholeskyOptions, DetOptions, EigOptions, EigvalsOptions, EigvalshOptions, FullPivLuOptions,
-    FullPivLuSolveOptions, HouseholderQrOptions, InvOptions, LstsqOptions, LuOptions, NormOptions,
-    PinvOptions, SlogdetOptions, SolveOptions, SvdvalsOptions, TriangularSolveOptions,
+    CholeskyOptions, EigvalshOptions, NormOptions, PinvOptions, SvdvalsOptions,
+    TriangularSolveOptions,
 };
 use crate::eager_ext::EagerLinalg as Old;
 use crate::eager_ext::{apply_linalg_eager_in_session, one_output};
@@ -71,11 +70,7 @@ pub(crate) fn qr(s: S<'_, '_>, a: &T, o: &QrOptions) -> Result<Qr<T>> {
     Ok(Qr { q, r })
 }
 
-pub(crate) fn householder_qr(
-    s: S<'_, '_>,
-    a: &T,
-    _o: &HouseholderQrOptions,
-) -> Result<HouseholderQr<T>> {
+pub(crate) fn householder_qr(s: S<'_, '_>, a: &T) -> Result<HouseholderQr<T>> {
     Old::householder_qr(s, a)
 }
 
@@ -87,30 +82,25 @@ pub(crate) fn rank_revealing_qr(
     Old::rank_revealing_qr(s, a, *o)
 }
 
-pub(crate) fn lu(s: S<'_, '_>, a: &T, _o: &LuOptions) -> Result<Lu<T, T>> {
+pub(crate) fn lu(s: S<'_, '_>, a: &T) -> Result<Lu<T, T>> {
     let (p, l, u, parity) = Old::lu(s, a)?;
     Ok(Lu { p, l, u, parity })
 }
 
-pub(crate) fn full_piv_lu(s: S<'_, '_>, a: &T, _o: &FullPivLuOptions) -> Result<FullPivLu<T, T>> {
+pub(crate) fn full_piv_lu(s: S<'_, '_>, a: &T) -> Result<FullPivLu<T, T>> {
     let (p, l, u, q, parity) = Old::full_piv_lu(s, a)?;
     Ok(FullPivLu { p, l, u, q, parity })
 }
 
-pub(crate) fn full_piv_lu_solve(
-    s: S<'_, '_>,
-    a: &T,
-    b: &T,
-    _o: &FullPivLuSolveOptions,
-) -> Result<T> {
+pub(crate) fn full_piv_lu_solve(s: S<'_, '_>, a: &T, b: &T) -> Result<T> {
     Old::full_piv_lu_solve(s, a, b)
 }
 
-pub(crate) fn solve(s: S<'_, '_>, a: &T, b: &T, _o: &SolveOptions) -> Result<T> {
+pub(crate) fn solve(s: S<'_, '_>, a: &T, b: &T) -> Result<T> {
     Old::solve(s, a, b)
 }
 
-pub(crate) fn lstsq(s: S<'_, '_>, a: &T, b: &T, _o: &LstsqOptions) -> Result<T> {
+pub(crate) fn lstsq(s: S<'_, '_>, a: &T, b: &T) -> Result<T> {
     Old::lstsq(s, a, b)
 }
 
@@ -133,12 +123,12 @@ pub(crate) fn cholesky(s: S<'_, '_>, a: &T, o: &CholeskyOptions) -> Result<T> {
     Old::cholesky(s, a)
 }
 
-pub(crate) fn eig(s: S<'_, '_>, a: &T, _o: &EigOptions) -> Result<Eig<T>> {
+pub(crate) fn eig(s: S<'_, '_>, a: &T) -> Result<Eig<T>> {
     let (values, vectors) = Old::eig(s, a)?;
     Ok(Eig { values, vectors })
 }
 
-pub(crate) fn eigvals(s: S<'_, '_>, a: &T, _o: &EigvalsOptions) -> Result<T> {
+pub(crate) fn eigvals(s: S<'_, '_>, a: &T) -> Result<T> {
     Old::eigvals(s, a)
 }
 
@@ -168,16 +158,16 @@ pub(crate) fn eigvalsh(s: S<'_, '_>, a: &T, o: &EigvalshOptions) -> Result<T> {
     )
 }
 
-pub(crate) fn slogdet(s: S<'_, '_>, a: &T, _o: &SlogdetOptions) -> Result<Slogdet<T, T>> {
+pub(crate) fn slogdet(s: S<'_, '_>, a: &T) -> Result<Slogdet<T, T>> {
     let (sign, log_abs_det) = Old::slogdet(s, a)?;
     Ok(Slogdet { sign, log_abs_det })
 }
 
-pub(crate) fn det(s: S<'_, '_>, a: &T, _o: &DetOptions) -> Result<T> {
+pub(crate) fn det(s: S<'_, '_>, a: &T) -> Result<T> {
     Old::det(s, a)
 }
 
-pub(crate) fn inv(s: S<'_, '_>, a: &T, _o: &InvOptions) -> Result<T> {
+pub(crate) fn inv(s: S<'_, '_>, a: &T) -> Result<T> {
     Old::inv(s, a)
 }
 

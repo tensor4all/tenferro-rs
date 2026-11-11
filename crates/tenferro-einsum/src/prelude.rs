@@ -3,7 +3,7 @@
 pub use crate::{
     ConcreteEinsumPlan, ConjMask, ContractionTree, EinsumAxis, EinsumNotation, EinsumOps,
     EinsumOptimize, EinsumOptions, EinsumSpec, EinsumSubscripts, Spec, TensorDotAxes, TensordotOps,
-    TensordotOptions, TracedEinsumOps, TracedTensordotOps,
+    TracedEinsumOps, TracedTensordotOps,
 };
 pub use tenferro_runtime::{
     DType, Tensor, TensorRead, TensorScalar, TensorView, TraceContext, TracedTensor, TypedTensor,

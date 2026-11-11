@@ -68,28 +68,31 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 
 Each operation below exists on all three layers (`LinalgOps`,
 `EagerLinalgOps`, `TracedLinalgOps`) as `op` with default options and
-`op_with(&XxxOptions)` with explicit options. Multi-output operations return
+`op_with(&XxxOptions)` with explicit options. An operation without options
+(`solve`, `lstsq`, `householder_qr`, `lu`, `full_piv_lu`, `full_piv_lu_solve`,
+`eig`, `eigvals`, `slogdet`, `det`, `inv`) has only `op` and has no Options
+type or `_with` form. Multi-output operations return
 named structs: `Svd { u, s, vh }`, `Qr { q, r }`, `Lu { p, l, u, parity }`,
 `FullPivLu { p, l, u, q, parity }`, `Eig { values, vectors }`,
 `Eigh { values, vectors }`, and `Slogdet { sign, log_abs_det }`.
 
 | Operation family | Operations | Options |
 | --- | --- | --- |
-| Dense solve | `solve`, `solve_with`; concrete `solve_into` (overwrite) | `SolveOptions` |
-| Least squares | `lstsq`, `lstsq_with` | `LstsqOptions` |
+| Dense solve | `solve`; concrete `solve_into` (overwrite) | none |
+| Least squares | `lstsq` | none |
 | Triangular solve | `triangular_solve`, `triangular_solve_with` | `TriangularSolveOptions` (`side`, `uplo`, `op`, `diag`) |
 | Cholesky | `cholesky`, `cholesky_with` | `CholeskyOptions` |
 | SVD | `svd`, `svd_with`, `svdvals`, `svdvals_with` | `SvdOptions` (`shape(SvdShape::Full)` for full factors, `gauge`, `derivative_eps`, `driver`), `SvdvalsOptions` |
 | QR | `qr`, `qr_with` | `QrOptions` |
-| Incremental compact QR | `householder_qr`, `householder_qr_with`; state methods `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` (eager: with `&mut EagerSession`; traced: on `TracedTensor` state) | `HouseholderQrOptions` |
+| Incremental compact QR | `householder_qr`; state methods `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` (eager: with `&mut EagerSession`; traced: on `TracedTensor` state) | none |
 | Rank-revealing QR | `rank_revealing_qr`, `rank_revealing_qr_with` | `RankRevealingQrOptions` |
 | Hermitian eigen | `eigh`, `eigh_with`, `eigvalsh`, `eigvalsh_with` | `EighOptions`, `EigvalshOptions` |
-| General eigen | `eig`, `eigvals` (and `_with`) | `EigOptions`, `EigvalsOptions` |
-| LU | `lu`, `lu_with` | `LuOptions` |
-| Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` (and `_with`) | `FullPivLuOptions`, `FullPivLuSolveOptions` |
+| General eigen | `eig`, `eigvals` | none |
+| LU | `lu` | none |
+| Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` | none |
 | Pseudoinverse | `pinv`, `pinv_with` | `PinvOptions` (`rtol`) |
-| Determinants | `det`, `slogdet` (and `_with`) | `DetOptions`, `SlogdetOptions` |
-| Matrix inverse | `inv`, `inv_with` | `InvOptions` |
+| Determinants | `det`, `slogdet` | none |
+| Matrix inverse | `inv` | none |
 | Norms | `norm`, `norm_with` | `NormOptions` (`ord: NormOrd`, `axes`, `keep_dims`) |
 
 Options types are `#[non_exhaustive]`; build them with
