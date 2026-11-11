@@ -325,6 +325,7 @@ def test_repo_settings_requires_repository_rules_review() -> None:
     text = read("ai/repo-settings.json")
 
     assert '"repository rules review gate"' in text
+    assert '"fork_pr_contributor_approval": "all_external_contributors"' in text
 
 
 def test_gpu_ci_starts_after_lint_before_expensive_work() -> None:

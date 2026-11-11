@@ -1,13 +1,13 @@
 > [!IMPORTANT]
-> New features must start as a feature request issue.
-> Please do not open a new-feature implementation PR before maintainers accept
-> the issue and agree that implementation should start.
+> A prior issue is recommended for a new feature, not required. It is the best
+> place to agree the intended behavior, the API, and the non-goals first, so open
+> one when the design is not obvious yet; you may also open the pull request
+> directly and maintainers will ask for an issue or a short design if the change
+> needs one.
 >
-> If you already have prototype code, link to a fork branch, gist, or
-> repository from the feature request issue instead of opening a PR.
->
-> New-feature PRs opened before an accepted issue may be closed and redirected
-> to an issue.
+> Maintainers may close a pull request that is out of scope for the project,
+> with an explanation. Prototype code stays useful as a link from the issue or
+> the pull request.
 >
 > If you are using an AI agent for a bug-fix PR, use or follow the
 > repository-local `tenferro-bugfix-pr` workflow before editing code.
@@ -40,7 +40,7 @@ alone do not require one. -->
 - [ ] I ran local repository-rules review (deterministic; the external LLM
       review is permanently disabled) and resolved or documented its findings.
 - [ ] If this implements a new feature, the linked issue has been accepted by
-      maintainers.
+      maintainers (an issue is recommended for a new feature, not required).
 - [ ] If this is an AI-assisted bug fix, I applied the bug-fix scope gate from
       `ai/contribution-workflows/bugfix-pr.md`.
 - [ ] If this PR needs a work log, I added one under `docs/worklogs/` and

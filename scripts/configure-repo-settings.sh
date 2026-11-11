@@ -18,6 +18,12 @@ Options:
 EOF
 }
 
+# Applies ai/repo-settings.json to the repository. The fork pull request approval
+# policy (`fork_pr_contributor_approval`) is checked by check-repo-settings.sh but
+# not applied here: it is an Actions policy that this script leaves to the
+# repository owner, so set it once in *Settings > Actions > General > Fork pull
+# request workflows from outside collaborators* before the check can pass.
+
 log() {
   printf '%s\n' "$*"
 }

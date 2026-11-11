@@ -171,6 +171,19 @@ the test changes, not the new workflow wiring. Validate that wiring locally and
 through a trusted post-merge dispatch, without executing a PR-controlled
 secret-bearing workflow.
 
+## External pull requests
+
+Pull requests are accepted from any account, forks included, and a prior issue is
+recommended rather than required (`CONTRIBUTING.md`). What keeps an external
+contribution from consuming CI or a secret is the repository setting *Fork pull
+request workflows from outside collaborators* = `all_external_contributors`,
+recorded as `fork_pr_contributor_approval` in `ai/repo-settings.json`: an
+unapproved `pull_request` run does not execute. The deterministic `repository
+rules review gate` runs on `pull_request_target`, so it is safe by construction
+instead of by approval: it checks out the base revision and treats PR content as
+data, reads no secret, and writes only the review comment. A fork PR takes the
+legacy `CI_gpu.yml` gate; the RunPod path below stays same-repository.
+
 ## RunPod trust boundary
 
 The RunPod workflow is triggered from trusted `main`, never from

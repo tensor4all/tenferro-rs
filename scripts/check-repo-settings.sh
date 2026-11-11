@@ -115,12 +115,14 @@ EXPECTED_DELETE_BRANCH="$(json_get "$SETTINGS_PATH" "delete_branch_on_merge")"
 EXPECTED_STRICT="$(json_get "$SETTINGS_PATH" "required_status_checks.strict")"
 EXPECTED_PAGES_ENABLED="$(json_get_optional "$SETTINGS_PATH" "pages.enabled" "False")"
 EXPECTED_PAGES_BUILD_TYPE="$(json_get_optional "$SETTINGS_PATH" "pages.build_type" "")"
+EXPECTED_FORK_PR_APPROVAL="$(json_get_optional "$SETTINGS_PATH" "fork_pr_contributor_approval" "")"
 
 REPO_JSON="$(gh api "repos/$REPO")"
 PROTECTION_JSON="$(gh_api_optional "repos/$REPO/branches/$DEFAULT_BRANCH/protection")"
 PAGES_JSON="$(gh_api_optional "repos/$REPO/pages")"
+FORK_PR_JSON="$(gh_api_optional "repos/$REPO/actions/permissions/fork-pr-contributor-approval")"
 
-run_python - "$SETTINGS_PATH" "$REPO_JSON" "$PROTECTION_JSON" "$PAGES_JSON" "$EXPECTED_AUTO_MERGE" "$EXPECTED_DELETE_BRANCH" "$EXPECTED_STRICT" "$EXPECTED_PAGES_ENABLED" "$EXPECTED_PAGES_BUILD_TYPE" <<'PY'
+run_python - "$SETTINGS_PATH" "$REPO_JSON" "$PROTECTION_JSON" "$PAGES_JSON" "$FORK_PR_JSON" "$EXPECTED_AUTO_MERGE" "$EXPECTED_DELETE_BRANCH" "$EXPECTED_STRICT" "$EXPECTED_PAGES_ENABLED" "$EXPECTED_PAGES_BUILD_TYPE" "$EXPECTED_FORK_PR_APPROVAL" <<'PY'
 import json
 import sys
 
@@ -129,11 +131,13 @@ import sys
     repo_json,
     protection_json,
     pages_json,
+    fork_pr_json,
     expected_auto_merge,
     expected_delete_branch,
     expected_strict,
     expected_pages_enabled,
     expected_pages_build_type,
+    expected_fork_pr_approval,
 ) = sys.argv[1:]
 
 with open(settings_path, "r", encoding="utf-8") as handle:
@@ -142,6 +146,7 @@ with open(settings_path, "r", encoding="utf-8") as handle:
 repo = json.loads(repo_json)
 protection = json.loads(protection_json) if protection_json.strip() else None
 pages = json.loads(pages_json) if pages_json.strip() else None
+fork_pr = json.loads(fork_pr_json) if fork_pr_json.strip() else None
 
 errors = []
 if repo.get("allow_auto_merge") != (expected_auto_merge == "True"):
@@ -171,6 +176,18 @@ if expected_pages_enabled == "True":
         errors.append(
             "pages.build_type mismatch: "
             f"expected {expected_pages_build_type}, got {pages.get('build_type')!r}"
+        )
+
+if expected_fork_pr_approval:
+    if fork_pr is None:
+        errors.append(
+            "cannot read the fork pull request approval policy; "
+            "it needs the admin role on this repository"
+        )
+    elif fork_pr.get("approval_policy") != expected_fork_pr_approval:
+        errors.append(
+            "fork_pr_contributor_approval mismatch: "
+            f"expected {expected_fork_pr_approval}, got {fork_pr.get('approval_policy')!r}"
         )
 if errors:
     for error in errors:

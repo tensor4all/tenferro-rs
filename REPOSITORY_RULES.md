@@ -293,16 +293,20 @@ repeatedly reporting the same intentional invariant.
 Human/process protocol. This section is intentionally not routed to the
 diff-scoped review bot.
 
-- PR creation is restricted to collaborators. External requests, reproducers,
-  proposed regression tests, benchmark reports, and prototype branches should be
-  collected in issues first.
-- Collaborator bug-fix PRs may be reviewed as merge candidates when they fix
-  behavior already intended by current docs, specs, or tests.
-- New features start as feature request issues. A new-feature implementation PR
-  is not the source of truth unless maintainers accepted the linked issue and
-  agreed implementation should start; PRs opened before that may be closed and
-  redirected to an issue, with prototype code linked from the issue as reference
-  material.
+- Pull requests are accepted from any account, including first-time external
+  contributors and forks. A prior issue is recommended, not required: it is the
+  best place to agree the API, dependency, backend, and roadmap decisions, and
+  maintainers may ask for an issue or a short design before reviewing a large or
+  risky change. Maintainers may close a pull request that is out of scope for the
+  project, with an explanation of why.
+- Bug-fix PRs may be reviewed as merge candidates when they fix behavior already
+  intended by current docs, specs, or tests.
+- New features, substantial behavior changes, and architectural changes are
+  better as feature request issues first, so the accepted issue can carry the
+  intended behavior, the API, and the non-goals. An implementation PR is not the
+  source of truth for a new feature unless maintainers accepted that design;
+  maintainers may ask for an issue and close a PR opened before it, with
+  prototype code linked from the issue as reference material.
 - Accepted feature issues, specs, and repository rules are the source of truth
   for implementation. External prototype code may inform implementation only
   when its license and provenance are compatible with this repository.

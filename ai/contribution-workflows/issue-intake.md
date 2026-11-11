@@ -4,8 +4,9 @@ Use this workflow when the user wants to create or refine a tenferro-rs GitHub
 issue. It covers bug reports, feature requests, design discussions, and
 documentation or article topic issues.
 
-Do not use this workflow to open a new-feature implementation PR. New features
-must start as issues.
+This workflow produces the issue, not the implementation PR. A feature PR
+opened directly is reviewed on its merits, and maintainers may still ask for the
+issue this workflow produces when the change needs one.
 
 ## Operating Rules
 

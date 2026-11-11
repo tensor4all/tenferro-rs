@@ -48,36 +48,62 @@ first.
 
 Bug reports, minimal reproducers, and regression tests are welcome in issues.
 
-Bug-fix pull requests from collaborators are welcome when they fix behavior
-that is already intended by current docs, specs, or tests. A bug-fix PR should
-not introduce a new public API, operation family, backend, dependency, feature
-flag, or architectural layer.
+Bug-fix pull requests are welcome from any account when they fix behavior that
+is already intended by current docs, specs, or tests. A bug-fix PR should not
+introduce a new public API, operation family, backend, dependency, feature
+flag, or architectural layer; open an issue for that decision instead.
 
-This repository restricts pull request creation to collaborators. If you are
-not a collaborator, please open an issue with the reproducer, proposed test,
-or prototype branch instead of opening an implementation PR.
+## Pull requests from any account
 
-## Feature requests, prototypes, and implementation ownership
+Pull requests are accepted from any GitHub account, forks included, and you do
+not need collaborator access to open one. A prior issue is recommended rather
+than required: it is the best place to agree the API, dependency, backend, and
+roadmap decisions before implementation. Maintainers may ask for an issue or a
+short design before reviewing a large or risky change, and may close a pull
+request that is out of scope for the project, with an explanation of why.
 
 New features, substantial behavior changes, new public APIs, new backends, new
-dependencies, and architectural changes must start as an issue before an
-implementation pull request is opened.
-
-This boundary is intended to keep development fast and coherent in an
-agentic-coding workflow. The project preserves API consistency, internal
-architecture, test strategy, backend behavior, and long-term maintainability
-best when maintainers and active collaborators own the final implementation
-inside the repository.
+dependencies, and architectural changes are the cases where that issue matters
+most. An accepted issue carries the intended behavior, the API, and the
+non-goals, and it stays the source of truth for the implementation, the tests,
+and the roadmap decision; the project keeps development coherent when the
+implementation inside the repository follows that accepted design.
 
 Requests, prototype code, exploratory branches, gists, external repositories,
-and focused unit tests are still useful contributions. Please link them from
-the issue and explain what behavior they demonstrate. The issue remains the
-source of truth for the accepted API, dependency impact, backend behavior, AD
-behavior, tests, implementation plan, and roadmap decision.
+and focused unit tests are all useful contributions. Link them from the issue
+or the pull request and explain what behavior they demonstrate. Prototype code
+may inform an implementation when its license and provenance are compatible
+with this repository.
 
-Implementation PRs for new features or substantial changes that are opened
-before an accepted issue may be closed with a request to continue the
-discussion in an issue first.
+The shared tensor4all policy asks for an issue before every non-trivial change
+(`docs/contributing/rust-repositories.md` in `tensor4all/tensor4all-meta`).
+tenferro-rs keeps that step as a recommendation for external work and lets
+maintainer review ask for the issue when a change needs one; the files in this
+repository are the operative policy.
+
+## CI on pull requests
+
+A `pull_request` run from a fork receives no repository secrets and a read-only
+token. GitHub additionally holds `pull_request` runs from external contributors
+until a maintainer approves them: *Settings > Actions > General > Fork pull
+request workflows from outside collaborators* is set to the policy
+`all_external_contributors`, recorded as `fork_pr_contributor_approval` in
+`ai/repo-settings.json` and verified by `scripts/check-repo-settings.sh`. An
+unapproved run does not execute, so it cannot consume repository CI or read a
+secret, and the required checks stay queued until a maintainer approves the run
+on the pull request.
+
+External pull requests also get the deterministic `repository rules review
+gate`. That workflow runs on `pull_request_target`, so it cannot rely on the
+approval hold above; it is safe for a fork by construction instead. It checks
+out the **base** revision and treats pull request content as data, so nothing
+from an external branch is executed, it reads no secret, and its token is scoped
+to reading contents and writing the review comment. Every secret-bearing path
+stays same-repository: RunPod GPU execution authorizes `admin`/`maintain` actors
+and rejects fork PRs (`.github/workflows/runpod-gpu-test.yml`), the cache
+publisher runs only on main-scoped triggers, and a fork PR takes the legacy
+`CI_gpu.yml` gate instead of the RunPod one. See
+[Change-aware CI and trusted RunPod recovery](docs/design/change-aware-ci.md).
 
 ## Local PR gate and hosted CI profiles
 
