@@ -366,3 +366,25 @@ fn q_columns_manifest_records_the_value_only_complement_range() {
     assert_eq!(entry.jvp.status, LinalgAdRuleSupport::SupportedViaLinearize);
     assert_eq!(entry.vjp.status, LinalgAdRuleSupport::SupportedViaLinearize);
 }
+
+#[test]
+fn eigh_manifest_records_the_silent_higher_derivative_gap() {
+    // The shared decomposition caveat reads as a statement about eigenvector
+    // smoothness. It does not say that the HVP of a *smooth* spectral function
+    // comes back wrong at an exactly degenerate pair, with no error, so the
+    // `eigh` entries have to carry that themselves.
+    for kind in [LinalgAdOpKind::Eigh, LinalgAdOpKind::EighVals] {
+        let entry = linalg_ad_support(kind);
+        assert!(
+            entry.caveats.iter().any(|caveat| {
+                caveat.contains("degenerate")
+                    && caveat.contains("higher derivatives")
+                    && caveat.contains("no error")
+            }),
+            "{kind:?} caveats must name the silently dropped degenerate-pair term: {:?}",
+            entry.caveats
+        );
+        // The first derivative stays correct, so the entry keeps its status.
+        assert_eq!(entry.jvp.status, LinalgAdRuleSupport::SupportedViaLinearize);
+    }
+}

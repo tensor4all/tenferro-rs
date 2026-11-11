@@ -390,6 +390,15 @@ pub trait EagerSessionLinalgExt {
     /// ```
     /// # Errors
     /// Returns typed validation, extension, backend, or unsupported-executor errors.
+    ///
+    /// # AD caveat
+    /// A single eigenvalue is not a smooth function of the matrix at an exact
+    /// degeneracy. The first derivative of a smooth scalar spectral function
+    /// `T(K) = tr t(K)` is still correct for every spectrum; second and higher
+    /// derivatives are not. `jvp(grad(T))` weights each degenerate pair by
+    /// `Δ/(Δ² + ε²)`, which is zero at `Δ = 0`, so the pair contributes nothing
+    /// and a wrong value comes back with no error and no `NaN`. See
+    /// `linalg_ad_support` (feature `autodiff`).
     fn eigvalsh(&mut self, input: &EagerTensor) -> Result<EagerTensor>;
 
     /// Compute general eigenvalues in this borrowed session.
@@ -427,6 +436,16 @@ pub trait EagerSessionLinalgExt {
     /// ```
     /// # Errors
     /// Returns typed validation, unsupported-dtype, extension, or backend errors.
+    ///
+    /// # AD caveat
+    /// At an exactly degenerate eigenvalue neither the eigenvectors nor a
+    /// single eigenvalue are smooth functions of the matrix. The first
+    /// derivative of a smooth scalar spectral function `T(K) = tr t(K)` is
+    /// still correct for every spectrum; second and higher derivatives are
+    /// not. The eigenvector term is weighted by `Δ/(Δ² + ε²)`, which is zero at
+    /// `Δ = 0`, so an HVP such as `jvp(grad(T))` drops the degenerate pair's
+    /// contribution and returns a wrong value with no error and no `NaN`. See
+    /// `linalg_ad_support` (feature `autodiff`).
     fn eigh(&mut self, input: &EagerTensor) -> Result<(EagerTensor, EagerTensor)>;
 
     /// Compute Hermitian eigendecomposition with explicit gauge and tolerance.

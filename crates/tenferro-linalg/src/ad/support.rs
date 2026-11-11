@@ -417,6 +417,24 @@ static DECOMPOSITION_CAVEATS: [&str; 1] = [
     "Derivative regularization handles near-degenerate spectra but does not make exact degeneracies smoothly differentiable.",
 ];
 
+/// `eigh`/`eigvalsh` only. The shared `DECOMPOSITION_CAVEATS` line above reads as
+/// a statement about eigenvector smoothness, which understates the defect: an
+/// HVP of a smooth spectral function is silently wrong at an exactly degenerate
+/// pair.
+static EIGH_CAVEATS: [&str; 3] = [
+    "Derivative regularization handles near-degenerate spectra but does not make exact degeneracies smoothly differentiable.",
+    "First derivatives of a smooth scalar spectral function `T(K) = tr t(K)` \
+     stay correct for every spectrum, including exactly degenerate ones, even \
+     though neither the eigenvectors nor a single eigenvalue are smooth \
+     functions of the matrix at an exact degeneracy.",
+    "Second and higher derivatives, such as an HVP `jvp(grad(T))` for a smooth \
+     spectral function `T(K) = tr t(K)`, report no error and no NaN but silently \
+     drop the term an exactly degenerate eigenvalue pair contributes when the \
+     tangent couples it: the pair weight is `diff / (diff^2 + eps^2)`, which is \
+     exactly 0 at `diff = 0`, and the confluent limit of the divided difference \
+     is not reachable from the rule because `eigh` never sees `t`.",
+];
+
 static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
     support_entry(
         LinalgAdOpKind::Cholesky,
@@ -557,7 +575,7 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
         ),
         LinalgAdRuleSupport::Unsupported,
         &EIGH_OUTPUTS,
-        &DECOMPOSITION_CAVEATS,
+        &EIGH_CAVEATS,
     ),
     support_entry(
         LinalgAdOpKind::EighVals,
@@ -569,7 +587,7 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
         ),
         LinalgAdRuleSupport::Unsupported,
         &EIGH_VALS_OUTPUTS,
-        &DECOMPOSITION_CAVEATS,
+        &EIGH_CAVEATS,
     ),
     support_entry(
         LinalgAdOpKind::Eig,
