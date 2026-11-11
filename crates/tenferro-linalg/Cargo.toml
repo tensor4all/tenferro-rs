@@ -118,6 +118,10 @@ criterion.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
+[[example]]
+name = "lstsq_rank_deficient_diag"
+required-features = ["autodiff"]
+
 [[bench]]
 name = "lu_ad_breakdown"
 harness = false
