@@ -27,9 +27,34 @@ fn residual_spec_builders_and_queries_cover_always_on_api() {
 
     let both = ResidualSpec::all_inputs().with_all_outputs();
     assert!(both.declares_input(63) && both.declares_output(63));
-    assert!(!both.declares_input(64) && !both.declares_output(64));
+    // An all-index declaration covers every arity, not only the first 64.
+    assert!(both.declares_input(64) && both.declares_output(64));
+    assert!(both.declares_input(usize::MAX) && both.declares_output(usize::MAX));
+    assert!(!all_in.declares_output(64) && !all_out.declares_input(64));
+
+    // Explicit indices never declare anything past 63.
+    let explicit = ResidualSpec::input(63).with_output(63);
+    assert!(explicit.declares_input(63) && !explicit.declares_input(64));
+    assert!(explicit.declares_output(63) && !explicit.declares_output(64));
 
     assert!(ResidualSpec::default().is_empty());
+    assert_eq!(ResidualSpec::default(), ResidualSpec::none());
+    assert_eq!(
+        ResidualSpec::none().with_all_inputs(),
+        ResidualSpec::all_inputs()
+    );
+}
+
+#[test]
+#[should_panic(expected = "individual indices 0..64 only")]
+fn residual_spec_refuses_explicit_input_index_past_63() {
+    let _ = ResidualSpec::none().with_input(64);
+}
+
+#[test]
+#[should_panic(expected = "individual indices 0..64 only")]
+fn residual_spec_refuses_explicit_output_index_past_63() {
+    let _ = ResidualSpec::output(64);
 }
 
 #[cfg(feature = "autodiff")]
@@ -70,9 +95,9 @@ fn residual_spec_builders_and_queries() {
     assert!(both.declares_input(0) && both.declares_input(63));
     assert!(both.declares_output(0) && both.declares_output(63));
 
-    // Out-of-range indices are never declared.
-    assert!(!both.declares_input(64));
-    assert!(!both.declares_output(64));
+    // All-index declarations reach past index 63.
+    assert!(both.declares_input(64));
+    assert!(both.declares_output(64));
 }
 
 #[cfg(feature = "autodiff")]
@@ -164,6 +189,13 @@ fn all_residual_masks_match_the_pre_retirement_registry() {
         assert_eq!(
             (actual.input_mask, actual.output_mask),
             (input_mask, output_mask),
+            "{kind:?}"
+        );
+        // Every full mask in this table comes from an all-index declaration,
+        // which must also cover indices past 63 (e.g. a 65-operand concatenate).
+        assert_eq!(
+            (actual.input_tail, actual.output_tail),
+            (input_mask == u64::MAX, output_mask == u64::MAX),
             "{kind:?}"
         );
     }

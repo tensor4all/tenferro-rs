@@ -425,3 +425,188 @@ fn ad_context_owns_cloned_semantic_rule_sets_and_rejects_duplicate_inputs_atomic
         SemanticExtensionRegistryError::DuplicateRule { .. }
     ));
 }
+
+/// A transpose / direct primal-VJP rule that declares no residual and then
+/// reads primal value 0 of `self.0` anyway, returning the accessor's error.
+#[derive(Debug)]
+struct UndeclaredAccessRule(PrimalValueKind);
+
+impl UndeclaredAccessRule {
+    fn read(
+        &self,
+        input: impl FnOnce(usize) -> Result<tenferro_runtime::program::ProgramValue, SemanticAdError>,
+        output: impl FnOnce(usize) -> Result<tenferro_runtime::program::ProgramValue, SemanticAdError>,
+    ) -> Result<(), SemanticAdError> {
+        if self.0 == PrimalValueKind::Input {
+            input(0)?;
+        } else {
+            output(0)?;
+        }
+        Ok(())
+    }
+}
+
+impl SemanticLinearTransposeRule for UndeclaredAccessRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-ad.semantic-identity.v1"
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        ResidualSpec::none()
+    }
+
+    fn linear_transpose(
+        &self,
+        request: SemanticLinearTransposeRequest<'_>,
+        _builder: &mut SemanticProgramBuilder,
+    ) -> Result<Box<[AdValue]>, SemanticAdError> {
+        self.read(
+            |index| request.primal_input_value(index),
+            |index| request.primal_output_value(index),
+        )?;
+        Ok(request.cotangent_outputs().into())
+    }
+}
+
+impl SemanticPrimalVjpRule for UndeclaredAccessRule {
+    fn family_id(&self) -> &'static str {
+        "tenferro-ad.semantic-identity.v1"
+    }
+
+    fn residual_mask(&self) -> ResidualSpec {
+        ResidualSpec::none()
+    }
+
+    fn primal_vjp(
+        &self,
+        request: SemanticPrimalVjpRequest<'_>,
+        _builder: &mut SemanticProgramBuilder,
+    ) -> Result<Box<[AdValue]>, SemanticAdError> {
+        self.read(
+            |index| request.primal_input_value(index),
+            |index| request.primal_output_value(index),
+        )?;
+        Ok(request.cotangent_outputs().into())
+    }
+}
+
+/// Primal input, primal output and a cotangent, all owned by one builder.
+fn transpose_dispatch_values(
+    builder: &mut SemanticProgramBuilder,
+) -> (
+    tenferro_runtime::program::ProgramValue,
+    tenferro_runtime::program::ProgramValue,
+    AdValue,
+) {
+    let primal_input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let primal_output = builder
+        .add_op(CoreSemanticOp::Neg, &[primal_input])
+        .unwrap()[0];
+    let cotangent = builder
+        .add_op(CoreSemanticOp::Neg, &[primal_output])
+        .unwrap()[0];
+    (primal_input, primal_output, AdValue::Value(cotangent))
+}
+
+/// The checked-access assertions inside `IdentityRule` (metadata succeeds,
+/// undeclared value access and bounds are typed errors) only count if a
+/// dispatch actually calls the rule; this drives both roles through the
+/// public dispatchers.
+#[test]
+fn semantic_transpose_and_primal_vjp_dispatch_run_identity_checked_access_assertions() {
+    let (program, _, _) = extension_view(false);
+    let operation = program.operations().next().unwrap();
+    let mut builder = SemanticProgramBuilder::new();
+    let (primal_input, primal_output, cotangent) = transpose_dispatch_values(&mut builder);
+    let rules = SemanticExtensionRuleSet::new()
+        .with_linear_transpose(Arc::new(IdentityRule))
+        .unwrap()
+        .with_primal_vjp(Arc::new(IdentityRule))
+        .unwrap();
+
+    let transposed = rules
+        .linear_transpose_operation(
+            operation,
+            &[primal_input],
+            &[primal_output],
+            &[cotangent],
+            &[true],
+            &[primal_output],
+            &mut builder,
+        )
+        .unwrap();
+    assert_eq!(&*transposed, &[cotangent]);
+
+    let direct = rules
+        .primal_vjp_operation(
+            operation,
+            &[primal_input],
+            &[primal_output],
+            &[cotangent],
+            &[true],
+            &mut builder,
+        )
+        .unwrap();
+    assert_eq!(&*direct, &[cotangent]);
+}
+
+/// docs/design/checked-semantic-ad-residual-access.md (Tests): a fake
+/// transpose rule and a fake direct primal-VJP rule that read an undeclared
+/// input or output value get the exact typed error back from dispatch.
+#[test]
+fn semantic_dispatch_returns_typed_error_for_undeclared_primal_value_access() {
+    let (program, _, _) = extension_view(false);
+    let operation = program.operations().next().unwrap();
+    for kind in [PrimalValueKind::Input, PrimalValueKind::Output] {
+        let mut builder = SemanticProgramBuilder::new();
+        let (primal_input, primal_output, cotangent) = transpose_dispatch_values(&mut builder);
+        let rules = SemanticExtensionRuleSet::new()
+            .with_linear_transpose(Arc::new(UndeclaredAccessRule(kind)))
+            .unwrap()
+            .with_primal_vjp(Arc::new(UndeclaredAccessRule(kind)))
+            .unwrap();
+
+        let transposed = rules.linear_transpose_operation(
+            operation,
+            &[primal_input],
+            &[primal_output],
+            &[cotangent],
+            &[true],
+            &[],
+            &mut builder,
+        );
+        assert!(
+            matches!(
+                transposed,
+                Err(SemanticAdError::UndeclaredResidualValue {
+                    family_id: "tenferro-ad.semantic-identity.v1",
+                    kind: actual,
+                    index: 0,
+                }) if actual == kind
+            ),
+            "linear transpose, {kind:?}: {transposed:?}"
+        );
+
+        let direct = rules.primal_vjp_operation(
+            operation,
+            &[primal_input],
+            &[primal_output],
+            &[cotangent],
+            &[true],
+            &mut builder,
+        );
+        assert!(
+            matches!(
+                direct,
+                Err(SemanticAdError::UndeclaredResidualValue {
+                    family_id: "tenferro-ad.semantic-identity.v1",
+                    kind: actual,
+                    index: 0,
+                }) if actual == kind
+            ),
+            "direct primal VJP, {kind:?}: {direct:?}"
+        );
+    }
+}

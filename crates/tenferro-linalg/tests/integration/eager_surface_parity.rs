@@ -363,6 +363,131 @@ fn lstsq_validation_is_paired_across_eager_and_traced_surfaces() {
     assert_lstsq_wide_error_contract(&eager_error, &traced_error, WIDE_REASON);
 }
 
+/// Assert that an eager `lstsq` refused a rank-deficient system with the typed
+/// `Singular` source, and show the returned values when it did not.
+fn assert_eager_lstsq_singular(label: &str, result: tenferro_ad::Result<EagerTensor>) {
+    let error = match result {
+        Err(error) => error,
+        Ok(solution) => {
+            let shown = match solution.dtype() {
+                DType::F64 => format!("{:?}", f64_values(&solution)),
+                dtype => format!("<{dtype:?} values>"),
+            };
+            panic!(
+                "{label}: expected a typed Singular error, got Ok(shape {:?}, x = {shown})",
+                solution.shape()
+            );
+        }
+    };
+    assert_eq!(
+        error.kind(),
+        tenferro_tensor::ErrorKind::NumericalFailure,
+        "{label}: {error}"
+    );
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+    let mut found = None;
+    while let Some(current) = source {
+        if let Some(linalg) = current.downcast_ref::<tenferro_linalg::Error>() {
+            found = Some(linalg);
+            break;
+        }
+        source = current.source();
+    }
+    assert!(
+        matches!(
+            found,
+            Some(tenferro_linalg::Error::Singular { op: "lstsq" })
+        ),
+        "{label}: expected Singular {{ op: \"lstsq\" }} in the source chain, got {error:?}"
+    );
+}
+
+/// Place `data` in `runtime`, so that `A` and `b` of one solve share a context.
+fn eager_in<T: tenferro_tensor::TensorScalar>(
+    runtime: &std::sync::Arc<EagerRuntime>,
+    data: Vec<T>,
+    shape: Vec<usize>,
+) -> EagerTensor {
+    EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(shape, data).unwrap(),
+        runtime.clone(),
+    )
+    .unwrap()
+}
+
+// #2583: the eager surface used to return `Ok([inf, -inf])` here.
+#[test]
+fn eager_lstsq_rejects_rank_deficient_matrix() {
+    let rt = EagerRuntime::new().unwrap();
+    // Column-major 4x2, second column equal to the first: QR gives R[1,1] == 0.
+    let a = eager_in(
+        &rt,
+        vec![1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0],
+        vec![4, 2],
+    );
+    let b = eager_in(&rt, vec![1.0, 0.0, 0.0, 1.0], vec![4, 1]);
+    assert_eager_lstsq_singular("duplicated column", eager_lstsq(&a, &b));
+
+    // Third column = 0.5 * first + 0.25 * second, formed in floating point,
+    // so the last pivot is roundoff-level rather than an exact zero.
+    let c0 = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let c1 = [0.1, 0.7, 0.3, 0.9, 0.2];
+    let mut data = Vec::new();
+    data.extend_from_slice(&c0);
+    data.extend_from_slice(&c1);
+    data.extend(c0.iter().zip(c1).map(|(x, y)| 0.5 * x + 0.25 * y));
+    let a = eager_in(&rt, data, vec![5, 3]);
+    let b = eager_in(&rt, vec![1.0, -1.0, 2.0, 0.5, 3.0], vec![5, 1]);
+    assert_eager_lstsq_singular("dependent column (roundoff pivot)", eager_lstsq(&a, &b));
+
+    // Complex duplicated column.
+    let col = [
+        Complex64::new(1.0, 1.0),
+        Complex64::new(2.0, -1.0),
+        Complex64::new(0.5, 0.0),
+    ];
+    let a = eager_in(&rt, [col, col].concat(), vec![3, 2]);
+    let b = eager_in(&rt, vec![Complex64::new(1.0, 0.0); 3], vec![3, 1]);
+    assert_eager_lstsq_singular("complex duplicated column", eager_lstsq(&a, &b));
+
+    // Batched: batch 0 is full rank, batch 1 has a zero column.
+    let a = eager_in(
+        &rt,
+        vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0],
+        vec![3, 2, 2],
+    );
+    let b = eager_in(&rt, vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0], vec![3, 1, 2]);
+    assert_eager_lstsq_singular("batched, one rank-deficient slice", eager_lstsq(&a, &b));
+}
+
+// The rank check must not move full-rank inputs, including ill-conditioned ones
+// whose smallest pivot is far above the `max(m, n) * eps` relative cutoff.
+#[test]
+fn eager_lstsq_rank_check_keeps_ill_conditioned_full_rank_solves() {
+    let rt = EagerRuntime::new().unwrap();
+    // Column scales 1 and 1e-8: cond(A) ~ 1e8, pivot ratio 1e-8 >> 4 * eps.
+    let a = eager_in(
+        &rt,
+        vec![1.0, 1.0, 1.0, 1.0, 0.0, 1e-8, 2e-8, 3e-8],
+        vec![4, 2],
+    );
+    let x_true = [2.0, -3.0e8];
+    let b_data: Vec<f64> = (0..4)
+        .map(|i| x_true[0] + x_true[1] * 1e-8 * i as f64)
+        .collect();
+    let b = eager_in(&rt, b_data, vec![4, 1]);
+    let x = f64_values(&eager_lstsq(&a, &b).expect("ill-conditioned full-rank lstsq"));
+    assert!((x[0] - x_true[0]).abs() < 1e-6, "x = {x:?}");
+    assert!(((x[1] - x_true[1]) / x_true[1]).abs() < 1e-6, "x = {x:?}");
+
+    // An all-NaN input is not reported as rank deficient: the check skips a
+    // slice with non-finite pivots and the NaN reaches the solution.
+    let a = eager_in(&rt, vec![f64::NAN; 4], vec![2, 2]);
+    let b = eager_in(&rt, vec![1.0, 1.0], vec![2, 1]);
+    let x = f64_values(&eager_lstsq(&a, &b).expect("NaN input propagates"));
+    assert!(x.iter().all(|v| v.is_nan()), "x = {x:?}");
+}
+
 #[test]
 fn traced_lstsq_symbolic_shape_keeps_dtype_and_rank_precedence() {
     let trace = tenferro_runtime::TraceContext::new();
