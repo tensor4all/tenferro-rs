@@ -296,11 +296,22 @@ impl tenferro_runtime::ExecutionEngine for CpuEngine {
     }
 
     fn take_extension_caches(&mut self) -> tenferro_runtime::ExtensionCacheStore {
-        std::mem::take(&mut self.extension_caches)
+        let store = self.extension_caches.take();
+        debug_assert!(
+            store.is_some(),
+            "extension caches taken twice without a restore"
+        );
+        // A second take is a caller logic error; release builds hand out an
+        // empty store so the engine stays usable.
+        store.unwrap_or_default()
     }
 
     fn restore_extension_caches(&mut self, caches: tenferro_runtime::ExtensionCacheStore) {
-        self.extension_caches = caches;
+        debug_assert!(
+            self.extension_caches.is_none(),
+            "extension caches restored without a take"
+        );
+        self.extension_caches = Some(caches);
     }
 
     fn mark_broken(&mut self) {

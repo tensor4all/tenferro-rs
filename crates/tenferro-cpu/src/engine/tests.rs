@@ -443,3 +443,31 @@ fn with_exec_lends_the_full_budget_and_breaks_the_engine_on_panic() {
     let error = engine.with_exec(|_| ()).expect_err("broken engine refuses");
     assert_eq!(engine_error(&error), Some(CpuEngineError::Broken));
 }
+
+#[test]
+fn engine_wide_cache_controls_cover_the_extension_store() {
+    use tenferro_runtime::{ExecutionEngine, ExtensionCacheKey};
+
+    let mut engine = CpuEngine::serial();
+    let before = engine.runtime_cache_stats();
+    let key = ExtensionCacheKey::new("tenferro-cpu.test.engine-controls.v1", "entries", 0);
+    let mut caches = engine.take_extension_caches();
+    caches.put(key, 7_u64, 96);
+    engine.restore_extension_caches(caches);
+
+    let stored = engine.runtime_cache_stats();
+    assert_eq!(stored.entries, before.entries + 1);
+    assert_eq!(stored.retained_bytes, before.retained_bytes + 96);
+    assert_eq!(
+        (stored.hits, stored.misses, stored.evictions),
+        (before.hits, before.misses, before.evictions),
+        "extension store events stay out of the plan counters"
+    );
+
+    engine.clear_runtime_caches();
+    let cleared = engine.runtime_cache_stats();
+    assert_eq!((cleared.entries, cleared.retained_bytes), (0, 0));
+    let mut caches = engine.take_extension_caches();
+    assert!(caches.get::<u64>(&key).is_none());
+    engine.restore_extension_caches(caches);
+}

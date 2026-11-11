@@ -74,7 +74,10 @@ pub struct CudaEngine {
     ///
     /// The run takes this store out of the engine and puts it back afterwards, so anything an
     /// operation stores here is dropped at the end of the run it was created in.
-    pub(crate) extension_caches: std::cell::RefCell<tenferro_runtime::ExtensionCacheStore>,
+    ///
+    /// `None` only while the store is lent out, so a take moves it instead of building a
+    /// placeholder store (#2587).
+    pub(crate) extension_caches: std::cell::RefCell<Option<tenferro_runtime::ExtensionCacheStore>>,
     /// Resources a vendor call creates once per engine and reuses in every later session: a
     /// cuSOLVER handle, a cuBLAS handle, their stream bindings.
     ///
@@ -150,9 +153,9 @@ impl CudaEngine {
             runtime: CudaRuntime::new(device_id)?,
             cutensor: None,
             runtime_engine_id: default_runtime_engine_id(),
-            extension_caches: std::cell::RefCell::new(
+            extension_caches: std::cell::RefCell::new(Some(
                 tenferro_runtime::ExtensionCacheStore::default(),
-            ),
+            )),
             vendor_resources: std::cell::RefCell::new(
                 tenferro_runtime::ExtensionCacheStore::default(),
             ),
@@ -364,11 +367,20 @@ impl tenferro_runtime::ExecutionEngine for CudaEngine {
     }
 
     fn take_extension_caches(&mut self) -> tenferro_runtime::ExtensionCacheStore {
-        std::mem::take(&mut *self.extension_caches.borrow_mut())
+        let store = self.extension_caches.get_mut().take();
+        debug_assert!(
+            store.is_some(),
+            "extension caches taken twice without a restore"
+        );
+        // A second take is a caller logic error; release builds hand out an
+        // empty store so the engine stays usable.
+        store.unwrap_or_default()
     }
 
     fn restore_extension_caches(&mut self, caches: tenferro_runtime::ExtensionCacheStore) {
-        *self.extension_caches.borrow_mut() = caches;
+        let slot = self.extension_caches.get_mut();
+        debug_assert!(slot.is_none(), "extension caches restored without a take");
+        *slot = Some(caches);
     }
 
     fn mark_broken(&mut self) {
