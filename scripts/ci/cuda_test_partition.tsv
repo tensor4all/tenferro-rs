@@ -538,6 +538,7 @@ host	tenferro-ad::integration	signed_axes::negative_axes_equal_rank_minus_one_on
 host	tenferro-ad::prelude	prelude_calls_traced_ad_operation
 gpu	tenferro-einsum::integration	cuda_eager_tensor::cuda_eager_three_operand_einsum_stays_resident
 gpu	tenferro-einsum::integration	cuda_eager_tensor::cuda_einsum_ownership_copies_stay_resident
+host	tenferro-einsum	api::tests::registry::options_exist_exactly_for_the_operations_that_declare_them
 host	tenferro-einsum	broadcast::tests::broadcast_decision_only_counts_labels_shared_between_operands
 host	tenferro-einsum	broadcast::tests::classification_covers_every_known_and_symbolic_pairing
 host	tenferro-einsum	broadcast::tests::merge_keeps_equality_without_broadcast
@@ -777,7 +778,7 @@ host	tenferro-einsum	api::tests::registry::a_traced_input_from_another_trace_is_
 host	tenferro-einsum	api::tests::registry::an_invalid_spec_has_one_kind_and_cause_on_every_layer
 host	tenferro-einsum	api::tests::registry::api_docs_are_current
 host	tenferro-einsum	api::tests::registry::conjugation_mask_conjugates_the_selected_operands_on_every_layer
-host	tenferro-einsum	api::tests::registry::conjugation_mask_into_matches_owned_bit_for_bit_in_every_mode
+host	tenferro-einsum	api::tests::registry::conjugation_mask_into_matches_explicit_conjugation_bit_for_bit_in_every_mode
 host	tenferro-einsum	api::tests::registry::einsum_in_a_lane_is_unsupported_and_leaves_the_destination
 host	tenferro-einsum	api::tests::registry::einsum_into_honours_every_destination_mode
 host	tenferro-einsum	api::tests::registry::every_input_kind_returns_the_owned_result
@@ -843,6 +844,7 @@ host	tenferro-einsum::integration	traced_graph_cache::runtime_plan_cache_reuses_
 host	tenferro-einsum::integration	traced_graph_cache::trace_context_parse_cache_reuses_exact_notation
 host	tenferro-einsum::prelude	prelude_calls_concrete_einsum
 host	tenferro-einsum::prelude	prelude_calls_eager_einsum
+host	tenferro-fft	api::tests::registry::options_exist_exactly_for_the_operations_that_declare_them
 host	tenferro-fft	backend::tests::default_read_execution_preserves_owned_input_and_canonicalizes_a_view
 host	tenferro-fft	backend::tests::execution_cache_debug_identifies_both_owners_and_exposes_the_store
 host	tenferro-fft	backend::tests::trait_default_read_hooks_accept_input_pass_tensors_through_and_canonicalize_views
@@ -915,6 +917,7 @@ host	tenferro-fft	tests::checked_shape_product_rejects_overflow_before_allocatio
 host	tenferro-fft	tests::fft_infer_output_meta_rejects_invalid_trait_inputs_without_panicking
 host	tenferro-fft	tests::irfft_default_output_length_rejects_overflow
 host	tenferro-fft	tests::normalize_axis_handles_large_rank_without_isize_cast_wrap
+host	tenferro-fft	tests::out_of_range_axis_error_keeps_its_sign
 host	tenferro-fft	tests::symbolic_irfft_rejects_a_length_one_spectrum_like_the_concrete_path
 host	tenferro-fft	tests::symbolic_transform_length_rejects_zero_like_the_concrete_path
 host	tenferro-fft	api::tests::registry::an_fft_on_a_lane_engine_is_unsupported
@@ -1290,6 +1293,7 @@ gpu	tenferro-gpu::storage_provider_cuda_progress	cuda::cast_between_dtypes_conve
 gpu	tenferro-gpu::storage_provider_cuda_progress	cuda::cuda_runtime_rejects_a_foreign_allocation_domain_before_binding
 gpu	tenferro-gpu::storage_provider_cuda_progress	cuda::explicit_duplicate_has_new_identity_in_the_same_cuda_domain
 gpu	tenferro-gpu::warm_up	runtime_warm_up_runs_the_program_and_leaves_it_runnable
+host	tenferro-linalg	api::tests::registry::options_exist_exactly_for_the_operations_that_declare_them
 host	tenferro-linalg	cpu::backend::tests::host_narrowing_and_zero_like_cover_every_preset_scalar
 host	tenferro-linalg	cpu::backend::tests::host_operand_as_typed_refuses_a_dtype_the_dispatch_never_produces
 host	tenferro-linalg	cpu::backend::tests::host_operand_refuses_an_external_payload_by_operation
