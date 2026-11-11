@@ -75,6 +75,12 @@ pub type ADRuleResult<T> = std::result::Result<T, ADRuleError>;
 /// Indices are counted in primal-input order (input mask) and primal-output
 /// order (output mask).
 ///
+/// Individual indices ([`ResidualSpec::input`], [`ResidualSpec::with_input`],
+/// and the output counterparts) are limited to `0..64`. The all-index
+/// declarations ([`ResidualSpec::all_inputs`], [`ResidualSpec::with_all_inputs`],
+/// and the output counterparts) cover every index, including indices `>= 64`,
+/// so a variadic rule such as einsum or concatenate declares its whole arity.
+///
 /// # Examples
 ///
 /// ```
@@ -88,11 +94,33 @@ pub type ADRuleResult<T> = std::result::Result<T, ADRuleError>;
 /// // Unary ops that reuse the forward output (e.g. exp) declare it.
 /// let exp = ResidualSpec::output(0);
 /// assert!(exp.declares_output(0));
+/// // Variadic rules declare every operand, whatever the arity.
+/// let einsum = ResidualSpec::all_inputs();
+/// assert!(einsum.declares_input(0) && einsum.declares_input(64));
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResidualSpec {
+    /// Declared input indices `0..64`, one bit per index.
     input_mask: u64,
+    /// Declared output indices `0..64`, one bit per index.
     output_mask: u64,
+    /// Whether every input index `>= 64` is declared.
+    input_tail: bool,
+    /// Whether every output index `>= 64` is declared.
+    output_tail: bool,
+}
+
+/// One explicitly declared index as a mask bit.
+///
+/// An index outside `0..64` cannot be stored as a single bit. Shifting by it
+/// would overflow (a panic with overflow checks, a wrapped and therefore wrong
+/// bit without them), so it is refused in every build instead.
+const fn index_bit(index: usize) -> u64 {
+    assert!(
+        index < 64,
+        "ResidualSpec declares individual indices 0..64 only; use all_inputs/all_outputs"
+    );
+    1 << index
 }
 
 impl ResidualSpec {
@@ -101,83 +129,103 @@ impl ResidualSpec {
         Self {
             input_mask: 0,
             output_mask: 0,
+            input_tail: false,
+            output_tail: false,
         }
     }
 
     /// A mask declaring one input index as a tensor residual.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= 64`; declare such inputs with
+    /// [`ResidualSpec::all_inputs`].
     pub const fn input(index: usize) -> Self {
-        Self {
-            input_mask: 1 << index,
-            output_mask: 0,
-        }
+        Self::none().with_input(index)
     }
 
     /// A mask declaring one output index as a tensor residual.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= 64`; declare such outputs with
+    /// [`ResidualSpec::all_outputs`].
     pub const fn output(index: usize) -> Self {
-        Self {
-            input_mask: 0,
-            output_mask: 1 << index,
-        }
+        Self::none().with_output(index)
     }
 
     /// Add one input index to this mask.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= 64`; declare such inputs with
+    /// [`ResidualSpec::with_all_inputs`].
     pub const fn with_input(mut self, index: usize) -> Self {
-        self.input_mask |= 1 << index;
+        self.input_mask |= index_bit(index);
         self
     }
 
     /// Add one output index to this mask.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index >= 64`; declare such outputs with
+    /// [`ResidualSpec::with_all_outputs`].
     pub const fn with_output(mut self, index: usize) -> Self {
-        self.output_mask |= 1 << index;
+        self.output_mask |= index_bit(index);
         self
     }
 
-    /// Add every input index to this mask.
+    /// Add every input index, of any arity, to this mask.
     pub const fn with_all_inputs(mut self) -> Self {
         self.input_mask = u64::MAX;
+        self.input_tail = true;
         self
     }
 
-    /// Add every output index to this mask.
+    /// Add every output index, of any arity, to this mask.
     pub const fn with_all_outputs(mut self) -> Self {
         self.output_mask = u64::MAX;
+        self.output_tail = true;
         self
     }
 
-    /// A mask declaring every input index as a tensor residual.
+    /// A mask declaring every input index, of any arity, as a tensor residual.
     ///
     /// Used by rules whose required operand set depends on the active-input
     /// configuration (e.g. `mul`, concatenate, einsum), and by multi-op
     /// families whose individual ops collectively read any operand.
     pub const fn all_inputs() -> Self {
-        Self {
-            input_mask: u64::MAX,
-            output_mask: 0,
-        }
+        Self::none().with_all_inputs()
     }
 
-    /// A mask declaring every output index as a tensor residual.
+    /// A mask declaring every output index, of any arity, as a tensor residual.
     pub const fn all_outputs() -> Self {
-        Self {
-            input_mask: 0,
-            output_mask: u64::MAX,
-        }
+        Self::none().with_all_outputs()
     }
 
     /// Whether input `index` is declared as a tensor residual.
     pub const fn declares_input(&self, index: usize) -> bool {
-        index < 64 && (self.input_mask >> index) & 1 == 1
+        if index < 64 {
+            (self.input_mask >> index) & 1 == 1
+        } else {
+            self.input_tail
+        }
     }
 
     /// Whether output `index` is declared as a tensor residual.
     pub const fn declares_output(&self, index: usize) -> bool {
-        index < 64 && (self.output_mask >> index) & 1 == 1
+        if index < 64 {
+            (self.output_mask >> index) & 1 == 1
+        } else {
+            self.output_tail
+        }
     }
 
     /// Whether this mask declares no tensor residuals.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.input_mask == 0 && self.output_mask == 0
+        self.input_mask == 0 && self.output_mask == 0 && !self.input_tail && !self.output_tail
     }
 }
 
