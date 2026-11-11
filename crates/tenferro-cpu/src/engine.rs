@@ -308,7 +308,39 @@ impl CpuEngine {
         self.resources.thread_budget()
     }
 
-    pub(crate) fn dispatch_costs(&self) -> &threadteam::DispatchCosts {
+    /// The dispatch costs the engine's tokens use: those of its pool, or
+    /// [`threadteam::DispatchCosts::host_default`] for [`CpuEngine::serial`].
+    ///
+    /// Use them with [`CpuEngine::num_threads`] to decide, before taking a token
+    /// with [`CpuEngine::exec`], whether an operation would fork and at what
+    /// width. A token of an engine with a team ([`CpuEngine::has_team`]) charges
+    /// [`threadteam::DispatchCosts::cost`] of [`threadteam::DispatchKind::Team`]
+    /// for a section of two or more participants, so
+    /// [`threadteam::width_for_by`] and [`threadteam::pays_at`] over that cost
+    /// give the answer its `width_for` and `pays` would. A budget of one never
+    /// forks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use std::time::Duration;
+    /// use tenferro_cpu::threadteam::{width_for_by, DispatchKind};
+    ///
+    /// let pool = tenferro_cpu::Pool::builder().threads(2).build()?;
+    /// let engine = tenferro_cpu::CpuEngine::new(pool);
+    /// let budget = NonZeroUsize::new(engine.num_threads()).unwrap();
+    /// let cost = |width| engine.dispatch_costs().cost(DispatchKind::Team, width);
+    ///
+    /// // A nanosecond of work stays serial; a second of work uses the budget.
+    /// assert_eq!(width_for_by(Duration::from_nanos(1), 1, budget, cost).get(), 1);
+    /// assert_eq!(
+    ///     width_for_by(Duration::from_secs(1), 1, budget, cost).get(),
+    ///     engine.num_threads(),
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn dispatch_costs(&self) -> &threadteam::DispatchCosts {
         self.resources.dispatch_costs()
     }
 
