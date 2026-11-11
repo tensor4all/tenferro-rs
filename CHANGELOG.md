@@ -153,6 +153,23 @@ layer, generated from a per-family registry. The operation list, options,
   on `ShapeGuardFailure`, the extension-dispatch slot and the transpose
   primal-output keys.
 
+### Fixed
+
+- **`EinsumOptimize::False` contracts left to right again.** The plan resolved
+the `(0, 1)`-repeated JAX path through a resolver that appends a result to the
+end of the operand list instead of keeping it at the front, so from four
+operands on it contracted pairs of untouched inputs — `(0, 1)`, `(2, 3)`,
+`(4, 5)`, ... — and built an intermediate that the notation never mentions. On
+`"ij,jk,kl,lm,m->i"` (d=256, f64, serial engine) step 3 was a 256³ outer
+product, 128 MiB of intermediate, and the call took 186.9 ms instead of the
+3.33 ms the documented order costs (`"ij,jk,kl,lm,mn,no,o->i"`: 78.5 ms →
+5.52 ms). `EinsumPlanSpec::LeftToRight` now builds the fold directly; the
+`False` policy, its plan-cache identity and the extension payload are unchanged,
+and `EinsumOptimize::Path` keeps its documented append-at-end semantics. Results
+are bitwise identical to the same order written as an explicit `Path`, and can
+differ from a previous release in the last bits because the summation order
+changed.
+
 ## [0.11.0] - 2026-11-09
 
 0.10.0 stopped identifying one body of content: the crates on crates.io were

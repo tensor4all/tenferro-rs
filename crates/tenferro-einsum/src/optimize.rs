@@ -47,7 +47,15 @@ use crate::{
 pub enum EinsumOptimize {
     /// Automatic optimization via omeco TreeSA.
     Auto(ContractionOptimizerOptions),
-    /// No optimization: contract operands left-to-right.
+    /// No optimization: fold the operands left to right.
+    ///
+    /// Step 0 contracts inputs `0` and `1`; every later step contracts the running result with the
+    /// next input in written order, so the intermediate before step `k` is always the accumulated
+    /// contraction of inputs `0..=k`. The tree is resolved from the shapes at execution time, so
+    /// this policy is also usable with symbolic traced inputs.
+    ///
+    /// This is the predictable order, not a good one: [`Self::Auto`] usually finds a far cheaper
+    /// one. Use [`Self::Path`] when a specific order must be enforced.
     False,
     /// Parenthesized notation specifying contraction order.
     Nested(NestedEinsum),
@@ -149,14 +157,21 @@ pub(crate) fn resolve_plan_spec(
             ContractionTree::optimize_with_options(subscripts, shapes, options)
         }
         EinsumPlanSpec::LeftToRight => {
+            // Fold left: step 0 contracts inputs `0` and `1`; step `k` contracts the running result
+            // (`n + k - 1`) with input `k + 1`. Not the `(0, 1)`-repeated JAX path resolved through
+            // `jax_path_to_v1_pairs`: that resolver appends a result instead of keeping it at the
+            // front, which contracts pairs of untouched inputs and can build an outer product.
             let n = subscripts.inputs.len();
-            if n <= 1 {
-                ContractionTree::from_pairs(subscripts, shapes, &[])
-            } else {
-                let path: Vec<(usize, usize)> = (0..n - 1).map(|_| (0, 1)).collect();
-                let pairs = jax_path_to_v1_pairs(&path, n)?;
-                ContractionTree::from_pairs(subscripts, shapes, &pairs)
-            }
+            let pairs: Vec<(usize, usize)> = (0..n.saturating_sub(1))
+                .map(|step| {
+                    if step == 0 {
+                        (0, 1)
+                    } else {
+                        (step + 1, n + step - 1)
+                    }
+                })
+                .collect();
+            ContractionTree::from_pairs(subscripts, shapes, &pairs)
         }
         EinsumPlanSpec::Path(path) => {
             let pairs = jax_path_to_v1_pairs(path, subscripts.inputs.len())?;

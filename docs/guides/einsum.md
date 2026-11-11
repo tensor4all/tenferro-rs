@@ -378,6 +378,11 @@ This path is shape-independent and can be used with symbolic traced inputs.
 it requires concrete shapes and is converted to fixed contraction pairs when a
 concrete traced op is built.
 
+`EinsumOptimize::False` keeps the written order instead: the first step
+contracts the first two operands, and every later step folds the running result
+with the next operand. It is predictable, not cheap; the automatic plan is
+usually much faster.
+
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#einsum_17 -->
 ```rust
 use tenferro_einsum::{EinsumOptimize, EinsumOptions, TracedEinsumOps};
