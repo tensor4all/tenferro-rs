@@ -1585,19 +1585,9 @@ fn normalize_axis(op: &'static str, axis: isize, rank: usize) -> tenferro_tensor
             "FFT requires rank >= 1",
         ));
     }
-    let normalized = if axis >= 0 {
-        axis as usize
-    } else {
-        rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
-            tenferro_tensor::Error::axis_out_of_bounds(op, axis.unsigned_abs(), rank)
-        })?
-    };
-    if normalized >= rank {
-        return Err(tenferro_tensor::Error::axis_out_of_bounds(
-            op, normalized, rank,
-        ));
-    }
-    Ok(normalized)
+    // One shared normalization; the error keeps the caller's signed axis.
+    tenferro_tensor::normalize_axis(axis, rank)
+        .map_err(|source| tenferro_tensor::Error::validation(op, source))
 }
 
 /// Build the one-axis operation descriptor used by the eager builder, which
@@ -1960,6 +1950,19 @@ mod tests {
             usize::MAX - 1
         );
         assert!(normalize_axis("fft", isize::MIN, 3).is_err());
+    }
+
+    #[test]
+    fn out_of_range_axis_error_keeps_its_sign() {
+        for axis in [-5_isize, 5] {
+            match normalize_axis("fft", axis, 2) {
+                Err(tenferro_tensor::Error::Validation {
+                    source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: got, rank },
+                    ..
+                }) => assert_eq!((got, rank), (axis, 2)),
+                other => panic!("axis {axis}: expected AxisOutOfBounds, got {other:?}"),
+            }
+        }
     }
 
     #[test]
