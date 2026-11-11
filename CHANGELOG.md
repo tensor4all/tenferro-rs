@@ -110,7 +110,22 @@ layer, generated from a per-family registry. The operation list, options,
     `where_select` whose branch has another dtype reports `Error::Internal`;
     `convert` / `cast` accept any receiver and gather a non-owned one once.
 
+### Added
+
+- **`CpuEngine::dispatch_costs` is public** (#2590). The read-only accessor
+  returns the `threadteam::DispatchCosts` the engine's tokens use, so a caller
+  can decide with `num_threads` and threadteam's `width_for_by` / `pays_at`
+  whether an operation would fork before it takes a token with `exec`.
+
 ### Changed
+
+- **`CpuEngine`'s engine-wide cache controls cover its extension cache store**
+  (#2587). `runtime_cache_stats` adds the store's entries and retained bytes to
+  `entries` and `retained_bytes`; `hits`, `misses` and `evictions` stay the plan
+  cache's, and the store reports its own through `ExtensionCacheStore::stats`.
+  `clear_runtime_caches` also clears the store. `ExecutionEngine::take_extension_caches`
+  on `CpuEngine` and `CudaEngine` now moves the store out instead of building an
+  empty placeholder store, so a take/restore round trip no longer allocates.
 
 - **CUDA softplus is one fused launch** (#2530). `CudaEngine` now implements
   `Engine::fused_activation_read` for `softplus` on `F32`/`F64`, so concrete

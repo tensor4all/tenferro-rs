@@ -438,3 +438,23 @@ fn all_current_core_variants() -> Vec<(CoreSemanticOp, CpuPreparedKind)> {
         (CoreSemanticOp::ReduceMin { axes: vec![0] }, Reduction),
     ]
 }
+
+#[test]
+fn extension_store_round_trip_moves_the_store_without_a_placeholder() {
+    use tenferro_runtime::{ExecutionEngine, ExtensionCacheKey};
+
+    let mut engine = crate::CpuEngine::serial();
+    let key = ExtensionCacheKey::new("tenferro-cpu.test.extension-round-trip.v1", "entries", 3);
+    let mut caches = engine.take_extension_caches();
+    assert!(
+        engine.extension_caches.is_none(),
+        "a lent-out store leaves no placeholder store in the engine"
+    );
+    caches.put(key, 11_u64, 0);
+    engine.restore_extension_caches(caches);
+
+    let mut caches = engine.take_extension_caches();
+    assert_eq!(caches.get::<u64>(&key), Some(&11));
+    engine.restore_extension_caches(caches);
+    assert_eq!(engine.runtime_cache_stats().entries, 1);
+}

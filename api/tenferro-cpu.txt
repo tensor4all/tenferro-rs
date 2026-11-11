@@ -39,6 +39,7 @@ pub fn tenferro_cpu::CpuEngine::buffer_pool_cache_stats(&self) -> tenferro_tenso
 pub fn tenferro_cpu::CpuEngine::buffer_pool_len(&self) -> usize
 pub fn tenferro_cpu::CpuEngine::buffer_pool_limit_bytes(&self) -> usize
 pub fn tenferro_cpu::CpuEngine::buffer_pool_stats(&self) -> tenferro_cpu_basic::buffer_pool::BufferPoolStats
+pub fn tenferro_cpu::CpuEngine::dispatch_costs(&self) -> &threadteam::cost::DispatchCosts
 pub fn tenferro_cpu::CpuEngine::exec(&mut self) -> tenferro_tensor::error::Result<tcontract_exec::exec::Exec<'_>>
 pub fn tenferro_cpu::CpuEngine::has_team(&self) -> bool
 pub fn tenferro_cpu::CpuEngine::is_broken(&self) -> bool

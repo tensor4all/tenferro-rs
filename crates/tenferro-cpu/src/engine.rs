@@ -73,7 +73,10 @@ pub struct CpuEngine {
     /// Runtime engine id this engine runs prepared programs as.
     pub(crate) runtime_engine_id: tenferro_runtime::EngineId,
     /// Extension caches the runtime lends to extension executors during a run.
-    pub(crate) extension_caches: tenferro_runtime::ExtensionCacheStore,
+    ///
+    /// `None` only while the store is lent out, so a take moves it instead of
+    /// building a placeholder store (#2587).
+    pub(crate) extension_caches: Option<tenferro_runtime::ExtensionCacheStore>,
 }
 
 impl std::fmt::Debug for CpuEngine {
@@ -99,7 +102,7 @@ impl CpuEngine {
             runtime_clears: 0,
             broken: false,
             runtime_engine_id: crate::runtime_adapter::default_runtime_engine_id(),
-            extension_caches: tenferro_runtime::ExtensionCacheStore::default(),
+            extension_caches: Some(tenferro_runtime::ExtensionCacheStore::default()),
         }
     }
 
@@ -305,7 +308,39 @@ impl CpuEngine {
         self.resources.thread_budget()
     }
 
-    pub(crate) fn dispatch_costs(&self) -> &threadteam::DispatchCosts {
+    /// The dispatch costs the engine's tokens use: those of its pool, or
+    /// [`threadteam::DispatchCosts::host_default`] for [`CpuEngine::serial`].
+    ///
+    /// Use them with [`CpuEngine::num_threads`] to decide, before taking a token
+    /// with [`CpuEngine::exec`], whether an operation would fork and at what
+    /// width. A token of an engine with a team ([`CpuEngine::has_team`]) charges
+    /// [`threadteam::DispatchCosts::cost`] of [`threadteam::DispatchKind::Team`]
+    /// for a section of two or more participants, so
+    /// [`threadteam::width_for_by`] and [`threadteam::pays_at`] over that cost
+    /// give the answer its `width_for` and `pays` would. A budget of one never
+    /// forks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use std::time::Duration;
+    /// use tenferro_cpu::threadteam::{width_for_by, DispatchKind};
+    ///
+    /// let pool = tenferro_cpu::Pool::builder().threads(2).build()?;
+    /// let engine = tenferro_cpu::CpuEngine::new(pool);
+    /// let budget = NonZeroUsize::new(engine.num_threads()).unwrap();
+    /// let cost = |width| engine.dispatch_costs().cost(DispatchKind::Team, width);
+    ///
+    /// // A nanosecond of work stays serial; a second of work uses the budget.
+    /// assert_eq!(width_for_by(Duration::from_nanos(1), 1, budget, cost).get(), 1);
+    /// assert_eq!(
+    ///     width_for_by(Duration::from_secs(1), 1, budget, cost).get(),
+    ///     engine.num_threads(),
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn dispatch_costs(&self) -> &threadteam::DispatchCosts {
         self.resources.dispatch_costs()
     }
 
@@ -644,7 +679,13 @@ impl CpuEngine {
     }
 
     /// Aggregate statistics of everything this engine retains between
-    /// operations: buffers, contraction scratch and its plan cache.
+    /// operations: buffers, contraction scratch, its plan cache and its
+    /// extension cache store.
+    ///
+    /// `entries` and `retained_bytes` cover all of them. `hits`, `misses` and
+    /// `evictions` are the plan cache's alone; the extension store reports its
+    /// own through [`ExtensionCacheStore::stats`](tenferro_runtime::ExtensionCacheStore::stats).
+    /// While a run has the extension store lent out, it is not counted.
     ///
     /// # Examples
     ///
@@ -657,15 +698,22 @@ impl CpuEngine {
         let workspace_bytes = nary_bytes.saturating_add(self.resources.retained_bytes());
         let buffers = self.buffers.cache_stats();
         let plans = self.plans.stats();
+        let (extension_entries, extension_bytes) =
+            self.extension_caches.as_ref().map_or((0, 0), |store| {
+                let stats = store.stats(tenferro_runtime::ExtensionCacheSelector::All);
+                (stats.entries, stats.retained_bytes)
+            });
         CacheStats {
             entries: buffers
                 .entries
                 .saturating_add(plans.entries)
-                .saturating_add(workspace_entries),
+                .saturating_add(workspace_entries)
+                .saturating_add(extension_entries),
             retained_bytes: buffers
                 .retained_bytes
                 .saturating_add(plans.retained_bytes)
-                .saturating_add(workspace_bytes),
+                .saturating_add(workspace_bytes)
+                .saturating_add(extension_bytes),
             hits: plans.hits,
             misses: plans.misses,
             evictions: plans.evictions,
@@ -673,8 +721,9 @@ impl CpuEngine {
         }
     }
 
-    /// Drop everything this engine retains between operations, including its
-    /// plan cache (and therefore the plans of every engine sharing it).
+    /// Drop everything this engine retains between operations: buffers,
+    /// contraction scratch, its extension cache store and its plan cache (and
+    /// therefore the plans of every engine sharing it).
     ///
     /// # Examples
     ///
@@ -687,6 +736,9 @@ impl CpuEngine {
     pub fn clear_runtime_caches(&mut self) {
         self.reset_buffer_pool();
         self.plans.clear();
+        if let Some(store) = self.extension_caches.as_mut() {
+            store.clear();
+        }
         self.runtime_clears = self.runtime_clears.saturating_add(1);
     }
 }
