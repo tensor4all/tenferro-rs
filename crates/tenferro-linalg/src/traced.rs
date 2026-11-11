@@ -159,6 +159,21 @@ pub trait TracedTensorLinalgExt {
     ///
     /// Concrete square-shape validation and solver failures may be reported at
     /// compile or execution time.
+    ///
+    /// # AD caveat
+    ///
+    /// At an exactly degenerate eigenvalue the decomposition is not smooth: the
+    /// eigenvectors are not, and neither is a single eigenvalue as a function of
+    /// the matrix. For a smooth scalar spectral function `T(K) = tr t(K)` the
+    /// first derivative is nevertheless correct for every spectrum. Second and
+    /// higher derivatives are not: the eigenvector term is weighted by
+    /// `Δ/(Δ² + ε²)`, which is exactly zero at `Δ = 0`, so an HVP such as
+    /// `jvp(grad(T))` silently drops the contribution an exactly degenerate
+    /// eigenvalue pair makes when the tangent couples it. No error and no `NaN`
+    /// is reported; the returned value is simply wrong. The missing term is the
+    /// confluent limit of the divided difference, which involves `t`, so no
+    /// value of the derivative epsilon recovers it. See `linalg_ad_support`
+    /// (feature `autodiff`).
     fn eigh(&self) -> Result<(TracedTensor, TracedTensor)>;
 
     /// Build a traced Hermitian eigendecomposition with explicit options.
@@ -353,6 +368,20 @@ pub trait TracedTensorLinalgExt {
     ///
     /// A known non-square input is rejected when the backend executes the
     /// factorization; solver failures may also be reported during execution.
+    ///
+    /// # AD caveat
+    ///
+    /// A single eigenvalue is not a smooth function of the matrix at an exact
+    /// degeneracy, and the first derivative of `eigvalsh` itself inherits that.
+    /// For a smooth scalar spectral function `T(K) = tr t(K)` the first
+    /// derivative is nevertheless correct for every spectrum. Second and higher
+    /// derivatives are not: `jvp(grad(T))` differentiates the `eigh` eigenvector
+    /// term, whose pair weight is `Δ/(Δ² + ε²)` and is exactly zero at `Δ = 0`,
+    /// so an exactly degenerate pair that the tangent couples contributes
+    /// nothing. No error and no `NaN` is reported; the returned value is simply
+    /// wrong. The missing term is the confluent limit of the divided difference,
+    /// which involves `t`, so no value of the derivative epsilon recovers it.
+    /// See `linalg_ad_support` (feature `autodiff`).
     fn eigvalsh(&self) -> Result<TracedTensor>;
 
     /// Build a traced general eigenvalue-only operation.

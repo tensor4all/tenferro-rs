@@ -173,3 +173,7 @@ path = "tests/cpu_linalg_allocation.rs"
 name = "small_linalg_allocation"
 path = "tests/small_linalg_allocation.rs"
 
+[[example]]
+name = "eigh_hvp_degenerate_pair"
+path = "examples/eigh_hvp_degenerate_pair.rs"
+required-features = ["autodiff"]
