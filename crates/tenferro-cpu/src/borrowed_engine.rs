@@ -576,6 +576,36 @@ impl CpuEngine {
     /// assert_eq!(engine.num_threads(), 2);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    ///
+    /// A lane engine does not outlive the call: it cannot be returned from the closure or
+    /// stored in a captured variable.
+    ///
+    /// ```compile_fail
+    /// use tenferro_cpu::linalg_interop::BufferPool;
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_tensor::Engine;
+    ///
+    /// // `Send` is asserted by hand so that the only remaining error is the lifetime: the lane
+    /// // engine is valid for one call of the closure only ("lifetime may not live long enough").
+    /// struct Escaped<'a>(&'a mut dyn Engine);
+    /// unsafe impl Send for Escaped<'_> {}
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let mut pools = [BufferPool::new()];
+    /// let _ = engine.with_lanes(&[1], &mut pools, |_, lane| Escaped(lane));
+    /// ```
+    ///
+    /// The pools are borrowed for the whole call, so a pool cannot be dropped or moved while
+    /// the lanes run.
+    ///
+    /// ```compile_fail,E0505
+    /// use tenferro_cpu::linalg_interop::BufferPool;
+    /// use tenferro_cpu::CpuEngine;
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let mut pools = [BufferPool::new()];
+    /// let _ = engine.with_lanes(&[1], &mut pools, |_, _| drop(pools));
+    /// ```
     pub fn with_lanes<R: Send>(
         &mut self,
         shares: &[usize],
