@@ -298,6 +298,38 @@ mod in_place {
     }
 
     #[test]
+    fn in_place_rejects_a_tensor_from_another_runtime_and_returns_it() -> TestResult<()> {
+        let mut e = CpuEngine::serial();
+        let (a, b) = (EagerRuntime::new()?, EagerRuntime::new()?);
+        let x = EagerTensor::from_tensor_in(complex()?, b.clone())?;
+        let before = tensor_bits(&x.to_tensor(&mut e)?)?;
+        let outcome = a.with_eager_session(&mut e, |s| {
+            let out_of_place = s.fft(&x).map(|_| ()).expect_err("foreign tensor");
+            let rejected = s
+                .fft_in_place(x, &FftOptions::default())
+                .expect_err("foreign tensor");
+            Ok::<_, tenferro_ad::Error>((out_of_place, rejected))
+        })?;
+        let (out_of_place, rejected) = outcome;
+        assert!(
+            matches!(out_of_place, tenferro_ad::Error::ContextMismatch { .. }),
+            "{out_of_place}"
+        );
+        match rejected {
+            EagerFftInPlaceError::Rejected { input, source } => {
+                assert!(
+                    matches!(source, tenferro_ad::Error::ContextMismatch { .. }),
+                    "{source}"
+                );
+                assert!(input.same_context(&EagerTensor::from_tensor_in(complex()?, b)?));
+                assert_eq!(tensor_bits(&input.to_tensor(&mut e)?)?, before);
+            }
+            other => panic!("expected Rejected, got {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn an_accepted_in_place_transform_equals_the_out_of_place_one() -> TestResult<()> {
         let mut e = CpuEngine::serial();
         let want =

@@ -106,6 +106,12 @@ pub(crate) fn in_place(
     operation: FftOperation,
     o: &FftOptions,
 ) -> std::result::Result<T, EagerFftInPlaceError> {
+    if let Err(source) = tenferro_ad::extension::ensure_session_owns(s, &x) {
+        return Err(EagerFftInPlaceError::Rejected {
+            input: Box::new(x),
+            source,
+        });
+    }
     if let Some(n) = o.n {
         return Err(EagerFftInPlaceError::Rejected {
             input: Box::new(x),
