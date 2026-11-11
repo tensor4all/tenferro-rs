@@ -37,22 +37,22 @@ suffix: it is a receiver type, an options field or a `Dest` value.
 | `svd` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `svd`, `svd_with` |
 | `svdvals` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `svdvals`, `svdvals_with` |
 | `qr` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `qr`, `qr_with` |
-| `householder_qr` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `householder_qr`, `householder_qr_with` |
+| `householder_qr` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `householder_qr` |
 | `rank_revealing_qr` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `rank_revealing_qr`, `rank_revealing_qr_with` |
-| `lu` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `lu`, `lu_with` |
-| `full_piv_lu` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `full_piv_lu`, `full_piv_lu_with` |
-| `full_piv_lu_solve` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `full_piv_lu_solve`, `full_piv_lu_solve_with` |
-| `solve` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `solve`, `solve_with`, `solve_into` (overwrite) |
-| `lstsq` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `lstsq`, `lstsq_with` |
+| `lu` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `lu` |
+| `full_piv_lu` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `full_piv_lu` |
+| `full_piv_lu_solve` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `full_piv_lu_solve` |
+| `solve` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `solve`, `solve_into` (overwrite) |
+| `lstsq` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `lstsq` |
 | `triangular_solve` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `triangular_solve`, `triangular_solve_with` |
 | `cholesky` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `cholesky`, `cholesky_with` |
-| `eig` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `eig`, `eig_with` |
-| `eigvals` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `eigvals`, `eigvals_with` |
+| `eig` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `eig` |
+| `eigvals` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `eigvals` |
 | `eigh` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `eigh`, `eigh_with` |
 | `eigvalsh` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `eigvalsh`, `eigvalsh_with` |
-| `slogdet` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `slogdet`, `slogdet_with` |
-| `det` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `det`, `det_with` |
-| `inv` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `inv`, `inv_with` |
+| `slogdet` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `slogdet` |
+| `det` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `det` |
+| `inv` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `inv` |
 | `pinv` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `pinv`, `pinv_with` |
 | `norm` | LinalgOps | TracedLinalgOps | EagerLinalgOps | `norm`, `norm_with` |
 
@@ -98,7 +98,7 @@ Thin QR factorization `a = q r`.
 
 Compact Householder QR: an opaque factorization state from which `r` and `q_columns` are extracted.
 
-- Options: `HouseholderQrOptions`
+- Options: none
 - Output: `HouseholderQr<V>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64.
 - Layout: The compact factorization takes a compact operand: an owned tensor is read in place, any other operand (a view or a typed tensor) is first made compact by the backend (same placement and dtype). Operands stay on their device; nothing is transferred.
@@ -122,7 +122,7 @@ Column-pivoted QR with a numerical rank: `q`, `r`, `column_permutation` and `ran
 
 Partial-pivot LU `a = p l u`; `p` is a permutation matrix and `parity` is the real sign of the permutation.
 
-- Options: `LuOptions`
+- Options: none
 - Output: `Lu<V>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `p`, `l`, `u` and `parity` (+1 or -1) have the dtype of `a`.
 - Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
@@ -134,7 +134,7 @@ Partial-pivot LU `a = p l u`; `p` is a permutation matrix and `parity` is the re
 
 Complete-pivot LU `a = p l u q`; `p` and `q` are permutation matrices and `parity` is the real sign of the permutations.
 
-- Options: `FullPivLuOptions`
+- Options: none
 - Output: `FullPivLu<V, R>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `p`, `l`, `u` and `q` have the dtype of `a`; `parity` (+1 or -1) is real for an owned `Tensor` and has the dtype of `a` on the borrowed route (#2552 Q21).
 - Layout: A rank-2 matrix with non-negative strides is read in place by the faer route (every CPU build); a negative stride or a batched input (rank >= 3) is gathered once into a compact buffer of the same placement and dtype. Operands stay on their device; nothing is transferred.
@@ -147,7 +147,7 @@ Complete-pivot LU `a = p l u q`; `p` and `q` are permutation matrices and `parit
 
 Solves `a x = b` through the complete-pivot LU of `a`; a rank-deficient system is rejected.
 
-- Options: `FullPivLuSolveOptions`
+- Options: none
 - Output: `V`
 - Dtypes: `a` and `b`: the same dtype, one of f32, f64, Complex32 or Complex64. `x` has that dtype.
 - Layout: `a` and `b` that are not owned compact tensors (views, typed tensors) are first made compact (same placement and dtype); owned tensors are read in place. Operands stay on their device; nothing is transferred.
@@ -159,7 +159,7 @@ Solves `a x = b` through the complete-pivot LU of `a`; a rank-deficient system i
 
 Solves `a x = b` with a partial-pivot LU of `a`; `solve_into` overwrites a destination.
 
-- Options: `SolveOptions`
+- Options: none
 - Output: `V`
 - Dtypes: `a` and `b`: the same dtype, one of f32, f64, Complex32 or Complex64. `x` has that dtype.
 - Layout: A rank-2 `a` with a rank-1 or rank-2 non-empty `b` is read in place (`b` is gathered straight into the right-hand side); any other shape or layout is gathered once into compact buffers of the same placement and dtype. `solve_into` writes the solution into `dest` directly when `dest` is a column-major matrix of the shape of `b`; otherwise it computes the solution and copies it in. Operands and `dest` must be on the same device; nothing is transferred.
@@ -172,7 +172,7 @@ Solves `a x = b` with a partial-pivot LU of `a`; `solve_into` overwrites a desti
 
 Least-squares solution of `a x = b` for a tall or square, full-column-rank `a` (thin QR, then a triangular solve).
 
-- Options: `LstsqOptions`
+- Options: none
 - Output: `V`
 - Dtypes: `a` and `b`: the same dtype, one of f32, f64, Complex32 or Complex64. `x` has that dtype.
 - Layout: `a` is read like `qr` reads it (rank-2 with non-negative strides in place, otherwise gathered once into a compact buffer of the same placement and dtype); `b` is read in place by the contraction. Operands stay on their device; nothing is transferred.
@@ -211,7 +211,7 @@ Lower Cholesky factor `l` of a Hermitian positive-definite matrix, `a = l l^H`.
 
 General eigendecomposition `a v = v diag(values)`; eigenvectors have unit 2-norm.
 
-- Options: `EigOptions`
+- Options: none
 - Output: `Eig<C>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `values` and `vectors` are complex (Complex32 for f32 and Complex32 input, Complex64 otherwise).
 - Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
@@ -223,7 +223,7 @@ General eigendecomposition `a v = v diag(values)`; eigenvectors have unit 2-norm
 
 Eigenvalues of a general matrix, as complex numbers.
 
-- Options: `EigvalsOptions`
+- Options: none
 - Output: `C`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result is complex.
 - Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
@@ -258,7 +258,7 @@ Eigenvalues of a Hermitian matrix (the lower triangle is read), real and ascendi
 
 Sign and natural log of the absolute determinant of a square matrix.
 
-- Options: `SlogdetOptions`
+- Options: none
 - Output: `Slogdet<V, R>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `sign` has the dtype of `a`; `log_abs_det` is real.
 - Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
@@ -270,7 +270,7 @@ Sign and natural log of the absolute determinant of a square matrix.
 
 Determinant of a square matrix, computed as `sign * exp(log_abs_det)`.
 
-- Options: `DetOptions`
+- Options: none
 - Output: `V`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result has the dtype of `a`.
 - Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
@@ -282,7 +282,7 @@ Determinant of a square matrix, computed as `sign * exp(log_abs_det)`.
 
 Inverse of a square matrix (a solve against the identity).
 
-- Options: `InvOptions`
+- Options: none
 - Output: `V`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result has the dtype of `a`.
 - Layout: A rank-2 `a` is read in place by the solve (the identity right-hand side is allocated compact); any other shape or layout is gathered once into a compact buffer of the same placement and dtype. Operands stay on their device; nothing is transferred.
@@ -353,7 +353,7 @@ Vector or matrix norm over the chosen axes, selected by `NormOrd`.
 | `pow` | CoreOps | described | described | `pow` |
 | `maximum` | CoreOps | described | described | `maximum` |
 | `minimum` | CoreOps | described | described | `minimum` |
-| `add` | CoreOps | described | described | `add`, `add_with`, `add_into` (overwrite) |
+| `add` | CoreOps | described | described | `add`, `add_into` (overwrite) |
 | `matmul` | CoreOps | described | described | `matmul` |
 | `compare` | CoreOps | described | described | `compare` |
 | `clamp` | CoreOps | described | described | `clamp` |
@@ -692,13 +692,13 @@ Elementwise minimum with broadcasting.
 
 Elementwise sum with broadcasting.
 
-- Options: `AddOptions`
+- Options: none
 - Output: `V`
 - Dtypes: Both operands share a numeric dtype; the result has that dtype.
 - Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `add_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
-  - traced and eager: only `add`; `add_with` and `add_into` exist on the concrete layer
+  - traced and eager: only `add`; `add_into` exists on the concrete layer
 
 ### matmul
 
@@ -1233,12 +1233,12 @@ Zero-pad a signed axis to the size of a reference tensor.
 
 | ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |
 |---|---|---|---|---|---|---|---|---|
-| E03 | retained | `tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache`<br>`tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats` | plan-cache owner methods of the concrete einsum plan | cache owner \| inherent method | `tenferro_einsum::concrete` | a cache owner exposes its cache; these are not tensor operations | the einsum registry tests and the cache tests of tenferro-einsum | kept while ConcreteEinsumPlan owns a CPU cache |
+| E03 | retained | `tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache`<br>`tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats` | plan-cache owner methods of the concrete einsum plan (clearing and inspecting the cache) | cache owner \| inherent method | `tenferro_einsum::concrete` | the plan owns its CPU numerical descriptor cache; a cache owner exposes its cache, and clearing or inspecting it is not a tensor operation and has no options, inputs or destination | the einsum registry tests, the cache tests and the doctests of both methods; the plan's execute/execute_into follow the grammar (inputs, exec, dest) | kept while ConcreteEinsumPlan owns a CPU cache |
 | E04 | retained | `tenferro_runtime::TraceContext`<br>`tenferro_runtime::GraphCompiler::compile`<br>`tenferro_runtime::GraphCompiler::compile_many`<br>`tenferro_runtime::Runtime::prepare`<br>`tenferro_runtime::Runtime::run`<br>`tenferro_runtime::TraceContext::finish` | trace, compile, prepare and run lifecycle | lifecycle \| builder | `tenferro_runtime::{trace, graph, runtime}` | program construction and execution are not tensor operations; their shapes are fixed by the public API snapshot (api/) | scripts/api-snapshot.sh --check and the runtime lifecycle tests | kept |
-| E05 | retained | `tenferro_tensor::Tensor::shape`<br>`tenferro_tensor::Tensor::dtype`<br>`tenferro_tensor::Tensor::into_dynamic`<br>`tenferro_tensor::TypedTensor::as_view`<br>`tenferro_tensor::TypedTensorView::transpose_view`<br>`tenferro_tensor::TypedTensorView::slice_view`<br>`tenferro_runtime::TracedTensor::rank`<br>`tenferro_runtime::TracedTensor::sym_size`<br>`tenferro_runtime::TracedTensor::axis_sym_dim`<br>`tenferro_runtime::TracedTensor::shape_of` | descriptor-only operations and metadata queries | metadata \| view | `tenferro_tensor, tenferro_runtime::traced` | they never touch element data, so they take no engine and are not operations of the grammar | tenferro-runtime `metadata_queries_and_views_do_not_copy` (pointer identity) | kept |
+| E05 | retained | `tenferro_tensor::Tensor::shape`<br>`tenferro_tensor::Tensor::dtype`<br>`tenferro_tensor::TypedTensor::as_view`<br>`tenferro_tensor::TypedTensorView::transpose_view`<br>`tenferro_tensor::TypedTensorView::slice_view`<br>`tenferro_runtime::TracedTensor::rank`<br>`tenferro_runtime::TracedTensor::sym_size`<br>`tenferro_runtime::TracedTensor::axis_sym_dim`<br>`tenferro_runtime::TracedTensor::shape_of` | descriptor-only operations and metadata queries | metadata \| view | `tenferro_tensor, tenferro_runtime::traced` | they never touch element data, so they take no engine and are not operations of the grammar | tenferro-runtime `metadata_queries_and_views_do_not_copy` (pointer identity) | kept |
 | E06 | retained | `tenferro_cpu::with_borrowed_cpu_engine`<br>`tenferro_tensor::Dest::into_accumulation`<br>`num_complex::Complex` | approved external types and owner-scoped doc-hidden bridges | bridge \| external type | `tenferro_cpu, tenferro_tensor::dest` | the lane bridge lets tenferro-linalg reach the lane engine (#2552 S2b); into_accumulation maps a Dest to the backend accumulation descriptor (#2552 Q3); num_complex is the public complex scalar | listed symbol by symbol in api/allowlist.txt; the bridges are #[doc(hidden)] | kept while the owners need the bridge |
-| E09 | retained | `tenferro_einsum::Error`<br>`tenferro_einsum::PlanningError`<br>`tenferro_einsum::parse_einsum_subscripts`<br>`tenferro_einsum::parse_einsum_notation`<br>`tenferro_linalg::Error`<br>`tenferro_ad::EagerFftInPlaceError` | domain errors of parsers and planners, and failures that return ownership | error \| domain | `the owning family crates` | parsers and planners report domain errors; the operations wrap them as the `source()` of the layer error | the error-cause tests of each family | kept |
-| E10 | retained | `tenferro_tensor::Engine`<br>`tenferro_tensor::TensorDot`<br>`tenferro_tensor::TensorDot::dot_general_read_into_accum`<br>`tenferro_tensor::TensorElementwise::axpby_read_into_accum`<br>`tenferro_linalg::LinalgBackend`<br>`tenferro_fft::FftBackend` | backend and provider traits and their read/accumulate hooks | provider contract \| trait | `tenferro_tensor::backend and the family backends` | a provider-facing contract, not the user grammar; `*_read` and `*_read_into_accum` name backend hooks | the backend contract tests of each crate | kept |
+| E09 | retained | `tenferro_einsum::Error`<br>`tenferro_einsum::PlanningError`<br>`tenferro_einsum::parse_einsum_subscripts`<br>`tenferro_einsum::parse_einsum_notation`<br>`tenferro_einsum::ContractionTree::optimize`<br>`tenferro_einsum::ContractionTree::optimize_with_options`<br>`tenferro_einsum::ContractionTree::from_pairs`<br>`tenferro_linalg::Error`<br>`tenferro_fft::EagerFftInPlaceError` | domain errors of parsers and planners (einsum parser and contraction planner), and failures that return ownership | error \| domain | `the owning family crates` | parsers and planners report einsum-domain errors; the grammar's operations wrap them (concrete: tenferro_tensor::Error::Extension, traced/eager: tenferro_runtime::Error::Extension) as the `source()` of the layer error | the error-cause tests of each family; the einsum error-cause tests reach tenferro_einsum::Error::InvalidSubscripts through source() on all three layers | kept |
+| E10 | retained | `tenferro_tensor::Engine`<br>`tenferro_tensor::TensorDot`<br>`tenferro_tensor::TensorDot::dot_general_read_into_accum`<br>`tenferro_tensor::Engine::axpby_read_into_accum`<br>`tenferro_linalg::LinalgBackend`<br>`tenferro_fft::FftBackend` | backend and provider traits and their read/accumulate hooks | provider contract \| trait | `tenferro_tensor::backend and the family backends` | a provider-facing contract, not the user grammar; `*_read` and `*_read_into_accum` name backend hooks | the backend contract tests of each crate | kept |
 
 <!-- api-ops:core:end -->
 
@@ -1248,7 +1248,7 @@ Zero-pad a signed axis to the size of a reference tensor.
 | Op | concrete | concrete_tensordot | traced | traced_tensordot | eager | Suffixes |
 |---|---|---|---|---|---|---|
 | `einsum` | EinsumOps | — | TracedEinsumOps | — | EagerEinsumOps | `einsum`, `einsum_with`, `einsum_into` (overwrite, accumulate, scaled) |
-| `tensordot` | — | TensordotOps | — | TracedTensordotOps | EagerEinsumOps | `tensordot`, `tensordot_with` |
+| `tensordot` | — | TensordotOps | — | TracedTensordotOps | EagerEinsumOps | `tensordot` |
 
 ### einsum
 
@@ -1268,7 +1268,7 @@ Einstein summation over N inputs: contract, trace, transpose, reduce and broadca
 
 Contract `a` with `b` over the given axis pairs (or the last/first `n` axes); free axes of `a` come first.
 
-- Options: `TensordotOptions`
+- Options: none
 - Output: `V`
 - Dtypes: `a` and `b` have the same dtype; the result has it too.
 - Layout: Lowered to one dot_general, which reads strided operands in place; an operand that the provider cannot read is packed once into a compact buffer of the same placement and dtype.

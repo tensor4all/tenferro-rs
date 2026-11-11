@@ -460,20 +460,6 @@ pub use tenferro_runtime::prelude::Engine
 pub use tenferro_runtime::prelude::Tensor
 pub use tenferro_runtime::prelude::TensorScalar
 pub use tenferro_runtime::prelude::TypedTensor
-#[non_exhaustive] pub struct tenferro_runtime::prelude::AddOptions
-impl core::clone::Clone for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::clone(&self) -> tenferro_runtime::AddOptions
-impl core::cmp::Eq for tenferro_runtime::AddOptions
-impl core::cmp::PartialEq for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::eq(&self, &tenferro_runtime::AddOptions) -> bool
-impl core::default::Default for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::default() -> tenferro_runtime::AddOptions
-impl core::fmt::Debug for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::hash::Hash for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::hash<__H: core::hash::Hasher>(&self, &mut __H)
-impl core::marker::Copy for tenferro_runtime::AddOptions
-impl core::marker::StructuralPartialEq for tenferro_runtime::AddOptions
 pub struct tenferro_runtime::prelude::GraphCompiler
 impl tenferro_runtime::GraphCompiler
 pub fn tenferro_runtime::GraphCompiler::cache_stats(&self) -> tenferro_tensor::cache::CacheStats
@@ -673,8 +659,7 @@ pub fn &tenferro_runtime::traced::TracedTensor::sub(self, &tenferro_runtime::tra
 pub trait tenferro_runtime::prelude::CoreOps: tenferro_tensor::view::AsView
 pub fn tenferro_runtime::prelude::CoreOps::abs(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_runtime::CoreRepr>::Real> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn tenferro_runtime::prelude::CoreOps::add(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
-pub fn tenferro_runtime::prelude::CoreOps::add_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_runtime::AddOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_runtime::CoreRepr
-pub fn tenferro_runtime::prelude::CoreOps::add_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_runtime::AddOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
+pub fn tenferro_runtime::prelude::CoreOps::add_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn tenferro_runtime::prelude::CoreOps::broadcast_in_dim(&self, &[usize], &[usize], &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn tenferro_runtime::prelude::CoreOps::cast(&self, tenferro_tensor_core::DType, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn tenferro_runtime::prelude::CoreOps::clamp(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
@@ -741,8 +726,7 @@ pub fn tenferro_runtime::prelude::CoreOps::where_select<Y: tenferro_runtime::Sel
 impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_runtime::CoreOps for X
 pub fn X::abs(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_runtime::CoreRepr>::Real> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn X::add(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
-pub fn X::add_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_runtime::AddOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_runtime::CoreRepr
-pub fn X::add_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_runtime::AddOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
+pub fn X::add_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn X::broadcast_in_dim(&self, &[usize], &[usize], &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn X::cast(&self, tenferro_tensor_core::DType, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn X::clamp(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
@@ -4004,20 +3988,6 @@ pub fn tenferro_runtime::UnsupportedReason::fmt(&self, &mut core::fmt::Formatter
 impl core::hash::Hash for tenferro_runtime::UnsupportedReason
 pub fn tenferro_runtime::UnsupportedReason::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for tenferro_runtime::UnsupportedReason
-#[non_exhaustive] pub struct tenferro_runtime::AddOptions
-impl core::clone::Clone for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::clone(&self) -> tenferro_runtime::AddOptions
-impl core::cmp::Eq for tenferro_runtime::AddOptions
-impl core::cmp::PartialEq for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::eq(&self, &tenferro_runtime::AddOptions) -> bool
-impl core::default::Default for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::default() -> tenferro_runtime::AddOptions
-impl core::fmt::Debug for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::hash::Hash for tenferro_runtime::AddOptions
-pub fn tenferro_runtime::AddOptions::hash<__H: core::hash::Hasher>(&self, &mut __H)
-impl core::marker::Copy for tenferro_runtime::AddOptions
-impl core::marker::StructuralPartialEq for tenferro_runtime::AddOptions
 pub struct tenferro_runtime::CacheOwnerError
 impl tenferro_runtime::CacheOwnerError
 pub fn tenferro_runtime::CacheOwnerError::new(alloc::sync::Arc<(dyn core::error::Error + core::marker::Send + core::marker::Sync)>) -> Self
@@ -5255,8 +5225,7 @@ pub fn tenferro_runtime::TransferRequest<'a>::fmt(&self, &mut core::fmt::Formatt
 pub trait tenferro_runtime::CoreOps: tenferro_tensor::view::AsView
 pub fn tenferro_runtime::CoreOps::abs(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_runtime::CoreRepr>::Real> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn tenferro_runtime::CoreOps::add(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
-pub fn tenferro_runtime::CoreOps::add_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_runtime::AddOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_runtime::CoreRepr
-pub fn tenferro_runtime::CoreOps::add_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_runtime::AddOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
+pub fn tenferro_runtime::CoreOps::add_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn tenferro_runtime::CoreOps::broadcast_in_dim(&self, &[usize], &[usize], &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn tenferro_runtime::CoreOps::cast(&self, tenferro_tensor_core::DType, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn tenferro_runtime::CoreOps::clamp(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
@@ -5323,8 +5292,7 @@ pub fn tenferro_runtime::CoreOps::where_select<Y: tenferro_runtime::SelectOperan
 impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_runtime::CoreOps for X
 pub fn X::abs(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_runtime::CoreRepr>::Real> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn X::add(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
-pub fn X::add_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_runtime::AddOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_runtime::CoreRepr
-pub fn X::add_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_runtime::AddOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
+pub fn X::add_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn X::broadcast_in_dim(&self, &[usize], &[usize], &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn X::cast(&self, tenferro_tensor_core::DType, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor> where Self::Repr: tenferro_runtime::CoreRepr
 pub fn X::clamp(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_runtime::CoreRepr

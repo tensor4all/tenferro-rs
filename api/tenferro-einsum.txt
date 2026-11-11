@@ -242,20 +242,6 @@ impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumSubscripts
 pub fn tenferro_einsum::EinsumSubscripts::spec(&self) -> tenferro_einsum::Spec<'_>
 impl<'a> core::convert::From<&'a tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Spec<'a>
 pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumSubscripts) -> Self
-#[non_exhaustive] pub struct tenferro_einsum::prelude::TensordotOptions
-impl core::clone::Clone for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::clone(&self) -> tenferro_einsum::TensordotOptions
-impl core::cmp::Eq for tenferro_einsum::TensordotOptions
-impl core::cmp::PartialEq for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::eq(&self, &tenferro_einsum::TensordotOptions) -> bool
-impl core::default::Default for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::default() -> tenferro_einsum::TensordotOptions
-impl core::fmt::Debug for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::hash::Hash for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::hash<__H: core::hash::Hasher>(&self, &mut __H)
-impl core::marker::Copy for tenferro_einsum::TensordotOptions
-impl core::marker::StructuralPartialEq for tenferro_einsum::TensordotOptions
 pub trait tenferro_einsum::prelude::EinsumOps: tenferro_einsum::EinsumInputs
 pub fn tenferro_einsum::prelude::EinsumOps::einsum(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
 pub fn tenferro_einsum::prelude::EinsumOps::einsum_into(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
@@ -278,10 +264,8 @@ impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
 pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
 pub trait tenferro_einsum::prelude::TensordotOps: tenferro_tensor::view::AsView
 pub fn tenferro_einsum::prelude::TensordotOps::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
-pub fn tenferro_einsum::prelude::TensordotOps::tensordot_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
 impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_einsum::TensordotOps for X
 pub fn X::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
-pub fn X::tensordot_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
 pub trait tenferro_einsum::prelude::TracedEinsumOps
 pub fn tenferro_einsum::prelude::TracedEinsumOps::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub fn tenferro_einsum::prelude::TracedEinsumOps::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
@@ -290,10 +274,8 @@ pub fn tenferro_runtime::trace::TraceContext::einsum(&self, &[&tenferro_runtime:
 pub fn tenferro_runtime::trace::TraceContext::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub trait tenferro_einsum::prelude::TracedTensordotOps
 pub fn tenferro_einsum::prelude::TracedTensordotOps::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_einsum::prelude::TracedTensordotOps::tensordot_with(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 impl tenferro_einsum::TracedTensordotOps for tenferro_runtime::traced::TracedTensor
 pub fn tenferro_runtime::traced::TracedTensor::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::tensordot_with(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub enum tenferro_einsum::EinsumAxis
 pub tenferro_einsum::EinsumAxis::Ellipsis
 pub tenferro_einsum::EinsumAxis::Label(u32)
@@ -547,20 +529,6 @@ pub fn tenferro_einsum::Subscripts::fmt(&self, &mut core::fmt::Formatter<'_>) ->
 impl core::hash::Hash for tenferro_einsum::Subscripts
 pub fn tenferro_einsum::Subscripts::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for tenferro_einsum::Subscripts
-#[non_exhaustive] pub struct tenferro_einsum::TensordotOptions
-impl core::clone::Clone for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::clone(&self) -> tenferro_einsum::TensordotOptions
-impl core::cmp::Eq for tenferro_einsum::TensordotOptions
-impl core::cmp::PartialEq for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::eq(&self, &tenferro_einsum::TensordotOptions) -> bool
-impl core::default::Default for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::default() -> tenferro_einsum::TensordotOptions
-impl core::fmt::Debug for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::hash::Hash for tenferro_einsum::TensordotOptions
-pub fn tenferro_einsum::TensordotOptions::hash<__H: core::hash::Hasher>(&self, &mut __H)
-impl core::marker::Copy for tenferro_einsum::TensordotOptions
-impl core::marker::StructuralPartialEq for tenferro_einsum::TensordotOptions
 pub const tenferro_einsum::EINSUM_EXTENSION_FAMILY_ID: &str
 pub trait tenferro_einsum::EinsumInputs: tenferro_einsum::api::options::sealed::Sealed
 pub type tenferro_einsum::EinsumInputs::Repr: tenferro_tensor::view::Repr
@@ -596,10 +564,8 @@ impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
 pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
 pub trait tenferro_einsum::TensordotOps: tenferro_tensor::view::AsView
 pub fn tenferro_einsum::TensordotOps::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
-pub fn tenferro_einsum::TensordotOps::tensordot_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
 impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_einsum::TensordotOps for X
 pub fn X::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
-pub fn X::tensordot_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
 pub trait tenferro_einsum::TracedEinsumOps
 pub fn tenferro_einsum::TracedEinsumOps::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub fn tenferro_einsum::TracedEinsumOps::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
@@ -608,10 +574,8 @@ pub fn tenferro_runtime::trace::TraceContext::einsum(&self, &[&tenferro_runtime:
 pub fn tenferro_runtime::trace::TraceContext::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub trait tenferro_einsum::TracedTensordotOps
 pub fn tenferro_einsum::TracedTensordotOps::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_einsum::TracedTensordotOps::tensordot_with(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 impl tenferro_einsum::TracedTensordotOps for tenferro_runtime::traced::TracedTensor
 pub fn tenferro_runtime::traced::TracedTensor::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
-pub fn tenferro_runtime::traced::TracedTensor::tensordot_with(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>, &tenferro_einsum::TensordotOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub fn tenferro_einsum::extension_module<B: tenferro_tensor::backend::Engine + 'static>(tenferro_runtime::runtime::identity::EngineId) -> core::result::Result<alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>, tenferro_runtime::runtime::error::RuntimeConfigError> where EinsumExtensionOp: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
 pub fn tenferro_einsum::parse_einsum_notation(&str) -> tenferro_einsum::Result<tenferro_einsum::EinsumNotation>
 pub fn tenferro_einsum::parse_einsum_subscripts(&str) -> tenferro_einsum::Result<tenferro_einsum::EinsumSubscripts>
