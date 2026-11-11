@@ -471,3 +471,23 @@ fn engine_wide_cache_controls_cover_the_extension_store() {
     assert!(caches.get::<u64>(&key).is_none());
     engine.restore_extension_caches(caches);
 }
+
+#[test]
+fn dispatch_costs_price_every_width_as_the_engines_token_does() {
+    use std::num::NonZeroUsize;
+    use threadteam::DispatchKind;
+    for mut engine in [CpuEngine::new(pool(3)), CpuEngine::serial()] {
+        let costs = *engine.dispatch_costs();
+        let team = engine.has_team();
+        let budget = engine.num_threads();
+        let mut exec = engine.exec().expect("token");
+        for width in (1..=budget).filter_map(NonZeroUsize::new) {
+            let expected = if team && width.get() >= 2 {
+                costs.cost(DispatchKind::Team, width)
+            } else {
+                std::time::Duration::MAX
+            };
+            assert_eq!(exec.token().dispatch_cost(width), expected, "width {width}");
+        }
+    }
+}

@@ -6,6 +6,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`CpuEngine::dispatch_costs` is public** (#2590). The read-only accessor
+  returns the `threadteam::DispatchCosts` the engine's tokens use, so a caller
+  can decide with `num_threads` and threadteam's `width_for_by` / `pays_at`
+  whether an operation would fork before it takes a token with `exec`.
+
 ### Changed
 
 - **`CpuEngine`'s engine-wide cache controls cover its extension cache store**
