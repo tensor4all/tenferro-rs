@@ -1,5 +1,5 @@
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, TypedTensor};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());

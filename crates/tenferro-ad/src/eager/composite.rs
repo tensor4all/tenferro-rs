@@ -89,10 +89,17 @@ impl CompositeOps for EagerComposite<'_, '_> {
         value: &EagerTensor,
         axes: &[usize],
     ) -> Result<EagerTensor> {
+        // The composites hand over normalized axes; the public methods take
+        // signed axes, and a normalized axis round-trips unchanged.
+        let axes = axes
+            .iter()
+            .map(|&axis| crate::shape_packing::signed_axis(axis))
+            .collect::<Result<Vec<_>>>()?;
+        let axes = Some(axes.as_slice());
         match op {
-            CompositeReduce::Sum => self.session.reduce_sum(value, Some(axes)),
-            CompositeReduce::Max => self.session.reduce_max(value, Some(axes)),
-            CompositeReduce::SumSquares => self.session.reduce_sum_squares(value, Some(axes)),
+            CompositeReduce::Sum => self.session.reduce_sum(value, axes),
+            CompositeReduce::Max => self.session.reduce_max(value, axes),
+            CompositeReduce::SumSquares => self.session.reduce_sum_squares(value, axes),
         }
     }
 
@@ -110,7 +117,8 @@ impl CompositeOps for EagerComposite<'_, '_> {
     }
 
     fn concatenate(&mut self, values: &[&EagerTensor], axis: usize) -> Result<EagerTensor> {
-        self.session.concatenate(values, axis)
+        self.session
+            .concatenate(values, crate::shape_packing::signed_axis(axis)?)
     }
 
     fn pad(&mut self, value: &EagerTensor, low: &[usize], high: &[usize]) -> Result<EagerTensor> {
@@ -342,8 +350,18 @@ impl<'a> EagerSession<'a> {
     pub fn reduce_mean(
         &mut self,
         input: &EagerTensor,
-        axes: Option<&[usize]>,
+        axes: Option<&[isize]>,
     ) -> Result<EagerTensor> {
+        let axes = axes
+            .map(|axes| {
+                crate::shape_packing::normalize_existing_axes(
+                    "EagerSession::reduce_mean",
+                    axes,
+                    input.shape().len(),
+                )
+            })
+            .transpose()?;
+        let axes = axes.as_deref();
         composite::reduce_mean(&mut self.composite(), input, axes)
     }
 
@@ -370,7 +388,12 @@ impl<'a> EagerSession<'a> {
     /// Returns a typed `UnsupportedDType` error for non-real input, an
     /// `AxisOutOfBounds` validation error for an invalid axis,
     /// [`Error::ContextMismatch`] for a tensor from another runtime, or a backend error.
-    pub fn softmax(&mut self, input: &EagerTensor, axis: usize) -> Result<EagerTensor> {
+    pub fn softmax(&mut self, input: &EagerTensor, axis: isize) -> Result<EagerTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::softmax",
+            axis,
+            input.shape().len(),
+        )?;
         if crate::eager_ops::untracked_fast_path_allowed(&[input])
             && let Some(output) = self.engine.softmax_read(input.tensor_read(), axis)?
         {
@@ -401,7 +424,12 @@ impl<'a> EagerSession<'a> {
     /// Returns a typed `UnsupportedDType` error for non-real input, an
     /// `AxisOutOfBounds` validation error for an invalid axis,
     /// [`Error::ContextMismatch`] for a tensor from another runtime, or a backend error.
-    pub fn log_softmax(&mut self, input: &EagerTensor, axis: usize) -> Result<EagerTensor> {
+    pub fn log_softmax(&mut self, input: &EagerTensor, axis: isize) -> Result<EagerTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::log_softmax",
+            axis,
+            input.shape().len(),
+        )?;
         composite::log_softmax(&mut self.composite(), input, axis)
     }
 
@@ -435,8 +463,13 @@ impl<'a> EagerSession<'a> {
         &mut self,
         input: &EagerTensor,
         mask: &EagerTensor,
-        axis: usize,
+        axis: isize,
     ) -> Result<EagerTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::masked_softmax",
+            axis,
+            input.shape().len(),
+        )?;
         composite::masked_softmax(&mut self.composite(), input, mask, axis)
     }
 
@@ -469,8 +502,13 @@ impl<'a> EagerSession<'a> {
         &mut self,
         input: &EagerTensor,
         mask: &EagerTensor,
-        axis: usize,
+        axis: isize,
     ) -> Result<EagerTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::masked_log_softmax",
+            axis,
+            input.shape().len(),
+        )?;
         composite::masked_log_softmax(&mut self.composite(), input, mask, axis)
     }
 
@@ -503,11 +541,16 @@ impl<'a> EagerSession<'a> {
     pub fn layer_norm(
         &mut self,
         input: &EagerTensor,
-        axis: usize,
+        axis: isize,
         weight: Option<&EagerTensor>,
         bias: Option<&EagerTensor>,
         eps: f64,
     ) -> Result<EagerTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::layer_norm",
+            axis,
+            input.shape().len(),
+        )?;
         composite::layer_norm(&mut self.composite(), input, axis, weight, bias, eps)
     }
 
@@ -539,11 +582,16 @@ impl<'a> EagerSession<'a> {
     pub fn rms_norm(
         &mut self,
         input: &EagerTensor,
-        axis: usize,
+        axis: isize,
         weight: Option<&EagerTensor>,
         bias: Option<&EagerTensor>,
         eps: f64,
     ) -> Result<EagerTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::rms_norm",
+            axis,
+            input.shape().len(),
+        )?;
         composite::rms_norm(&mut self.composite(), input, axis, weight, bias, eps)
     }
 
@@ -579,8 +627,13 @@ impl<'a> EagerSession<'a> {
         &mut self,
         input: &EagerTensor,
         indices: &EagerTensor,
-        axis: usize,
+        axis: isize,
     ) -> Result<EagerTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::take_along_axis",
+            axis,
+            input.shape().len(),
+        )?;
         composite::take_along_axis(&mut self.composite(), input, indices, axis)
     }
 }

@@ -13,7 +13,7 @@
 //! example.
 
 use tenferro_gpu::cuda::{cuda_devices, download_tensor, gpu_available, upload_tensor, CudaEngine};
-use tenferro_runtime::TensorSessionOpsExt;
+use tenferro_runtime::CoreOps;
 use tenferro_tensor::{Error, Tensor, TypedTensor};
 
 const OP: &str = "tutorial.cublas_dgemm";

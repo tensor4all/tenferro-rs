@@ -1,6 +1,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftExecutor, FftNorm, TensorFftExt, TracedTensorFftExt};
+use tenferro_fft::FftOptions;
+use tenferro_fft::{FftExecutor, FftNorm, FftOps, TracedFftOps};
 use tenferro_gpu::cuda::{cuda_runtime_engine_registration, CudaEngine};
 use tenferro_runtime::{DType, ExecutionEngine, GraphCompiler, Runtime, Tensor, TracedTensor};
 use tenferro_tensor::TensorRead;
@@ -25,10 +26,16 @@ impl Operation {
         norm: FftNorm,
     ) -> tenferro_tensor::Result<Tensor> {
         match self {
-            Self::Fft => input.fft(n, axis, norm, engine),
-            Self::Ifft => input.ifft(n, axis, norm, engine),
-            Self::Rfft => input.rfft(n, axis, norm, engine),
-            Self::Irfft => input.irfft(n, axis, norm, engine),
+            Self::Fft => input.fft_with(&FftOptions::default().n(n).axis(axis).norm(norm), engine),
+            Self::Ifft => {
+                input.ifft_with(&FftOptions::default().n(n).axis(axis).norm(norm), engine)
+            }
+            Self::Rfft => {
+                input.rfft_with(&FftOptions::default().n(n).axis(axis).norm(norm), engine)
+            }
+            Self::Irfft => {
+                input.irfft_with(&FftOptions::default().n(n).axis(axis).norm(norm), engine)
+            }
         }
     }
 
@@ -41,10 +48,16 @@ impl Operation {
         norm: FftNorm,
     ) -> tenferro_tensor::Result<Tensor> {
         match self {
-            Self::Fft => input.fft(n, axis, norm, engine),
-            Self::Ifft => input.ifft(n, axis, norm, engine),
-            Self::Rfft => input.rfft(n, axis, norm, engine),
-            Self::Irfft => input.irfft(n, axis, norm, engine),
+            Self::Fft => input.fft_with(&FftOptions::default().n(n).axis(axis).norm(norm), engine),
+            Self::Ifft => {
+                input.ifft_with(&FftOptions::default().n(n).axis(axis).norm(norm), engine)
+            }
+            Self::Rfft => {
+                input.rfft_with(&FftOptions::default().n(n).axis(axis).norm(norm), engine)
+            }
+            Self::Irfft => {
+                input.irfft_with(&FftOptions::default().n(n).axis(axis).norm(norm), engine)
+            }
         }
     }
 
@@ -58,10 +71,26 @@ impl Operation {
         norm: FftNorm,
     ) -> tenferro_tensor::Result<Tensor> {
         match self {
-            Self::Fft => executor.fft(input, n, axis, norm, engine),
-            Self::Ifft => executor.ifft(input, n, axis, norm, engine),
-            Self::Rfft => executor.rfft(input, n, axis, norm, engine),
-            Self::Irfft => executor.irfft(input, n, axis, norm, engine),
+            Self::Fft => executor.fft_with(
+                input,
+                &FftOptions::default().n(n).axis(axis).norm(norm),
+                engine,
+            ),
+            Self::Ifft => executor.ifft_with(
+                input,
+                &FftOptions::default().n(n).axis(axis).norm(norm),
+                engine,
+            ),
+            Self::Rfft => executor.rfft_with(
+                input,
+                &FftOptions::default().n(n).axis(axis).norm(norm),
+                engine,
+            ),
+            Self::Irfft => executor.irfft_with(
+                input,
+                &FftOptions::default().n(n).axis(axis).norm(norm),
+                engine,
+            ),
         }
     }
 }
@@ -427,10 +456,18 @@ pub(crate) fn compiled_cuda_fft(
     let trace = tenferro_runtime::TraceContext::new();
     let input = trace.input_concrete_shape(dtype, shape).unwrap();
     let output = match operation {
-        Operation::Fft => input.fft(n, axis, norm).unwrap(),
-        Operation::Ifft => input.ifft(n, axis, norm).unwrap(),
-        Operation::Rfft => input.rfft(n, axis, norm).unwrap(),
-        Operation::Irfft => input.irfft(n, axis, norm).unwrap(),
+        Operation::Fft => input
+            .fft_with(&FftOptions::default().n(n).axis(axis).norm(norm))
+            .unwrap(),
+        Operation::Ifft => input
+            .ifft_with(&FftOptions::default().n(n).axis(axis).norm(norm))
+            .unwrap(),
+        Operation::Rfft => input
+            .rfft_with(&FftOptions::default().n(n).axis(axis).norm(norm))
+            .unwrap(),
+        Operation::Irfft => input
+            .irfft_with(&FftOptions::default().n(n).axis(axis).norm(norm))
+            .unwrap(),
     };
     let mut compiler = GraphCompiler::new();
     let program = compiler

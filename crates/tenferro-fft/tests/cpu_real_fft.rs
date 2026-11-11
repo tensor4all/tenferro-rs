@@ -1,6 +1,7 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftNorm, TensorFftExt, TensorReadFftExt};
+use tenferro_fft::FftOptions;
+use tenferro_fft::{FftNorm, FftOps};
 use tenferro_tensor::{Tensor, TensorRead};
 
 fn forward_scale(norm: FftNorm, n: usize) -> f64 {
@@ -83,9 +84,9 @@ macro_rules! real_fft_regression {
                                 for borrowed in [false, true] {
                                     let full = if borrowed {
                                         TensorRead::from_tensor(&input)
-                                            .fft_read(None, axis as isize, norm, &mut engine)
+                                            .fft_with(&FftOptions::default().axis(axis as isize).norm(norm), &mut engine)
                                     } else {
-                                        input.fft(None, axis as isize, norm, &mut engine)
+                                        input.fft_with(&FftOptions::default().axis(axis as isize).norm(norm), &mut engine)
                                     }
                                     .unwrap();
                                     assert_eq!(full.shape(), shape.as_slice());
@@ -123,9 +124,9 @@ macro_rules! real_fft_regression {
                             for borrowed in [false, true] {
                                 let inverse = if borrowed {
                                     TensorRead::from_tensor(&spectrum)
-                                        .irfft_read(Some(n), axis as isize, norm, &mut engine)
+                                        .irfft_with(&FftOptions::default().n(Some(n)).axis(axis as isize).norm(norm), &mut engine)
                                 } else {
-                                    spectrum.irfft(Some(n), axis as isize, norm, &mut engine)
+                                    spectrum.irfft_with(&FftOptions::default().n(Some(n)).axis(axis as isize).norm(norm), &mut engine)
                                 }
                                 .unwrap();
                                 assert_eq!(inverse.shape(), shape.as_slice());

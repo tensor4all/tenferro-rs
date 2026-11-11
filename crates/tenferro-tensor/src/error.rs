@@ -241,7 +241,13 @@ impl Error {
     /// assert!(matches!(error, Error::Validation { .. }));
     /// ```
     pub fn axis_out_of_bounds(op: &'static str, axis: usize, rank: usize) -> Self {
-        Self::validation(op, ValidationError::AxisOutOfBounds { axis, rank })
+        Self::validation(
+            op,
+            ValidationError::AxisOutOfBounds {
+                axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                rank,
+            },
+        )
     }
 
     /// Construct a duplicate-axis validation error.

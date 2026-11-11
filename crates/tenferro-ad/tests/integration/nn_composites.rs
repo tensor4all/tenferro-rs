@@ -6,10 +6,7 @@ use std::sync::{Arc, OnceLock};
 use crate::support::{cpu_runtime, RunTraced};
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerSession, EagerTensor, TracedTensorAdExt};
-use tenferro_runtime::{
-    DType, Runtime, Tensor, TensorSessionOpsExt, TraceContext, TracedTensor, TypedTensor,
-    TypedTensorSessionOpsExt,
-};
+use tenferro_runtime::{CoreOps, DType, Runtime, Tensor, TraceContext, TracedTensor, TypedTensor};
 use tenferro_tensor::Engine;
 
 fn ctx() -> Arc<EagerRuntime> {
@@ -688,10 +685,10 @@ fn eager_softmax(
     axis: usize,
 ) -> tenferro_ad::Result<EagerTensor> {
     match (case.log, case.masked) {
-        (false, false) => s.softmax(x, axis),
-        (true, false) => s.log_softmax(x, axis),
-        (false, true) => s.masked_softmax(x, mask, axis),
-        (true, true) => s.masked_log_softmax(x, mask, axis),
+        (false, false) => s.softmax(x, axis as isize),
+        (true, false) => s.log_softmax(x, axis as isize),
+        (false, true) => s.masked_softmax(x, mask, axis as isize),
+        (true, true) => s.masked_log_softmax(x, mask, axis as isize),
     }
 }
 
@@ -702,10 +699,10 @@ fn traced_softmax(
     axis: usize,
 ) -> tenferro_ad::Result<TracedTensor> {
     match (case.log, case.masked) {
-        (false, false) => x.softmax(axis),
-        (true, false) => x.log_softmax(axis),
-        (false, true) => x.masked_softmax(mask, axis),
-        (true, true) => x.masked_log_softmax(mask, axis),
+        (false, false) => x.softmax(axis as isize),
+        (true, false) => x.log_softmax(axis as isize),
+        (false, true) => x.masked_softmax(mask, axis as isize),
+        (true, true) => x.masked_log_softmax(mask, axis as isize),
     }
 }
 
@@ -717,10 +714,10 @@ fn session_softmax(
     s: &mut dyn Engine,
 ) -> tenferro_tensor::Result<Tensor> {
     match (case.log, case.masked) {
-        (false, false) => x.softmax(axis, s),
-        (true, false) => x.log_softmax(axis, s),
-        (false, true) => x.masked_softmax(mask, axis, s),
-        (true, true) => x.masked_log_softmax(mask, axis, s),
+        (false, false) => x.softmax(axis as isize, s),
+        (true, false) => x.log_softmax(axis as isize, s),
+        (false, true) => x.masked_softmax(mask, axis as isize, s),
+        (true, true) => x.masked_log_softmax(mask, axis as isize, s),
     }
 }
 
@@ -1120,9 +1117,9 @@ fn layer_norm_and_rms_norm_match_reference_on_all_surfaces() {
 
             let concrete = with_session(|s| {
                 if rms {
-                    xt.rms_norm(axis, Some(&wt), Some(&bt), 1e-5, s)
+                    xt.rms_norm(axis as isize, Some(&wt), Some(&bt), 1e-5, s)
                 } else {
-                    xt.layer_norm(axis, Some(&wt), Some(&bt), 1e-5, s)
+                    xt.layer_norm(axis as isize, Some(&wt), Some(&bt), 1e-5, s)
                 }
             })
             .unwrap();
@@ -1140,9 +1137,9 @@ fn layer_norm_and_rms_norm_match_reference_on_all_surfaces() {
                     let w = s.constant_from(wt.duplicate()?)?;
                     let b = s.constant_from(bt.duplicate()?)?;
                     if rms {
-                        s.rms_norm(&x, axis, Some(&w), Some(&b), 1e-5)
+                        s.rms_norm(&x, axis as isize, Some(&w), Some(&b), 1e-5)
                     } else {
-                        s.layer_norm(&x, axis, Some(&w), Some(&b), 1e-5)
+                        s.layer_norm(&x, axis as isize, Some(&w), Some(&b), 1e-5)
                     }
                 })
                 .unwrap();
@@ -1164,9 +1161,9 @@ fn layer_norm_and_rms_norm_match_reference_on_all_surfaces() {
                 .from_tensor_concrete_shape(bt.duplicate().unwrap())
                 .unwrap();
             let traced = if rms {
-                x_tr.rms_norm(axis, Some(&w_tr), Some(&b_tr), 1e-5)
+                x_tr.rms_norm(axis as isize, Some(&w_tr), Some(&b_tr), 1e-5)
             } else {
-                x_tr.layer_norm(axis, Some(&w_tr), Some(&b_tr), 1e-5)
+                x_tr.layer_norm(axis as isize, Some(&w_tr), Some(&b_tr), 1e-5)
             }
             .unwrap();
             assert_close(
@@ -1376,7 +1373,7 @@ fn take_along_axis_rows_columns_and_batches_match_numpy() {
         )
         .unwrap();
         for it in [&it64, &it32] {
-            let y = with_session(|s| xt.take_along_axis(it, axis, s)).unwrap();
+            let y = with_session(|s| xt.take_along_axis(it, axis as isize, s)).unwrap();
             assert_eq!(y.shape(), &out_shape[..], "{idx_shape:?} axis {axis}");
             assert_eq!(
                 data64(&y),
@@ -1390,7 +1387,7 @@ fn take_along_axis_rows_columns_and_batches_match_numpy() {
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                 let x = s.constant_from(xt.duplicate()?)?;
                 let i = s.constant_from(it64.duplicate()?)?;
-                s.take_along_axis(&x, &i, axis)
+                s.take_along_axis(&x, &i, axis as isize)
             })
             .unwrap();
         assert_eq!(
@@ -1405,7 +1402,7 @@ fn take_along_axis_rows_columns_and_batches_match_numpy() {
         let i_tr = trace
             .from_tensor_concrete_shape(it32.duplicate().unwrap())
             .unwrap();
-        let traced = x_tr.take_along_axis(&i_tr, axis).unwrap();
+        let traced = x_tr.take_along_axis(&i_tr, axis as isize).unwrap();
         assert_eq!(
             data64(&traced_value(&traced)),
             expected,

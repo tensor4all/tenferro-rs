@@ -4,7 +4,8 @@ use num_complex::{Complex32, Complex64};
 use std::num::NonZeroUsize;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{EagerSessionFftExt, FftNorm};
+use tenferro_fft::FftOptions;
+use tenferro_fft::{EagerFftOps, FftNorm};
 use tenferro_gpu::cuda::gpu_available;
 use tenferro_runtime::{ExtensionCacheLimits, Tensor};
 use tenferro_tensor::{TensorDeviceTransfer, TensorRead};
@@ -72,9 +73,7 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
         None => return,
     };
     let eager_spectrum = ctx
-        .with_eager_session(&mut engine, |session| {
-            session.rfft(&eager_real, None, -1, FftNorm::Backward)
-        })
+        .with_eager_session(&mut engine, |session| session.rfft(&eager_real))
         .unwrap();
     // cuFFT plans are device-bound, so an eager run keeps them in the engine
     // and never in a runtime- or caller-owned cache (#2206).
@@ -87,9 +86,7 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     assert_eq!(first_stats.clears, 0);
 
     let _eager_spectrum_repeat = ctx
-        .with_eager_session(&mut engine, |session| {
-            session.rfft(&eager_real, None, -1, FftNorm::Backward)
-        })
+        .with_eager_session(&mut engine, |session| session.rfft(&eager_real))
         .unwrap();
     let eager_cache_stats = support::engine_cache_stats(&mut engine);
     assert_eq!(eager_cache_stats.entries, 1);
@@ -110,9 +107,7 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     assert_host_close(&spectrum_host, &expected_spectrum, 1.0e-11);
 
     let eager_signal = ctx
-        .with_eager_session(&mut engine, |session| {
-            session.irfft(&eager_spectrum, None, -1, FftNorm::Backward)
-        })
+        .with_eager_session(&mut engine, |session| session.irfft(&eager_spectrum))
         .unwrap();
     let signal_stats = support::engine_cache_stats(&mut engine);
     assert_eq!(signal_stats.entries, 2);
@@ -140,9 +135,7 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
         None => return,
     };
     let eager_fft = ctx
-        .with_eager_session(&mut engine, |session| {
-            session.fft(&eager_complex, None, -1, FftNorm::Backward)
-        })
+        .with_eager_session(&mut engine, |session| session.fft(&eager_complex))
         .unwrap();
     let fft_stats = support::engine_cache_stats(&mut engine);
     assert_eq!(fft_stats.entries, 3);
@@ -165,9 +158,7 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     // the CPU engine, not in this CUDA engine.
     let cpu_input = EagerTensor::from_tensor_in(real_f64(&[8], 0.25), ctx.clone()).unwrap();
     let cpu_output = ctx
-        .with_eager_session(&mut cpu, |session| {
-            session.rfft(&cpu_input, None, -1, FftNorm::Backward)
-        })
+        .with_eager_session(&mut cpu, |session| session.rfft(&cpu_input))
         .unwrap()
         .to_tensor(&mut cpu)
         .unwrap();
@@ -200,15 +191,13 @@ fn cuda_eager_engine_cache_limit_reduction_evicts_and_preserves_results() {
         None => return,
     };
     let first = ctx
-        .with_eager_session(&mut engine, |session| {
-            session.rfft(&input, None, -1, FftNorm::Backward)
-        })
+        .with_eager_session(&mut engine, |session| session.rfft(&input))
         .unwrap()
         .to_tensor(&mut engine)
         .unwrap();
     let second = ctx
         .with_eager_session(&mut engine, |session| {
-            session.rfft(&input, Some(6), -1, FftNorm::Backward)
+            session.rfft_with(&input, &FftOptions::default().n(Some(6)))
         })
         .unwrap()
         .to_tensor(&mut engine)
@@ -286,7 +275,7 @@ fn cuda_eager_zero_batch_returns_empty_outputs_without_engine_cache() {
     };
     let output = ctx
         .with_eager_session(&mut engine, |session| {
-            session.fft(&input, None, 1, FftNorm::Backward)
+            session.fft_with(&input, &FftOptions::default().axis(1))
         })
         .unwrap();
     let tensor = output.to_tensor(&mut engine).unwrap();
@@ -317,7 +306,7 @@ fn cuda_eager_zero_batch_returns_empty_outputs_without_engine_cache() {
     };
     let real_output = ctx
         .with_eager_session(&mut engine, |session| {
-            session.rfft(&real_input, None, 2, FftNorm::Backward)
+            session.rfft_with(&real_input, &FftOptions::default().axis(2))
         })
         .unwrap();
     let real_tensor = real_output.to_tensor(&mut engine).unwrap();

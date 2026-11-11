@@ -647,7 +647,7 @@ fn validate_tropical_einsum_inputs(
 /// `AxisOutOfBounds` or `DuplicateAxis` payload when `axes` is invalid, or
 /// [`tenferro_runtime::Error::Internal`] if output metadata registration
 /// fails.
-pub fn tropical_reduce_sum(a: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
+pub fn tropical_reduce_sum(a: &TracedTensor, axes: &[isize]) -> Result<TracedTensor> {
     a.reduce_max(Some(axes))
 }
 

@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{EagerSessionFftExt, EagerTensorFftExt, FftNorm};
+use tenferro_fft::EagerFftOps;
+use tenferro_fft::FftOptions;
 use tenferro_tensor::Tensor;
 
 const LEN: usize = 4096;
@@ -103,7 +104,9 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     .unwrap();
     let transform = |engine: &mut CpuEngine| {
         runtime
-            .with_eager_session(engine, |s| s.fft(&input, None, 1, FftNorm::Backward))
+            .with_eager_session(engine, |s| {
+                s.fft_with(&input, &FftOptions::default().axis(1))
+            })
             .unwrap()
     };
     let first = measured((1, INPUT_BYTES), || transform(&mut engine));
@@ -164,8 +167,11 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
         pointer
     );
     let output = measured((0, 0), || {
-        output
-            .fft_in_place(&mut engine, 1, FftNorm::Backward)
+        runtime
+            .with_eager_session(&mut engine, |s| {
+                Ok::<_, tenferro_ad::Error>(s.fft_in_place(output, &FftOptions::default().axis(1)))
+            })
+            .unwrap()
             .unwrap()
     });
     assert_eq!(
@@ -198,7 +204,9 @@ fn whole_tensor_axis_fft_lane_comes_from_the_buffer_pool() {
     .unwrap();
     let transform = |engine: &mut CpuEngine| {
         runtime
-            .with_eager_session(engine, |s| s.rfft(&input, None, 0, FftNorm::Backward))
+            .with_eager_session(engine, |s| {
+                s.rfft_with(&input, &FftOptions::default().axis(0))
+            })
             .unwrap()
     };
     // Warm the plan cache and the buffer pool; only a steady-state call shows
@@ -219,7 +227,7 @@ fn whole_tensor_axis_fft_lane_comes_from_the_buffer_pool() {
     let inverse = |engine: &mut CpuEngine| {
         runtime
             .with_eager_session(engine, |s| {
-                s.irfft(&spectrum, Some(LEN), 0, FftNorm::Backward)
+                s.irfft_with(&spectrum, &FftOptions::default().n(Some(LEN)).axis(0))
             })
             .unwrap()
     };

@@ -5,23 +5,32 @@ use tenferro_tensor::{GatherConfig, SliceConfig, Tensor, TypedTensor};
 use crate::eager::{EagerSession, EagerTensor};
 use crate::error::{Error, Result};
 
-fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
-    let normalized = if axis >= 0 {
-        axis as usize
-    } else {
-        rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
-            tenferro_tensor::Error::axis_out_of_bounds(op, axis.unsigned_abs(), rank)
-        })?
-    };
-    if normalized >= rank {
-        return Err(
-            tenferro_tensor::Error::axis_out_of_bounds(op, axis.unsigned_abs(), rank).into(),
-        );
-    }
-    Ok(normalized)
+/// Normalize one signed axis of an eager operation (#2552 §3.2) through the
+/// shared `tenferro_tensor::normalize_axis`.
+pub(crate) fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
+    tenferro_tensor::normalize_axis(axis, rank)
+        .map_err(|e| Error::TensorRuntime(tenferro_tensor::Error::validation(op, e)))
 }
 
-fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
+/// Normalize a signed axis list of an eager operation, keeping its order.
+/// Duplicates are left to the operation's own validation.
+pub(crate) fn normalize_existing_axes(
+    op: &'static str,
+    axes: &[isize],
+    rank: usize,
+) -> Result<Vec<usize>> {
+    axes.iter()
+        .map(|&axis| normalize_existing_axis(op, axis, rank))
+        .collect()
+}
+
+/// A normalized axis as the signed form of the public eager methods.
+pub(crate) fn signed_axis(axis: usize) -> Result<isize> {
+    isize::try_from(axis)
+        .map_err(|_| Error::Internal(format!("normalized axis {axis} does not fit isize")))
+}
+
+pub(crate) fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
     let insert_rank = rank
         .checked_add(1)
         .ok_or_else(|| tenferro_tensor::Error::axis_out_of_bounds(op, axis.unsigned_abs(), rank))?;
@@ -115,14 +124,14 @@ fn validate_stack_shapes(op: &'static str, shapes: &[&[usize]]) -> Result<()> {
 }
 
 #[derive(Clone, Debug)]
-enum AxisSelection {
+enum AxisSelection<A = usize> {
     Slice {
-        axis: usize,
+        axis: A,
         range: Range<usize>,
         step: usize,
     },
     Take {
-        axis: usize,
+        axis: A,
         indices: Vec<usize>,
     },
 }
@@ -211,7 +220,7 @@ fn apply_slice_axis_config(
 #[derive(Clone, Debug)]
 pub struct EagerSliceBuilder<'a> {
     tensor: &'a EagerTensor,
-    selections: Vec<AxisSelection>,
+    selections: Vec<AxisSelection<isize>>,
 }
 
 impl<'a> EagerSliceBuilder<'a> {
@@ -238,7 +247,7 @@ impl<'a> EagerSliceBuilder<'a> {
     /// assert_eq!(y.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn axis(mut self, axis: usize, range: Range<usize>) -> Self {
+    pub fn axis(mut self, axis: isize, range: Range<usize>) -> Self {
         self.selections.push(AxisSelection::Slice {
             axis,
             range,
@@ -263,7 +272,7 @@ impl<'a> EagerSliceBuilder<'a> {
     /// assert_eq!(y.shape(), &[3]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn axis_step(mut self, axis: usize, range: Range<usize>, step: usize) -> Self {
+    pub fn axis_step(mut self, axis: isize, range: Range<usize>, step: usize) -> Self {
         self.selections
             .push(AxisSelection::Slice { axis, range, step });
         self
@@ -285,7 +294,7 @@ impl<'a> EagerSliceBuilder<'a> {
     /// assert_eq!(y.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
-    pub fn take_axis(mut self, axis: usize, indices: &[usize]) -> Self {
+    pub fn take_axis(mut self, axis: isize, indices: &[usize]) -> Self {
         self.selections.push(AxisSelection::Take {
             axis,
             indices: indices.to_vec(),
@@ -318,8 +327,25 @@ impl<'a> EagerSliceBuilder<'a> {
     pub fn apply(self, session: &mut EagerSession<'_>) -> Result<EagerTensor> {
         session.ensure_runtime(self.tensor)?;
         let shape = self.tensor.shape().to_vec();
+        let selections = self
+            .selections
+            .into_iter()
+            .map(|selection| {
+                Ok(match selection {
+                    AxisSelection::Slice { axis, range, step } => AxisSelection::Slice {
+                        axis: normalize_existing_axis("slice_builder", axis, shape.len())?,
+                        range,
+                        step,
+                    },
+                    AxisSelection::Take { axis, indices } => AxisSelection::Take {
+                        axis: normalize_existing_axis("slice_builder", axis, shape.len())?,
+                        indices,
+                    },
+                })
+            })
+            .collect::<Result<Vec<AxisSelection>>>()?;
         let mut seen = vec![false; shape.len()];
-        for selection in &self.selections {
+        for selection in &selections {
             let axis = match selection {
                 AxisSelection::Slice { axis, .. } | AxisSelection::Take { axis, .. } => *axis,
             };
@@ -327,12 +353,12 @@ impl<'a> EagerSliceBuilder<'a> {
         }
 
         let mut output = self.tensor.clone();
-        if let Some(config) = apply_slice_axis_config("slice_builder", &shape, &self.selections)? {
+        if let Some(config) = apply_slice_axis_config("slice_builder", &shape, &selections)? {
             output = session.slice(&output, config)?;
         }
-        for selection in self.selections {
+        for selection in selections {
             if let AxisSelection::Take { axis, indices } = selection {
-                output = session.take_axis(&output, axis, &indices)?;
+                output = session.take_axis(&output, signed_axis(axis)?, &indices)?;
             }
         }
         Ok(output)
@@ -407,17 +433,10 @@ impl EagerSession<'_> {
     pub fn take_axis(
         &mut self,
         tensor: &EagerTensor,
-        axis: usize,
+        axis: isize,
         positions: &[usize],
     ) -> Result<EagerTensor> {
         self.ensure_runtime(tensor)?;
-        let axis = isize::try_from(axis).map_err(|_| {
-            Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
-                "take_axis",
-                "axis",
-                format!("{axis} cannot be represented as isize"),
-            ))
-        })?;
         self.index_select(tensor, axis, positions)
     }
 
@@ -502,7 +521,7 @@ impl EagerSession<'_> {
     pub fn slice_axis(
         &mut self,
         tensor: &EagerTensor,
-        axis: usize,
+        axis: isize,
         range: Range<usize>,
     ) -> Result<EagerTensor> {
         tensor.slice_builder().axis(axis, range).apply(self)
@@ -545,7 +564,7 @@ impl EagerSession<'_> {
             .map(|tensor| self.reshape(tensor, &expanded_shape))
             .collect::<Result<Vec<_>>>()?;
         let refs = expanded.iter().collect::<Vec<_>>();
-        self.concatenate(&refs, axis)
+        self.concatenate(&refs, signed_axis(axis)?)
     }
 }
 

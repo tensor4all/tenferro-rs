@@ -15,8 +15,7 @@ use tenferro_gpu::cuda::{
     CudaEngine,
 };
 use tenferro_runtime::{
-    DType, GraphCompiler, Runtime, Tensor, TensorRead, TensorSessionOpsExt, TraceContext,
-    TracedTensor,
+    CoreOps, DType, GraphCompiler, Runtime, Tensor, TensorRead, TraceContext, TracedTensor,
 };
 
 fn cuda_engine() -> CudaEngine {

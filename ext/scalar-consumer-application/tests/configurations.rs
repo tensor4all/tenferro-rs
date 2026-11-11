@@ -21,7 +21,7 @@ use tenferro_df64_proof::extension::{
     module, module_for_engine, Df64Qr, Df64ToF64, DF64_SCALAR_IDENTITY,
 };
 use tenferro_df64_proof::Df64;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{Qr, TracedLinalgOps};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{EngineId, Error, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_scalar_consumer_algorithm::{factor_norm_gradient, ScalarSupport};
@@ -36,7 +36,8 @@ struct Standard;
 
 impl ScalarSupport for Standard {
     fn qr(&self, input: &TracedTensor) -> Result<(TracedTensor, TracedTensor), Error> {
-        input.qr()
+        let Qr { q, r } = input.qr()?;
+        Ok((q, r))
     }
 
     fn to_f64(&self, input: &TracedTensor) -> Result<TracedTensor, Error> {
@@ -365,7 +366,7 @@ fn a_value_from_one_owner_reaches_the_other_owner_explicitly() {
             Tensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).expect("shape matches data"),
         )
         .expect("traced input");
-    let (q, _r) = standard_input.qr().expect("traced QR");
+    let Qr { q, r: _r } = standard_input.qr().expect("traced QR");
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&q).expect("compiled the standard program");
     let produced = run_on_engine(&runtime, &mut standard_engine, &program, &[])

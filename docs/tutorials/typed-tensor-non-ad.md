@@ -9,8 +9,8 @@ The example below shows four details that matter in real code:
 
 - `from_vec_col_major` accepts data already arranged in tenferro's native
   column-major layout.
-- `TypedTensorSessionOpsExt` session methods keep the scalar type fixed and
-  return `TypedTensor<T>`.
+- `CoreOps` methods (engine last) keep the scalar type fixed and return
+  `TypedTensor<T>` for a typed receiver.
 - Reductions such as `x.reduce_sum(...)` are backend-aware tensor operations,
   unlike small host-only checks over `iter()`.
 - Structural helpers such as `x.transpose(...)` preserve the typed workflow
@@ -19,7 +19,7 @@ The example below shows four details that matter in real code:
 <!-- snippet-source: docs/tutorial-code/src/bin/typed_tensor_non_ad.rs -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, TypedTensor};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());

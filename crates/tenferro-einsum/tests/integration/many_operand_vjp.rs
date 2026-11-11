@@ -7,7 +7,7 @@
 //! transpose fails with `UndeclaredResidualValue` at index 64.
 
 use tenferro_ad::AdContext;
-use tenferro_einsum::{EinsumSubscripts, TraceContextEinsumExt};
+use tenferro_einsum::{EinsumSubscripts, TracedEinsumOps};
 use tenferro_runtime::{GraphCompiler, TraceContext};
 use tenferro_tensor::Tensor;
 
@@ -29,7 +29,7 @@ fn traced_einsum_vjp_with_65_operands_reads_every_residual() {
         .unwrap()
         .build()
         .unwrap();
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let leaves: Vec<_> = (0..OPERANDS)
         .map(|k| {
             let values = if k + 1 == OPERANDS {
@@ -40,12 +40,11 @@ fn traced_einsum_vjp_with_65_operands_reads_every_residual() {
             trace.from_tensor_concrete_shape(vector(values)).unwrap()
         })
         .collect();
-    let values: Vec<_> = leaves.iter().map(|leaf| leaf.trace_value()).collect();
+    let inputs: Vec<_> = leaves.iter().collect();
     let labels: Vec<&[u32]> = vec![&[0]; OPERANDS];
     let output = trace
-        .einsum_subscripts(&values, &EinsumSubscripts::new(&labels, &[0]))
+        .einsum(&inputs, &EinsumSubscripts::new(&labels, &[0]))
         .unwrap();
-    let output = trace.derive_tensor(output).unwrap();
     let cotangent = trace
         .from_tensor_concrete_shape(vector([1.0, 1.0]))
         .unwrap();

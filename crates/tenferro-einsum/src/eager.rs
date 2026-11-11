@@ -1339,11 +1339,14 @@ pub(crate) fn eager_einsum_subscripts_on_session(
     if eager_einsum_profile_enabled() {
         let total_started = Instant::now();
         let plan = profile_eager_einsum_section("plan_subscripts", || {
-            ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
+            ConcreteEinsumPlan::prepare_owned_subscripts(
+                inputs,
+                &EinsumSubscripts::from(subscripts),
+            )
         })
         .map_err(into_tensor_error)?;
         let result = profile_eager_einsum_section("execute_plan", || {
-            plan.execute(inputs, session).map_err(into_tensor_error)
+            plan.run_owned(inputs, session).map_err(into_tensor_error)
         });
         record_eager_einsum_profile("total", total_started.elapsed());
         maybe_print_eager_einsum_profile();
@@ -1357,13 +1360,15 @@ pub(crate) fn eager_einsum_subscripts_on_session(
         let shape_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
-        let plan =
-            ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
-                .map_err(into_tensor_error)?;
+        let plan = ConcreteEinsumPlan::prepare_owned_subscripts(
+            inputs,
+            &EinsumSubscripts::from(subscripts),
+        )
+        .map_err(into_tensor_error)?;
         let plan_us = started.elapsed().as_secs_f64() * 1.0e6;
 
         let started = Instant::now();
-        let result = plan.execute(inputs, session).map_err(into_tensor_error);
+        let result = plan.run_owned(inputs, session).map_err(into_tensor_error);
         let exec_us = started.elapsed().as_secs_f64() * 1.0e6;
         let total_us = total_started.elapsed().as_secs_f64() * 1.0e6;
 
@@ -1376,9 +1381,10 @@ pub(crate) fn eager_einsum_subscripts_on_session(
         return result;
     }
 
-    let plan = ConcreteEinsumPlan::prepare_subscripts(inputs, &EinsumSubscripts::from(subscripts))
-        .map_err(into_tensor_error)?;
-    plan.execute(inputs, session).map_err(into_tensor_error)
+    let plan =
+        ConcreteEinsumPlan::prepare_owned_subscripts(inputs, &EinsumSubscripts::from(subscripts))
+            .map_err(into_tensor_error)?;
+    plan.run_owned(inputs, session).map_err(into_tensor_error)
 }
 
 /// Eager N-ary einsum on read-only tensor inputs.
@@ -1412,8 +1418,7 @@ pub(crate) fn eager_einsum_read_subscripts_on_session(
     let plan =
         ConcreteEinsumPlan::prepare_read_subscripts(inputs, &EinsumSubscripts::from(subscripts))
             .map_err(into_tensor_error)?;
-    plan.execute_read(inputs, session)
-        .map_err(into_tensor_error)
+    plan.run_reads(inputs, session).map_err(into_tensor_error)
 }
 
 /// Eager N-ary einsum that consumes concrete [`Tensor`] inputs.

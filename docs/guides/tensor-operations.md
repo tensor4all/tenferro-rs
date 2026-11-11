@@ -22,9 +22,9 @@ Choose the tensor API first, then choose the operation entry point.
 
 | Layer | Start here when | Operation entry point | AD |
 | --- | --- | --- | --- |
-| `TypedTensor<T, R>` | No autodiff, scalar type known at compile time | direct typed accessors; `TypedTensorSessionOpsExt` session-explicit methods for dynamic-rank `TypedTensor<T>` | No |
-| `Tensor` | No autodiff, dtype selected at runtime or passed through backend dispatch | `TensorSessionOpsExt` session-explicit methods | No |
-| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` or functional `grad`/`vjp`/`jvp` | `EagerTensor` methods and associated functions | Yes, for tracked values |
+| `TypedTensor<T, R>` | No autodiff, scalar type known at compile time | direct typed accessors; `CoreOps` methods (engine last) for dynamic-rank `TypedTensor<T>` and `TypedTensorView<T>` | No |
+| `Tensor` | No autodiff, dtype selected at runtime or passed through backend dispatch | `CoreOps` methods (engine last) on `Tensor` and `TensorRead` | No |
+| `EagerTensor` | Immediate execution in an `EagerRuntime`, optionally with `backward()` or functional `grad`/`vjp`/`jvp` | `EagerSession` methods inside `EagerRuntime::with_eager_session` | Yes, for tracked values |
 | `TracedTensor` | Graph transforms, compilation, `grad`, `vjp`, `jvp`, or graph reuse | `TracedTensor` methods and associated functions | Yes, through graph transforms |
 
 For most code without autodiff, start with `TypedTensor<T, R>` when the scalar type is
@@ -105,16 +105,17 @@ and they do not configure CPU parallelism.
 
 ## TypedTensor Backend Operations
 
-For common typed math without autodiff, `TypedTensorSessionOpsExt` provides
-selected session-explicit methods that accept dynamic-rank `TypedTensor<T>`
-values and return typed results.
+For typed math without autodiff, `CoreOps` (`tenferro_runtime::CoreOps`) is
+the same trait as for `Tensor`: it accepts dynamic-rank `TypedTensor<T>` and
+`TypedTensorView<T>` receivers, takes the engine as the last argument, and
+returns typed results (`TypedTensor<T>`, `TypedTensor<bool>` for
+comparisons). Axis arguments are `isize`; `-1` is the last axis.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_15 -->
 ```rust
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{
-    CompareDir, TypedTensor, TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt,
-};
+    CompareDir, TypedTensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
@@ -136,22 +137,18 @@ assert_eq!(selected.as_slice().unwrap(), &[4.0, 7.0, 9.0]);
 ```
 <!-- end-snippet-source -->
 
-The current typed wrapper set covers:
+`CoreOps` covers elementwise arithmetic and analytic operations, comparisons
+and selection (`compare`, `clamp`, and `where_select`, whose receiver is the `bool`
+condition; a typed condition must be `TypedTensor<bool>`), reductions,
+structural operations, indexing, `matmul` and `dot_general` (with
+`dot_general_with` and `DotGeneralOptions` for per-operand conjugation), and
+`add_into` for a preallocated destination. The generated
+[operation registry](../spec/generated/api-ops.md#core) lists every operation
+with its layout and dtype rules. `convert` and `cast` take the target `DType`
+at run time and therefore return a dtype-erased `Tensor`.
 
-- elementwise arithmetic and analytic operations: `add`, `sub`, `mul`, `div`,
-  `pow`, `maximum`, `minimum`, `neg`, `abs`, `sign`, `conj`, `exp`, `log`,
-  `sin`, `cos`, `tanh`, `sqrt`, `rsqrt`, `expm1`, `log1p`, and `erf`;
-- boolean-producing and selection operations: `compare`, `where_select`, and
-  `clamp`;
-- reduction and structural operations that preserve scalar type: `reduce_sum`,
-  `reshape`, `transpose`, and `broadcast_in_dim`;
-- rank-2 matrix multiplication through `matmul`.
-
-These wrappers are a convenience layer over concrete tensor backend execution.
-For backend-resident CUDA tensors or operation families not covered by the
-typed wrappers, use the runtime-dtype `Tensor` path or the eager/traced layer
-that matches the workflow. Prefer backend-aware typed wrappers for tensor
-reductions and shape operations; reserve `host_data()` and `as_slice()` for
+Use the eager/traced layer that matches the workflow when you need AD. Prefer
+backend-aware `CoreOps` methods for tensor reductions and shape operations; reserve `host_data()` and `as_slice()` for
 host-side inspection, small assertions, or interoperability with ordinary Rust
 slice code.
 
@@ -174,9 +171,8 @@ assert_eq!(x.as_slice().unwrap(), &[2.0, 4.0, 6.0]);
 There is no public closure-style `TypedTensor::map` or `mapv` method in the
 current public API. For host-only transformations, use `host_data`,
 `host_data_mut`, `as_slice`, or `as_slice_mut`. For tensor math,
-reductions, or shape operations that should use backend execution, use typed
-wrappers or the runtime-dtype `Tensor`, `EagerTensor`, or `TracedTensor`
-operation API.
+reductions, or shape operations that should use backend execution, use
+`CoreOps` or the eager or traced operation API.
 
 Host-buffer iteration uses ordinary Rust slice iterators. Backend CPU parallelism is
 controlled by the backend execution context, not by host slice iteration. See
@@ -217,7 +213,7 @@ should remain dynamic.
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_17 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
@@ -353,7 +349,7 @@ Ok(())
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_22 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(
@@ -395,7 +391,7 @@ Ok(())
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_24 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(
@@ -428,7 +424,7 @@ only where a consumer needs batch first.
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#tensor_operations_dot_general_layout -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{DotGeneralConfig, Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{DotGeneralConfig, Tensor, CoreOps};
 
 // Attention scores: q[d, lq, b] and k[d, lk, b] (column-major, batch last).
 let (d, lq, lk, b) = (2, 3, 4, 2);

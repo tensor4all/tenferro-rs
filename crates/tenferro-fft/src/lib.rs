@@ -4,36 +4,46 @@
 //! [`FftBackend`] capability. [`tenferro_cpu::CpuEngine`] implements the
 //! capability through RustFFT. With the `cuda` feature,
 //! `tenferro_gpu::cuda::CudaEngine` executes the
-//! supported one-dimensional F32/F64/C32/C64 operations through dynamically
-//! loaded cuFFT without implicit transfers or CPU fallback. The vendor call
-//! synchronizes at the cuFFT FFI boundary; subsequent CUDA postprocessing and
-//! explicit download remain stream-managed. Backend choice remains explicit.
-//! Concrete non-AD execution uses
-//! [`TensorFftExt`] and [`TensorReadFftExt`]. Eager FFTs use
-//! `EagerSessionFftExt` on a borrowed session when `autodiff` is enabled;
-//! consuming in-place transforms retain `EagerTensorFftExt`. Traced graph
-//! construction uses [`TraceContextFftExt`] on a `TraceContext` value, or
-//! [`TracedTensorFftExt`] for method chaining on a traced tensor.
+//! supported F32/F64/C32/C64 operations through dynamically loaded cuFFT
+//! without implicit transfers or CPU fallback. The vendor call synchronizes at
+//! the cuFFT FFI boundary; subsequent CUDA postprocessing and explicit download
+//! remain stream-managed. Backend choice remains explicit.
+//!
+//! Every operation is declared once in the operation registry (#2552) and
+//! offered on three layers with the same spellings:
+//!
+//! | Layer | Trait | Receiver | Spellings |
+//! |---|---|---|---|
+//! | concrete | [`FftOps`] | anything that implements [`AsView`](tenferro_tensor::AsView) | `x.fft(exec)`, `x.fft_with(&opts, exec)` |
+//! | traced | [`TracedFftOps`] | [`TracedTensor`] | `t.fft()`, `t.fft_with(&opts)` |
+//! | eager (`autodiff`) | `EagerFftOps` | `EagerSession` | `sess.fft(&x)`, `sess.fft_with(&x, &opts)` |
+//!
+//! The operations are `fft`, `ifft`, `rfft`, `irfft` ([`FftOptions`]: `n`,
+//! `axis`, `norm`) and `fftn`, `ifftn`, `rfftn`, `irfftn` ([`FftnOptions`]:
+//! `shape`, `axes`, `norm`). Two exceptions keep their own shape: the
+//! consuming eager transforms `sess.fft_in_place(x, &opts)` /
+//! `sess.ifft_in_place(x, &opts)` (E01) and the plan-cache owner
+//! [`FftExecutor`] (`executor.fft_with(&x, &opts, exec)`, E02). The generated
+//! page `docs/spec/generated/api-ops.md` lists layout handling, errors and
+//! omissions per operation.
 //!
 //! # Cargo features
 //!
 //! | Feature | Enables |
 //! |---|---|
 //! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
-//! | `autodiff` | The eager surface (`EagerSessionFftExt`, `EagerTensorFftExt`) and AD rules. Adds the `tenferro-ad` dependency. |
+//! | `autodiff` | The eager layer (`EagerFftOps`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
 //!
-//! For transforms without AD, use [`TensorFftExt`] / [`TensorReadFftExt`] on
-//! concrete tensors inside a backend session; they need no `autodiff`.
+//! For transforms without AD, use [`FftOps`] on concrete tensors; it needs no
+//! `autodiff`.
 //!
 //! # N-dimensional transforms
 //!
-//! [`FftExecutor::fftn`], [`FftExecutor::ifftn`], [`FftExecutor::rfftn`], and
-//! [`FftExecutor::irfftn`] transform every axis named in `axes`, and
-//! [`TraceContextFftExt`] / [`TracedTensorFftExt`] expose the same four
-//! operations on traced graphs.
-//! One declared axis is the ordinary one-axis transform: it runs the same
-//! single backend call, so `fftn(.., &[axis], ..)` equals [`FftExecutor::fft`].
+//! `fftn`, `ifftn`, `rfftn` and `irfftn` transform every axis in
+//! [`FftnOptions::axes`] (empty selects them as NumPy does). One declared
+//! axis is the ordinary one-axis transform: it runs the same single backend
+//! call, so `fftn` over `[axis]` equals `fft` along `axis`.
 //!
 //! The normalization of [`FftNorm`] is applied once to the whole transform, not
 //! once per axis: the transform over axes with `P = prod(shape over axes)` is
@@ -49,11 +59,13 @@
 //!
 //! # Examples
 //!
+//! Traced: record, compile, run.
+//!
 //! ```
 //! use num_complex::Complex64;
 //! use tenferro_cpu::CpuEngine;
-//! use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-//! use tenferro_fft::{FftNorm, TracedTensorFftExt};
+//! use tenferro_fft::TracedFftOps;
+//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 //!
 //! let trace = TraceContext::new();
 //! let x = trace.from_vec_col_major(
@@ -64,88 +76,42 @@
 //!         Complex64::new(3.0, 0.0),
 //!         Complex64::new(4.0, 0.0),
 //!     ],
-//! )
-//! .unwrap();
-//! let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+//! )?;
+//! let y = x.fft()?;
 //!
-//! let mut compiler = GraphCompiler::new();
-//! let program = compiler.compile(&y).unwrap();
+//! let program = GraphCompiler::new().compile(&y)?;
 //! let mut engine = CpuEngine::serial();
-//! let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+//! let engine_id = tenferro_cpu::runtime_engine_id()?;
 //! let mut builder = Runtime::builder();
-//! builder
-//!     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
-//!     .unwrap();
-//! builder
-//!     .install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id).unwrap())
-//!     .unwrap();
-//! let runtime = builder.build().unwrap();
-//! let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
-//! let out = runtime
-//!     .run(&mut [&mut engine], &prepared, &[])
-//!     .unwrap()
-//!     .pop()
-//!     .unwrap()
-//!     .into_tensor(&mut engine)
-//!     .unwrap();
+//! builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
+//! builder.install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id)?)?;
+//! let runtime = builder.build()?;
+//! let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+//! let out = {
+//!     let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut engine];
+//!     runtime.run(&mut engines, &prepared, &[])?.pop().ok_or("no output")?
+//! }
+//! .into_tensor(&mut engine)?;
 //! assert_eq!(out.shape(), &[4]);
-//! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
+//! assert_eq!(out.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! Concrete, with options:
 //!
 //! ```
 //! use num_complex::Complex64;
 //! use tenferro_cpu::CpuEngine;
-//! use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext, TracedTensor};
-//! use tenferro_fft::{FftNorm, TracedTensorFftExt};
-//!
-//! let trace = TraceContext::new();
-//! let x = trace.from_vec_col_major(
-//!     vec![4],
-//!     vec![
-//!         Complex64::new(1.0, 0.0),
-//!         Complex64::new(2.0, 0.0),
-//!         Complex64::new(3.0, 0.0),
-//!         Complex64::new(4.0, 0.0),
-//!     ],
-//! )
-//! .unwrap();
-//! let y = x.fft(None, -1, FftNorm::Backward).unwrap();
-//!
-//! let mut compiler = GraphCompiler::new();
-//! let program = compiler.compile(&y).unwrap();
-//! let mut engine = CpuEngine::serial();
-//! let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
-//! let mut builder = Runtime::builder();
-//! builder
-//!     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
-//!     .unwrap();
-//! builder
-//!     .install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id).unwrap())
-//!     .unwrap();
-//! let runtime = builder.build().unwrap();
-//! let prepared = runtime.prepare(&program, &[], &[engine.target()]).unwrap();
-//! let out = runtime
-//!     .run(&mut [&mut engine], &prepared, &[])
-//!     .unwrap()
-//!     .pop()
-//!     .unwrap()
-//!     .into_tensor(&mut engine)
-//!     .unwrap();
-//! assert_eq!(out.shape(), &[4]);
-//! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
-//! ```
-//!
-//! ```
-//! use num_complex::Complex64;
-//! use tenferro_cpu::CpuEngine;
-//! use tenferro_fft::{FftNorm, TensorFftExt};
+//! use tenferro_fft::{FftNorm, FftOps, FftOptions};
 //! use tenferro_tensor::Tensor;
 //!
-//! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+//! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 //! let mut engine = CpuEngine::serial();
-//! let out = x.fft(None, -1, FftNorm::Backward, &mut engine).unwrap();
+//! let out = x.fft(&mut engine)?;
+//! assert_eq!(out.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 //!
-//! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
+//! let ortho = x.fft_with(&FftOptions::default().norm(FftNorm::Ortho), &mut engine)?;
+//! assert_eq!(ortho.as_slice::<Complex64>()?[0], Complex64::new(5.0, 0.0));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -174,9 +140,10 @@ use tenferro_runtime::extension::{
 };
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
-use tenferro_runtime::{Error, ErrorPhase, Result, TraceContext, TraceValue, TracedTensor};
+use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
 use tenferro_tensor::{CacheStats, DType, Engine, ErrorKind, Tensor, TensorRead};
 
+mod api;
 mod backend;
 mod cache;
 mod cpu;
@@ -189,13 +156,14 @@ mod eager_in_place;
 pub mod prelude;
 mod spec;
 
+#[cfg(feature = "autodiff")]
+#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
+pub use api::EagerFftOps;
+pub use api::{FftOps, FftOptions, FftRepr, FftScalar, FftnOptions, TracedFftOps};
 pub use backend::{FftBackend, FftExecutionCache};
 pub use cache::{
     fft_plan_cache_selector, FftPlanCache, DEFAULT_FFT_PLAN_CACHE_CAPACITY, FFT_PLAN_CACHE_NAME,
 };
-#[cfg(feature = "autodiff")]
-#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
-pub use eager_ext::{EagerSessionFftExt, EagerTensorFftExt};
 #[cfg(feature = "autodiff")]
 #[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
 pub use eager_in_place::EagerFftInPlaceError;
@@ -216,7 +184,7 @@ pub const FFT_EXTENSION_FAMILY_ID: &str = "tenferro-fft.fft.v1";
 /// Reusable concrete FFT executor with an explicitly owned backend-neutral cache.
 ///
 /// Use this executor for repeated concrete FFT calls that should reuse backend
-/// plans. The immediate [`TensorFftExt`] and [`TensorReadFftExt`] methods stay
+/// plans (exception E02). The [`FftOps`] methods stay
 /// one-shot and do not retain hidden process-global, thread-local, or
 /// backend-owned plan state between calls.
 #[derive(Default)]
@@ -250,323 +218,346 @@ impl FftExecutor {
         self.plans.clear();
     }
 
-    /// Execute a complex or full-spectrum real FFT while reusing owned plans.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n`,
-    /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
-    /// for unsupported dtypes, a typed capability error when the session does
-    /// not expose an FFT execution capability, or a typed backend source for
-    /// execution.
-    pub fn fft(
+    fn one_axis_with(
         &mut self,
+        op: &'static str,
+        operation_of: fn(&'static str, DType) -> tenferro_tensor::Result<FftOperation>,
         input: &Tensor,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
+        opts: &FftOptions,
+        exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
-            concrete_fft_operation("FftExecutor::fft", input.dtype())?,
-            "FftExecutor::fft",
-            n,
-            axis,
-            norm,
-            session,
+            operation_of(op, input.dtype())?,
+            op,
+            opts.n,
+            opts.axis,
+            opts.norm,
+            exec,
         )
     }
 
-    /// Execute an inverse complex FFT while reusing owned plans.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n`,
-    /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
-    /// for a non-complex input, a typed capability error when the session does
-    /// not expose an FFT execution capability, or a typed backend source for
-    /// execution.
-    pub fn ifft(
+    fn n_axes_with(
         &mut self,
+        op: &'static str,
+        operation_of: fn(&'static str, DType) -> tenferro_tensor::Result<FftOperation>,
         input: &Tensor,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
+        opts: &FftnOptions,
+        exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.execute(
+        let axes = opts.resolved_axes(input.shape().len());
+        self.execute_nd(
+            op,
+            operation_of(op, input.dtype())?,
             input,
-            concrete_ifft_operation("FftExecutor::ifft", input.dtype())?,
-            "FftExecutor::ifft",
-            n,
-            axis,
-            norm,
-            session,
+            opts.shape.as_deref(),
+            &axes,
+            opts.norm,
+            exec,
         )
     }
 
-    /// Execute a real FFT while reusing owned plans.
+    /// [`FftOps::fft`] (complex, or full spectrum of a real input) reusing this
+    /// executor's plans. Bit-identical to `FftOps::fft_with` on the same input.
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n`,
-    /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
-    /// for a non-real input, a typed capability error when the session does not
-    /// expose an FFT execution capability, or a typed backend source for
-    /// execution.
-    pub fn rfft(
-        &mut self,
-        input: &Tensor,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        self.execute(
-            input,
-            concrete_rfft_operation("FftExecutor::rfft", input.dtype())?,
-            "FftExecutor::rfft",
-            n,
-            axis,
-            norm,
-            session,
-        )
-    }
-
-    /// Execute an inverse real FFT while reusing owned plans.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds`,
-    /// `InvalidArgument`, or spectrum-length details,
-    /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
-    /// for a non-complex input, a typed capability error when the session does
-    /// not expose an FFT execution capability, or a typed backend source for
-    /// execution.
-    pub fn irfft(
-        &mut self,
-        input: &Tensor,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        self.execute(
-            input,
-            concrete_irfft_operation("FftExecutor::irfft", input.dtype())?,
-            "FftExecutor::irfft",
-            n,
-            axis,
-            norm,
-            session,
-        )
-    }
-
-    /// Execute a forward n-dimensional FFT over `axes`.
-    ///
-    /// `axes` names the transformed axes in transform order. `shape` optionally
-    /// supplies one transform length per axis (default: the input extent),
-    /// matching NumPy's `fftn(a, s, axes)`. Axes may be negative, must be in
-    /// bounds, and must not repeat. A real input returns the full complex
-    /// spectrum like [`Self::fft`]; use [`Self::rfftn`] for the one-sided one.
-    ///
-    /// One axis is not a special case: `fftn(.., None, &[axis], ..)` is exactly
-    /// [`Self::fft`] and runs the same single-axis backend call.
-    ///
-    /// # Normalization
-    ///
-    /// [`FftNorm`] is applied **once** to the whole n-dimensional transform.
-    /// With `P = prod(shape over axes)`: `Backward` leaves the forward transform
-    /// unscaled and scales the inverse by `1 / P`, `Forward` scales the forward
-    /// transform by `1 / P`, and `Ortho` scales both by `1 / sqrt(P)`. The
-    /// per-axis factors of that one factor also make successive one-axis calls
-    /// with the same `norm` agree with this entry point. Applying the whole
-    /// transform's factor once *per axis* instead is a different transform: for
-    /// `k = axes.len()` it leaves an extra `P^(k - 1)` on the scaled side
-    /// (`P^((k - 1) / 2)` for `Ortho`).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::Error::Validation`] for an empty, repeated,
-    /// out-of-bounds, or negative-beyond-rank `axes` entry, a `shape` whose
-    /// length disagrees with `axes`, a zero transform length,
-    /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`] for
-    /// an unsupported dtype, a typed capability error when the session does not
-    /// expose an FFT execution capability, or a typed backend source.
+    /// As [`FftOps::fft`]: `Validation` for an invalid `axis`/`n`,
+    /// `Unsupported` for an unsupported dtype or an engine without an FFT
+    /// capability, or the backend's typed error.
     ///
     /// # Examples
     ///
     /// ```
     /// use num_complex::Complex64;
     /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_fft::{FftExecutor, FftNorm};
+    /// use tenferro_fft::{FftExecutor, FftOptions};
     /// use tenferro_tensor::Tensor;
     ///
     /// let mut executor = FftExecutor::default();
-    /// let mut engine = CpuEngine::serial();
-    /// let input = Tensor::from_vec_col_major([2, 2], vec![Complex64::new(1.0, 0.0); 4])?;
-    /// let output = executor.fftn(&input, None, &[0, 1], FftNorm::Backward, &mut engine)?;
-    /// assert_eq!(output.as_slice::<Complex64>()?[0], Complex64::new(4.0, 0.0));
+    /// let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let y = executor.fft_with(&x, &FftOptions::default(), &mut CpuEngine::serial())?;
+    /// assert_eq!(y.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
+    /// assert!(executor.cache_stats().entries > 0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn fftn(
+    pub fn fft_with(
         &mut self,
         input: &Tensor,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-        session: &mut dyn Engine,
+        opts: &FftOptions,
+        exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.execute_nd(
-            "FftExecutor::fftn",
-            concrete_fft_operation("FftExecutor::fftn", input.dtype())?,
+        self.one_axis_with(
+            "FftExecutor::fft_with",
+            concrete_fft_operation,
             input,
-            shape,
-            axes,
-            norm,
-            session,
+            opts,
+            exec,
         )
     }
 
-    /// Execute an inverse n-dimensional FFT over `axes`.
-    ///
-    /// Normalization is the one stated on [`Self::fftn`]: the inverse transform
-    /// is scaled once by `1 / prod(shape over axes)` under [`FftNorm::Backward`].
+    /// [`FftOps::ifft`] reusing this executor's plans.
     ///
     /// # Errors
     ///
-    /// Returns the same validation, capability, and backend errors as
-    /// [`Self::fftn`], plus [`ErrorKind::Unsupported`] for a non-complex input.
+    /// As [`FftOps::ifft`]: `Validation` for an invalid `axis`/`n`,
+    /// `Unsupported` for an unsupported dtype or an engine without an FFT
+    /// capability, or the backend's typed error.
     ///
     /// # Examples
     ///
     /// ```
     /// use num_complex::Complex64;
     /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_fft::{FftExecutor, FftNorm};
+    /// use tenferro_fft::{FftExecutor, FftOptions};
     /// use tenferro_tensor::Tensor;
     ///
     /// let mut executor = FftExecutor::default();
-    /// let mut engine = CpuEngine::serial();
-    /// let input = Tensor::from_vec_col_major([2, 3], vec![Complex64::new(1.0, 0.0); 6])?;
-    /// let output = executor.ifftn(&input, None, &[0, 1], FftNorm::Backward, &mut engine)?;
-    /// assert_eq!(output.as_slice::<Complex64>()?[0], Complex64::new(1.0, 0.0));
+    /// let x = Tensor::from_vec_col_major(
+    ///     vec![2],
+    ///     vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)],
+    /// )?;
+    /// let y = executor.ifft_with(&x, &FftOptions::default(), &mut CpuEngine::serial())?;
+    /// assert_eq!(y.as_slice::<Complex64>()?[1], Complex64::new(2.0, 0.0));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn ifftn(
+    pub fn ifft_with(
         &mut self,
         input: &Tensor,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-        session: &mut dyn Engine,
+        opts: &FftOptions,
+        exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.execute_nd(
-            "FftExecutor::ifftn",
-            concrete_ifft_operation("FftExecutor::ifftn", input.dtype())?,
+        self.one_axis_with(
+            "FftExecutor::ifft_with",
+            concrete_ifft_operation,
             input,
-            shape,
-            axes,
-            norm,
-            session,
+            opts,
+            exec,
         )
     }
 
-    /// Execute a real-to-complex n-dimensional FFT over `axes`.
-    ///
-    /// The last requested axis carries the real transform of length `n`, so the
-    /// output keeps `n / 2 + 1` points there and the full spectrum on the other
-    /// axes, as in NumPy's `rfftn`. The real transform runs first, which is why
-    /// the per-axis loop starts from the last declared axis.
+    /// [`FftOps::rfft`] reusing this executor's plans.
     ///
     /// # Errors
     ///
-    /// Returns the same validation, capability, and backend errors as
-    /// [`Self::fftn`], plus [`ErrorKind::Unsupported`] for a non-`F32`/`F64`
-    /// input.
+    /// As [`FftOps::rfft`]: `Validation` for an invalid `axis`/`n` or a
+    /// non-real input, `Unsupported` for an unsupported dtype or an engine
+    /// without an FFT capability, or the backend's typed error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_fft::{FftExecutor, FftOptions};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let mut executor = FftExecutor::default();
+    /// let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let y = executor.rfft_with(&x, &FftOptions::default(), &mut CpuEngine::serial())?;
+    /// assert_eq!(y.shape(), &[3]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn rfft_with(
+        &mut self,
+        input: &Tensor,
+        opts: &FftOptions,
+        exec: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.one_axis_with(
+            "FftExecutor::rfft_with",
+            concrete_rfft_operation,
+            input,
+            opts,
+            exec,
+        )
+    }
+
+    /// [`FftOps::irfft`] reusing this executor's plans.
+    ///
+    /// # Errors
+    ///
+    /// As [`FftOps::irfft`]: `Validation` for an invalid `axis`/`n` or a
+    /// complex input, `Unsupported` for an unsupported dtype or an engine
+    /// without an FFT capability, or the backend's typed error.
     ///
     /// # Examples
     ///
     /// ```
     /// use num_complex::Complex64;
     /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_fft::{FftExecutor, FftNorm};
+    /// use tenferro_fft::{FftExecutor, FftOptions};
     /// use tenferro_tensor::Tensor;
     ///
     /// let mut executor = FftExecutor::default();
-    /// let mut engine = CpuEngine::serial();
-    /// let input = Tensor::from_vec_col_major([2, 4], vec![1.0_f64; 8])?;
-    /// let output = executor.rfftn(&input, None, &[0, 1], FftNorm::Backward, &mut engine)?;
-    /// assert_eq!(output.shape(), &[2, 3]);
-    /// assert_eq!(output.as_slice::<Complex64>()?[0], Complex64::new(8.0, 0.0));
+    /// let x = Tensor::from_vec_col_major(
+    ///     vec![3],
+    ///     vec![Complex64::new(10.0, 0.0), Complex64::new(0.0, 0.0), Complex64::new(-2.0, 0.0)],
+    /// )?;
+    /// let y = executor.irfft_with(&x, &FftOptions::default(), &mut CpuEngine::serial())?;
+    /// assert_eq!(y.shape(), &[4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn rfftn(
+    pub fn irfft_with(
         &mut self,
         input: &Tensor,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-        session: &mut dyn Engine,
+        opts: &FftOptions,
+        exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.execute_nd(
-            "FftExecutor::rfftn",
-            concrete_rfft_operation("FftExecutor::rfftn", input.dtype())?,
+        self.one_axis_with(
+            "FftExecutor::irfft_with",
+            concrete_irfft_operation,
             input,
-            shape,
-            axes,
-            norm,
-            session,
+            opts,
+            exec,
         )
     }
 
-    /// Execute a complex-to-real n-dimensional FFT over `axes`.
-    ///
-    /// This is the inverse of [`Self::rfftn`]: the last requested axis carries
-    /// the one-sided Hermitian spectrum and is reconstructed last, so
-    /// `irfftn(rfftn(x)) == x` for a real `x` under [`FftNorm::Backward`].
+    /// [`FftOps::fftn`] reusing this executor's plans.
     ///
     /// # Errors
     ///
-    /// Returns the same validation, capability, and backend errors as
-    /// [`Self::fftn`], plus [`ErrorKind::Unsupported`] for a non-complex input
-    /// and a spectrum-length mismatch for the real axis.
+    /// As [`FftOps::fftn`]: `Validation` for an invalid `axes`/`shape`/`n`,
+    /// `Unsupported` for an unsupported dtype or an engine without an N-d FFT
+    /// capability, or the backend's typed error.
     ///
     /// # Examples
     ///
     /// ```
     /// use num_complex::Complex64;
     /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_fft::{FftExecutor, FftNorm};
+    /// use tenferro_fft::{FftExecutor, FftnOptions};
     /// use tenferro_tensor::Tensor;
     ///
     /// let mut executor = FftExecutor::default();
-    /// let mut engine = CpuEngine::serial();
-    /// let input = Tensor::from_vec_col_major([2, 3], vec![Complex64::new(1.0, 0.0); 6])?;
-    /// let output = executor.irfftn(&input, Some(&[2, 4]), &[0, 1], FftNorm::Backward, &mut engine)?;
-    /// assert_eq!(output.shape(), &[2, 4]);
+    /// let x = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+    /// let y = executor.fftn_with(&x, &FftnOptions::default(), &mut CpuEngine::serial())?;
+    /// assert_eq!(y.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn irfftn(
+    pub fn fftn_with(
         &mut self,
         input: &Tensor,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-        session: &mut dyn Engine,
+        opts: &FftnOptions,
+        exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.execute_nd(
-            "FftExecutor::irfftn",
-            concrete_irfft_operation("FftExecutor::irfftn", input.dtype())?,
+        self.n_axes_with(
+            "FftExecutor::fftn_with",
+            concrete_fft_operation,
             input,
-            shape,
-            axes,
-            norm,
-            session,
+            opts,
+            exec,
+        )
+    }
+
+    /// [`FftOps::ifftn`] reusing this executor's plans.
+    ///
+    /// # Errors
+    ///
+    /// As [`FftOps::ifftn`]: `Validation` for an invalid `axes`/`shape`/`n`,
+    /// `Unsupported` for an unsupported dtype or an engine without an N-d FFT
+    /// capability, or the backend's typed error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_fft::{FftExecutor, FftnOptions};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let mut executor = FftExecutor::default();
+    /// let x = Tensor::from_vec_col_major(vec![1, 2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)])?;
+    /// let y = executor.ifftn_with(&x, &FftnOptions::default(), &mut CpuEngine::serial())?;
+    /// assert_eq!(y.as_slice::<Complex64>()?[1], Complex64::new(2.0, 0.0));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn ifftn_with(
+        &mut self,
+        input: &Tensor,
+        opts: &FftnOptions,
+        exec: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.n_axes_with(
+            "FftExecutor::ifftn_with",
+            concrete_ifft_operation,
+            input,
+            opts,
+            exec,
+        )
+    }
+
+    /// [`FftOps::rfftn`] reusing this executor's plans.
+    ///
+    /// # Errors
+    ///
+    /// As [`FftOps::rfftn`]: `Validation` for an invalid `axes`/`shape`/`n` or a
+    /// non-real input, `Unsupported` for an unsupported dtype or an engine
+    /// without an N-d FFT capability, or the backend's typed error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_fft::{FftExecutor, FftnOptions};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let mut executor = FftExecutor::default();
+    /// let x = Tensor::from_vec_col_major(vec![2, 4], vec![1.0_f64; 8])?;
+    /// let y = executor.rfftn_with(&x, &FftnOptions::default(), &mut CpuEngine::serial())?;
+    /// assert_eq!(y.shape(), &[2, 3]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn rfftn_with(
+        &mut self,
+        input: &Tensor,
+        opts: &FftnOptions,
+        exec: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.n_axes_with(
+            "FftExecutor::rfftn_with",
+            concrete_rfft_operation,
+            input,
+            opts,
+            exec,
+        )
+    }
+
+    /// [`FftOps::irfftn`] reusing this executor's plans.
+    ///
+    /// # Errors
+    ///
+    /// As [`FftOps::irfftn`]: `Validation` for an invalid `axes`/`shape`/`n` or a
+    /// complex input, `Unsupported` for an unsupported dtype or an engine
+    /// without an N-d FFT capability, or the backend's typed error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_fft::{FftExecutor, FftnOptions};
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let mut executor = FftExecutor::default();
+    /// let mut spectrum = vec![Complex64::new(0.0, 0.0); 6];
+    /// spectrum[0] = Complex64::new(8.0, 0.0);
+    /// let x = Tensor::from_vec_col_major(vec![2, 3], spectrum)?;
+    /// let y = executor.irfftn_with(&x, &FftnOptions::default(), &mut CpuEngine::serial())?;
+    /// assert_eq!(y.as_slice::<f64>()?, &[1.0; 8]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn irfftn_with(
+        &mut self,
+        input: &Tensor,
+        opts: &FftnOptions,
+        exec: &mut dyn Engine,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.n_axes_with(
+            "FftExecutor::irfftn_with",
+            concrete_irfft_operation,
+            input,
+            opts,
+            exec,
         )
     }
 
@@ -632,1182 +623,6 @@ impl FftExecutor {
                 input,
                 &spec,
                 FftExecutionCache::caller_owned(&mut self.plans),
-            )
-        })
-    }
-}
-
-/// FFT tracing methods for [`TraceContext`].
-///
-/// Each method records one semantic FFT extension operation on one trait
-/// input value. Plan selection, cache ownership, and execution stay in the
-/// runtime and the backend, exactly as [`TracedTensorFftExt`] describes.
-///
-/// # Examples
-///
-/// ```
-/// use num_complex::Complex64;
-/// use tenferro_fft::{FftNorm, TraceContextFftExt};
-/// use tenferro_runtime::TraceContext;
-///
-/// let trace = TraceContext::new();
-/// let spectrum = trace.from_vec_col_major(
-///     vec![2],
-///     vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)],
-/// )?;
-/// let restored = trace.ifft(spectrum.trace_value(), None, -1, FftNorm::Backward)?;
-/// assert_eq!(restored.rank(), 1);
-/// assert_eq!(trace.finish(&[restored.trace_value()])?.program().operations().count(), 1);
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
-pub trait TraceContextFftExt {
-    /// Build a traced complex or full-spectrum real FFT.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TraceContextFftExt};
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let spectrum = trace.from_vec_col_major(
-    ///     vec![4],
-    ///     vec![
-    ///         Complex64::new(1.0, 0.0),
-    ///         Complex64::new(1.0, 0.0),
-    ///         Complex64::new(1.0, 0.0),
-    ///         Complex64::new(1.0, 0.0),
-    ///     ],
-    /// )?;
-    /// let output = trace.fft(spectrum.trace_value(), None, -1, FftNorm::Backward)?;
-    /// assert_eq!(output.rank(), 1);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n`, or `Error::Extension` with
-    /// `ErrorKind::Unsupported` for integer, boolean, or otherwise unsupported
-    /// dtypes, and `Error::RuntimeStateSource` when `input` belongs to another
-    /// context.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic axis extents and extension execution failures are checked at
-    /// compile or execution time after concrete inputs are bound.
-    fn fft(
-        &self,
-        input: TraceValue,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-    ) -> Result<TracedTensor>;
-
-    /// Build a traced inverse complex FFT.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TraceContextFftExt};
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let spectrum =
-    ///     trace.from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0); 2])?;
-    /// let restored = trace.ifft(spectrum.trace_value(), None, -1, FftNorm::Backward)?;
-    /// assert_eq!(restored.rank(), 1);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n`, `Error::Extension` with
-    /// `ErrorKind::Unsupported` when the input is not `C32`/`C64`, and
-    /// `Error::RuntimeStateSource` for a value from another context.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic shape and extension execution failures may be deferred to
-    /// compile or execution.
-    fn ifft(
-        &self,
-        input: TraceValue,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-    ) -> Result<TracedTensor>;
-
-    /// Build a traced one-sided real FFT.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_fft::{FftNorm, TraceContextFftExt};
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-    /// let spectrum = trace.rfft(x.trace_value(), None, -1, FftNorm::Backward)?;
-    /// assert_eq!(spectrum.rank(), 1);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n`, `Error::Extension` with
-    /// `ErrorKind::Unsupported` when the input is not `F32`/`F64`, and
-    /// `Error::RuntimeStateSource` for a value from another context.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic shape and extension execution failures may be deferred to
-    /// compile or execution.
-    fn rfft(
-        &self,
-        input: TraceValue,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-    ) -> Result<TracedTensor>;
-
-    /// Build a traced inverse one-sided real FFT.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TraceContextFftExt};
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let spectrum =
-    ///     trace.from_vec_col_major(vec![3], vec![Complex64::new(1.0, 0.0); 3])?;
-    /// let restored = trace.irfft(spectrum.trace_value(), Some(4), -1, FftNorm::Backward)?;
-    /// assert_eq!(restored.rank(), 1);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n` or spectrum length,
-    /// `Error::Extension` with `ErrorKind::Unsupported` for non-complex input,
-    /// and `Error::RuntimeStateSource` for a value from another context.
-    ///
-    /// # Deferred errors
-    ///
-    /// A symbolic spectrum length is resolved at preparation, where this op's
-    /// own `Validation::InvalidArgument` surfaces at `ErrorPhase::Compile`; an
-    /// empty batch it accepts stays accepted, and execution failures stay
-    /// deferred.
-    fn irfft(
-        &self,
-        input: TraceValue,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-    ) -> Result<TracedTensor>;
-
-    /// Build a traced n-dimensional forward FFT over `axes`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TraceContextFftExt};
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let input = trace.from_vec_col_major(vec![2, 2], vec![Complex64::new(1.0, 0.0); 4])?;
-    /// let output = trace.fftn(input.trace_value(), None, &[0, 1], FftNorm::Backward)?;
-    /// assert_eq!(output.rank(), 2);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` for an empty, repeated, or out-of-bounds
-    /// `axes` entry or a `shape` that does not have one length per axis,
-    /// `Error::Extension` with `ErrorKind::Unsupported` for integer, boolean, or
-    /// otherwise unsupported dtypes, and `Error::RuntimeStateSource` for a value
-    /// from another context.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic axis extents and extension execution failures are checked at
-    /// compile or execution time after concrete inputs are bound.
-    fn fftn(
-        &self,
-        input: TraceValue,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor>;
-
-    /// Build a traced inverse n-dimensional FFT over `axes`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TraceContextFftExt};
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let spectrum =
-    ///     trace.from_vec_col_major(vec![2, 3], vec![Complex64::new(1.0, 0.0); 6])?;
-    /// let restored = trace.ifftn(spectrum.trace_value(), None, &[0, 1], FftNorm::Backward)?;
-    /// assert_eq!(restored.rank(), 2);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns the validation errors of [`Self::fftn`], `Error::Extension` with
-    /// `ErrorKind::Unsupported` when the input is not `C32`/`C64`, and
-    /// `Error::RuntimeStateSource` for a value from another context.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic shape and extension execution failures may be deferred to
-    /// compile or execution.
-    fn ifftn(
-        &self,
-        input: TraceValue,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor>;
-
-    /// Build a traced real-to-complex n-dimensional FFT over `axes`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_fft::{FftNorm, TraceContextFftExt};
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 4], vec![1.0_f64; 8])?;
-    /// let spectrum = trace.rfftn(x.trace_value(), None, &[0, 1], FftNorm::Backward)?;
-    /// assert_eq!(spectrum.rank(), 2);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns the validation errors of [`Self::fftn`], `Error::Extension` with
-    /// `ErrorKind::Unsupported` when the input is not `F32`/`F64`, and
-    /// `Error::RuntimeStateSource` for a value from another context.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic shape and extension execution failures may be deferred to
-    /// compile or execution.
-    fn rfftn(
-        &self,
-        input: TraceValue,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor>;
-
-    /// Build a traced complex-to-real n-dimensional FFT over `axes`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TraceContextFftExt};
-    /// use tenferro_runtime::TraceContext;
-    ///
-    /// let trace = TraceContext::new();
-    /// let spectrum =
-    ///     trace.from_vec_col_major(vec![2, 3], vec![Complex64::new(1.0, 0.0); 6])?;
-    /// let restored =
-    ///     trace.irfftn(spectrum.trace_value(), Some(&[2, 4]), &[0, 1], FftNorm::Backward)?;
-    /// assert_eq!(restored.rank(), 2);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns the validation errors of [`Self::fftn`], `Error::Extension` with
-    /// `ErrorKind::Unsupported` when the input is not `C32`/`C64`, a
-    /// spectrum-length mismatch for the real axis, and
-    /// `Error::RuntimeStateSource` for a value from another context.
-    ///
-    /// # Deferred errors
-    ///
-    /// A symbolic spectrum length is resolved at preparation, where this op's
-    /// own `Validation::InvalidArgument` surfaces at `ErrorPhase::Compile`; an
-    /// empty batch it accepts stays accepted, and execution failures stay
-    /// deferred.
-    fn irfftn(
-        &self,
-        input: TraceValue,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor>;
-}
-
-impl TraceContextFftExt for TraceContext {
-    fn fft(
-        &self,
-        input: TraceValue,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        let input = self.derive_tensor(input)?;
-        let operation = runtime_forward_fft_operation(input.dtype())?;
-        let lengths = single_axis_lengths(n);
-        apply_unary_fftn(
-            "fft",
-            &input,
-            operation,
-            lengths.as_ref().map(|lengths| lengths.as_slice()),
-            "n",
-            &[axis],
-            norm,
-        )
-    }
-
-    fn ifft(
-        &self,
-        input: TraceValue,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        let input = self.derive_tensor(input)?;
-        require_runtime_dtype(
-            "ifft",
-            input.dtype(),
-            &[DType::C32, DType::C64],
-            "C32 or C64",
-        )?;
-        let lengths = single_axis_lengths(n);
-        apply_unary_fftn(
-            "ifft",
-            &input,
-            FftOperation::C2cInverse,
-            lengths.as_ref().map(|lengths| lengths.as_slice()),
-            "n",
-            &[axis],
-            norm,
-        )
-    }
-
-    fn rfft(
-        &self,
-        input: TraceValue,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        let input = self.derive_tensor(input)?;
-        require_runtime_dtype(
-            "rfft",
-            input.dtype(),
-            &[DType::F32, DType::F64],
-            "F32 or F64",
-        )?;
-        let lengths = single_axis_lengths(n);
-        apply_unary_fftn(
-            "rfft",
-            &input,
-            FftOperation::R2cOnesided,
-            lengths.as_ref().map(|lengths| lengths.as_slice()),
-            "n",
-            &[axis],
-            norm,
-        )
-    }
-
-    fn irfft(
-        &self,
-        input: TraceValue,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        let input = self.derive_tensor(input)?;
-        require_runtime_dtype(
-            "irfft",
-            input.dtype(),
-            &[DType::C32, DType::C64],
-            "C32 or C64",
-        )?;
-        let lengths = single_axis_lengths(n);
-        apply_unary_fftn(
-            "irfft",
-            &input,
-            FftOperation::C2r,
-            lengths.as_ref().map(|lengths| lengths.as_slice()),
-            "n",
-            &[axis],
-            norm,
-        )
-    }
-
-    fn fftn(
-        &self,
-        input: TraceValue,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        let input = self.derive_tensor(input)?;
-        require_runtime_dtype(
-            "fftn",
-            input.dtype(),
-            &[DType::F32, DType::F64, DType::C32, DType::C64],
-            "F32, F64, C32, or C64",
-        )?;
-        let operation = runtime_forward_fft_operation(input.dtype())?;
-        apply_unary_fftn("fftn", &input, operation, shape, "shape", axes, norm)
-    }
-
-    fn ifftn(
-        &self,
-        input: TraceValue,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        let input = self.derive_tensor(input)?;
-        require_runtime_dtype(
-            "ifftn",
-            input.dtype(),
-            &[DType::C32, DType::C64],
-            "C32 or C64",
-        )?;
-        apply_unary_fftn(
-            "ifftn",
-            &input,
-            FftOperation::C2cInverse,
-            shape,
-            "shape",
-            axes,
-            norm,
-        )
-    }
-
-    fn rfftn(
-        &self,
-        input: TraceValue,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        let input = self.derive_tensor(input)?;
-        require_runtime_dtype(
-            "rfftn",
-            input.dtype(),
-            &[DType::F32, DType::F64],
-            "F32 or F64",
-        )?;
-        apply_unary_fftn(
-            "rfftn",
-            &input,
-            FftOperation::R2cOnesided,
-            shape,
-            "shape",
-            axes,
-            norm,
-        )
-    }
-
-    fn irfftn(
-        &self,
-        input: TraceValue,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        let input = self.derive_tensor(input)?;
-        require_runtime_dtype(
-            "irfftn",
-            input.dtype(),
-            &[DType::C32, DType::C64],
-            "C32 or C64",
-        )?;
-        apply_unary_fftn(
-            "irfftn",
-            &input,
-            FftOperation::C2r,
-            shape,
-            "shape",
-            axes,
-            norm,
-        )
-    }
-}
-
-/// FFT extension methods for [`TracedTensor`].
-pub trait TracedTensorFftExt {
-    /// Build a traced complex or full-spectrum real FFT.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n`, or `Error::Extension` with
-    /// `ErrorKind::Unsupported` for integer, boolean, or otherwise unsupported
-    /// dtypes.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic axis extents and extension execution failures are checked at
-    /// compile or execution time after concrete inputs are bound.
-    fn fft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor>;
-
-    /// Build a traced inverse complex FFT.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n`, or `Error::Extension` with
-    /// `ErrorKind::Unsupported` when the input is not `C32`/`C64`.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic shape and extension execution failures may be deferred to
-    /// compile or execution.
-    fn ifft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor>;
-
-    /// Build a traced one-sided real FFT.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n`, or `Error::Extension` with
-    /// `ErrorKind::Unsupported` when the input is not `F32`/`F64`.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic shape and extension execution failures may be deferred to
-    /// compile or execution.
-    fn rfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor>;
-
-    /// Build a traced inverse one-sided real FFT.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or
-    /// `InvalidArgument` for invalid `axis`/`n` or spectrum length, or
-    /// `Error::Extension` with `ErrorKind::Unsupported` for non-complex input.
-    ///
-    /// # Deferred errors
-    ///
-    /// A symbolic spectrum length is resolved at preparation, where this op's own
-    /// `Validation::InvalidArgument` surfaces at `ErrorPhase::Compile`; an empty
-    /// batch it accepts stays accepted, and execution failures stay deferred.
-    fn irfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor>;
-
-    /// Build a traced n-dimensional forward FFT over `axes`.
-    ///
-    /// `shape` supplies one transform length per axis and defaults to the input
-    /// extents. Normalization is the single per-transform factor documented on
-    /// [`FftExecutor::fftn`], and a one-element `axes` is exactly [`Self::fft`].
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` for an empty, repeated, or out-of-bounds
-    /// `axes` entry or a `shape` that does not have one length per axis, and
-    /// `Error::Extension` with `ErrorKind::Unsupported` for integer, boolean, or
-    /// otherwise unsupported dtypes.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic axis extents and extension execution failures are checked at
-    /// compile or execution time after concrete inputs are bound.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
-    ///
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 2], vec![Complex64::new(1.0, 0.0); 4])?;
-    /// let y = x.fftn(None, &[0, 1], FftNorm::Backward)?;
-    /// # let mut compiler = GraphCompiler::new();
-    /// # let program = compiler.compile(&y)?;
-    /// # let mut engine = CpuEngine::serial();
-    /// # let engine_id = tenferro_cpu::runtime_engine_id()?;
-    /// # let mut builder = Runtime::builder();
-    /// # builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
-    /// # builder.install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id)?)?;
-    /// # let runtime = builder.build()?;
-    /// # let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
-    /// # let out = runtime
-    /// #     .run(&mut [&mut engine], &prepared, &[])?
-    /// #     .pop()
-    /// #     .unwrap()
-    /// #     .into_tensor(&mut engine)?;
-    /// assert_eq!(out.as_slice::<Complex64>()?[0], Complex64::new(4.0, 0.0));
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    fn fftn(&self, shape: Option<&[usize]>, axes: &[isize], norm: FftNorm) -> Result<TracedTensor>;
-
-    /// Build a traced inverse n-dimensional FFT over `axes`.
-    ///
-    /// # Errors
-    ///
-    /// Returns the validation errors of [`Self::fftn`] and
-    /// `Error::Extension` with `ErrorKind::Unsupported` when the input is not
-    /// `C32`/`C64`.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic shape and extension execution failures may be deferred to
-    /// compile or execution.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
-    ///
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 3], vec![Complex64::new(1.0, 0.0); 6])?;
-    /// let y = x.ifftn(None, &[0, 1], FftNorm::Backward)?;
-    /// # let mut compiler = GraphCompiler::new();
-    /// # let program = compiler.compile(&y)?;
-    /// # let mut engine = CpuEngine::serial();
-    /// # let engine_id = tenferro_cpu::runtime_engine_id()?;
-    /// # let mut builder = Runtime::builder();
-    /// # builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
-    /// # builder.install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id)?)?;
-    /// # let runtime = builder.build()?;
-    /// # let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
-    /// # let out = runtime
-    /// #     .run(&mut [&mut engine], &prepared, &[])?
-    /// #     .pop()
-    /// #     .unwrap()
-    /// #     .into_tensor(&mut engine)?;
-    /// assert_eq!(out.as_slice::<Complex64>()?[0], Complex64::new(1.0, 0.0));
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    fn ifftn(&self, shape: Option<&[usize]>, axes: &[isize], norm: FftNorm)
-        -> Result<TracedTensor>;
-
-    /// Build a traced real-to-complex n-dimensional FFT over `axes`.
-    ///
-    /// The last requested axis carries the real transform and keeps `n / 2 + 1`
-    /// points of the returned one-sided Hermitian spectrum.
-    ///
-    /// # Errors
-    ///
-    /// Returns the validation errors of [`Self::fftn`] and
-    /// `Error::Extension` with `ErrorKind::Unsupported` when the input is not
-    /// `F32`/`F64`.
-    ///
-    /// # Deferred errors
-    ///
-    /// Symbolic shape and extension execution failures may be deferred to
-    /// compile or execution.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
-    ///
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 4], vec![1.0_f64; 8])?;
-    /// let y = x.rfftn(None, &[0, 1], FftNorm::Backward)?;
-    /// # let mut compiler = GraphCompiler::new();
-    /// # let program = compiler.compile(&y)?;
-    /// # let mut engine = CpuEngine::serial();
-    /// # let engine_id = tenferro_cpu::runtime_engine_id()?;
-    /// # let mut builder = Runtime::builder();
-    /// # builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
-    /// # builder.install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id)?)?;
-    /// # let runtime = builder.build()?;
-    /// # let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
-    /// # let out = runtime
-    /// #     .run(&mut [&mut engine], &prepared, &[])?
-    /// #     .pop()
-    /// #     .unwrap()
-    /// #     .into_tensor(&mut engine)?;
-    /// assert_eq!(out.shape(), &[2, 3]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    fn rfftn(&self, shape: Option<&[usize]>, axes: &[isize], norm: FftNorm)
-        -> Result<TracedTensor>;
-
-    /// Build a traced complex-to-real n-dimensional FFT over `axes`.
-    ///
-    /// This is the inverse of [`Self::rfftn`]: the last requested axis carries
-    /// the one-sided Hermitian spectrum that is reconstructed last.
-    ///
-    /// # Errors
-    ///
-    /// Returns the validation errors of [`Self::fftn`],
-    /// `Error::Extension` with `ErrorKind::Unsupported` when the input is not
-    /// `C32`/`C64`, and a spectrum-length mismatch for the real axis.
-    ///
-    /// # Deferred errors
-    ///
-    /// A symbolic spectrum length is resolved at preparation, where this op's own
-    /// `Validation::InvalidArgument` surfaces at `ErrorPhase::Compile`; an empty
-    /// batch it accepts stays accepted, and execution failures stay deferred.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tenferro_cpu::CpuEngine;
-    /// # use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-    /// use num_complex::Complex64;
-    /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
-    ///
-    /// let trace = TraceContext::new();
-    /// let x = trace.from_vec_col_major(vec![2, 3], vec![Complex64::new(1.0, 0.0); 6])?;
-    /// let y = x.irfftn(Some(&[2, 4]), &[0, 1], FftNorm::Backward)?;
-    /// # let mut compiler = GraphCompiler::new();
-    /// # let program = compiler.compile(&y)?;
-    /// # let mut engine = CpuEngine::serial();
-    /// # let engine_id = tenferro_cpu::runtime_engine_id()?;
-    /// # let mut builder = Runtime::builder();
-    /// # builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
-    /// # builder.install_extension_module(tenferro_fft::extension_module::<CpuEngine>(engine_id)?)?;
-    /// # let runtime = builder.build()?;
-    /// # let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
-    /// # let out = runtime
-    /// #     .run(&mut [&mut engine], &prepared, &[])?
-    /// #     .pop()
-    /// #     .unwrap()
-    /// #     .into_tensor(&mut engine)?;
-    /// assert_eq!(out.shape(), &[2, 4]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    fn irfftn(
-        &self,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor>;
-}
-
-impl TracedTensorFftExt for TracedTensor {
-    fn fft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
-        self.context().fft(self.trace_value(), n, axis, norm)
-    }
-
-    fn ifft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
-        self.context().ifft(self.trace_value(), n, axis, norm)
-    }
-
-    fn rfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
-        self.context().rfft(self.trace_value(), n, axis, norm)
-    }
-
-    fn irfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
-        self.context().irfft(self.trace_value(), n, axis, norm)
-    }
-
-    fn fftn(&self, shape: Option<&[usize]>, axes: &[isize], norm: FftNorm) -> Result<TracedTensor> {
-        self.context().fftn(self.trace_value(), shape, axes, norm)
-    }
-
-    fn ifftn(
-        &self,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        self.context().ifftn(self.trace_value(), shape, axes, norm)
-    }
-
-    fn rfftn(
-        &self,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        self.context().rfftn(self.trace_value(), shape, axes, norm)
-    }
-
-    fn irfftn(
-        &self,
-        shape: Option<&[usize]>,
-        axes: &[isize],
-        norm: FftNorm,
-    ) -> Result<TracedTensor> {
-        self.context().irfftn(self.trace_value(), shape, axes, norm)
-    }
-}
-
-/// Backend-explicit FFT methods for concrete [`Tensor`] values.
-///
-/// This is the non-AD immediate execution surface. It uses unsuffixed method
-/// names because the receiver is an owned compact tensor value. Use
-/// [`TensorReadFftExt`] when the input is a borrowed view or other
-/// [`TensorRead`] value.
-///
-/// Direct calls intentionally use a call-local one-shot FFT plan cache. Use
-/// [`FftExecutor`] for repeated concrete calls with stable transform lengths,
-/// or traced/runtime execution when the runtime should own the extension cache.
-///
-/// # Examples
-///
-/// ```
-/// use num_complex::Complex64;
-/// use tenferro_cpu::CpuEngine;
-/// use tenferro_fft::{FftNorm, TensorFftExt};
-/// use tenferro_tensor::Tensor;
-///
-/// let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
-/// let mut engine = CpuEngine::serial();
-///
-/// let spectrum = input.fft(None, -1, FftNorm::Backward, &mut engine)?;
-/// assert_eq!(spectrum.shape(), &[4]);
-/// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
-/// # Ok::<(), tenferro_tensor::Error>(())
-/// ```
-pub trait TensorFftExt {
-    /// Execute a one-dimensional FFT along `axis`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
-    /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// integer or boolean input, a typed capability error when the session
-    /// does not expose an FFT execution capability, or a typed backend source
-    /// for execution.
-    fn fft(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
-
-    /// Execute a one-dimensional inverse FFT along `axis`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
-    /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
-    /// non-complex input, a typed capability error when the session does not
-    /// expose an FFT execution capability, or a typed backend source for
-    /// execution.
-    fn ifft(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
-
-    /// Execute a one-dimensional real FFT along `axis`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
-    /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
-    /// non-`F32`/`F64` input, a typed capability error when the session does
-    /// not expose an FFT execution capability, or a typed backend source for
-    /// execution.
-    fn rfft(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
-
-    /// Execute a one-dimensional inverse real FFT along `axis`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds`, `InvalidArgument`,
-    /// or spectrum-length details, `Error::Extension` with
-    /// `ErrorKind::Unsupported` for a non-complex input, a typed capability
-    /// error when the session does not expose an FFT execution capability, or
-    /// a typed backend source for execution.
-    fn irfft(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
-}
-
-impl TensorFftExt for Tensor {
-    fn fft(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        let spec = concrete_fft_spec(
-            "TensorFftExt::fft",
-            concrete_fft_operation("TensorFftExt::fft", self.dtype())?,
-            self.dtype(),
-            self.shape(),
-            n,
-            axis,
-            norm,
-        )?;
-        with_fft_exec_session(session, "TensorFftExt::fft", |backend| {
-            execute_concrete_fft_op(self, &spec, backend)
-        })
-    }
-
-    fn ifft(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        let spec = concrete_fft_spec(
-            "TensorFftExt::ifft",
-            concrete_ifft_operation("TensorFftExt::ifft", self.dtype())?,
-            self.dtype(),
-            self.shape(),
-            n,
-            axis,
-            norm,
-        )?;
-        with_fft_exec_session(session, "TensorFftExt::ifft", |backend| {
-            execute_concrete_fft_op(self, &spec, backend)
-        })
-    }
-
-    fn rfft(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        let spec = concrete_fft_spec(
-            "TensorFftExt::rfft",
-            concrete_rfft_operation("TensorFftExt::rfft", self.dtype())?,
-            self.dtype(),
-            self.shape(),
-            n,
-            axis,
-            norm,
-        )?;
-        with_fft_exec_session(session, "TensorFftExt::rfft", |backend| {
-            execute_concrete_fft_op(self, &spec, backend)
-        })
-    }
-
-    fn irfft(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        let spec = concrete_fft_spec(
-            "TensorFftExt::irfft",
-            concrete_irfft_operation("TensorFftExt::irfft", self.dtype())?,
-            self.dtype(),
-            self.shape(),
-            n,
-            axis,
-            norm,
-        )?;
-        with_fft_exec_session(session, "TensorFftExt::irfft", |backend| {
-            execute_concrete_fft_op(self, &spec, backend)
-        })
-    }
-}
-
-/// Backend-explicit FFT methods for read-only tensor inputs.
-///
-/// The `_read` suffix follows the repository convention for APIs that
-/// explicitly accept [`TensorRead`] values such as borrowed views.
-///
-/// Direct read calls intentionally materialize through a call-local one-shot
-/// FFT plan cache. Use [`FftExecutor`] on compact owned tensors when repeated
-/// concrete calls should retain backend plans across calls.
-///
-/// # Examples
-///
-/// ```
-/// use num_complex::Complex64;
-/// use tenferro_cpu::CpuEngine;
-/// use tenferro_fft::{FftNorm, TensorReadFftExt};
-/// use tenferro_tensor::{TensorRead, TensorView};
-///
-/// let shape = [4usize];
-/// let data = [1.0_f64, 2.0, 3.0, 4.0];
-/// let input = TensorRead::from_view(TensorView::f64(&shape, &data)?);
-/// let mut engine = CpuEngine::serial();
-///
-/// let spectrum = input.fft_read(None, -1, FftNorm::Backward, &mut engine)?;
-/// assert_eq!(spectrum.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
-/// # Ok::<(), tenferro_tensor::Error>(())
-/// ```
-pub trait TensorReadFftExt {
-    /// Execute a one-dimensional FFT along `axis`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
-    /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for an
-    /// integer or boolean input, a typed capability error when the session
-    /// does not expose an FFT execution capability, or a typed backend source
-    /// for materialization or execution.
-    fn fft_read(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
-
-    /// Execute a one-dimensional inverse FFT along `axis`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
-    /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
-    /// non-complex input, a typed capability error when the session does not
-    /// expose an FFT execution capability, or a typed backend source for
-    /// materialization.
-    fn ifft_read(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
-
-    /// Execute a one-dimensional real FFT along `axis`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
-    /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
-    /// non-`F32`/`F64` input, a typed capability error when the session does
-    /// not expose an FFT execution capability, or a typed backend source for
-    /// materialization.
-    fn rfft_read(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
-
-    /// Execute a one-dimensional inverse real FFT along `axis`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Error::Validation` with `AxisOutOfBounds`, `InvalidArgument`,
-    /// or spectrum-length details, `Error::Extension` with
-    /// `ErrorKind::Unsupported` for a non-complex input, a typed capability
-    /// error when the session does not expose an FFT execution capability, or
-    /// a typed backend source for materialization.
-    fn irfft_read(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor>;
-}
-
-impl TensorReadFftExt for TensorRead<'_> {
-    fn fft_read(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        with_fft_exec_session(session, "TensorReadFftExt::fft_read", |backend| {
-            execute_concrete_fft_read_op(
-                self,
-                concrete_fft_operation("TensorReadFftExt::fft_read", self.dtype())?,
-                "TensorReadFftExt::fft_read",
-                n,
-                axis,
-                norm,
-                backend,
-            )
-        })
-    }
-
-    fn ifft_read(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        with_fft_exec_session(session, "TensorReadFftExt::ifft_read", |backend| {
-            execute_concrete_fft_read_op(
-                self,
-                concrete_ifft_operation("TensorReadFftExt::ifft_read", self.dtype())?,
-                "TensorReadFftExt::ifft_read",
-                n,
-                axis,
-                norm,
-                backend,
-            )
-        })
-    }
-
-    fn rfft_read(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        with_fft_exec_session(session, "TensorReadFftExt::rfft_read", |backend| {
-            execute_concrete_fft_read_op(
-                self,
-                concrete_rfft_operation("TensorReadFftExt::rfft_read", self.dtype())?,
-                "TensorReadFftExt::rfft_read",
-                n,
-                axis,
-                norm,
-                backend,
-            )
-        })
-    }
-
-    fn irfft_read(
-        &self,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        with_fft_exec_session(session, "TensorReadFftExt::irfft_read", |backend| {
-            execute_concrete_fft_read_op(
-                self,
-                concrete_irfft_operation("TensorReadFftExt::irfft_read", self.dtype())?,
-                "TensorReadFftExt::irfft_read",
-                n,
-                axis,
-                norm,
-                backend,
             )
         })
     }
@@ -2770,19 +1585,9 @@ fn normalize_axis(op: &'static str, axis: isize, rank: usize) -> tenferro_tensor
             "FFT requires rank >= 1",
         ));
     }
-    let normalized = if axis >= 0 {
-        axis as usize
-    } else {
-        rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
-            tenferro_tensor::Error::axis_out_of_bounds(op, axis.unsigned_abs(), rank)
-        })?
-    };
-    if normalized >= rank {
-        return Err(tenferro_tensor::Error::axis_out_of_bounds(
-            op, normalized, rank,
-        ));
-    }
-    Ok(normalized)
+    // One shared normalization; the error keeps the caller's signed axis.
+    tenferro_tensor::normalize_axis(axis, rank)
+        .map_err(|source| tenferro_tensor::Error::validation(op, source))
 }
 
 /// Build the one-axis operation descriptor used by the eager builder, which
@@ -3045,247 +1850,4 @@ mod concrete_tests;
 mod nd_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fft_infer_output_meta_rejects_invalid_trait_inputs_without_panicking() {
-        let op = FftOp::new(FftOperation::R2cOnesided, vec![0], None, FftNorm::Backward);
-        let shape = [SymDim::from(4usize)];
-
-        assert!(
-            tenferro_ops::ext_op::invoke_extension_shape_inference(&op, &[], &[&shape]).is_err()
-        );
-        assert!(
-            tenferro_ops::ext_op::invoke_extension_shape_inference(&op, &[DType::F64], &[])
-                .is_err()
-        );
-        assert!(tenferro_ops::ext_op::invoke_extension_shape_inference(
-            &op,
-            &[DType::I64],
-            &[&shape]
-        )
-        .is_err());
-
-        let bad_axis = FftOp::new(FftOperation::C2cForward, vec![2], None, FftNorm::Backward);
-        assert!(tenferro_ops::ext_op::invoke_extension_shape_inference(
-            &bad_axis,
-            &[DType::C64],
-            &[&shape]
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn symbolic_irfft_rejects_a_length_one_spectrum_like_the_concrete_path() {
-        let op = FftOp::new(FftOperation::C2r, vec![0], None, FftNorm::Backward);
-        let shape = [SymDim::from(1usize)];
-
-        let symbolic =
-            tenferro_ops::ext_op::invoke_extension_shape_inference(&op, &[DType::C64], &[&shape])
-                .expect_err("a length-1 one-sided spectrum has output length 0");
-        let concrete =
-            output_shape_c2r(&[1usize], 0, None).expect_err("the concrete path rejects the same");
-
-        assert_eq!(symbolic.to_string(), concrete.to_string());
-    }
-
-    #[test]
-    fn symbolic_transform_length_rejects_zero_like_the_concrete_path() {
-        for (operation, dtype) in [
-            (FftOperation::C2cForward, DType::C64),
-            (FftOperation::R2cOnesided, DType::F64),
-        ] {
-            let concrete = transform_len(&[0usize], 0, None)
-                .expect_err("the concrete path rejects a zero transform length");
-
-            let zero_input = FftOp::new(operation, vec![0], None, FftNorm::Backward);
-            let shape = [SymDim::from(0usize)];
-            let symbolic = tenferro_ops::ext_op::invoke_extension_shape_inference(
-                &zero_input,
-                &[dtype],
-                &[&shape],
-            )
-            .expect_err("a symbolic zero extent must be rejected the same way");
-            assert_eq!(symbolic.to_string(), concrete.to_string(), "{operation:?}");
-
-            let zero_length = FftOp::new(operation, vec![0], Some(vec![0]), FftNorm::Backward);
-            let shape = [SymDim::from(4usize)];
-            let symbolic = tenferro_ops::ext_op::invoke_extension_shape_inference(
-                &zero_length,
-                &[dtype],
-                &[&shape],
-            )
-            .expect_err("an explicit zero transform length must be rejected");
-            assert_eq!(symbolic.to_string(), concrete.to_string(), "{operation:?}");
-        }
-    }
-
-    #[test]
-    fn checked_shape_product_rejects_overflow_before_allocation() {
-        let err = cpu::checked_shape_product("fft", "output", &[usize::MAX, 2])
-            .expect_err("overflowing output shape should be rejected");
-
-        assert!(err.to_string().contains("overflows usize"), "{err}");
-    }
-
-    #[test]
-    fn irfft_default_output_length_rejects_overflow() {
-        let err = output_shape_c2r(&[usize::MAX], 0, None)
-            .expect_err("default irfft output length should reject overflow");
-
-        assert!(err.to_string().contains("overflows usize"), "{err}");
-    }
-
-    #[test]
-    fn normalize_axis_handles_large_rank_without_isize_cast_wrap() {
-        assert_eq!(normalize_axis("fft", 0, usize::MAX).unwrap(), 0);
-        assert_eq!(
-            normalize_axis("fft", -1, usize::MAX).unwrap(),
-            usize::MAX - 1
-        );
-        assert!(normalize_axis("fft", isize::MIN, 3).is_err());
-    }
-
-    #[test]
-    fn axis_lane_layout_rejects_stride_overflow() {
-        let err = cpu::LaneLayout::new(&[usize::MAX, 2], 1, 2)
-            .expect_err("lane layout should reject stride overflow");
-
-        assert!(err.to_string().contains("overflows usize"), "{err}");
-    }
-
-    #[cfg(feature = "autodiff")]
-    #[test]
-    fn fft_semantic_rules_emit_extension_first_jvp_and_length_restoring_transpose() {
-        use tenferro_ops::dim_expr::DimExpr;
-        use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef, SemanticProgramBuilder};
-
-        let fft_op = FftOp::new(
-            FftOperation::C2cForward,
-            vec![0],
-            Some(vec![2]),
-            FftNorm::Backward,
-        );
-        let mut source = SemanticProgramBuilder::new();
-        let source_input = source
-            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
-            .unwrap();
-        let source_output = source
-            .add_extension(Arc::new(fft_op), &[source_input])
-            .unwrap()[0];
-        let source = source.finish(&[source_output]).unwrap();
-        let operation = source.program.operations().next().unwrap();
-
-        let rules = semantic_ad_rules().unwrap();
-        let mut destination = SemanticProgramBuilder::new();
-        let primal = destination
-            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
-            .unwrap();
-        let tangent = destination
-            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
-            .unwrap();
-        let primal_output = destination
-            .add_extension(
-                Arc::new(FftOp::new(
-                    FftOperation::C2cForward,
-                    vec![0],
-                    Some(vec![2]),
-                    FftNorm::Backward,
-                )),
-                &[primal],
-            )
-            .unwrap()[0];
-        let linearized = rules
-            .linearize_operation(
-                operation,
-                &[primal],
-                &[primal_output],
-                &[AdValue::Value(tangent)],
-                &[true],
-                &mut destination,
-            )
-            .unwrap();
-        let AdValue::Value(tangent_output) = linearized.tangent_outputs()[0] else {
-            panic!("FFT tangent must be active");
-        };
-        let cotangent_inputs = rules
-            .linear_transpose_operation(
-                operation,
-                &[primal],
-                &[primal_output],
-                &[AdValue::Value(tangent_output)],
-                &[true],
-                linearized.residuals(),
-                &mut destination,
-            )
-            .unwrap();
-        let AdValue::Value(cotangent_input) = cotangent_inputs[0] else {
-            panic!("FFT cotangent must be active");
-        };
-        let frozen = destination
-            .finish(&[tangent_output, cotangent_input])
-            .unwrap();
-        let operations: Vec<_> = frozen.program.operations().collect();
-        assert!(
-            operations
-                .iter()
-                .filter(|operation| matches!(operation.op(), SemanticOpRef::Extension(_)))
-                .count()
-                >= 3
-        );
-        assert!(operations.iter().any(|operation| matches!(
-            operation.op(),
-            SemanticOpRef::Core(CoreSemanticOp::DynamicTruncate { axis: 0 })
-        )));
-        assert!(operations.iter().any(|operation| matches!(
-            operation.op(),
-            SemanticOpRef::Core(CoreSemanticOp::PadToMatch { axis: 0 })
-        )));
-    }
-
-    #[cfg(feature = "autodiff")]
-    #[test]
-    fn fft_semantic_rules_run_through_whole_program_jvp_and_vjp() {
-        use tenferro_ad::AdContext;
-        use tenferro_ops::dim_expr::DimExpr;
-        use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef, SemanticProgramBuilder};
-
-        let mut builder = SemanticProgramBuilder::new();
-        let input = builder
-            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
-            .unwrap();
-        let output = builder
-            .add_extension(
-                Arc::new(FftOp::new(
-                    FftOperation::C2cForward,
-                    vec![0],
-                    Some(vec![2]),
-                    FftNorm::Backward,
-                )),
-                &[input],
-            )
-            .unwrap()[0];
-        let source = builder.finish(&[output]).unwrap();
-        let ad = AdContext::builder()
-            .with_semantic_extension_rules(semantic_ad_rules().unwrap())
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let jvp = ad.jvp_program(&source, &[true]).unwrap();
-        assert_eq!(jvp.derivative_input_indices(), &[Some(1)]);
-        assert!(matches!(
-            jvp.frozen().program.operations().last().unwrap().op(),
-            SemanticOpRef::Extension(op) if op.family_id() == FFT_EXTENSION_FAMILY_ID
-        ));
-
-        let vjp = ad.vjp_program(&source, &[true], &[true]).unwrap();
-        assert_eq!(vjp.derivative_output_indices(), &[Some(0)]);
-        assert!(vjp.frozen().program.operations().any(|operation| matches!(
-            operation.op(),
-            SemanticOpRef::Core(CoreSemanticOp::PadToMatch { axis: 0 })
-                | SemanticOpRef::Core(CoreSemanticOp::DynamicTruncate { axis: 0 })
-        )));
-    }
-}
+mod lib_tests;

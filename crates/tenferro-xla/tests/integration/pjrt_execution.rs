@@ -2,7 +2,7 @@
 
 use std::sync::MutexGuard;
 
-use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_einsum::TracedEinsumOps;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec};
 use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, TraceContext};
@@ -110,7 +110,7 @@ fn pjrt_executes_nary_einsum_plus_elementwise_from_rust_when_configured() {
 }
 
 fn compile_nary_einsum(postprocess: bool) -> CompiledGraph {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let inputs = [[2, 3], [3, 4], [4, 2]].map(|shape| {
         trace
             .input(ProgramInputSpec::new(
@@ -119,7 +119,11 @@ fn compile_nary_einsum(postprocess: bool) -> CompiledGraph {
             ))
             .unwrap()
     });
-    let mut output = trace.einsum(&inputs, "ij,jk,kl->il").unwrap();
+    let inputs = inputs.map(|value| trace.derive_tensor(value).unwrap());
+    let mut output = trace
+        .einsum(&[&inputs[0], &inputs[1], &inputs[2]], "ij,jk,kl->il")
+        .unwrap()
+        .trace_value();
     if postprocess {
         for op in [
             CoreSemanticOp::Abs,

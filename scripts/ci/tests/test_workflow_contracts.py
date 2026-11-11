@@ -1072,9 +1072,11 @@ class WorkflowContractTests(unittest.TestCase):
         embeds: set[str] = set()
         for rust_file in (ROOT / "crates").rglob("*.rs"):
             source = rust_file.read_text()
-            if "include_str!" not in source and "include_bytes!" not in source:
-                continue
-            for quoted in re.findall(r'"([^"]+\.md)"', source):
+            for match in re.finditer(
+                r'include_(?:str|bytes)!\s*\(\s*"([^"]+\.md)"',
+                source,
+            ):
+                quoted = match.group(1)
                 repo_relative = re.sub(r"^(\.\./|/)+", "", quoted)
                 self.assertTrue(
                     (ROOT / repo_relative).is_file(),

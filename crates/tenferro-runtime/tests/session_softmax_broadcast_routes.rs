@@ -6,7 +6,7 @@ use tenferro_cpu::CpuEngine;
 use tenferro_runtime::composite::{
     set_broadcast_route_observation, take_broadcast_routes, BroadcastRoute,
 };
-use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, TypedTensor};
 
 #[test]
 fn the_session_softmax_broadcasts_as_a_view() -> tenferro_runtime::Result<()> {

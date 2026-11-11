@@ -1,13 +1,16 @@
 # Linear Algebra
 
 tenferro exposes linear algebra through the `tenferro-linalg` operation crate.
-Use `TensorLinalgExt`, `TensorReadLinalgExt`, or `TypedTensorLinalgExt` for direct
-execution without autodiff, `EagerSessionLinalgExt` inside
-`EagerRuntime::with_eager_session` for eager `backward()` / functional transform
-workflows (with `EagerTensorLinalgExt::solve` as a calling-thread `no_grad`
-exception), and `TracedTensorLinalgExt` when the
-operation should be part of a graph, `grad`/`vjp`/`jvp`, or repeated compile/run
-workflow.
+Every operation has the same name and options on three layers: `LinalgOps`
+for direct execution without autodiff (`a.svd(exec)`,
+`a.svd_with(&opts, exec)`; the receiver is any `Tensor`, `TensorRead`,
+`TypedTensor<T>`, or `TypedTensorView<T>`), `EagerLinalgOps` on the
+`EagerSession` borrowed inside `EagerRuntime::with_eager_session` for eager
+`backward()` / functional transform workflows (`sess.svd(&x)`), and
+`TracedLinalgOps` on `TracedTensor` when the operation should be part of a
+graph, `grad`/`vjp`/`jvp`, or repeated compile/run workflow (`t.svd()`). The
+generated [operation registry](../spec/generated/api-ops.md#linalg) lists every
+operation with its options type, layout handling, errors, and omissions.
 
 ## Setup
 
@@ -42,8 +45,8 @@ tenferro-linalg = { version = "...", features = ["autodiff"] }
 Concrete graph/runtime users can omit `tenferro-ad` and the `autodiff` feature
 when they do not need eager linalg helpers or linalg AD rules. For
 inference-only code, call the operations on `Tensor`/`TypedTensor` inside a
-backend session (`TensorLinalgExt` / `TypedTensorLinalgExt`, for example
-`triangular_solve`, `solve`, `cholesky`); that route needs no `autodiff`. There
+backend session (`LinalgOps`, for example `triangular_solve`, `solve`,
+`cholesky`); that route needs no `autodiff`. There
 is no separate eager-without-AD feature: `EagerSession` lives in `tenferro-ad`,
 which is all that `autodiff` adds, so such a feature would save no dependency.
 The examples below are Rust fragments; copy them into `fn main() -> Result<(),
@@ -53,9 +56,9 @@ Box<dyn std::error::Error>>` for a standalone binary.
 
 | Layer | Linear algebra style |
 | --- | --- |
-| Concrete `Tensor` / `TensorRead` / `TypedTensor<T>` | crate-root linalg extension traits; methods take the caller's `&mut dyn Engine` |
-| `EagerTensor` | `EagerSessionLinalgExt` methods on a borrowed `EagerSession` behind `autodiff`, except tensor-owned `EagerTensorLinalgExt::solve`; tracked variables support `backward()` and functional transforms where AD rules support the operation |
-| `TracedTensor` | `TracedTensorLinalgExt` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
+| Concrete `Tensor` / `TensorRead` / `TypedTensor<T>` / `TypedTensorView<T>` | `LinalgOps` methods; the caller's `&mut dyn Engine` is the last argument |
+| `EagerTensor` | `EagerLinalgOps` methods on a borrowed `EagerSession` behind `autodiff` (`sess.solve(&a, &b)`); tracked variables support `backward()` and functional transforms where AD rules support the operation |
+| `TracedTensor` | `TracedLinalgOps` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
 
 CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 `TracedTensor` paths. It is not a separate linear algebra layer. See
@@ -63,39 +66,55 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 
 ## Operation Surface
 
-| Operation family | Concrete backend | Eager helper | Traced helper |
-| --- | --- | --- | --- |
-| Dense solve | `solve` | `solve` | `solve` |
-| Triangular solve | `triangular_solve` | `triangular_solve` | `triangular_solve` |
-| Cholesky | `cholesky` | `cholesky` | `cholesky` |
-| SVD | `svd`, `svdvals`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
-| QR | `qr`, `qr_with_options` | `qr`, `qr_with_options` | `qr`, `qr_with_options` |
-| Incremental compact QR | `householder_qr`, `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` | `EagerSessionLinalgExt::householder_qr` and state operations with `&mut EagerSession` | same state operations on `TracedTensor` |
-| Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` | `eigh`, `eigh_with_options`, `eigvalsh` |
-| General eigen | `eig` | `eig`, `eigvals` | `eig`, `eigvals` |
-| LU | `lu` | `lu` | `lu` |
-| Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` |
-| Pseudoinverse | `pinv` | `pinv`, `pinv_with_rtol` | `pinv`, `pinv_with_rtol` |
-| Determinants | `det`, `slogdet` | `det`, `slogdet` | `det`, `slogdet` |
-| Matrix inverse | `inv` | `inv` | `inv` |
-| Norms | `norm` | `norm` | `norm` |
+Each operation below exists on all three layers (`LinalgOps`,
+`EagerLinalgOps`, `TracedLinalgOps`) as `op` with default options and
+`op_with(&XxxOptions)` with explicit options. An operation without options
+(`solve`, `lstsq`, `householder_qr`, `lu`, `full_piv_lu`, `full_piv_lu_solve`,
+`eig`, `eigvals`, `slogdet`, `det`, `inv`) has only `op` and has no Options
+type or `_with` form. Multi-output operations return
+named structs: `Svd { u, s, vh }`, `Qr { q, r }`, `Lu { p, l, u, parity }`,
+`FullPivLu { p, l, u, q, parity }`, `Eig { values, vectors }`,
+`Eigh { values, vectors }`, and `Slogdet { sign, log_abs_det }`.
 
-Concrete, read, typed, eager-session, and traced tensor APIs are crate-root
-extension traits. Eager decompositions take `&mut EagerSession` from
-`EagerRuntime::with_eager_session`; do not call the tensor-owned `solve` entry
-inside an active borrowed session. Concrete methods take `&mut dyn Engine` obtained through
-the caller-held engine. `TensorReadLinalgExt::svdvals_read`
-and `eigvalsh_read` accept borrowed inputs. A provider may consume the borrowed
+| Operation family | Operations | Options |
+| --- | --- | --- |
+| Dense solve | `solve`; concrete `solve_into` (overwrite) | none |
+| Least squares | `lstsq` | none |
+| Triangular solve | `triangular_solve`, `triangular_solve_with` | `TriangularSolveOptions` (`side`, `uplo`, `op`, `diag`) |
+| Cholesky | `cholesky`, `cholesky_with` | `CholeskyOptions` |
+| SVD | `svd`, `svd_with`, `svdvals`, `svdvals_with` | `SvdOptions` (`shape(SvdShape::Full)` for full factors, `gauge`, `derivative_eps`, `driver`), `SvdvalsOptions` |
+| QR | `qr`, `qr_with` | `QrOptions` |
+| Incremental compact QR | `householder_qr`; state methods `HouseholderQr::from_factors`, `append_columns`, `r`, `q_columns` (eager: with `&mut EagerSession`; traced: on `TracedTensor` state) | none |
+| Rank-revealing QR | `rank_revealing_qr`, `rank_revealing_qr_with` | `RankRevealingQrOptions` |
+| Hermitian eigen | `eigh`, `eigh_with`, `eigvalsh`, `eigvalsh_with` | `EighOptions`, `EigvalshOptions` |
+| General eigen | `eig`, `eigvals` | none |
+| LU | `lu` | none |
+| Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` | none |
+| Pseudoinverse | `pinv`, `pinv_with` | `PinvOptions` (`rtol`) |
+| Determinants | `det`, `slogdet` | none |
+| Matrix inverse | `inv` | none |
+| Norms | `norm`, `norm_with` | `NormOptions` (`ord: NormOrd`, `axes`, `keep_dims`) |
+
+Options types are `#[non_exhaustive]`; build them with
+`XxxOptions::default()` and the setters, for example
+`PinvOptions::default().rtol(Some(1e-12))`. Axis arguments such as
+`NormOptions::axes` are signed: `-1` is the last axis.
+
+Eager decompositions take the `&mut EagerSession` from
+`EagerRuntime::with_eager_session` as the receiver. Concrete methods take the
+caller-held `&mut dyn Engine` as the last argument. Borrowed inputs
+(`TensorRead`, `TypedTensorView<T>`, transposed or negative-stride views) use
+the same method names as owned tensors. A provider may consume the borrowed
 view without copying it when its own layout rules allow, and otherwise
 materializes it once inside its own boundary; no zero-copy guarantee is made,
 the borrowed source is never modified, and a provider that cannot read the view
-returns a typed error instead of a narrowed result. A values-only backend
-capability returns only the
-values tensor and does not allocate singular/eigenvectors; unsupported
-providers return a typed error rather than computing a full decomposition and
-discarding its factors. `LinalgBackend` is the SPI provider contract used by
-backend implementations and lower-level session tests, not by ordinary
-callers.
+returns a typed error instead of a narrowed result. The registry's `Layout`
+entry states the rule per operation. A values-only backend capability
+(`svdvals`, `eigvalsh`, `eigvals`) returns only the values tensor and does not
+allocate singular/eigenvectors; unsupported providers return a typed error
+rather than computing a full decomposition and discarding its factors.
+`LinalgBackend` is the SPI provider contract used by backend implementations
+and lower-level session tests, not by ordinary callers.
 
 ## Batch And Inner Parallelism
 
@@ -122,7 +141,7 @@ than silently changing the algorithm or execution backend.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_1 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::LinalgOps;
 use tenferro_runtime::Tensor;
 
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
@@ -140,8 +159,8 @@ assert_eq!(x.as_slice::<f64>()?, &[2.0, 3.0]);
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_2 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_linalg::LinalgOps;
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -193,8 +212,8 @@ let ad = AdContext::builder()
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_4 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_linalg::{LinalgOps, Svd};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -207,7 +226,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0])?;
 let mut engine = CpuEngine::serial();
-let (u, s, vt) = a.svd(&mut engine)?;
+let Svd { u, s, vh: vt } = a.svd(&mut engine)?;
 
 assert_eq!(u.shape(), &[2, 2]);
 assert_eq!(vt.shape(), &[2, 2]);
@@ -236,7 +255,7 @@ not change the forward decomposition algorithm.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_5 -->
 ```rust
-use tenferro_linalg::{SvdGauge, SvdOptions, TracedTensorLinalgExt};
+use tenferro_linalg::{Svd, SvdGauge, SvdOptions, TracedLinalgOps};
 use tenferro_runtime::{TraceContext, TracedTensor};
 let trace = TraceContext::new();
 
@@ -248,12 +267,10 @@ let a = trace.from_vec_col_major(
         0.0, 0.0, 1.0,
     ],
 )?;
-let (u, s, vt) = a
-    .svd_with_options(
-        SvdOptions::default()
+let Svd { u, s, vh: vt } = a
+    .svd_with(&SvdOptions::default()
             .gauge(SvdGauge::CanonicalPivot)
-            .derivative_eps(1.0e-10),
-    )?;
+            .derivative_eps(1.0e-10))?;
 
 let rank = 2;
 let u_rank2 = u.slice_axis(1, 0..rank)?;
@@ -287,7 +304,7 @@ rank-deficient `F32`/`C32` explicit request.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_svd_driver -->
 ```rust
-use tenferro_linalg::{SvdDriver, SvdOptions, TracedTensorLinalgExt};
+use tenferro_linalg::{Svd, SvdDriver, SvdOptions, TracedLinalgOps};
 use tenferro_runtime::{TraceContext, TracedTensor};
 let trace = TraceContext::new();
 
@@ -299,7 +316,7 @@ let a = trace.from_vec_col_major(
     ],
 )?;
 // Forces cuSOLVER `gesvd` on CUDA; CPU providers ignore the driver.
-let (u, s, vt) = a.svd_with_options(SvdOptions::default().driver(SvdDriver::QrBased))?;
+let Svd { u, s, vh: vt } = a.svd_with(&SvdOptions::default().driver(SvdDriver::QrBased))?;
 
 assert_eq!(u.concrete_shape()?, vec![3, 2]);
 assert_eq!(s.concrete_shape()?, vec![2]);
@@ -325,7 +342,7 @@ ignore the driver.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_eigh_driver -->
 ```rust
-use tenferro_linalg::{EighDriver, EighOptions, TracedTensorLinalgExt};
+use tenferro_linalg::{Eigh, EighDriver, EighOptions, TracedLinalgOps};
 use tenferro_runtime::{TraceContext, TracedTensor};
 let trace = TraceContext::new();
 
@@ -339,8 +356,8 @@ let a = trace.from_vec_col_major(
 )?;
 // On CUDA this reaches `syevjBatched`: one launch for the whole batch.
 // CPU providers ignore the driver.
-let (values, vectors) =
-    a.eigh_with_options(EighOptions::default().driver(EighDriver::Jacobi))?;
+let Eigh { values, vectors } =
+    a.eigh_with(&EighOptions::default().driver(EighDriver::Jacobi))?;
 
 assert_eq!(values.concrete_shape()?, vec![2, 2]);
 assert_eq!(vectors.concrete_shape()?, vec![2, 2, 2]);
@@ -352,7 +369,7 @@ selected axis needs repeated or reordered indices:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_6 -->
 ```rust
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::{Svd, TracedLinalgOps};
 use tenferro_runtime::{TraceContext, TracedTensor};
 let trace = TraceContext::new();
 
@@ -364,7 +381,7 @@ let a = trace.from_vec_col_major(
         0.0, 0.0, 1.0,
     ],
 )?;
-let (_u, s, _vt) = a.svd()?;
+let Svd { u: _u, s, vh: _vt } = a.svd()?;
 let repeated = s.take_axis(0, &[0, 1, 0])?;
 
 assert_eq!(repeated.concrete_shape()?, vec![3]);
@@ -376,8 +393,8 @@ assert_eq!(repeated.concrete_shape()?, vec![3]);
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_7 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_linalg::{LinalgOps, Qr, QrGauge, QrOptions};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -397,10 +414,7 @@ let a = Tensor::from_vec_col_major(
     ],
 )?;
 let mut engine = CpuEngine::serial();
-let (q, r) = a.qr_with_options(
-    QrOptions::default().gauge(QrGauge::PositiveDiagonal),
-    &mut engine,
-)?;
+let Qr { q, r } = a.qr_with(&QrOptions::default().gauge(QrGauge::PositiveDiagonal), &mut engine)?;
 
 let identity = Tensor::from_vec_col_major(
     vec![3, 3],
@@ -429,8 +443,8 @@ you need:
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#incremental_householder_qr -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_linalg::{QrGauge, QrOptions, LinalgOps};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let initial = Tensor::from_vec_col_major(
     vec![3, 2],
@@ -484,8 +498,8 @@ shape, dtype, provider, or thread count.
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_8 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_linalg::{Eigh, LinalgOps};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -498,7 +512,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Erro
 }
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0])?;
 let mut engine = CpuEngine::serial();
-let (values, vectors) = a.eigh(&mut engine)?;
+let Eigh { values, vectors } = a.eigh(&mut engine)?;
 
 assert_eq!(values.shape(), &[2]);
 assert_eq!(vectors.shape(), &[2, 2]);
@@ -523,7 +537,7 @@ assert!(max_abs_diff(&reconstructed, &a)? < 1.0e-12);
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
 let trace = TraceContext::new();
 
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
@@ -555,7 +569,7 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 0.0, 0.0, 3.0]);
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
 use tenferro_runtime::{TraceContext, ExecutionEngine, GraphCompiler, Runtime, TracedTensor};
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
 let trace = TraceContext::new();
 
 let a = trace.from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0])?;
@@ -584,18 +598,18 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 3.0]);
 
 ## Complete-Pivot LU Solve
 
-`full_piv_lu` returns `(P, L, U, Q, parity)` with the reconstruction convention
+`full_piv_lu` returns `FullPivLu { p, l, u, q, parity }` with the reconstruction convention
 `A = P^T * L * U * Q`, equivalently `P * A * Q^T = L * U`. The `parity` output
-is a scalar real tensor containing `+1` or `-1`: `F32` for `F32`/`C32` inputs
-and `F64` for `F64`/`C64` inputs. The tensor extension
-`full_piv_lu_solve` solves `A * x = b`; the lower-level backend contract also
+is a scalar tensor containing `+1` or `-1`. On an owned `Tensor` it is real (`F32` for `F32`/`C32` inputs
+and `F64` for `F64`/`C64` inputs); the borrowed route returns it in the input dtype, and a typed complex call
+returns `Unsupported` until the two routes agree (#2552 Q21). `full_piv_lu_solve` solves `A * x = b`; the lower-level backend contract also
 exposes an explicit transpose flag.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_11 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_linalg::{FullPivLu, LinalgOps};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> Result<f64, tenferro_tensor::Error> {
     let lhs = lhs.as_slice::<f64>()?;
@@ -618,7 +632,7 @@ let a = Tensor::from_vec_col_major(
 )?;
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 
-let (p, l, u, q, parity) = a.full_piv_lu(&mut engine)?;
+let FullPivLu { p, l, u, q, parity } = a.full_piv_lu(&mut engine)?;
 let pt = p.transpose(&[1, 0], &mut engine)?;
 let pt_l = pt.matmul(&l, &mut engine)?;
 let pt_lu = pt_l.matmul(&u, &mut engine)?;

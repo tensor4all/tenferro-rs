@@ -127,6 +127,7 @@ pub(crate) fn merge_broadcast_extent(
 /// was a broadcast singleton. The two non-`Keep` variants both remove the label
 /// from the VJP einsum's output, which sums the cotangent over it, and then
 /// broadcast the result back to the active operand's shape.
+#[cfg(any(feature = "autodiff", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AxisCotangent {
     /// Some other extent of the label equals the active extent, so the VJP
@@ -141,6 +142,7 @@ pub(crate) enum AxisCotangent {
     ExpandSingletonPeers,
 }
 
+#[cfg(any(feature = "autodiff", test))]
 impl AxisCotangent {
     /// Whether the VJP einsum leaves the label out of its output, so that it
     /// is summed there and restored by a broadcast to the active shape.
@@ -150,6 +152,7 @@ impl AxisCotangent {
 }
 
 /// The extents could not decide whether an active axis was broadcast.
+#[cfg(any(feature = "autodiff", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UndecidedBroadcastAxis;
 
@@ -178,6 +181,7 @@ pub(crate) fn classify_dim_exprs(lhs: Option<&DimExpr>, rhs: Option<&DimExpr>) -
 ///
 /// Only an op that admits broadcasting asks; without it every shared extent
 /// is equal and every axis is kept.
+#[cfg(any(feature = "autodiff", test))]
 pub(crate) fn broadcast_axis_reduce(
     pairs: impl IntoIterator<Item = ExtentPair>,
 ) -> Result<AxisCotangent, UndecidedBroadcastAxis> {

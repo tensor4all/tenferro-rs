@@ -1,10 +1,11 @@
 use std::env;
 use std::sync::Arc;
+use tenferro_linalg::Lu;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::EagerSessionLinalgExt;
+use tenferro_linalg::{Diag, EagerLinalgOps, Side, TriangularSolveOptions, Uplo};
 use tenferro_runtime::DotGeneralConfig;
 
 const DEFAULT_SIZES: &[usize] = &[256, 512];
@@ -130,15 +131,26 @@ fn fixture(n: usize, threads: usize) -> Fixture {
     let rhs = eager(&ctx, vec![n, n], dense_matrix(n, 3));
     let scalar_one = eager(&ctx, vec![], vec![1.0]);
 
-    let (_p, l, u, _parity) = ctx
+    let Lu {
+        p: _p,
+        l,
+        u,
+        parity: _parity,
+    } = ctx
         .with_eager_session(&mut engine, |s| s.lu(&matrix))
         .unwrap();
     let lu_loss = ctx
         .with_eager_session(&mut engine, |s| {
             let l_axes: Vec<usize> = (0..l.shape().len()).collect();
             let u_axes: Vec<usize> = (0..u.shape().len()).collect();
-            let l_sum = s.reduce_sum(&l, Some(&l_axes))?;
-            let u_sum = s.reduce_sum(&u, Some(&u_axes))?;
+            let l_sum = s.reduce_sum(
+                &l,
+                Some(&l_axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+            )?;
+            let u_sum = s.reduce_sum(
+                &u,
+                Some(&u_axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+            )?;
             s.add(&l_sum, &u_sum)
         })
         .unwrap();
@@ -196,7 +208,7 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("lu_forward_unpack", n), |bench| {
             bench.iter(|| {
-                let (p, l, u, parity) = fixture
+                let Lu { p, l, u, parity } = fixture
                     .ctx
                     .with_eager_session(&mut fixture.engine, |s| s.lu(black_box(&fixture.matrix)))
                     .unwrap();
@@ -211,13 +223,10 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                     let out = fixture
                         .ctx
                         .with_eager_session(&mut fixture.engine, |s| {
-                            s.triangular_solve(
+                            s.triangular_solve_with(
                                 black_box(&fixture.lower_unit),
                                 black_box(&fixture.rhs),
-                                true,
-                                true,
-                                false,
-                                true,
+                                &TriangularSolveOptions::default().diag(Diag::Unit),
                             )
                         })
                         .unwrap();
@@ -233,13 +242,12 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
                     let out = fixture
                         .ctx
                         .with_eager_session(&mut fixture.engine, |s| {
-                            s.triangular_solve(
+                            s.triangular_solve_with(
                                 black_box(&fixture.upper),
                                 black_box(&fixture.rhs),
-                                false,
-                                false,
-                                false,
-                                false,
+                                &TriangularSolveOptions::default()
+                                    .side(Side::Right)
+                                    .uplo(Uplo::Upper),
                             )
                         })
                         .unwrap();

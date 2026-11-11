@@ -9,7 +9,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tenferro_cpu::CpuEngine;
 use tenferro_einsum::ConcreteEinsumPlan;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, Tensor};
 
 const N: usize = 8;
 const CALLS: usize = 10;
@@ -25,12 +25,17 @@ fn bench_einsum_session_chain(c: &mut Criterion) {
     let mut backend = CpuEngine::new(tenferro_cpu::Pool::builder().threads(1).build().unwrap());
     let lhs = f64_square(1);
     let rhs = f64_square(2);
-    let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
+    let plan = ConcreteEinsumPlan::prepare(
+        &[&lhs, &rhs],
+        "ij,jk->ik",
+        &tenferro_einsum::EinsumOptions::default(),
+    )
+    .unwrap();
 
     // Correctness validation outside the timed region: shape [8, 8], finite.
     let check = {
         let session = &mut backend;
-        plan.execute([&lhs, &rhs], session)
+        plan.execute(&[&lhs, &rhs], session)
     }
     .unwrap();
     assert_eq!(check.shape(), &[8, 8]);
@@ -49,7 +54,7 @@ fn bench_einsum_session_chain(c: &mut Criterion) {
                 {
                     let inputs = black_box([&lhs, &rhs]);
                     for _ in 0..CALLS {
-                        let out = plan.execute(inputs, session).unwrap();
+                        let out = plan.execute(&inputs, session).unwrap();
                         black_box(out);
                     }
                 }
@@ -64,7 +69,7 @@ fn bench_einsum_session_chain(c: &mut Criterion) {
                 {
                     let inputs = black_box([&lhs, &rhs]);
                     for _ in 0..CALLS {
-                        let x = plan.execute(inputs, session).unwrap();
+                        let x = plan.execute(&inputs, session).unwrap();
                         let x = x.exp(session).unwrap();
                         let out = x.reduce_sum(Some(&[0]), session).unwrap();
                         black_box(out);

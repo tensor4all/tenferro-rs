@@ -1,0 +1,1094 @@
+pub mod tenferro_linalg
+pub mod tenferro_linalg::backend
+pub trait tenferro_linalg::backend::LinalgBackend: tenferro_tensor::backend::Engine
+pub fn tenferro_linalg::backend::LinalgBackend::cholesky(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::backend::LinalgBackend::cholesky_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::backend::LinalgBackend::eig(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::eig_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::eigh(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::eigh_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::eigh_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::eigh_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::full_piv_lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::full_piv_lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::full_piv_lu_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::backend::LinalgBackend::lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::qr(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::qr_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::qr_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::qr_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::backend::LinalgBackend::solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::backend::LinalgBackend::solve_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_linalg::backend::LinalgBackend::svd(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::svd_full(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::svd_full_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::svd_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::svd_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::svd_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::backend::LinalgBackend::triangular_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::backend::LinalgBackend::triangular_solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_linalg::backend::LinalgBackend for tenferro_cpu::engine::CpuEngine
+pub fn tenferro_cpu::engine::CpuEngine::cholesky(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::cholesky_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::eig(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eig_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::full_piv_lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::full_piv_lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::full_piv_lu_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::solve_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_cpu::engine::CpuEngine::svd(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_full(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_full_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::triangular_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::triangular_solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub mod tenferro_linalg::error
+#[non_exhaustive] pub enum tenferro_linalg::error::Error
+pub tenferro_linalg::error::Error::NonConvergence
+pub tenferro_linalg::error::Error::NonConvergence::op: &'static str
+pub tenferro_linalg::error::Error::NonFinite
+pub tenferro_linalg::error::Error::NonFinite::op: &'static str
+pub tenferro_linalg::error::Error::NonFinite::role: &'static str
+pub tenferro_linalg::error::Error::Singular
+pub tenferro_linalg::error::Error::Singular::op: &'static str
+pub tenferro_linalg::error::Error::UnsupportedDType
+pub tenferro_linalg::error::Error::UnsupportedDType::dtype: tenferro_tensor_core::DType
+pub tenferro_linalg::error::Error::UnsupportedDType::op: &'static str
+impl tenferro_linalg::error::Error
+pub fn tenferro_linalg::error::Error::kind(&self) -> tenferro_tensor_core::error::ErrorKind
+impl core::error::Error for tenferro_linalg::error::Error
+impl core::fmt::Debug for tenferro_linalg::error::Error
+pub fn tenferro_linalg::error::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_linalg::error::Error
+pub fn tenferro_linalg::error::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn tenferro_linalg::error::map_error(tlinalg::error::Op, tlinalg::error::Error) -> tenferro_tensor::error::Error
+pub type tenferro_linalg::error::Result<T> = core::result::Result<T, tenferro_linalg::error::Error>
+pub mod tenferro_linalg::prelude
+pub use tenferro_linalg::prelude::Tensor
+pub use tenferro_linalg::prelude::TensorRead
+pub use tenferro_linalg::prelude::TracedTensor
+pub use tenferro_linalg::prelude::TypedTensor
+pub struct tenferro_linalg::prelude::Eig<C>
+pub tenferro_linalg::prelude::Eig::values: C
+pub tenferro_linalg::prelude::Eig::vectors: C
+impl<C: core::clone::Clone> core::clone::Clone for tenferro_linalg::Eig<C>
+pub fn tenferro_linalg::Eig<C>::clone(&self) -> tenferro_linalg::Eig<C>
+impl<C: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Eig<C>
+pub fn tenferro_linalg::Eig<C>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::prelude::Eigh<V, R>
+pub tenferro_linalg::prelude::Eigh::values: R
+pub tenferro_linalg::prelude::Eigh::vectors: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Eigh<V, R>
+pub fn tenferro_linalg::Eigh<V, R>::clone(&self) -> tenferro_linalg::Eigh<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Eigh<V, R>
+pub fn tenferro_linalg::Eigh<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct tenferro_linalg::prelude::EighOptions
+pub tenferro_linalg::prelude::EighOptions::derivative_eps: f64
+pub tenferro_linalg::prelude::EighOptions::driver: tenferro_linalg::EighDriver
+pub tenferro_linalg::prelude::EighOptions::gauge: tenferro_linalg::EighGauge
+impl tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::derivative_eps(self, f64) -> Self
+pub fn tenferro_linalg::EighOptions::driver(self, tenferro_linalg::EighDriver) -> Self
+pub fn tenferro_linalg::EighOptions::gauge(self, tenferro_linalg::EighGauge) -> Self
+impl core::clone::Clone for tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::clone(&self) -> tenferro_linalg::EighOptions
+impl core::cmp::PartialEq for tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::eq(&self, &tenferro_linalg::EighOptions) -> bool
+impl core::default::Default for tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::default() -> Self
+impl core::fmt::Debug for tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::EighOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::EighOptions
+pub struct tenferro_linalg::prelude::FullPivLu<V, R>
+pub tenferro_linalg::prelude::FullPivLu::l: V
+pub tenferro_linalg::prelude::FullPivLu::p: V
+pub tenferro_linalg::prelude::FullPivLu::parity: R
+pub tenferro_linalg::prelude::FullPivLu::q: V
+pub tenferro_linalg::prelude::FullPivLu::u: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::FullPivLu<V, R>
+pub fn tenferro_linalg::FullPivLu<V, R>::clone(&self) -> tenferro_linalg::FullPivLu<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::FullPivLu<V, R>
+pub fn tenferro_linalg::FullPivLu<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::prelude::Lu<V, R>
+pub tenferro_linalg::prelude::Lu::l: V
+pub tenferro_linalg::prelude::Lu::p: V
+pub tenferro_linalg::prelude::Lu::parity: R
+pub tenferro_linalg::prelude::Lu::u: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Lu<V, R>
+pub fn tenferro_linalg::Lu<V, R>::clone(&self) -> tenferro_linalg::Lu<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Lu<V, R>
+pub fn tenferro_linalg::Lu<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::prelude::Qr<V>
+pub tenferro_linalg::prelude::Qr::q: V
+pub tenferro_linalg::prelude::Qr::r: V
+impl<V: core::clone::Clone> core::clone::Clone for tenferro_linalg::Qr<V>
+pub fn tenferro_linalg::Qr<V>::clone(&self) -> tenferro_linalg::Qr<V>
+impl<V: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Qr<V>
+pub fn tenferro_linalg::Qr<V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct tenferro_linalg::prelude::QrOptions
+pub tenferro_linalg::prelude::QrOptions::gauge: tenferro_linalg::QrGauge
+impl tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::gauge(self, tenferro_linalg::QrGauge) -> Self
+impl core::clone::Clone for tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::clone(&self) -> tenferro_linalg::QrOptions
+impl core::cmp::Eq for tenferro_linalg::QrOptions
+impl core::cmp::PartialEq for tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::eq(&self, &tenferro_linalg::QrOptions) -> bool
+impl core::default::Default for tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::default() -> Self
+impl core::fmt::Debug for tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::QrOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::QrOptions
+#[non_exhaustive] pub struct tenferro_linalg::prelude::RankRevealingQrOptions
+pub tenferro_linalg::prelude::RankRevealingQrOptions::atol: f64
+pub tenferro_linalg::prelude::RankRevealingQrOptions::gauge: tenferro_linalg::QrGauge
+pub tenferro_linalg::prelude::RankRevealingQrOptions::rtol: f64
+impl tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::atol(self, f64) -> Self
+pub fn tenferro_linalg::RankRevealingQrOptions::gauge(self, tenferro_linalg::QrGauge) -> Self
+pub fn tenferro_linalg::RankRevealingQrOptions::rtol(self, f64) -> Self
+impl core::clone::Clone for tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::clone(&self) -> tenferro_linalg::RankRevealingQrOptions
+impl core::cmp::PartialEq for tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::eq(&self, &tenferro_linalg::RankRevealingQrOptions) -> bool
+impl core::default::Default for tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::default() -> Self
+impl core::fmt::Debug for tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::RankRevealingQrOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::RankRevealingQrOptions
+pub struct tenferro_linalg::prelude::RankRevealingQrResult<T, M>
+pub tenferro_linalg::prelude::RankRevealingQrResult::column_permutation: M
+pub tenferro_linalg::prelude::RankRevealingQrResult::q: T
+pub tenferro_linalg::prelude::RankRevealingQrResult::r: T
+pub tenferro_linalg::prelude::RankRevealingQrResult::rank: M
+impl<T: core::clone::Clone, M: core::clone::Clone> core::clone::Clone for tenferro_linalg::RankRevealingQrResult<T, M>
+pub fn tenferro_linalg::RankRevealingQrResult<T, M>::clone(&self) -> tenferro_linalg::RankRevealingQrResult<T, M>
+impl<T: core::fmt::Debug, M: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::RankRevealingQrResult<T, M>
+pub fn tenferro_linalg::RankRevealingQrResult<T, M>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::prelude::Slogdet<V, R>
+pub tenferro_linalg::prelude::Slogdet::log_abs_det: R
+pub tenferro_linalg::prelude::Slogdet::sign: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Slogdet<V, R>
+pub fn tenferro_linalg::Slogdet<V, R>::clone(&self) -> tenferro_linalg::Slogdet<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Slogdet<V, R>
+pub fn tenferro_linalg::Slogdet<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::prelude::Svd<V, R>
+pub tenferro_linalg::prelude::Svd::s: R
+pub tenferro_linalg::prelude::Svd::u: V
+pub tenferro_linalg::prelude::Svd::vh: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Svd<V, R>
+pub fn tenferro_linalg::Svd<V, R>::clone(&self) -> tenferro_linalg::Svd<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Svd<V, R>
+pub fn tenferro_linalg::Svd<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct tenferro_linalg::prelude::SvdOptions
+pub tenferro_linalg::prelude::SvdOptions::derivative_eps: f64
+pub tenferro_linalg::prelude::SvdOptions::driver: tenferro_linalg::SvdDriver
+pub tenferro_linalg::prelude::SvdOptions::gauge: tenferro_linalg::SvdGauge
+pub tenferro_linalg::prelude::SvdOptions::shape: tenferro_linalg::SvdShape
+impl tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::derivative_eps(self, f64) -> Self
+pub fn tenferro_linalg::SvdOptions::driver(self, tenferro_linalg::SvdDriver) -> Self
+pub fn tenferro_linalg::SvdOptions::gauge(self, tenferro_linalg::SvdGauge) -> Self
+pub fn tenferro_linalg::SvdOptions::shape(self, tenferro_linalg::SvdShape) -> Self
+impl core::clone::Clone for tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::clone(&self) -> tenferro_linalg::SvdOptions
+impl core::cmp::PartialEq for tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::eq(&self, &tenferro_linalg::SvdOptions) -> bool
+impl core::default::Default for tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::default() -> Self
+impl core::fmt::Debug for tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::SvdOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::SvdOptions
+pub trait tenferro_linalg::prelude::LinalgBackend: tenferro_tensor::backend::Engine
+pub fn tenferro_linalg::prelude::LinalgBackend::cholesky(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::prelude::LinalgBackend::cholesky_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::prelude::LinalgBackend::eig(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::eig_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::eigh(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::eigh_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::eigh_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::eigh_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::full_piv_lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::full_piv_lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::full_piv_lu_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::prelude::LinalgBackend::lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::qr(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::qr_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::qr_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::qr_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::prelude::LinalgBackend::solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::prelude::LinalgBackend::solve_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_linalg::prelude::LinalgBackend::svd(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::svd_full(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::svd_full_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::svd_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::svd_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::svd_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::prelude::LinalgBackend::triangular_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::prelude::LinalgBackend::triangular_solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_linalg::backend::LinalgBackend for tenferro_cpu::engine::CpuEngine
+pub fn tenferro_cpu::engine::CpuEngine::cholesky(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::cholesky_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::eig(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eig_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::full_piv_lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::full_piv_lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::full_piv_lu_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::solve_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_cpu::engine::CpuEngine::svd(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_full(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_full_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::triangular_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::triangular_solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub trait tenferro_linalg::prelude::LinalgOps: tenferro_tensor::view::AsView
+pub fn tenferro_linalg::prelude::LinalgOps::cholesky(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::cholesky_with(&self, &tenferro_linalg::CholeskyOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::det(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::eig(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eig<<Self::Repr as tenferro_linalg::LinalgRepr>::Complex>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::eigh(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eigh<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::eigh_with(&self, &tenferro_linalg::EighOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eigh<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::eigvals(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Complex> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::eigvalsh(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::eigvalsh_with(&self, &tenferro_linalg::EigvalshOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::full_piv_lu(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::FullPivLu<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::full_piv_lu_solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::householder_qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::HouseholderQr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::inv(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::lstsq(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::lu(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Lu<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::norm(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::norm_with(&self, &tenferro_linalg::NormOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::pinv(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::pinv_with(&self, &tenferro_linalg::PinvOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Qr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::qr_with(&self, &tenferro_linalg::QrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Qr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::rank_revealing_qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::RankRevealingQrResult<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Index>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::rank_revealing_qr_with(&self, &tenferro_linalg::RankRevealingQrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::RankRevealingQrResult<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Index>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::slogdet(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Slogdet<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::solve_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::svd(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Svd<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::svd_with(&self, &tenferro_linalg::SvdOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Svd<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::svdvals(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::svdvals_with(&self, &tenferro_linalg::SvdvalsOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::triangular_solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::prelude::LinalgOps::triangular_solve_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_linalg::TriangularSolveOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_linalg::LinalgOps for X
+pub fn X::cholesky(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::cholesky_with(&self, &tenferro_linalg::CholeskyOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::det(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eig(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eig<<Self::Repr as tenferro_linalg::LinalgRepr>::Complex>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigh(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eigh<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigh_with(&self, &tenferro_linalg::EighOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eigh<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigvals(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Complex> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigvalsh(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigvalsh_with(&self, &tenferro_linalg::EigvalshOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::full_piv_lu(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::FullPivLu<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::full_piv_lu_solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::householder_qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::HouseholderQr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::inv(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::lstsq(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::lu(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Lu<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::norm(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::norm_with(&self, &tenferro_linalg::NormOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::pinv(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::pinv_with(&self, &tenferro_linalg::PinvOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Qr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::qr_with(&self, &tenferro_linalg::QrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Qr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::rank_revealing_qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::RankRevealingQrResult<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Index>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::rank_revealing_qr_with(&self, &tenferro_linalg::RankRevealingQrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::RankRevealingQrResult<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Index>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::slogdet(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Slogdet<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::solve_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::svd(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Svd<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::svd_with(&self, &tenferro_linalg::SvdOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Svd<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::svdvals(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::svdvals_with(&self, &tenferro_linalg::SvdvalsOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::triangular_solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::triangular_solve_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_linalg::TriangularSolveOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub trait tenferro_linalg::prelude::LinalgScalar: tenferro_tensor::types::TensorScalar + tenferro_linalg::tensor_ext::private::Sealed
+pub type tenferro_linalg::prelude::LinalgScalar::Complex: tenferro_tensor::types::TensorScalar + tenferro_cpu_basic::buffer_pool::PoolScalar + core::default::Default
+pub type tenferro_linalg::prelude::LinalgScalar::RealScalar: tenferro_tensor::types::TensorScalar + tenferro_cpu_basic::buffer_pool::PoolScalar + core::default::Default
+impl tenferro_linalg::LinalgScalar for f32
+pub type f32::Complex = num_complex::Complex<f32>
+pub type f32::RealScalar = f32
+impl tenferro_linalg::LinalgScalar for f64
+pub type f64::Complex = num_complex::Complex<f64>
+pub type f64::RealScalar = f64
+impl tenferro_linalg::LinalgScalar for num_complex::Complex32
+pub type num_complex::Complex32::Complex = num_complex::Complex<f32>
+pub type num_complex::Complex32::RealScalar = f32
+impl tenferro_linalg::LinalgScalar for num_complex::Complex64
+pub type num_complex::Complex64::Complex = num_complex::Complex<f64>
+pub type num_complex::Complex64::RealScalar = f64
+pub trait tenferro_linalg::prelude::TracedLinalgOps
+pub fn tenferro_linalg::prelude::TracedLinalgOps::cholesky(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::cholesky_with(&self, &tenferro_linalg::CholeskyOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::det(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::eig(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Eig<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::eigh(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Eigh<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::eigh_with(&self, &tenferro_linalg::EighOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Eigh<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::eigvals(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::eigvalsh(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::eigvalsh_with(&self, &tenferro_linalg::EigvalshOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::full_piv_lu(&self) -> tenferro_runtime::error::Result<tenferro_linalg::FullPivLu<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::full_piv_lu_solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::householder_qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::HouseholderQr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::inv(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::lstsq(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::lu(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Lu<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::norm(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::norm_with(&self, &tenferro_linalg::NormOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::pinv(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::pinv_with(&self, &tenferro_linalg::PinvOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Qr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::qr_with(&self, &tenferro_linalg::QrOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Qr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::rank_revealing_qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::RankRevealingQrResult<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::rank_revealing_qr_with(&self, &tenferro_linalg::RankRevealingQrOptions) -> tenferro_runtime::error::Result<tenferro_linalg::RankRevealingQrResult<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::slogdet(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Slogdet<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::svd(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Svd<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::svd_with(&self, &tenferro_linalg::SvdOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Svd<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::svdvals(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::svdvals_with(&self, &tenferro_linalg::SvdvalsOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::triangular_solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::prelude::TracedLinalgOps::triangular_solve_with(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_linalg::TriangularSolveOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_linalg::TracedLinalgOps for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::cholesky(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::cholesky_with(&self, &tenferro_linalg::CholeskyOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::det(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::eig(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Eig<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::eigh(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Eigh<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::eigh_with(&self, &tenferro_linalg::EighOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Eigh<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::eigvals(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::eigvalsh(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::eigvalsh_with(&self, &tenferro_linalg::EigvalshOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::full_piv_lu(&self) -> tenferro_runtime::error::Result<tenferro_linalg::FullPivLu<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::full_piv_lu_solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::householder_qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::HouseholderQr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::inv(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::lstsq(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::lu(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Lu<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::norm(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::norm_with(&self, &tenferro_linalg::NormOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::pinv(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::pinv_with(&self, &tenferro_linalg::PinvOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Qr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::qr_with(&self, &tenferro_linalg::QrOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Qr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::rank_revealing_qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::RankRevealingQrResult<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::rank_revealing_qr_with(&self, &tenferro_linalg::RankRevealingQrOptions) -> tenferro_runtime::error::Result<tenferro_linalg::RankRevealingQrResult<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::slogdet(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Slogdet<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::svd(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Svd<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::svd_with(&self, &tenferro_linalg::SvdOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Svd<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::svdvals(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::svdvals_with(&self, &tenferro_linalg::SvdvalsOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::triangular_solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::triangular_solve_with(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_linalg::TriangularSolveOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub enum tenferro_linalg::Diag
+pub tenferro_linalg::Diag::NonUnit
+pub tenferro_linalg::Diag::Unit
+impl core::clone::Clone for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::clone(&self) -> tenferro_linalg::Diag
+impl core::cmp::Eq for tenferro_linalg::Diag
+impl core::cmp::PartialEq for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::eq(&self, &tenferro_linalg::Diag) -> bool
+impl core::default::Default for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::default() -> tenferro_linalg::Diag
+impl core::fmt::Debug for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::Diag
+pub fn tenferro_linalg::Diag::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::Diag
+impl core::marker::StructuralPartialEq for tenferro_linalg::Diag
+pub enum tenferro_linalg::EighDriver
+pub tenferro_linalg::EighDriver::Auto
+pub tenferro_linalg::EighDriver::DivideAndConquer
+pub tenferro_linalg::EighDriver::Jacobi
+impl core::clone::Clone for tenferro_linalg::EighDriver
+pub fn tenferro_linalg::EighDriver::clone(&self) -> tenferro_linalg::EighDriver
+impl core::cmp::Eq for tenferro_linalg::EighDriver
+impl core::cmp::PartialEq for tenferro_linalg::EighDriver
+pub fn tenferro_linalg::EighDriver::eq(&self, &tenferro_linalg::EighDriver) -> bool
+impl core::default::Default for tenferro_linalg::EighDriver
+pub fn tenferro_linalg::EighDriver::default() -> tenferro_linalg::EighDriver
+impl core::fmt::Debug for tenferro_linalg::EighDriver
+pub fn tenferro_linalg::EighDriver::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::EighDriver
+impl core::marker::StructuralPartialEq for tenferro_linalg::EighDriver
+pub enum tenferro_linalg::EighGauge
+pub tenferro_linalg::EighGauge::CanonicalPivot
+pub tenferro_linalg::EighGauge::Raw
+impl core::clone::Clone for tenferro_linalg::EighGauge
+pub fn tenferro_linalg::EighGauge::clone(&self) -> tenferro_linalg::EighGauge
+impl core::cmp::Eq for tenferro_linalg::EighGauge
+impl core::cmp::PartialEq for tenferro_linalg::EighGauge
+pub fn tenferro_linalg::EighGauge::eq(&self, &tenferro_linalg::EighGauge) -> bool
+impl core::fmt::Debug for tenferro_linalg::EighGauge
+pub fn tenferro_linalg::EighGauge::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::EighGauge
+impl core::marker::StructuralPartialEq for tenferro_linalg::EighGauge
+#[non_exhaustive] pub enum tenferro_linalg::Error
+pub tenferro_linalg::Error::NonConvergence
+pub tenferro_linalg::Error::NonConvergence::op: &'static str
+pub tenferro_linalg::Error::NonFinite
+pub tenferro_linalg::Error::NonFinite::op: &'static str
+pub tenferro_linalg::Error::NonFinite::role: &'static str
+pub tenferro_linalg::Error::Singular
+pub tenferro_linalg::Error::Singular::op: &'static str
+pub tenferro_linalg::Error::UnsupportedDType
+pub tenferro_linalg::Error::UnsupportedDType::dtype: tenferro_tensor_core::DType
+pub tenferro_linalg::Error::UnsupportedDType::op: &'static str
+impl tenferro_linalg::error::Error
+pub fn tenferro_linalg::error::Error::kind(&self) -> tenferro_tensor_core::error::ErrorKind
+impl core::error::Error for tenferro_linalg::error::Error
+impl core::fmt::Debug for tenferro_linalg::error::Error
+pub fn tenferro_linalg::error::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_linalg::error::Error
+pub fn tenferro_linalg::error::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_linalg::KeepDims
+pub tenferro_linalg::KeepDims::No
+pub tenferro_linalg::KeepDims::Yes
+impl core::clone::Clone for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::clone(&self) -> tenferro_linalg::KeepDims
+impl core::cmp::Eq for tenferro_linalg::KeepDims
+impl core::cmp::PartialEq for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::eq(&self, &tenferro_linalg::KeepDims) -> bool
+impl core::default::Default for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::default() -> tenferro_linalg::KeepDims
+impl core::fmt::Debug for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::KeepDims
+pub fn tenferro_linalg::KeepDims::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::KeepDims
+impl core::marker::StructuralPartialEq for tenferro_linalg::KeepDims
+pub enum tenferro_linalg::MatOp
+pub tenferro_linalg::MatOp::Adjoint
+pub tenferro_linalg::MatOp::None
+pub tenferro_linalg::MatOp::Transpose
+impl core::clone::Clone for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::clone(&self) -> tenferro_linalg::MatOp
+impl core::cmp::Eq for tenferro_linalg::MatOp
+impl core::cmp::PartialEq for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::eq(&self, &tenferro_linalg::MatOp) -> bool
+impl core::default::Default for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::default() -> tenferro_linalg::MatOp
+impl core::fmt::Debug for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::MatOp
+pub fn tenferro_linalg::MatOp::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::MatOp
+impl core::marker::StructuralPartialEq for tenferro_linalg::MatOp
+#[non_exhaustive] pub enum tenferro_linalg::NormOrd
+pub tenferro_linalg::NormOrd::Frobenius
+pub tenferro_linalg::NormOrd::Inf
+pub tenferro_linalg::NormOrd::NegInf
+pub tenferro_linalg::NormOrd::P(f64)
+pub tenferro_linalg::NormOrd::Zero
+impl core::clone::Clone for tenferro_linalg::NormOrd
+pub fn tenferro_linalg::NormOrd::clone(&self) -> tenferro_linalg::NormOrd
+impl core::cmp::PartialEq for tenferro_linalg::NormOrd
+pub fn tenferro_linalg::NormOrd::eq(&self, &tenferro_linalg::NormOrd) -> bool
+impl core::default::Default for tenferro_linalg::NormOrd
+pub fn tenferro_linalg::NormOrd::default() -> tenferro_linalg::NormOrd
+impl core::fmt::Debug for tenferro_linalg::NormOrd
+pub fn tenferro_linalg::NormOrd::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::NormOrd
+impl core::marker::StructuralPartialEq for tenferro_linalg::NormOrd
+pub enum tenferro_linalg::QrGauge
+pub tenferro_linalg::QrGauge::PositiveDiagonal
+pub tenferro_linalg::QrGauge::Raw
+impl core::clone::Clone for tenferro_linalg::QrGauge
+pub fn tenferro_linalg::QrGauge::clone(&self) -> tenferro_linalg::QrGauge
+impl core::cmp::Eq for tenferro_linalg::QrGauge
+impl core::cmp::PartialEq for tenferro_linalg::QrGauge
+pub fn tenferro_linalg::QrGauge::eq(&self, &tenferro_linalg::QrGauge) -> bool
+impl core::fmt::Debug for tenferro_linalg::QrGauge
+pub fn tenferro_linalg::QrGauge::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::QrGauge
+impl core::marker::StructuralPartialEq for tenferro_linalg::QrGauge
+pub enum tenferro_linalg::Side
+pub tenferro_linalg::Side::Left
+pub tenferro_linalg::Side::Right
+impl core::clone::Clone for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::clone(&self) -> tenferro_linalg::Side
+impl core::cmp::Eq for tenferro_linalg::Side
+impl core::cmp::PartialEq for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::eq(&self, &tenferro_linalg::Side) -> bool
+impl core::default::Default for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::default() -> tenferro_linalg::Side
+impl core::fmt::Debug for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::Side
+pub fn tenferro_linalg::Side::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::Side
+impl core::marker::StructuralPartialEq for tenferro_linalg::Side
+pub enum tenferro_linalg::SvdDriver
+pub tenferro_linalg::SvdDriver::Auto
+pub tenferro_linalg::SvdDriver::Jacobi
+pub tenferro_linalg::SvdDriver::Polar
+pub tenferro_linalg::SvdDriver::QrBased
+impl core::clone::Clone for tenferro_linalg::SvdDriver
+pub fn tenferro_linalg::SvdDriver::clone(&self) -> tenferro_linalg::SvdDriver
+impl core::cmp::Eq for tenferro_linalg::SvdDriver
+impl core::cmp::PartialEq for tenferro_linalg::SvdDriver
+pub fn tenferro_linalg::SvdDriver::eq(&self, &tenferro_linalg::SvdDriver) -> bool
+impl core::default::Default for tenferro_linalg::SvdDriver
+pub fn tenferro_linalg::SvdDriver::default() -> tenferro_linalg::SvdDriver
+impl core::fmt::Debug for tenferro_linalg::SvdDriver
+pub fn tenferro_linalg::SvdDriver::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::SvdDriver
+impl core::marker::StructuralPartialEq for tenferro_linalg::SvdDriver
+pub enum tenferro_linalg::SvdGauge
+pub tenferro_linalg::SvdGauge::CanonicalPivot
+pub tenferro_linalg::SvdGauge::Raw
+impl core::clone::Clone for tenferro_linalg::SvdGauge
+pub fn tenferro_linalg::SvdGauge::clone(&self) -> tenferro_linalg::SvdGauge
+impl core::cmp::Eq for tenferro_linalg::SvdGauge
+impl core::cmp::PartialEq for tenferro_linalg::SvdGauge
+pub fn tenferro_linalg::SvdGauge::eq(&self, &tenferro_linalg::SvdGauge) -> bool
+impl core::fmt::Debug for tenferro_linalg::SvdGauge
+pub fn tenferro_linalg::SvdGauge::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::SvdGauge
+impl core::marker::StructuralPartialEq for tenferro_linalg::SvdGauge
+pub enum tenferro_linalg::SvdShape
+pub tenferro_linalg::SvdShape::Full
+pub tenferro_linalg::SvdShape::Thin
+impl core::clone::Clone for tenferro_linalg::SvdShape
+pub fn tenferro_linalg::SvdShape::clone(&self) -> tenferro_linalg::SvdShape
+impl core::cmp::Eq for tenferro_linalg::SvdShape
+impl core::cmp::PartialEq for tenferro_linalg::SvdShape
+pub fn tenferro_linalg::SvdShape::eq(&self, &tenferro_linalg::SvdShape) -> bool
+impl core::default::Default for tenferro_linalg::SvdShape
+pub fn tenferro_linalg::SvdShape::default() -> tenferro_linalg::SvdShape
+impl core::fmt::Debug for tenferro_linalg::SvdShape
+pub fn tenferro_linalg::SvdShape::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::SvdShape
+pub fn tenferro_linalg::SvdShape::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::SvdShape
+impl core::marker::StructuralPartialEq for tenferro_linalg::SvdShape
+pub enum tenferro_linalg::Uplo
+pub tenferro_linalg::Uplo::Lower
+pub tenferro_linalg::Uplo::Upper
+impl core::clone::Clone for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::clone(&self) -> tenferro_linalg::Uplo
+impl core::cmp::Eq for tenferro_linalg::Uplo
+impl core::cmp::PartialEq for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::eq(&self, &tenferro_linalg::Uplo) -> bool
+impl core::default::Default for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::default() -> tenferro_linalg::Uplo
+impl core::fmt::Debug for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_linalg::Uplo
+pub fn tenferro_linalg::Uplo::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_linalg::Uplo
+impl core::marker::StructuralPartialEq for tenferro_linalg::Uplo
+#[non_exhaustive] pub struct tenferro_linalg::CholeskyOptions
+pub tenferro_linalg::CholeskyOptions::uplo: tenferro_linalg::Uplo
+impl tenferro_linalg::CholeskyOptions
+pub fn tenferro_linalg::CholeskyOptions::uplo(self, tenferro_linalg::Uplo) -> Self
+impl core::clone::Clone for tenferro_linalg::CholeskyOptions
+pub fn tenferro_linalg::CholeskyOptions::clone(&self) -> tenferro_linalg::CholeskyOptions
+impl core::cmp::PartialEq for tenferro_linalg::CholeskyOptions
+pub fn tenferro_linalg::CholeskyOptions::eq(&self, &tenferro_linalg::CholeskyOptions) -> bool
+impl core::default::Default for tenferro_linalg::CholeskyOptions
+pub fn tenferro_linalg::CholeskyOptions::default() -> tenferro_linalg::CholeskyOptions
+impl core::fmt::Debug for tenferro_linalg::CholeskyOptions
+pub fn tenferro_linalg::CholeskyOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::CholeskyOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::CholeskyOptions
+pub struct tenferro_linalg::Eig<C>
+pub tenferro_linalg::Eig::values: C
+pub tenferro_linalg::Eig::vectors: C
+impl<C: core::clone::Clone> core::clone::Clone for tenferro_linalg::Eig<C>
+pub fn tenferro_linalg::Eig<C>::clone(&self) -> tenferro_linalg::Eig<C>
+impl<C: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Eig<C>
+pub fn tenferro_linalg::Eig<C>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::Eigh<V, R>
+pub tenferro_linalg::Eigh::values: R
+pub tenferro_linalg::Eigh::vectors: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Eigh<V, R>
+pub fn tenferro_linalg::Eigh<V, R>::clone(&self) -> tenferro_linalg::Eigh<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Eigh<V, R>
+pub fn tenferro_linalg::Eigh<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct tenferro_linalg::EighOptions
+pub tenferro_linalg::EighOptions::derivative_eps: f64
+pub tenferro_linalg::EighOptions::driver: tenferro_linalg::EighDriver
+pub tenferro_linalg::EighOptions::gauge: tenferro_linalg::EighGauge
+impl tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::derivative_eps(self, f64) -> Self
+pub fn tenferro_linalg::EighOptions::driver(self, tenferro_linalg::EighDriver) -> Self
+pub fn tenferro_linalg::EighOptions::gauge(self, tenferro_linalg::EighGauge) -> Self
+impl core::clone::Clone for tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::clone(&self) -> tenferro_linalg::EighOptions
+impl core::cmp::PartialEq for tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::eq(&self, &tenferro_linalg::EighOptions) -> bool
+impl core::default::Default for tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::default() -> Self
+impl core::fmt::Debug for tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::EighOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::EighOptions
+#[non_exhaustive] pub struct tenferro_linalg::EigvalshOptions
+pub tenferro_linalg::EigvalshOptions::driver: tenferro_linalg::EighDriver
+impl tenferro_linalg::EigvalshOptions
+pub fn tenferro_linalg::EigvalshOptions::driver(self, tenferro_linalg::EighDriver) -> Self
+impl core::clone::Clone for tenferro_linalg::EigvalshOptions
+pub fn tenferro_linalg::EigvalshOptions::clone(&self) -> tenferro_linalg::EigvalshOptions
+impl core::cmp::PartialEq for tenferro_linalg::EigvalshOptions
+pub fn tenferro_linalg::EigvalshOptions::eq(&self, &tenferro_linalg::EigvalshOptions) -> bool
+impl core::default::Default for tenferro_linalg::EigvalshOptions
+pub fn tenferro_linalg::EigvalshOptions::default() -> tenferro_linalg::EigvalshOptions
+impl core::fmt::Debug for tenferro_linalg::EigvalshOptions
+pub fn tenferro_linalg::EigvalshOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::EigvalshOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::EigvalshOptions
+pub struct tenferro_linalg::FullPivLu<V, R>
+pub tenferro_linalg::FullPivLu::l: V
+pub tenferro_linalg::FullPivLu::p: V
+pub tenferro_linalg::FullPivLu::parity: R
+pub tenferro_linalg::FullPivLu::q: V
+pub tenferro_linalg::FullPivLu::u: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::FullPivLu<V, R>
+pub fn tenferro_linalg::FullPivLu<V, R>::clone(&self) -> tenferro_linalg::FullPivLu<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::FullPivLu<V, R>
+pub fn tenferro_linalg::FullPivLu<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::HouseholderQr<T>
+impl tenferro_linalg::HouseholderQr<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::HouseholderQr<tenferro_runtime::traced::TracedTensor>::append_columns(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_linalg::HouseholderQr<tenferro_runtime::traced::TracedTensor>::from_factors(&tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_linalg::HouseholderQr<tenferro_runtime::traced::TracedTensor>::q_columns(&self, core::ops::range::Range<usize>, tenferro_linalg::QrOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::HouseholderQr<tenferro_runtime::traced::TracedTensor>::r(&self, tenferro_linalg::QrOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_linalg::HouseholderQr<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::HouseholderQr<tenferro_tensor::types::Tensor>::append_columns(&self, &tenferro_tensor::types::Tensor, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<Self>
+pub fn tenferro_linalg::HouseholderQr<tenferro_tensor::types::Tensor>::from_factors(&tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<Self>
+pub fn tenferro_linalg::HouseholderQr<tenferro_tensor::types::Tensor>::q_columns(&self, core::ops::range::Range<usize>, tenferro_linalg::QrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::HouseholderQr<tenferro_tensor::types::Tensor>::r(&self, tenferro_linalg::QrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl<T: core::clone::Clone> core::clone::Clone for tenferro_linalg::HouseholderQr<T>
+pub fn tenferro_linalg::HouseholderQr<T>::clone(&self) -> tenferro_linalg::HouseholderQr<T>
+impl<T> core::fmt::Debug for tenferro_linalg::HouseholderQr<T>
+pub fn tenferro_linalg::HouseholderQr<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::Lu<V, R>
+pub tenferro_linalg::Lu::l: V
+pub tenferro_linalg::Lu::p: V
+pub tenferro_linalg::Lu::parity: R
+pub tenferro_linalg::Lu::u: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Lu<V, R>
+pub fn tenferro_linalg::Lu<V, R>::clone(&self) -> tenferro_linalg::Lu<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Lu<V, R>
+pub fn tenferro_linalg::Lu<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct tenferro_linalg::NormOptions
+pub tenferro_linalg::NormOptions::axes: core::option::Option<tenferro_tensor_core::axis::AxisVec>
+pub tenferro_linalg::NormOptions::keep_dims: tenferro_linalg::KeepDims
+pub tenferro_linalg::NormOptions::ord: tenferro_linalg::NormOrd
+impl tenferro_linalg::NormOptions
+pub fn tenferro_linalg::NormOptions::axes(self, core::option::Option<tenferro_tensor_core::axis::AxisVec>) -> Self
+pub fn tenferro_linalg::NormOptions::keep_dims(self, tenferro_linalg::KeepDims) -> Self
+pub fn tenferro_linalg::NormOptions::ord(self, tenferro_linalg::NormOrd) -> Self
+impl core::clone::Clone for tenferro_linalg::NormOptions
+pub fn tenferro_linalg::NormOptions::clone(&self) -> tenferro_linalg::NormOptions
+impl core::cmp::PartialEq for tenferro_linalg::NormOptions
+pub fn tenferro_linalg::NormOptions::eq(&self, &tenferro_linalg::NormOptions) -> bool
+impl core::default::Default for tenferro_linalg::NormOptions
+pub fn tenferro_linalg::NormOptions::default() -> tenferro_linalg::NormOptions
+impl core::fmt::Debug for tenferro_linalg::NormOptions
+pub fn tenferro_linalg::NormOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_linalg::NormOptions
+#[non_exhaustive] pub struct tenferro_linalg::PinvOptions
+pub tenferro_linalg::PinvOptions::rtol: core::option::Option<f64>
+impl tenferro_linalg::PinvOptions
+pub fn tenferro_linalg::PinvOptions::rtol(self, core::option::Option<f64>) -> Self
+impl core::clone::Clone for tenferro_linalg::PinvOptions
+pub fn tenferro_linalg::PinvOptions::clone(&self) -> tenferro_linalg::PinvOptions
+impl core::cmp::PartialEq for tenferro_linalg::PinvOptions
+pub fn tenferro_linalg::PinvOptions::eq(&self, &tenferro_linalg::PinvOptions) -> bool
+impl core::default::Default for tenferro_linalg::PinvOptions
+pub fn tenferro_linalg::PinvOptions::default() -> tenferro_linalg::PinvOptions
+impl core::fmt::Debug for tenferro_linalg::PinvOptions
+pub fn tenferro_linalg::PinvOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::PinvOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::PinvOptions
+pub struct tenferro_linalg::Qr<V>
+pub tenferro_linalg::Qr::q: V
+pub tenferro_linalg::Qr::r: V
+impl<V: core::clone::Clone> core::clone::Clone for tenferro_linalg::Qr<V>
+pub fn tenferro_linalg::Qr<V>::clone(&self) -> tenferro_linalg::Qr<V>
+impl<V: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Qr<V>
+pub fn tenferro_linalg::Qr<V>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct tenferro_linalg::QrOptions
+pub tenferro_linalg::QrOptions::gauge: tenferro_linalg::QrGauge
+impl tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::gauge(self, tenferro_linalg::QrGauge) -> Self
+impl core::clone::Clone for tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::clone(&self) -> tenferro_linalg::QrOptions
+impl core::cmp::Eq for tenferro_linalg::QrOptions
+impl core::cmp::PartialEq for tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::eq(&self, &tenferro_linalg::QrOptions) -> bool
+impl core::default::Default for tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::default() -> Self
+impl core::fmt::Debug for tenferro_linalg::QrOptions
+pub fn tenferro_linalg::QrOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::QrOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::QrOptions
+#[non_exhaustive] pub struct tenferro_linalg::RankRevealingQrOptions
+pub tenferro_linalg::RankRevealingQrOptions::atol: f64
+pub tenferro_linalg::RankRevealingQrOptions::gauge: tenferro_linalg::QrGauge
+pub tenferro_linalg::RankRevealingQrOptions::rtol: f64
+impl tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::atol(self, f64) -> Self
+pub fn tenferro_linalg::RankRevealingQrOptions::gauge(self, tenferro_linalg::QrGauge) -> Self
+pub fn tenferro_linalg::RankRevealingQrOptions::rtol(self, f64) -> Self
+impl core::clone::Clone for tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::clone(&self) -> tenferro_linalg::RankRevealingQrOptions
+impl core::cmp::PartialEq for tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::eq(&self, &tenferro_linalg::RankRevealingQrOptions) -> bool
+impl core::default::Default for tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::default() -> Self
+impl core::fmt::Debug for tenferro_linalg::RankRevealingQrOptions
+pub fn tenferro_linalg::RankRevealingQrOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::RankRevealingQrOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::RankRevealingQrOptions
+pub struct tenferro_linalg::RankRevealingQrResult<T, M>
+pub tenferro_linalg::RankRevealingQrResult::column_permutation: M
+pub tenferro_linalg::RankRevealingQrResult::q: T
+pub tenferro_linalg::RankRevealingQrResult::r: T
+pub tenferro_linalg::RankRevealingQrResult::rank: M
+impl<T: core::clone::Clone, M: core::clone::Clone> core::clone::Clone for tenferro_linalg::RankRevealingQrResult<T, M>
+pub fn tenferro_linalg::RankRevealingQrResult<T, M>::clone(&self) -> tenferro_linalg::RankRevealingQrResult<T, M>
+impl<T: core::fmt::Debug, M: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::RankRevealingQrResult<T, M>
+pub fn tenferro_linalg::RankRevealingQrResult<T, M>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::Slogdet<V, R>
+pub tenferro_linalg::Slogdet::log_abs_det: R
+pub tenferro_linalg::Slogdet::sign: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Slogdet<V, R>
+pub fn tenferro_linalg::Slogdet<V, R>::clone(&self) -> tenferro_linalg::Slogdet<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Slogdet<V, R>
+pub fn tenferro_linalg::Slogdet<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_linalg::Svd<V, R>
+pub tenferro_linalg::Svd::s: R
+pub tenferro_linalg::Svd::u: V
+pub tenferro_linalg::Svd::vh: V
+impl<V: core::clone::Clone, R: core::clone::Clone> core::clone::Clone for tenferro_linalg::Svd<V, R>
+pub fn tenferro_linalg::Svd<V, R>::clone(&self) -> tenferro_linalg::Svd<V, R>
+impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Svd<V, R>
+pub fn tenferro_linalg::Svd<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct tenferro_linalg::SvdOptions
+pub tenferro_linalg::SvdOptions::derivative_eps: f64
+pub tenferro_linalg::SvdOptions::driver: tenferro_linalg::SvdDriver
+pub tenferro_linalg::SvdOptions::gauge: tenferro_linalg::SvdGauge
+pub tenferro_linalg::SvdOptions::shape: tenferro_linalg::SvdShape
+impl tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::derivative_eps(self, f64) -> Self
+pub fn tenferro_linalg::SvdOptions::driver(self, tenferro_linalg::SvdDriver) -> Self
+pub fn tenferro_linalg::SvdOptions::gauge(self, tenferro_linalg::SvdGauge) -> Self
+pub fn tenferro_linalg::SvdOptions::shape(self, tenferro_linalg::SvdShape) -> Self
+impl core::clone::Clone for tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::clone(&self) -> tenferro_linalg::SvdOptions
+impl core::cmp::PartialEq for tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::eq(&self, &tenferro_linalg::SvdOptions) -> bool
+impl core::default::Default for tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::default() -> Self
+impl core::fmt::Debug for tenferro_linalg::SvdOptions
+pub fn tenferro_linalg::SvdOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::SvdOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::SvdOptions
+#[non_exhaustive] pub struct tenferro_linalg::SvdvalsOptions
+pub tenferro_linalg::SvdvalsOptions::driver: tenferro_linalg::SvdDriver
+impl tenferro_linalg::SvdvalsOptions
+pub fn tenferro_linalg::SvdvalsOptions::driver(self, tenferro_linalg::SvdDriver) -> Self
+impl core::clone::Clone for tenferro_linalg::SvdvalsOptions
+pub fn tenferro_linalg::SvdvalsOptions::clone(&self) -> tenferro_linalg::SvdvalsOptions
+impl core::cmp::PartialEq for tenferro_linalg::SvdvalsOptions
+pub fn tenferro_linalg::SvdvalsOptions::eq(&self, &tenferro_linalg::SvdvalsOptions) -> bool
+impl core::default::Default for tenferro_linalg::SvdvalsOptions
+pub fn tenferro_linalg::SvdvalsOptions::default() -> tenferro_linalg::SvdvalsOptions
+impl core::fmt::Debug for tenferro_linalg::SvdvalsOptions
+pub fn tenferro_linalg::SvdvalsOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::SvdvalsOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::SvdvalsOptions
+#[non_exhaustive] pub struct tenferro_linalg::TriangularSolveOptions
+pub tenferro_linalg::TriangularSolveOptions::diag: tenferro_linalg::Diag
+pub tenferro_linalg::TriangularSolveOptions::op: tenferro_linalg::MatOp
+pub tenferro_linalg::TriangularSolveOptions::side: tenferro_linalg::Side
+pub tenferro_linalg::TriangularSolveOptions::uplo: tenferro_linalg::Uplo
+impl tenferro_linalg::TriangularSolveOptions
+pub fn tenferro_linalg::TriangularSolveOptions::diag(self, tenferro_linalg::Diag) -> Self
+pub fn tenferro_linalg::TriangularSolveOptions::op(self, tenferro_linalg::MatOp) -> Self
+pub fn tenferro_linalg::TriangularSolveOptions::side(self, tenferro_linalg::Side) -> Self
+pub fn tenferro_linalg::TriangularSolveOptions::uplo(self, tenferro_linalg::Uplo) -> Self
+impl core::clone::Clone for tenferro_linalg::TriangularSolveOptions
+pub fn tenferro_linalg::TriangularSolveOptions::clone(&self) -> tenferro_linalg::TriangularSolveOptions
+impl core::cmp::PartialEq for tenferro_linalg::TriangularSolveOptions
+pub fn tenferro_linalg::TriangularSolveOptions::eq(&self, &tenferro_linalg::TriangularSolveOptions) -> bool
+impl core::default::Default for tenferro_linalg::TriangularSolveOptions
+pub fn tenferro_linalg::TriangularSolveOptions::default() -> tenferro_linalg::TriangularSolveOptions
+impl core::fmt::Debug for tenferro_linalg::TriangularSolveOptions
+pub fn tenferro_linalg::TriangularSolveOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::TriangularSolveOptions
+impl core::marker::StructuralPartialEq for tenferro_linalg::TriangularSolveOptions
+pub const tenferro_linalg::DEFAULT_DECOMPOSITION_DERIVATIVE_EPS: f64
+pub const tenferro_linalg::LINALG_EXTENSION_FAMILY_ID: &str
+pub trait tenferro_linalg::LinalgBackend: tenferro_tensor::backend::Engine
+pub fn tenferro_linalg::LinalgBackend::cholesky(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::LinalgBackend::cholesky_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::LinalgBackend::eig(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::eig_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::eigh(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::eigh_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::eigh_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::eigh_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::full_piv_lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::full_piv_lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::full_piv_lu_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::LinalgBackend::lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::qr(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::qr_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::qr_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::qr_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::LinalgBackend::solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::LinalgBackend::solve_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_linalg::LinalgBackend::svd(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::svd_full(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::svd_full_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::svd_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::svd_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::svd_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_linalg::LinalgBackend::triangular_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_linalg::LinalgBackend::triangular_solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_linalg::backend::LinalgBackend for tenferro_cpu::engine::CpuEngine
+pub fn tenferro_cpu::engine::CpuEngine::cholesky(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::cholesky_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::eig(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eig_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::eigh_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::EighOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::full_piv_lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::full_piv_lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::full_piv_lu_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::lu(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::lu_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::qr_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::QrOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::solve_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_cpu::engine::CpuEngine::svd(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_full(&mut self, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_full_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_with_options(&mut self, &tenferro_tensor::types::Tensor, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::svd_with_options_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_linalg::SvdOptions) -> tenferro_tensor::error::Result<alloc::vec::Vec<tenferro_tensor::types::Tensor>>
+pub fn tenferro_cpu::engine::CpuEngine::triangular_solve(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::engine::CpuEngine::triangular_solve_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, bool, bool, bool, bool) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub trait tenferro_linalg::LinalgOps: tenferro_tensor::view::AsView
+pub fn tenferro_linalg::LinalgOps::cholesky(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::cholesky_with(&self, &tenferro_linalg::CholeskyOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::det(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::eig(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eig<<Self::Repr as tenferro_linalg::LinalgRepr>::Complex>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::eigh(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eigh<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::eigh_with(&self, &tenferro_linalg::EighOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eigh<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::eigvals(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Complex> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::eigvalsh(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::eigvalsh_with(&self, &tenferro_linalg::EigvalshOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::full_piv_lu(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::FullPivLu<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::full_piv_lu_solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::householder_qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::HouseholderQr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::inv(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::lstsq(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::lu(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Lu<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::norm(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::norm_with(&self, &tenferro_linalg::NormOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::pinv(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::pinv_with(&self, &tenferro_linalg::PinvOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Qr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::qr_with(&self, &tenferro_linalg::QrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Qr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::rank_revealing_qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::RankRevealingQrResult<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Index>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::rank_revealing_qr_with(&self, &tenferro_linalg::RankRevealingQrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::RankRevealingQrResult<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Index>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::slogdet(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Slogdet<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::solve_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::svd(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Svd<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::svd_with(&self, &tenferro_linalg::SvdOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Svd<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::svdvals(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::svdvals_with(&self, &tenferro_linalg::SvdvalsOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::triangular_solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn tenferro_linalg::LinalgOps::triangular_solve_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_linalg::TriangularSolveOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_linalg::LinalgOps for X
+pub fn X::cholesky(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::cholesky_with(&self, &tenferro_linalg::CholeskyOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::det(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eig(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eig<<Self::Repr as tenferro_linalg::LinalgRepr>::Complex>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigh(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eigh<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigh_with(&self, &tenferro_linalg::EighOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Eigh<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigvals(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Complex> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigvalsh(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::eigvalsh_with(&self, &tenferro_linalg::EigvalshOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::full_piv_lu(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::FullPivLu<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::full_piv_lu_solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::householder_qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::HouseholderQr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::inv(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::lstsq(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::lu(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Lu<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::norm(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::norm_with(&self, &tenferro_linalg::NormOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::pinv(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::pinv_with(&self, &tenferro_linalg::PinvOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Qr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::qr_with(&self, &tenferro_linalg::QrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Qr<<Self::Repr as tenferro_tensor::view::Repr>::Value>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::rank_revealing_qr(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::RankRevealingQrResult<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Index>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::rank_revealing_qr_with(&self, &tenferro_linalg::RankRevealingQrOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::RankRevealingQrResult<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Index>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::slogdet(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Slogdet<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::solve_into(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::svd(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Svd<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::svd_with(&self, &tenferro_linalg::SvdOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<tenferro_linalg::Svd<<Self::Repr as tenferro_tensor::view::Repr>::Value, <Self::Repr as tenferro_linalg::LinalgRepr>::Real>> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::svdvals(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::svdvals_with(&self, &tenferro_linalg::SvdvalsOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_linalg::LinalgRepr>::Real> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::triangular_solve(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub fn X::triangular_solve_with(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, &tenferro_linalg::TriangularSolveOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value> where Self::Repr: tenferro_linalg::LinalgRepr
+pub trait tenferro_linalg::LinalgRepr: tenferro_tensor::view::Repr
+pub type tenferro_linalg::LinalgRepr::Complex
+pub type tenferro_linalg::LinalgRepr::Index
+pub type tenferro_linalg::LinalgRepr::Real
+pub fn tenferro_linalg::LinalgRepr::wrap_complex(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Complex>
+pub fn tenferro_linalg::LinalgRepr::wrap_index(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Index>
+pub fn tenferro_linalg::LinalgRepr::wrap_real(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Real>
+impl tenferro_linalg::LinalgRepr for tenferro_tensor::view::Erased
+pub type tenferro_tensor::view::Erased::Complex = tenferro_tensor::types::Tensor
+pub type tenferro_tensor::view::Erased::Index = tenferro_tensor::types::Tensor
+pub type tenferro_tensor::view::Erased::Real = tenferro_tensor::types::Tensor
+pub fn tenferro_tensor::view::Erased::wrap_complex(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_tensor::view::Erased::wrap_index(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_tensor::view::Erased::wrap_real(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl<T: tenferro_linalg::LinalgScalar> tenferro_linalg::LinalgRepr for tenferro_tensor::view::Typed<T>
+pub type tenferro_tensor::view::Typed<T>::Complex = tenferro_tensor::types::TypedTensor<<T as tenferro_linalg::LinalgScalar>::Complex>
+pub type tenferro_tensor::view::Typed<T>::Index = tenferro_tensor::types::TypedTensor<i64>
+pub type tenferro_tensor::view::Typed<T>::Real = tenferro_tensor::types::TypedTensor<<T as tenferro_tensor::types::TensorScalar>::Real>
+pub fn tenferro_tensor::view::Typed<T>::wrap_complex(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Complex>
+pub fn tenferro_tensor::view::Typed<T>::wrap_index(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Index>
+pub fn tenferro_tensor::view::Typed<T>::wrap_real(tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<Self::Real>
+pub trait tenferro_linalg::LinalgScalar: tenferro_tensor::types::TensorScalar + tenferro_linalg::tensor_ext::private::Sealed
+pub type tenferro_linalg::LinalgScalar::Complex: tenferro_tensor::types::TensorScalar + tenferro_cpu_basic::buffer_pool::PoolScalar + core::default::Default
+pub type tenferro_linalg::LinalgScalar::RealScalar: tenferro_tensor::types::TensorScalar + tenferro_cpu_basic::buffer_pool::PoolScalar + core::default::Default
+impl tenferro_linalg::LinalgScalar for f32
+pub type f32::Complex = num_complex::Complex<f32>
+pub type f32::RealScalar = f32
+impl tenferro_linalg::LinalgScalar for f64
+pub type f64::Complex = num_complex::Complex<f64>
+pub type f64::RealScalar = f64
+impl tenferro_linalg::LinalgScalar for num_complex::Complex32
+pub type num_complex::Complex32::Complex = num_complex::Complex<f32>
+pub type num_complex::Complex32::RealScalar = f32
+impl tenferro_linalg::LinalgScalar for num_complex::Complex64
+pub type num_complex::Complex64::Complex = num_complex::Complex<f64>
+pub type num_complex::Complex64::RealScalar = f64
+pub trait tenferro_linalg::TracedLinalgOps
+pub fn tenferro_linalg::TracedLinalgOps::cholesky(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::cholesky_with(&self, &tenferro_linalg::CholeskyOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::det(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::eig(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Eig<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::eigh(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Eigh<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::eigh_with(&self, &tenferro_linalg::EighOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Eigh<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::eigvals(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::eigvalsh(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::eigvalsh_with(&self, &tenferro_linalg::EigvalshOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::full_piv_lu(&self) -> tenferro_runtime::error::Result<tenferro_linalg::FullPivLu<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::full_piv_lu_solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::householder_qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::HouseholderQr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::inv(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::lstsq(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::lu(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Lu<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::norm(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::norm_with(&self, &tenferro_linalg::NormOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::pinv(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::pinv_with(&self, &tenferro_linalg::PinvOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Qr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::qr_with(&self, &tenferro_linalg::QrOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Qr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::rank_revealing_qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::RankRevealingQrResult<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::rank_revealing_qr_with(&self, &tenferro_linalg::RankRevealingQrOptions) -> tenferro_runtime::error::Result<tenferro_linalg::RankRevealingQrResult<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::slogdet(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Slogdet<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::svd(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Svd<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::svd_with(&self, &tenferro_linalg::SvdOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Svd<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_linalg::TracedLinalgOps::svdvals(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::svdvals_with(&self, &tenferro_linalg::SvdvalsOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::triangular_solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::TracedLinalgOps::triangular_solve_with(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_linalg::TriangularSolveOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_linalg::TracedLinalgOps for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::cholesky(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::cholesky_with(&self, &tenferro_linalg::CholeskyOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::det(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::eig(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Eig<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::eigh(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Eigh<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::eigh_with(&self, &tenferro_linalg::EighOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Eigh<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::eigvals(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::eigvalsh(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::eigvalsh_with(&self, &tenferro_linalg::EigvalshOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::full_piv_lu(&self) -> tenferro_runtime::error::Result<tenferro_linalg::FullPivLu<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::full_piv_lu_solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::householder_qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::HouseholderQr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::inv(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::lstsq(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::lu(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Lu<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::norm(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::norm_with(&self, &tenferro_linalg::NormOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::pinv(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::pinv_with(&self, &tenferro_linalg::PinvOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Qr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::qr_with(&self, &tenferro_linalg::QrOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Qr<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::rank_revealing_qr(&self) -> tenferro_runtime::error::Result<tenferro_linalg::RankRevealingQrResult<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::rank_revealing_qr_with(&self, &tenferro_linalg::RankRevealingQrOptions) -> tenferro_runtime::error::Result<tenferro_linalg::RankRevealingQrResult<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::slogdet(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Slogdet<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::svd(&self) -> tenferro_runtime::error::Result<tenferro_linalg::Svd<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::svd_with(&self, &tenferro_linalg::SvdOptions) -> tenferro_runtime::error::Result<tenferro_linalg::Svd<tenferro_runtime::traced::TracedTensor, tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::svdvals(&self) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::svdvals_with(&self, &tenferro_linalg::SvdvalsOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::triangular_solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::triangular_solve_with(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_linalg::TriangularSolveOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_linalg::extension_module<B: tenferro_tensor::backend::Engine + 'static>(tenferro_runtime::runtime::identity::EngineId) -> core::result::Result<alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>, tenferro_runtime::runtime::error::RuntimeConfigError> where LinalgExtensionOp: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
+pub fn tenferro_linalg::normalize_eig_vectors<R>(&mut [num_complex::Complex<R>], usize, usize) -> tenferro_tensor::error::Result<()> where R: num_traits::float::Float + num_traits::NumAssign + num_traits::cast::AsPrimitive<f64> + 'static, f64: num_traits::cast::AsPrimitive<R>
+pub type tenferro_linalg::Result<T> = core::result::Result<T, tenferro_linalg::error::Error>

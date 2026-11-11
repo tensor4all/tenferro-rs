@@ -4,7 +4,7 @@ use tenferro_ad::{
 };
 use tenferro_runtime::ErrorPhase;
 
-use crate::eager_ext::EagerSessionLinalgExt;
+use crate::eager_ext::EagerLinalg;
 use crate::traced::real_values_dtype;
 use crate::validation::{ensure_float_or_complex, validate_lstsq, validate_square_matrix};
 
@@ -64,7 +64,7 @@ pub(crate) fn lstsq(
     let (q, r) = session.qr(a)?;
     ensure_lstsq_full_column_rank(session, a, &r)?;
     let q_conj = session.conj(&q)?;
-    let qh = session.transpose(&q_conj, &matrix_transpose_perm(q.shape().len()))?;
+    let qh = session.transpose(&q_conj, &signed(&matrix_transpose_perm(q.shape().len())))?;
     let qh_b = session.dot_general(&qh, b, trailing_batch_dot_config(qh.shape().len()))?;
     session.triangular_solve(&r, &qh_b, true, false, false, false)
 }
@@ -166,9 +166,15 @@ pub(crate) fn pinv_with_rtol(
     let s_inv = session.div(&mask, &denom)?;
 
     let conjugated = session.conj(&vt)?;
-    let v = session.transpose(&conjugated, &matrix_transpose_perm(vt.shape().len()))?;
+    let v = session.transpose(
+        &conjugated,
+        &signed(&matrix_transpose_perm(vt.shape().len())),
+    )?;
     let conjugated = session.conj(&u)?;
-    let uh = session.transpose(&conjugated, &matrix_transpose_perm(u.shape().len()))?;
+    let uh = session.transpose(
+        &conjugated,
+        &signed(&matrix_transpose_perm(u.shape().len())),
+    )?;
     let vs = scale_matrix_columns(session, &v, &s_inv)?;
     matmul_preserve_trailing_batch(session, &vs, &uh)
 }
@@ -200,8 +206,12 @@ pub(crate) fn norm(
                 let abs = session.abs(a)?;
                 match ord {
                     None => frobenius_norm(session, &abs, &axes)?,
-                    Some(p) if p == f64::INFINITY => session.reduce_max(&abs, Some(&axes))?,
-                    Some(p) if p == f64::NEG_INFINITY => session.reduce_min(&abs, Some(&axes))?,
+                    Some(p) if p == f64::INFINITY => {
+                        session.reduce_max(&abs, Some(&signed(&axes)[..]))?
+                    }
+                    Some(p) if p == f64::NEG_INFINITY => {
+                        session.reduce_min(&abs, Some(&signed(&axes)[..]))?
+                    }
                     Some(0.0) => count_nonzero(session, &abs, &axes)?,
                     Some(p) => p_norm(session, &abs, &axes, p)?,
                 }
@@ -330,7 +340,7 @@ fn frobenius_norm(
     abs: &EagerTensor,
     axes: &[usize],
 ) -> Result<EagerTensor> {
-    let squares = session.reduce_sum_squares(abs, Some(axes))?;
+    let squares = session.reduce_sum_squares(abs, Some(&signed(axes)[..]))?;
     session.sqrt(&squares)
 }
 
@@ -353,7 +363,7 @@ fn p_norm(
     }
     let order = scalar_real(session, abs, p)?;
     let powered = session.pow(abs, &order)?;
-    let summed = session.reduce_sum(&powered, Some(axes))?;
+    let summed = session.reduce_sum(&powered, Some(&signed(axes)[..]))?;
     let inverse_order = scalar_real(session, abs, 1.0 / p)?;
     session.pow(&summed, &inverse_order)
 }
@@ -380,8 +390,8 @@ fn vector_norm(
     match ord {
         None => frobenius_norm(session, &abs, &[axis]),
         Some(0.0) => count_nonzero(session, &abs, &[axis]),
-        Some(p) if p == f64::INFINITY => session.reduce_max(&abs, Some(&[axis])),
-        Some(p) if p == f64::NEG_INFINITY => session.reduce_min(&abs, Some(&[axis])),
+        Some(p) if p == f64::INFINITY => session.reduce_max(&abs, Some(&signed(&[axis])[..])),
+        Some(p) if p == f64::NEG_INFINITY => session.reduce_min(&abs, Some(&signed(&[axis])[..])),
         Some(p) => p_norm(session, &abs, &[axis], p),
     }
 }
@@ -441,7 +451,7 @@ fn count_nonzero(
     let is_zero = session.convert(&is_zero, abs.dtype())?;
     let ones = ones_like(session, abs)?;
     let mask = session.sub(&ones, &is_zero)?;
-    session.reduce_sum(&mask, Some(axes))
+    session.reduce_sum(&mask, Some(&signed(axes)[..]))
 }
 
 fn matrix_row_sum_norm(
@@ -489,7 +499,7 @@ fn move_axes_to_front(
             perm.push(axis);
         }
     }
-    session.transpose(tensor, &perm)
+    session.transpose(tensor, &signed(&perm))
 }
 
 fn restore_keepdim(
@@ -507,4 +517,12 @@ fn restore_keepdim(
         kept_shape[axis] = 1;
     }
     session.reshape(&reduced, &kept_shape)
+}
+
+/// Signed form of internally computed (already normalized) axes, for the
+/// signed public core methods (#2552 §3.2). Axes are rank-bounded.
+fn signed(axes: &[usize]) -> Vec<isize> {
+    axes.iter()
+        .map(|&axis| isize::try_from(axis).unwrap_or(isize::MAX))
+        .collect()
 }

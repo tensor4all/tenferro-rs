@@ -1,5 +1,7 @@
 # Tensor/Session Redesign (#1938): Target Architecture
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 Status: **accepted target architecture; implementation in progress**. This is the
 whole-architecture decision record for [#1938](https://github.com/tensor4all/tenferro-rs/issues/1938),
 not proof that the proposed Rust surface or resource protocol already works.

@@ -3,9 +3,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::{
-    parse_einsum_subscripts, ConcreteEinsumPlan, TensorEinsumExt, TensorReadEinsumExt,
-};
+use tenferro_einsum::{parse_einsum_subscripts, ConcreteEinsumPlan, EinsumOps};
 use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
 
 fn measure(name: &str, mut call: impl FnMut()) {
@@ -73,7 +71,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let b = Tensor::from_vec_col_major([n, n], data(n * n, 3)).unwrap();
         let inputs = [&a, &b];
         let subs = parse_einsum_subscripts("ij,jk->ik").unwrap();
-        let plan = ConcreteEinsumPlan::prepare(inputs, "ij,jk->ik").unwrap();
+        let plan = ConcreteEinsumPlan::prepare(
+            &inputs,
+            "ij,jk->ik",
+            &tenferro_einsum::EinsumOptions::default(),
+        )
+        .unwrap();
         let av = a.as_slice::<f64>().unwrap();
         let bv = b.as_slice::<f64>().unwrap();
         let expected: Vec<f64> = (0..n * n)
@@ -93,13 +96,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         measure(&format!("prepare_string/{n}"), || {
             black_box(
-                ConcreteEinsumPlan::prepare(black_box(inputs), black_box("ij,jk->ik")).unwrap(),
+                ConcreteEinsumPlan::prepare(
+                    &black_box(inputs),
+                    black_box("ij,jk->ik"),
+                    &tenferro_einsum::EinsumOptions::default(),
+                )
+                .unwrap(),
             );
         });
         measure(&format!("prepare_labels/{n}"), || {
             black_box(
-                ConcreteEinsumPlan::prepare_subscripts(black_box(inputs), black_box(&subs))
-                    .unwrap(),
+                ConcreteEinsumPlan::prepare(
+                    &black_box(inputs),
+                    black_box(&subs),
+                    &tenferro_einsum::EinsumOptions::default(),
+                )
+                .unwrap(),
             );
         });
         measure(&format!("ordinary_string/{n}"), || {
@@ -116,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     let s = &mut backend;
                     {
-                        black_box(inputs).einsum_subscripts(black_box(&subs), s)
+                        black_box(inputs).einsum(black_box(&subs), s)
                     }
                 }
                 .unwrap(),
@@ -126,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             observe(
                 {
                     let s = &mut backend;
-                    plan.execute(black_box(inputs), s)
+                    plan.execute(&black_box(inputs), s)
                 }
                 .unwrap(),
             )
@@ -172,7 +184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 check(
                     &{
                         let s = &mut backend;
-                        inputs.einsum_read(equation, s)
+                        inputs.einsum(equation, s)
                     }
                     .unwrap(),
                     &expected,
@@ -182,7 +194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         {
                             let s = &mut backend;
                             {
-                                black_box(&inputs).einsum_read(black_box(equation), s)
+                                black_box(&inputs).einsum(black_box(equation), s)
                             }
                         }
                         .unwrap(),
@@ -204,7 +216,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[1.0; 256],
     );
     measure("batch_prepare/8", || {
-        black_box(ConcreteEinsumPlan::prepare(black_box(batch), "ijb,jkb->ikb").unwrap());
+        black_box(
+            ConcreteEinsumPlan::prepare(
+                &black_box(batch),
+                "ijb,jkb->ikb",
+                &tenferro_einsum::EinsumOptions::default(),
+            )
+            .unwrap(),
+        );
     });
     measure("batch_ordinary/8", || {
         observe(
@@ -226,7 +245,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[4.0; 256],
     );
     measure("nary_prepare/8", || {
-        black_box(ConcreteEinsumPlan::prepare(black_box(nary), "ijb,jkb,klb->ilb").unwrap());
+        black_box(
+            ConcreteEinsumPlan::prepare(
+                &black_box(nary),
+                "ijb,jkb,klb->ilb",
+                &tenferro_einsum::EinsumOptions::default(),
+            )
+            .unwrap(),
+        );
     });
     measure("nary_ordinary/8", || {
         observe(

@@ -16,11 +16,13 @@ it clearly.
 An extension operation is a tensor operation supplied by another crate. The
 extension crate owns the public API, validates arguments, and
 applies the lower-level extension operation through `tenferro_runtime::extension`.
-Extension-family helpers that target foreign tensor types should be exposed as
-crate-root extension traits or ordinary crate-root functions, depending on the
-operation shape. Do not add public `eager_tensor` or `traced_tensor` module
-namespaces. Core AD operations stay on `EagerTensor` and `TracedTensor` as
-methods or associated functions.
+Extension-family operations that target foreign tensor types follow the same
+call grammar as the standard families: one trait per layer at the crate root
+(as `tenferro-linalg` does with `LinalgOps`, `TracedLinalgOps` and
+`EagerLinalgOps`), `op` / `op_with(&XxxOptions)` methods, and the engine as
+the last concrete argument. Do not add public `eager_tensor` or
+`traced_tensor` module namespaces. Core operations stay on `TracedTensor` and
+`EagerSession` as methods or associated functions.
 
 An extension can participate in the same eager and traced workflows as built-in
 tensor operations when it provides the required metadata and execution hooks.
@@ -29,7 +31,7 @@ flow through it. If it does not, AD reports the operation as unsupported rather
 than silently dropping the gradient.
 
 For most users, the expected workflow is to depend on an extension crate, import
-its public extension traits when needed, and call its public APIs. Directly
+its public operation traits when needed, and call its public APIs. Directly
 implementing the lower-level extension traits is for authors of those crates.
 
 ## What An Extension Crate Provides

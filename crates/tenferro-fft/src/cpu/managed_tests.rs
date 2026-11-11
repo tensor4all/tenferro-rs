@@ -1,3 +1,4 @@
+use crate::{FftOptions, FftnOptions};
 use std::any::Any;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -11,7 +12,7 @@ use tenferro_tensor::{
     TensorRead, TensorScalar, TypedTensor,
 };
 
-use crate::{FftExecutor, FftNorm, TensorFftExt, TensorReadFftExt};
+use crate::{FftExecutor, FftOps};
 
 #[derive(Debug, Default)]
 struct AccessCounts {
@@ -213,7 +214,7 @@ fn managed_output_failures_return_errors_and_leave_input_usable() {
             }));
         let error = {
             let s: &mut dyn tenferro_tensor::Engine = &mut failing;
-            input.rfft(None, 0, FftNorm::Backward, s)
+            input.rfft_with(&FftOptions::default().axis(0), s)
         }
         .unwrap_err();
         match fault {
@@ -225,7 +226,7 @@ fn managed_output_failures_return_errors_and_leave_input_usable() {
         let mut valid = backend(&domain);
         let result = {
             let s: &mut dyn tenferro_tensor::Engine = &mut valid;
-            input.rfft(None, 0, FftNorm::Backward, s)
+            input.rfft_with(&FftOptions::default().axis(0), s)
         }
         .unwrap();
         let Some(result) = result.as_typed::<Complex64>() else {
@@ -285,7 +286,7 @@ fn domain_bound_backend_accepts_host_owned_fft() {
 
     let output = {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-        host.rfft(None, 0, FftNorm::Backward, session)
+        host.rfft_with(&FftOptions::default().axis(0), session)
     }
     .unwrap();
     let Some(output) = output.as_typed::<Complex64>() else {
@@ -316,7 +317,7 @@ fn domain_bound_backend_accepts_host_read_fft() {
 
     let output = {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-        input.rfft_read(None, 0, FftNorm::Backward, session)
+        input.rfft_with(&FftOptions::default().axis(0), session)
     }
     .unwrap();
     let Some(output) = output.as_typed::<Complex64>() else {
@@ -347,7 +348,7 @@ fn domain_bound_backend_rejects_foreign_fft_input() {
 
     let error = {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
-        input.rfft(None, 0, FftNorm::Backward, session)
+        input.rfft_with(&FftOptions::default().axis(0), session)
     }
     .unwrap_err();
 
@@ -374,14 +375,18 @@ fn managed_cpu_fftn_matches_the_one_axis_transform() {
 
     let input = Tensor::from_typed::<Complex64>(domain.tensor(&[2, 3], values));
     let n_dimensional = executor
-        .fftn(&input, None, &[0, 1], FftNorm::Backward, &mut backend)
+        .fftn_with(
+            &input,
+            &FftnOptions::default().axes(vec![0, 1]),
+            &mut backend,
+        )
         .unwrap();
     assert_managed_output(&n_dimensional, &domain, None);
 
     let mut sequential = input;
     for axis in 0..2 {
         sequential = executor
-            .fft(&sequential, None, axis, FftNorm::Backward, &mut backend)
+            .fft_with(&sequential, &FftOptions::default().axis(axis), &mut backend)
             .unwrap();
     }
 
@@ -403,50 +408,50 @@ fn managed_cpu_fft_covers_all_supported_scalar_and_operation_paths() {
         let real32 = domain.tensor(&[4], vec![1.0_f32, 2.0, 3.0, 4.0]);
         let real32_id = real32.allocation_id();
         let full32 = Tensor::from_typed::<f32>(real32)
-            .fft(None, 0, FftNorm::Backward, session)
+            .fft_with(&FftOptions::default().axis(0), session)
             .unwrap();
         assert_managed_output(&full32, &domain, real32_id);
         let real32 = domain.tensor(&[4], vec![1.0_f32, 2.0, 3.0, 4.0]);
         let one_sided32 = Tensor::from_typed::<f32>(real32)
-            .rfft(None, 0, FftNorm::Backward, session)
+            .rfft_with(&FftOptions::default().axis(0), session)
             .unwrap();
         let Ok(one_sided32) = one_sided32.into_typed::<Complex32>() else {
             unreachable!()
         };
         let recovered32 = Tensor::from_typed::<tenferro_tensor::Complex32>(one_sided32)
-            .irfft(Some(4), 0, FftNorm::Backward, session)
+            .irfft_with(&FftOptions::default().n(Some(4)).axis(0), session)
             .unwrap();
         assert_managed_output(&recovered32, &domain, None);
 
         let real64 = domain.tensor(&[4], vec![1.0_f64, 2.0, 3.0, 4.0]);
         let real64_id = real64.allocation_id();
         let one_sided64 = Tensor::from_typed::<f64>(real64)
-            .rfft(None, 0, FftNorm::Backward, session)
+            .rfft_with(&FftOptions::default().axis(0), session)
             .unwrap();
         assert_managed_output(&one_sided64, &domain, real64_id);
         let Ok(one_sided64) = one_sided64.into_typed::<Complex64>() else {
             unreachable!()
         };
         let recovered64 = Tensor::from_typed::<tenferro_tensor::Complex64>(one_sided64)
-            .irfft(Some(4), 0, FftNorm::Backward, session)
+            .irfft_with(&FftOptions::default().n(Some(4)).axis(0), session)
             .unwrap();
         assert_managed_output(&recovered64, &domain, None);
 
         let complex32 = domain.tensor(&[4], vec![Complex32::new(1.0, 0.0); 4]);
         let transformed32 = Tensor::from_typed::<tenferro_tensor::Complex32>(complex32)
-            .fft(None, 0, FftNorm::Backward, session)
+            .fft_with(&FftOptions::default().axis(0), session)
             .unwrap();
         let inverted32 = transformed32
-            .ifft(None, 0, FftNorm::Backward, session)
+            .ifft_with(&FftOptions::default().axis(0), session)
             .unwrap();
         assert_managed_output(&inverted32, &domain, None);
 
         let complex64 = domain.tensor(&[4], vec![Complex64::new(1.0, 0.0); 4]);
         let transformed64 = Tensor::from_typed::<tenferro_tensor::Complex64>(complex64)
-            .fft(None, 0, FftNorm::Backward, session)
+            .fft_with(&FftOptions::default().axis(0), session)
             .unwrap();
         let inverted64 = transformed64
-            .ifft(None, 0, FftNorm::Backward, session)
+            .ifft_with(&FftOptions::default().axis(0), session)
             .unwrap();
         assert_managed_output(&inverted64, &domain, None);
     };

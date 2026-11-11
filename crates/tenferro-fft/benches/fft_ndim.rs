@@ -7,7 +7,8 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftExecutor, FftNorm};
+use tenferro_fft::FftExecutor;
+use tenferro_fft::{FftOptions, FftnOptions};
 use tenferro_tensor::{Engine, Tensor};
 
 fn c64_grid(cube: usize) -> Tensor {
@@ -32,7 +33,11 @@ fn bench_fft_ndim(c: &mut Criterion) {
         let mut executor = FftExecutor::default();
         // Warm the plans both arms share, so neither pays planning cost.
         executor
-            .fftn(&input, None, &[0, 1, 2], FftNorm::Backward, &mut engine)
+            .fftn_with(
+                &input,
+                &FftnOptions::default().axes(vec![0, 1, 2]),
+                &mut engine,
+            )
             .unwrap();
 
         group.bench_function(format!("caller_one_axis_loop/{id}"), |bench| {
@@ -41,13 +46,13 @@ fn bench_fft_ndim(c: &mut Criterion) {
                 let mut current = {
                     let session: &mut dyn Engine = &mut engine;
                     executor
-                        .fft(black_box(&input), None, 0, FftNorm::Backward, session)
+                        .fft_with(black_box(&input), &FftOptions::default().axis(0), session)
                         .unwrap()
                 };
                 for axis in 1..3 {
                     let session: &mut dyn Engine = &mut engine;
                     current = executor
-                        .fft(&current, None, axis, FftNorm::Backward, session)
+                        .fft_with(&current, &FftOptions::default().axis(axis), session)
                         .unwrap();
                 }
                 black_box(current);
@@ -60,11 +65,9 @@ fn bench_fft_ndim(c: &mut Criterion) {
                 let session: &mut dyn Engine = &mut engine;
                 black_box(
                     executor
-                        .fftn(
+                        .fftn_with(
                             black_box(&input),
-                            None,
-                            &[0, 1, 2],
-                            FftNorm::Backward,
+                            &FftnOptions::default().axes(vec![0, 1, 2]),
                             session,
                         )
                         .unwrap(),

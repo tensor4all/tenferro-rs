@@ -38,42 +38,6 @@ fn einsum_vjp_broadcast_uses_semantic_shape_metadata() {
 }
 
 #[test]
-fn typed_einsum_view_inputs_use_read_suffix_and_typed_outputs_accept_views() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/concrete.rs");
-    let source = std::fs::read_to_string(root).expect("read concrete einsum source");
-
-    assert!(source.contains("pub trait TypedTensorReadEinsumExt"));
-    assert!(source.contains("fn einsum_read("));
-    assert!(source.contains("session: &mut dyn Engine,"));
-    assert!(source.contains("pub trait TypedTensorReadEinsumIntoExt"));
-    assert!(source.contains("fn einsum_read_into<'out, O>"));
-    assert!(source.contains("O: Into<TypedTensorWrite<'out, T>>"));
-
-    assert!(
-        !source.contains(
-            "impl<'a, T: TensorScalar> TypedTensorEinsumExt<T> for [TypedTensorView<'a, T>]"
-        ),
-        "borrowed typed inputs must not implement the unsuffixed einsum surface"
-    );
-    assert!(
-        !source.contains(
-            "impl<'a, T: TensorScalar> TypedTensorEinsumIntoExt<T> for [TypedTensorView<'a, T>]"
-        ),
-        "borrowed typed inputs must not implement the unsuffixed einsum_into surface"
-    );
-    // The concrete einsum traits are engine-explicit: no generic engine type
-    // parameter remains on the public traits.
-    assert!(
-        !source.contains("fn einsum_read<B:"),
-        "concrete einsum traits must take &mut dyn Engine, not a generic engine"
-    );
-    assert!(
-        !source.contains("fn einsum_read_into<'out, B, O>"),
-        "concrete einsum traits must take &mut dyn Engine, not a generic engine"
-    );
-}
-
-#[test]
 fn gpu_dependency_is_owned_by_opt_in_backend_features() {
     let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let manifest = std::fs::read_to_string(manifest_path).expect("read einsum manifest");

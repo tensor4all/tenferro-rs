@@ -7,24 +7,13 @@ use std::marker::PhantomData;
 
 use tenferro_ops::broadcast::{broadcast_shape, broadcast_shapes};
 use tenferro_tensor::{
-    CompareDir, DType, Engine, Error, GatherConfig, Result, Tensor, TensorRead, TensorScalar,
-    TensorValue, TypedTensor,
+    CompareDir, DType, Engine, Error, GatherConfig, Result, Tensor, TensorRead, TensorValue,
 };
 
 use super::{
     scalar_tensor, zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce, CompositeUnary,
 };
 use crate::typed_tensor::{broadcast_error, broadcast_to_in_read, ReadInput};
-
-/// Borrow an erased tensor as a composite input.
-pub(crate) fn borrowed(tensor: &Tensor) -> ReadInput<'_> {
-    ReadInput::Borrowed(TensorRead::from_tensor(tensor))
-}
-
-/// Borrow a typed tensor as a composite input.
-pub(crate) fn typed_borrowed<T: TensorScalar>(tensor: &TypedTensor<T>) -> ReadInput<'_> {
-    ReadInput::Borrowed(T::tensor_read(tensor))
-}
 
 /// Run one composite in `session` and return its owned result.
 pub(crate) fn run_session_composite<'a>(

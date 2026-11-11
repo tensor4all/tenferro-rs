@@ -1,5 +1,7 @@
 # Explicit Backend Session Boundary
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 Status: implemented for #1929's reduced 2026-09-27 delivery contract, then
 superseded by #2206: the session model is removed and the current contract is
 [execution-engine-ownership.md](./execution-engine-ownership.md). This record

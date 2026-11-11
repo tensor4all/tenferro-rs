@@ -7,7 +7,7 @@ use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{DType, Tensor, TensorRead, TypedTensor};
 
 use crate::eager::{binary_dot_shortcut_plan, eager_einsum_exec, plan_subscripts};
-use crate::{ConcreteEinsumPlan, Subscripts, TensorEinsumExt, TypedTensorEinsumExt};
+use crate::{ConcreteEinsumPlan, EinsumOps, Subscripts};
 
 fn lcg(seed: &mut u64) -> f64 {
     *seed = seed
@@ -85,15 +85,17 @@ fn check(notation: &str, a: &Tensor, b: &Tensor, expect_shortcut: bool) {
         (Ok(old), Ok(new)) => {
             assert_eq!(old.shape(), new.shape(), "{notation} shape");
             assert_eq!(bits(old), bits(new), "{notation} bits (einsum)");
-            let plan = ConcreteEinsumPlan::prepare([a, b], notation).unwrap();
-            let planned = plan.execute([a, b], &mut engine).unwrap();
+            let plan =
+                ConcreteEinsumPlan::prepare(&[a, b], notation, &crate::EinsumOptions::default())
+                    .unwrap();
+            let planned = plan.execute(&[a, b], &mut engine).unwrap();
             assert_eq!(bits(old), bits(&planned), "{notation} bits (plan.execute)");
             let reads = [TensorRead::from_tensor(a), TensorRead::from_tensor(b)];
-            let read = plan.execute_read(reads, &mut engine).unwrap();
+            let read = plan.execute(&reads, &mut engine).unwrap();
             assert_eq!(
                 bits(old),
                 bits(&read),
-                "{notation} bits (plan.execute_read)"
+                "{notation} bits (plan.execute on reads)"
             );
         }
         (Err(_), Err(_)) => {}
@@ -199,8 +201,10 @@ fn shortcut_typed_entry_matches_tree_path_bitwise() {
         .collect();
     assert_eq!(typed_bits, bits(&old));
 
-    let plan = ConcreteEinsumPlan::prepare_typed([&ta, &tb], "ij,jk->ik").unwrap();
-    let planned = plan.execute_typed([&ta, &tb], &mut engine).unwrap();
+    let plan =
+        ConcreteEinsumPlan::prepare(&[&ta, &tb], "ij,jk->ik", &crate::EinsumOptions::default())
+            .unwrap();
+    let planned = plan.execute(&[&ta, &tb], &mut engine).unwrap();
     let planned_bits: Vec<u64> = planned
         .host_data()
         .unwrap()

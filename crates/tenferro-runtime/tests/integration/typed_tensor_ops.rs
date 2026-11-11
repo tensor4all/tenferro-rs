@@ -1,5 +1,5 @@
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, TypedTensor};
 use tenferro_tensor::{Error as TensorError, ShapeMismatch, ValidationError};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {

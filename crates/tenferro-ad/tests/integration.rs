@@ -75,6 +75,8 @@ mod semantic_transform;
 mod shape_inference;
 #[path = "integration/shape_of.rs"]
 mod shape_of;
+#[path = "integration/signed_axes.rs"]
+mod signed_axes;
 #[path = "integration/staging_surface_contract.rs"]
 mod staging_surface_contract;
 #[path = "integration/sym_dim.rs"]

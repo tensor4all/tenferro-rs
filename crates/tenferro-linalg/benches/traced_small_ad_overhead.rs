@@ -28,13 +28,12 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use tenferro_linalg::Qr;
 
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{
-    GraphCompiler, Prepared, Runtime, TensorSessionOpsExt, TraceContext, TracedTensor,
-};
+use tenferro_linalg::TracedLinalgOps;
+use tenferro_runtime::{CoreOps, GraphCompiler, Prepared, Runtime, TraceContext, TracedTensor};
 use tenferro_tensor::{Tensor, TypedTensor};
 
 struct CountingAllocator;
@@ -300,7 +299,7 @@ fn main() {
         // and r, and the VJP with respect to the matrix.
         for n in [2usize, 4, 8] {
             let a = traced(&trace, &[n, n], well_conditioned_matrix(n, 4));
-            let (q, r) = a.qr().unwrap();
+            let Qr { q, r } = a.qr().unwrap();
             let loss = (&q.reduce_sum(Some(&[0, 1])).unwrap()
                 + &r.reduce_sum(Some(&[0, 1])).unwrap())
                 .unwrap();

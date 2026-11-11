@@ -338,9 +338,10 @@ fn cuda_svd_auto_rank_deficient_spectrum_and_pinv_residual() {
         } else {
             1.0e-8
         };
-        let pseudoinverse =
-            with_cuda_linalg_session(&mut gpu, |session| device.pinv_with_rtol(rtol, session))
-                .unwrap();
+        let pseudoinverse = with_cuda_linalg_session(&mut gpu, |session| {
+            device.pinv_with(&PinvOptions::default().rtol(Some(rtol)), session)
+        })
+        .unwrap();
         let residual = pinv_residual_error(&input, &download(&gpu, &pseudoinverse));
         let pinv_tolerance = if matches!(dtype, DType::F32 | DType::C32) {
             1.0e-3
@@ -547,12 +548,14 @@ fn cuda_svd_auto_default_pinv_rank_deficient_double_precision() {
         };
         let auto_rank = mask(&auto_values);
         let cpu_rank = mask(&cpu_values);
-        let auto_pinv =
-            with_cuda_linalg_session(&mut gpu, |session| device.pinv_with_rtol(rtol, session))
-                .unwrap();
-        let cpu_pinv =
-            with_cpu_linalg_session(&mut cpu, |session| input.pinv_with_rtol(rtol, session))
-                .unwrap();
+        let auto_pinv = with_cuda_linalg_session(&mut gpu, |session| {
+            device.pinv_with(&PinvOptions::default().rtol(Some(rtol)), session)
+        })
+        .unwrap();
+        let cpu_pinv = with_cpu_linalg_session(&mut cpu, |session| {
+            input.pinv_with(&PinvOptions::default().rtol(Some(rtol)), session)
+        })
+        .unwrap();
         let p_auto = complex_values(&download(&gpu, &auto_pinv));
         let p_cpu = complex_values(&cpu_pinv);
         let p_error = {

@@ -6,14 +6,46 @@ that same engine; traced operations build a graph and execute it later. If an ol
 to a removed module, free function, or fallible-constructor change, start with
 the [API migration guide](../../../../docs/getting-started/api-migration.md).
 
+## Call grammar
+
+Every operation family (core, linalg, einsum, FFT) uses one grammar:
+
+| Layer | Spelling | Trait |
+| --- | --- | --- |
+| concrete | `x.op(…, exec)`, `x.op_with(…, &opts, exec)` (only ops with options), `x.op_into(…, [&opts,] exec, dest)` where declared | `CoreOps`, `LinalgOps`, `EinsumOps` (on `[X]` / `[X; N]`), `TensordotOps`, `FftOps` |
+| traced | `t.op(…)`, `t.op_with(…, &opts)` (only ops with options) | inherent core methods on `TracedTensor`; `TracedLinalgOps`, `TracedFftOps`, `TracedTensordotOps` on `TracedTensor`; `TracedEinsumOps` on `TraceContext` |
+| eager | `s.op(&x, …)`, `s.op_with(&x, …, &opts)` (only ops with options) | inherent core methods on `EagerSession`; `EagerLinalgOps`, `EagerEinsumOps`, `EagerFftOps` |
+
+- `exec` (`&mut dyn Engine`) is always the last argument, after the options.
+- A concrete receiver is anything that is `AsView`: `Tensor`, `TensorRead`,
+  `TypedTensor<T>`, `TypedTensorView<T>` and references to them. Owned,
+  borrowed, typed and strided inputs call the same method; there is no `_read`
+  spelling.
+- Options are `#[non_exhaustive]` structs built with setters:
+  `SvdOptions::default().shape(SvdShape::Full)`,
+  `PinvOptions::default().rtol(Some(1e-10))`,
+  `DotGeneralOptions::default().lhs(Conj::Yes)`.
+- `_into` writes into a `tenferro_tensor::Dest` (`Dest::overwrite(out)`,
+  accumulate, or scaled by `alpha`/`beta`) and exists only where the registry
+  declares it: `add_into` and `solve_into` (overwrite only), `einsum_into`
+  (overwrite, accumulate, scaled).
+- Axes are `isize`; a negative axis counts from the end (`-1` is the last).
+- Multi-output factorizations return structs with named fields:
+  `let Svd { u, s, vh } = a.svd(exec)?;` (also `Qr`, `Lu`, `FullPivLu`,
+  `Eig`, `Eigh`, `Slogdet { sign, log_abs_det }`).
+
+The full operation list, options, `_into` modes, layout and declared omissions
+per operation is
+[`docs/spec/generated/api-ops.md`](../../../../docs/spec/generated/api-ops.md).
+
 ## Direct concrete tensors
 
-Import the engine type and the extension trait that owns the operation method:
+Import the engine type and the operation trait that owns the method:
 
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#concrete-operation -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{TypedTensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 // The leftmost dimension varies fastest: this is a 2 x 3 column-major tensor.
@@ -31,14 +63,15 @@ assert_eq!(projected.host_data()?, &[3.0, 6.0, 3.5, 11.0]);
 ```
 <!-- end-snippet-source -->
 
-The important shape is `x.matmul(&weights, &mut engine)`. For
-dynamic dtypes use `TensorSessionOpsExt`; for static scalar types use
-`TypedTensorSessionOpsExt`. The receiver methods mirror the eager session
-methods with the engine last (`x.gather(&idx, config, &mut engine)`,
-`x.reduce_max(None, &mut engine)`, `x.dot_general(&y, config, &mut engine)`),
-including indexing, padding, concatenation and the triangular/diagonal ops.
-Only the dtype-changing `convert` / `cast` are `Tensor`-only
-(`Tensor::from_typed` moves a typed tensor there without a copy).
+The important shape is `x.matmul(&weights, &mut engine)`. `CoreOps` covers
+dynamic (`Tensor`, `TensorRead`) and static (`TypedTensor<T>`,
+`TypedTensorView<T>`) receivers alike; typed inputs return typed results. The
+receiver methods mirror the eager session methods with the engine last
+(`x.gather(&idx, config, &mut engine)`, `x.reduce_max(Some(&[-1]), &mut engine)`,
+`x.dot_general(&y, config, &mut engine)`), including indexing, padding,
+concatenation and the triangular/diagonal ops. The dtype-changing `convert` /
+`cast` return a dtype-erased `Tensor`; a receiver other than an owned `Tensor`
+is gathered once first.
 
 ## Eager tensors
 
@@ -71,8 +104,10 @@ assert_eq!(
 
 Common import recipes:
 
-- `tenferro_einsum::EagerSessionEinsumExt` for borrowed eager einsum and `tensordot` (`runtime.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?`).
-- `tenferro_linalg::EagerSessionLinalgExt` for borrowed eager linear algebra (`EagerTensorLinalgExt::solve` remains a calling-thread `no_grad` exception).
+- `tenferro_einsum::EagerEinsumOps` for eager einsum and `tensordot` (`runtime.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?`).
+- `tenferro_linalg::EagerLinalgOps` for eager linear algebra (`s.svd(&x)`, `s.solve(&a, &b)`).
+- `tenferro_fft::EagerFftOps` for eager FFTs (`s.fft(&x)`); the consuming `s.fft_in_place(x, &opts)` is the one in-place exception.
+- Core operations (`s.mul`, `s.reduce_sum`, `s.dot_general_with`, ...) are inherent `EagerSession` methods; no import is needed.
 - `tenferro_ad::{EagerRuntime, Tensor}` for eager values and runtime AD.
 
 ## Activations, softmax and normalization
@@ -83,14 +118,13 @@ Common import recipes:
 `rms_norm` (optional rank-1 `weight` / `bias`, `eps`) and NumPy-style
 `take_along_axis` have one name on every tier: `s.softmax(&x, axis)` on an
 `EagerSession`, `x.softmax(axis)` on a `TracedTensor`, and
-`x.softmax(axis, &mut engine)` through `TensorSessionOpsExt`. They are stable
+`x.softmax(axis, &mut engine)` through `CoreOps`. `axis` is `isize`
+(`-1` is the last axis). They are stable
 compositions (no overflow, max-subtracted softmax, all-masked slices give 0 /
 `-inf` with a zero gradient) and differentiate through eager and traced AD; do
 not hand-roll them. The edge-case policy is in
 [`docs/spec/tensor-semantics.md`](../../../../docs/spec/tensor-semantics.md),
-Section VIII. `TypedTensorSessionOpsExt` has `take_along_axis` too, with the
-index tensor kept dtype-erased; `erf` is real-only and does not lower to
-StableHLO.
+Section VIII. `erf` is real-only and does not lower to StableHLO.
 
 ## Traced tensors and extensions
 
@@ -101,8 +135,7 @@ module into the runtime that owns the registered backend engine.
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#traced-extension-operation -->
 ```rust
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_einsum::TraceContextEinsumExt;
-use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_einsum::TracedEinsumOps;
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, Tensor, TraceContext};
 
 let a = Tensor::from_vec_col_major(
@@ -113,12 +146,11 @@ let b = Tensor::from_vec_col_major(
     vec![3, 2],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let mut trace = TraceContext::new();
-let a_value = trace.input(ProgramInputSpec::new(a.dtype(), [2.into(), 3.into()]))?;
-let b_value = trace.input(ProgramInputSpec::new(b.dtype(), [3.into(), 2.into()]))?;
-let product = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
-let graph = trace.finish(&[product])?;
-let program = GraphCompiler::new().compile_traced_graph(&graph)?;
+let trace = TraceContext::new();
+let a_in = trace.input_concrete_shape(a.dtype(), &[2, 3])?;
+let b_in = trace.input_concrete_shape(b.dtype(), &[3, 2])?;
+let product = trace.einsum(&[&a_in, &b_in], "ij,jk->ik")?;
+let program = GraphCompiler::new().compile(&product)?;
 
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
@@ -140,16 +172,17 @@ assert_eq!(result.as_slice::<f64>()?, &[22.0, 28.0, 49.0, 64.0]);
 
 Import recipes:
 
-- `tenferro_einsum::TraceContextEinsumExt` for `TraceContext::einsum` graph
-  construction; use `tenferro_einsum::TracedTensorEinsumExt` when the receiver
-  is an already traced tensor.
-- `tenferro_linalg::TraceContextLinalgExt` for linear algebra on a
-  `TraceContext` value, or `tenferro_linalg::TracedTensorLinalgExt` when the
-  receiver is an already traced tensor.
+- `tenferro_einsum::TracedEinsumOps` for `trace.einsum(&[&a, &b], spec)` on a
+  `TraceContext`; `tenferro_einsum::TracedTensordotOps` for `a.tensordot(..)`
+  on a `TracedTensor`.
+- `tenferro_linalg::TracedLinalgOps` for linear algebra on a `TracedTensor`
+  (`t.svd()`, `t.solve(&b)`).
+- `tenferro_fft::TracedFftOps` for FFTs on a `TracedTensor`.
+- Core operations are inherent `TracedTensor` methods.
 - `tenferro_ad::TracedTensorAdExt` for `grad`, `vjp`, and `jvp` transforms.
 
 If a method is present in the guide but Rust reports E0599, check the owning
-crate's root re-exports and bring its `*Ext` trait into the local module.
+crate's root re-exports and bring its operation trait into the local module.
 
 ## Repeated CPU eager/AD and prepared trace calls
 
@@ -165,14 +198,18 @@ See the
 
 ## Lane-local factorizations
 
-On the `native` provider, a caller that runs its own lanes calls
-`tenferro_linalg::{svd, svd_values, qr, eigh, eigh_values, eig_values}_with_exec(exec,
-&mut lane_pool, &view)` on the bundle from `engine.with_exec(|exec| ..)` and a
-lane-owned `tenferro_cpu::linalg_interop::BufferPool`. They read a `[m, n]` or
-`[m, n, b..]` view in place (a negative stride is `Unsupported`), take every
-output from that pool, and return typed tensors (spectra in
-`LinalgScalar::RealScalar`, general eigenvalues in `LinalgScalar::Complex`)
-bit-identical to the engine entries. The BLAS provider has no such entry.
+`CpuEngine::with_lanes(&shares, &mut pools, |i, lane| ..)` splits the
+engine's thread budget into lanes, each with its own caller-owned
+`tenferro_cpu::linalg_interop::BufferPool`, and hands each lane to the closure
+as an ordinary `&mut dyn Engine`. Inside a lane, call the ordinary grammar
+(`view.svd(lane)`, `view.svd_with(&opts, lane)`); results come back in lane
+order as `Result<Vec<R>>`. On the `native` provider only `svd`, `svdvals`,
+`qr`, `eigh`, `eigvalsh` and `eigvals` run in a lane; every other operation on
+a lane engine, and every operation under the `blas` provider, returns
+`Unsupported`. Keep the pools across calls: a lane draws every output,
+workspace and gather buffer from its pool. A negative-stride input is gathered
+once into the lane's pool; zero steady-state allocation is promised only for
+non-negative strides.
 
 ## Borrowing external memory
 

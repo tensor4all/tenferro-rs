@@ -1,9 +1,10 @@
-//! Public concrete tensor einsum extension API.
+//! Concrete einsum bodies and the prepared plan.
+//!
+//! The public grammar (`EinsumOps`, `TensordotOps`, the plan's
+//! `prepare`/`execute`/`execute_into`) lives in `crate::api` and forwards to
+//! the crate-internal entries here.
 
-use tenferro_tensor::{
-    DType, DotGeneralAccumulation, Engine, Tensor, TensorRead, TensorScalar, TensorWrite,
-    TypedTensor, TypedTensorView, TypedTensorWrite,
-};
+use tenferro_tensor::{DType, DotGeneralAccumulation, Engine, Tensor, TensorRead, TensorWrite};
 use tinyvec::TinyVec;
 
 use crate::binary_dot::BinaryDotOperandOrder;
@@ -12,7 +13,7 @@ use crate::eager::{
     eager_einsum_exec_read, eager_einsum_exec_read_into, eager_einsum_exec_read_into_accum,
     eager_einsum_read_subscripts_on_session, eager_einsum_subscripts_on_session,
     execute_binary_dot_read_into, execute_binary_dot_read_into_accum, execute_binary_dot_shortcut,
-    plan_subscripts, try_binary_dot_shortcut, ConjugatedOperands,
+    plan_subscripts, ConjugatedOperands,
 };
 use crate::ellipsis::resolve_einsum_notation;
 use crate::TensorDotAxes;
@@ -21,146 +22,51 @@ use crate::{
     Subscripts,
 };
 
-const TENSOR_EINSUM_INTO_OP: &str = "TensorEinsumIntoExt::einsum_into";
-const TENSOR_READ_EINSUM_INTO_OP: &str = "TensorReadEinsumIntoExt::einsum_read_into";
-const TYPED_TENSOR_EINSUM_OP: &str = "TypedTensorEinsumExt::einsum";
-const TYPED_TENSOR_EINSUM_INTO_OP: &str = "TypedTensorEinsumIntoExt::einsum_into";
-const TYPED_TENSOR_READ_EINSUM_OP: &str = "TypedTensorReadEinsumExt::einsum_read";
-const TYPED_TENSOR_READ_EINSUM_INTO_OP: &str = "TypedTensorReadEinsumIntoExt::einsum_read_into";
+const TENSOR_EINSUM_INTO_OP: &str = "einsum_into";
+const TENSOR_READ_EINSUM_INTO_OP: &str = "einsum_into";
 const PLAN_EXECUTE_OP: &str = "ConcreteEinsumPlan::execute";
-const TYPED_TENSOR_TENSORDOT_OP: &str = "TypedTensorTensordotExt::tensordot";
 
-/// Backend-explicit tensordot sugar for dtype-erased concrete tensors.
-pub trait TensorTensordotExt {
-    /// Contract this tensor with `rhs` over explicit axes or an axis count.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with `InvalidArgument`, `RankMismatch`,
-    /// `AxisOutOfBounds`, or `ShapeMismatch` for invalid axes or incompatible
-    /// contracting dimensions, or [`Error::Tensor`] when backend execution
-    /// fails.
-    fn tensordot(
-        &self,
-        rhs: &Tensor,
-        axes: TensorDotAxes<'_>,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor>;
+/// Tensordot of two owned erased tensors (the former `Tensor` entry).
+pub(crate) fn tensordot_owned(
+    lhs: &Tensor,
+    rhs: &Tensor,
+    axes: TensorDotAxes<'_>,
+    session: &mut dyn Engine,
+) -> Result<Tensor> {
+    let config = crate::tensordot::dot_general_config(axes, lhs.shape().len(), rhs.shape().len())?;
+    crate::tensordot::validate_concrete_contract_dims(lhs.shape(), rhs.shape(), &config)?;
+    session
+        .dot_general_read(
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            &config,
+        )
+        .map_err(Error::from)
 }
 
-impl TensorTensordotExt for Tensor {
-    fn tensordot(
-        &self,
-        rhs: &Tensor,
-        axes: TensorDotAxes<'_>,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
-        let config =
-            crate::tensordot::dot_general_config(axes, self.shape().len(), rhs.shape().len())?;
-        crate::tensordot::validate_concrete_contract_dims(self.shape(), rhs.shape(), &config)?;
-        session
-            .dot_general_read(
-                TensorRead::from_tensor(self),
-                TensorRead::from_tensor(rhs),
-                &config,
-            )
-            .map_err(Error::from)
-    }
+/// Tensordot of two borrowed reads (the former typed entry, dtype-erased).
+pub(crate) fn tensordot_reads(
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    axes: TensorDotAxes<'_>,
+    session: &mut dyn Engine,
+) -> Result<Tensor> {
+    let config = crate::tensordot::dot_general_config(axes, lhs.shape().len(), rhs.shape().len())?;
+    crate::tensordot::validate_concrete_contract_dims(lhs.shape(), rhs.shape(), &config)?;
+    session
+        .dot_general_read(lhs, rhs, &config)
+        .map_err(Error::from)
 }
 
-/// Backend-explicit tensordot sugar for typed concrete tensors.
-pub trait TypedTensorTensordotExt<T: TensorScalar> {
-    /// Contract this tensor with `rhs` while preserving its scalar type.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with `InvalidArgument`, `RankMismatch`,
-    /// `AxisOutOfBounds`, or `ShapeMismatch` for invalid axes or incompatible
-    /// contracting dimensions, or [`Error::Tensor`] when backend execution
-    /// fails.
-    fn tensordot(
-        &self,
-        rhs: &TypedTensor<T>,
-        axes: TensorDotAxes<'_>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>>;
-}
-
-impl<T: TensorScalar> TypedTensorTensordotExt<T> for TypedTensor<T> {
-    fn tensordot(
-        &self,
-        rhs: &TypedTensor<T>,
-        axes: TensorDotAxes<'_>,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
-        let config =
-            crate::tensordot::dot_general_config(axes, self.shape().len(), rhs.shape().len())?;
-        crate::tensordot::validate_concrete_contract_dims(self.shape(), rhs.shape(), &config)?;
-        let result = session
-            .dot_general_read(T::tensor_read(self), T::tensor_read(rhs), &config)
-            .map_err(Error::from)?;
-        into_typed_result(result, TYPED_TENSOR_TENSORDOT_OP)
-    }
-}
-
-/// Backend-explicit einsum methods for dtype-erased concrete tensors.
-///
-/// Implementations are provided for slices and fixed-size arrays of
-/// [`Tensor`] references, so both `inputs.as_slice().einsum(...)` and
-/// `[&lhs, &rhs].einsum(...)` work.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::CpuEngine;
-/// use tenferro_einsum::TensorEinsumExt;
-/// use tenferro_tensor::Tensor;
-///
-/// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-/// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
-/// let mut backend = CpuEngine::serial();
-///
-/// let out = { let session = &mut backend;  {
-///     [&lhs, &rhs].einsum("ij,jk->ik", session)
-/// } }?;
-/// assert_eq!(out.shape(), &[2, 4]);
-/// # Ok::<(), tenferro_einsum::Error>(())
-/// ```
-pub trait TensorEinsumExt {
-    /// Execute an einsum from string notation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] with shape, rank, or dtype payloads for an invalid
-    /// contraction, or [`Error::Tensor`] for a typed backend failure.
+pub(crate) trait OwnedEinsum {
     fn einsum(&self, subscripts: &str, session: &mut dyn Engine) -> Result<Tensor>;
 
-    /// Execute an einsum from rank-unresolved string/programmatic notation.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or backend error when notation, shapes, or execution are invalid.
     fn einsum_notation(
         &self,
         notation: &EinsumNotation,
         session: &mut dyn Engine,
     ) -> Result<Tensor>;
 
-    /// Execute an einsum from parsed integer-label subscripts.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with shape, rank, or dtype payloads for an
-    /// invalid contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
@@ -168,7 +74,7 @@ pub trait TensorEinsumExt {
     ) -> Result<Tensor>;
 }
 
-impl TensorEinsumExt for [&Tensor] {
+impl OwnedEinsum for [&Tensor] {
     fn einsum(&self, subscripts: &str, session: &mut dyn Engine) -> Result<Tensor> {
         let notation = parse_einsum_notation(subscripts)?;
         self.einsum_notation(&notation, session)
@@ -193,37 +99,7 @@ impl TensorEinsumExt for [&Tensor] {
     }
 }
 
-impl<const N: usize> TensorEinsumExt for [&Tensor; N] {
-    fn einsum(&self, subscripts: &str, session: &mut dyn Engine) -> Result<Tensor> {
-        self.as_slice().einsum(subscripts, session)
-    }
-
-    fn einsum_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
-        self.as_slice().einsum_notation(notation, session)
-    }
-
-    fn einsum_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
-        self.as_slice().einsum_subscripts(subscripts, session)
-    }
-}
-
-/// Backend-explicit preallocated-output einsum methods for dtype-erased tensors.
-pub trait TensorEinsumIntoExt {
-    /// Execute an einsum from string notation into caller-provided output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
-    /// output do not match, or [`Error::Tensor`] for a typed backend failure.
+pub(crate) trait OwnedEinsumInto {
     fn einsum_into(
         &self,
         subscripts: &str,
@@ -231,19 +107,6 @@ pub trait TensorEinsumIntoExt {
         out: TensorWrite<'_>,
     ) -> Result<()>;
 
-    /// Execute an einsum from rank-unresolved notation into caller-provided output.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or backend error when notation, shapes, or output are invalid.
     fn einsum_into_notation(
         &self,
         notation: &EinsumNotation,
@@ -251,13 +114,6 @@ pub trait TensorEinsumIntoExt {
         out: TensorWrite<'_>,
     ) -> Result<()>;
 
-    /// Execute an einsum from parsed integer-label subscripts into caller-provided output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
-    /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
-    /// failure.
     fn einsum_into_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
@@ -266,7 +122,7 @@ pub trait TensorEinsumIntoExt {
     ) -> Result<()>;
 }
 
-impl TensorEinsumIntoExt for [&Tensor] {
+impl OwnedEinsumInto for [&Tensor] {
     fn einsum_into(
         &self,
         subscripts: &str,
@@ -305,742 +161,15 @@ impl TensorEinsumIntoExt for [&Tensor] {
     }
 }
 
-impl<const N: usize> TensorEinsumIntoExt for [&Tensor; N] {
-    fn einsum_into(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-        out: TensorWrite<'_>,
-    ) -> Result<()> {
-        self.as_slice().einsum_into(subscripts, session, out)
-    }
-
-    fn einsum_into_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-        out: TensorWrite<'_>,
-    ) -> Result<()> {
-        self.as_slice().einsum_into_notation(notation, session, out)
-    }
-
-    fn einsum_into_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-        out: TensorWrite<'_>,
-    ) -> Result<()> {
-        self.as_slice()
-            .einsum_into_subscripts(subscripts, session, out)
-    }
-}
-
-/// Backend-explicit einsum methods for typed concrete tensors.
-///
-/// The result keeps the same scalar type as the inputs. Mixed dtypes should use
-/// [`TensorEinsumExt`] on dtype-erased [`Tensor`] values instead.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::CpuEngine;
-/// use tenferro_einsum::TypedTensorEinsumExt;
-/// use tenferro_tensor::TypedTensor;
-///
-/// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-/// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![1.0; 12]).unwrap();
-/// let mut backend = CpuEngine::serial();
-///
-/// let out = { let session = &mut backend;  {
-///     [&lhs, &rhs].einsum("ij,jk->ik", session)
-/// } }?;
-/// assert_eq!(out.shape(), &[2, 4]);
-/// # Ok::<(), tenferro_einsum::Error>(())
-/// ```
-pub trait TypedTensorEinsumExt<T: TensorScalar> {
-    /// Execute an einsum from string notation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] with shape or rank payloads for an invalid
-    /// contraction, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum(&self, subscripts: &str, session: &mut dyn Engine) -> Result<TypedTensor<T>>;
-
-    /// Execute an einsum from rank-unresolved notation.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or backend error when notation, shapes, or execution are invalid.
-    fn einsum_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>>;
-
-    /// Execute an einsum from parsed integer-label subscripts.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with shape or rank payloads for an invalid
-    /// contraction, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>>;
-}
-
-impl<T: TensorScalar> TypedTensorEinsumExt<T> for [&TypedTensor<T>] {
-    fn einsum(&self, subscripts: &str, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
-        let notation = parse_einsum_notation(subscripts)?;
-        self.einsum_notation(&notation, session)
-    }
-
-    fn einsum_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
-        let subscripts = resolve_typed_notation(self, notation)?;
-        typed_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_EINSUM_OP)
-    }
-
-    fn einsum_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
-        let subscripts = Subscripts::from(subscripts);
-        typed_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_EINSUM_OP)
-    }
-}
-
-impl<T: TensorScalar, const N: usize> TypedTensorEinsumExt<T> for [&TypedTensor<T>; N] {
-    fn einsum(&self, subscripts: &str, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum(subscripts, session)
-    }
-
-    fn einsum_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum_notation(notation, session)
-    }
-
-    fn einsum_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum_subscripts(subscripts, session)
-    }
-}
-
-/// Backend-explicit einsum methods for typed borrowed views.
-///
-/// The `_read` suffix distinguishes this borrowed-view surface from
-/// [`TypedTensorEinsumExt`], whose unsuffixed methods accept only owned compact
-/// typed tensors.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::CpuEngine;
-/// use tenferro_einsum::TypedTensorReadEinsumExt;
-/// use tenferro_tensor::TypedTensor;
-///
-/// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
-/// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0])?;
-/// let mut backend = CpuEngine::serial();
-/// let result = { let session = &mut backend;  {
-///     [lhs.as_view(), rhs.as_view()].einsum_read("i,i->", session)
-/// } }?;
-/// assert_eq!(result.as_slice()?, &[11.0]);
-/// # Ok::<(), tenferro_einsum::Error>(())
-/// ```
-pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
-    /// Execute an einsum from string notation over typed borrowed views.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::TypedTensorReadEinsumExt;
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
-    /// let mut backend = CpuEngine::serial();
-    /// let result = { let session = &mut backend;  {
-    ///     [input.as_view()].einsum_read("i->i", session)
-    /// } }?;
-    /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] with shape or rank payloads for incompatible
-    /// views, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read(&self, subscripts: &str, session: &mut dyn Engine) -> Result<TypedTensor<T>>;
-
-    /// Execute an einsum from rank-unresolved notation over typed views.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or backend error when notation, views, or execution are invalid.
-    fn einsum_read_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>>;
-
-    /// Execute an einsum from parsed integer-label subscripts over typed
-    /// borrowed views.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::{EinsumSubscripts, TypedTensorReadEinsumExt};
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
-    /// let subscripts = EinsumSubscripts::new(&[&[0]], &[0]);
-    /// let mut backend = CpuEngine::serial();
-    /// let result = { let session = &mut backend;  {
-    ///     [input.as_view()].einsum_read_subscripts(&subscripts, session)
-    /// } }?;
-    /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with shape or rank payloads for
-    /// incompatible views, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>>;
-}
-
-impl<'a, T: TensorScalar> TypedTensorReadEinsumExt<T> for [TypedTensorView<'a, T>] {
-    fn einsum_read(&self, subscripts: &str, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
-        let notation = parse_einsum_notation(subscripts)?;
-        self.einsum_read_notation(&notation, session)
-    }
-
-    fn einsum_read_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
-        let subscripts = resolve_view_notation(self, notation)?;
-        typed_view_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_READ_EINSUM_OP)
-    }
-
-    fn einsum_read_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
-        let subscripts = Subscripts::from(subscripts);
-        typed_view_einsum_subscripts(session, self, &subscripts, TYPED_TENSOR_READ_EINSUM_OP)
-    }
-}
-
-impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumExt<T>
-    for [TypedTensorView<'a, T>; N]
-{
-    fn einsum_read(&self, subscripts: &str, session: &mut dyn Engine) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum_read(subscripts, session)
-    }
-
-    fn einsum_read_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum_read_notation(notation, session)
-    }
-
-    fn einsum_read_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>> {
-        self.as_slice().einsum_read_subscripts(subscripts, session)
-    }
-}
-
-/// Backend-explicit preallocated-output einsum methods for typed concrete tensors.
-pub trait TypedTensorEinsumIntoExt<T: TensorScalar> {
-    /// Execute an einsum from string notation into caller-provided typed output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
-    /// output do not match, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_into<'out, O>(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>;
-
-    /// Execute an einsum from rank-unresolved notation into typed output.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or backend error when notation, shapes, or output are invalid.
-    fn einsum_into_notation<'out, O>(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>;
-
-    /// Execute an einsum from parsed integer-label subscripts into caller-provided typed output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
-    /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
-    /// failure.
-    fn einsum_into_subscripts<'out, O>(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>;
-}
-
-impl<T: TensorScalar> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>] {
-    fn einsum_into<'out, O>(&self, subscripts: &str, session: &mut dyn Engine, out: O) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        let out = out.into().into_tensor_write();
-        if let ([lhs, rhs], Some((a, b, c))) = (self, parse_fast_ascii_binary_labels(subscripts)) {
-            let reads = [T::tensor_read(lhs), T::tensor_read(rhs)];
-            if let Some((order, config)) = read_binary_dot_config_for_labels(&reads, a, b, c, &out)
-            {
-                return execute_binary_dot_config_read_into(session, &reads, order, &config, out);
-            }
-        }
-        let notation = parse_einsum_notation(subscripts)?;
-        let subscripts = resolve_typed_notation(self, &notation)?;
-        typed_einsum_into_subscripts(session, self, &subscripts, out, TYPED_TENSOR_EINSUM_INTO_OP)
-    }
-
-    fn einsum_into_notation<'out, O>(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        let subscripts = resolve_typed_notation(self, notation)?;
-        typed_einsum_into_subscripts(
-            session,
-            self,
-            &subscripts,
-            out.into().into_tensor_write(),
-            TYPED_TENSOR_EINSUM_INTO_OP,
-        )
-    }
-
-    fn einsum_into_subscripts<'out, O>(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        let subscripts = Subscripts::from(subscripts);
-        typed_einsum_into_subscripts(
-            session,
-            self,
-            &subscripts,
-            out.into().into_tensor_write(),
-            TYPED_TENSOR_EINSUM_INTO_OP,
-        )
-    }
-}
-
-impl<T: TensorScalar, const N: usize> TypedTensorEinsumIntoExt<T> for [&TypedTensor<T>; N] {
-    fn einsum_into<'out, O>(&self, subscripts: &str, session: &mut dyn Engine, out: O) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        self.as_slice().einsum_into(subscripts, session, out)
-    }
-
-    fn einsum_into_notation<'out, O>(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        self.as_slice().einsum_into_notation(notation, session, out)
-    }
-
-    fn einsum_into_subscripts<'out, O>(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        self.as_slice()
-            .einsum_into_subscripts(subscripts, session, out)
-    }
-}
-
-/// Backend-explicit preallocated-output einsum methods for typed borrowed views.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::CpuEngine;
-/// use tenferro_einsum::TypedTensorReadEinsumIntoExt;
-/// use tenferro_tensor::TypedTensor;
-///
-/// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0])?;
-/// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0])?;
-/// let mut output = TypedTensor::<f64>::from_vec_col_major(vec![], vec![0.0])?;
-/// let mut backend = CpuEngine::serial();
-/// { let session = &mut backend;  {
-///     [lhs.as_view(), rhs.as_view()].einsum_read_into("i,i->", session, &mut output)
-/// } }?;
-/// assert_eq!(output.as_slice()?, &[11.0]);
-/// # Ok::<(), tenferro_einsum::Error>(())
-/// ```
-pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
-    /// Execute an einsum from string notation over typed borrowed views into a
-    /// caller-provided typed output.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::TypedTensorReadEinsumIntoExt;
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
-    /// let mut output = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0; 2])?;
-    /// let mut backend = CpuEngine::serial();
-    /// { let session = &mut backend;  {
-    ///     [input.as_view()].einsum_read_into("i->i", session, &mut output)
-    /// } }?;
-    /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
-    /// output do not match, or [`Error::Tensor`] for a typed backend failure.
-    fn einsum_read_into<'out, O>(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>;
-
-    /// Execute an einsum from rank-unresolved notation over typed views into output.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or backend error when notation, views, or output are invalid.
-    fn einsum_read_into_notation<'out, O>(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>;
-
-    /// Execute an einsum from parsed integer-label subscripts over typed
-    /// borrowed views into a caller-provided typed output.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::{EinsumSubscripts, TypedTensorReadEinsumIntoExt};
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![2.0, 3.0])?;
-    /// let mut output = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0; 2])?;
-    /// let subscripts = EinsumSubscripts::new(&[&[0]], &[0]);
-    /// let mut backend = CpuEngine::serial();
-    /// { let session = &mut backend;  {
-    ///     [input.as_view()].einsum_read_into_subscripts(&subscripts, session, &mut output)
-    /// } }?;
-    /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
-    /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
-    /// failure.
-    fn einsum_read_into_subscripts<'out, O>(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>;
-}
-
-impl<'a, T: TensorScalar> TypedTensorReadEinsumIntoExt<T> for [TypedTensorView<'a, T>] {
-    fn einsum_read_into<'out, O>(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        let out = out.into().into_tensor_write();
-        if let Some((lhs, rhs, output)) = parse_fast_ascii_binary_labels(subscripts) {
-            if let Some((order, config)) =
-                typed_view_binary_dot_config(self, lhs, rhs, output, &out)
-            {
-                return execute_typed_view_binary_dot_into(session, self, order, &config, out);
-            }
-        }
-        let notation = parse_einsum_notation(subscripts)?;
-        let subscripts = resolve_view_notation(self, &notation)?;
-        typed_view_einsum_into_subscripts(
-            session,
-            self,
-            &subscripts,
-            out,
-            TYPED_TENSOR_READ_EINSUM_INTO_OP,
-        )
-    }
-
-    fn einsum_read_into_notation<'out, O>(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        let out = out.into().into_tensor_write();
-        if let Some([lhs, rhs, output]) = borrowed_notation_labels(notation) {
-            if let Some((order, config)) =
-                typed_view_binary_dot_config(self, &lhs, &rhs, &output, &out)
-            {
-                return execute_typed_view_binary_dot_into(session, self, order, &config, out);
-            }
-        }
-        let subscripts = resolve_view_notation(self, notation)?;
-        typed_view_einsum_into_subscripts(
-            session,
-            self,
-            &subscripts,
-            out,
-            TYPED_TENSOR_READ_EINSUM_INTO_OP,
-        )
-    }
-
-    fn einsum_read_into_subscripts<'out, O>(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        let out = out.into().into_tensor_write();
-        if let [lhs, rhs] = subscripts.inputs.as_slice() {
-            if let Some((order, config)) =
-                typed_view_binary_dot_config(self, lhs, rhs, &subscripts.output, &out)
-            {
-                return execute_typed_view_binary_dot_into(session, self, order, &config, out);
-            }
-        }
-        let subscripts = Subscripts::from(subscripts);
-        typed_view_einsum_into_subscripts(
-            session,
-            self,
-            &subscripts,
-            out,
-            TYPED_TENSOR_READ_EINSUM_INTO_OP,
-        )
-    }
-}
-
-impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumIntoExt<T>
-    for [TypedTensorView<'a, T>; N]
-{
-    fn einsum_read_into<'out, O>(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        self.as_slice().einsum_read_into(subscripts, session, out)
-    }
-
-    fn einsum_read_into_notation<'out, O>(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        self.as_slice()
-            .einsum_read_into_notation(notation, session, out)
-    }
-
-    fn einsum_read_into_subscripts<'out, O>(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        self.as_slice()
-            .einsum_read_into_subscripts(subscripts, session, out)
-    }
-}
-
-/// Backend-explicit einsum methods for [`TensorRead`] inputs.
-///
-/// Use this surface when an input is a borrowed tensor view rather than an
-/// owned compact [`Tensor`]. The `_read` suffix follows the repository-wide
-/// convention for APIs that explicitly accept read-oriented borrowed inputs.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::CpuEngine;
-/// use tenferro_einsum::TensorReadEinsumExt;
-/// use tenferro_tensor::{Tensor, TensorRead, TensorView};
-///
-/// let shape = [2, 3];
-/// let data = [1.0_f64; 6];
-/// let rhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
-/// let inputs = [
-///     TensorRead::from_view(TensorView::f64(&shape, &data)?),
-///     TensorRead::from_tensor(&rhs),
-/// ];
-/// let mut backend = CpuEngine::serial();
-///
-/// let out = { let session = &mut backend;  inputs.einsum_read("ij,j->i", session) }?;
-/// assert_eq!(out.shape(), &[2]);
-/// # Ok::<(), tenferro_einsum::Error>(())
-/// ```
-pub trait TensorReadEinsumExt {
-    /// Execute an einsum from string notation over read-only tensor inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] with shape, rank, or dtype payloads for an invalid
-    /// contraction, or [`Error::Tensor`] for a typed backend failure.
+pub(crate) trait ReadEinsum {
     fn einsum_read(&self, subscripts: &str, session: &mut dyn Engine) -> Result<Tensor>;
 
-    /// Execute an einsum from rank-unresolved notation over read-only inputs.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or backend error when notation, shapes, or execution are invalid.
     fn einsum_read_notation(
         &self,
         notation: &EinsumNotation,
         session: &mut dyn Engine,
     ) -> Result<Tensor>;
 
-    /// Execute an einsum from parsed integer-label subscripts over read-only
-    /// tensor inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with shape, rank, or dtype payloads for an
-    /// invalid contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_read_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
@@ -1048,7 +177,7 @@ pub trait TensorReadEinsumExt {
     ) -> Result<Tensor>;
 }
 
-impl<'a> TensorReadEinsumExt for [TensorRead<'a>] {
+impl<'a> ReadEinsum for [TensorRead<'a>] {
     fn einsum_read(&self, subscripts: &str, session: &mut dyn Engine) -> Result<Tensor> {
         let notation = parse_einsum_notation(subscripts)?;
         self.einsum_read_notation(&notation, session)
@@ -1073,37 +202,7 @@ impl<'a> TensorReadEinsumExt for [TensorRead<'a>] {
     }
 }
 
-impl<'a, const N: usize> TensorReadEinsumExt for [TensorRead<'a>; N] {
-    fn einsum_read(&self, subscripts: &str, session: &mut dyn Engine) -> Result<Tensor> {
-        self.as_slice().einsum_read(subscripts, session)
-    }
-
-    fn einsum_read_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
-        self.as_slice().einsum_read_notation(notation, session)
-    }
-
-    fn einsum_read_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-    ) -> Result<Tensor> {
-        self.as_slice().einsum_read_subscripts(subscripts, session)
-    }
-}
-
-/// Backend-explicit preallocated-output einsum methods for [`TensorRead`] inputs.
-pub trait TensorReadEinsumIntoExt {
-    /// Execute an einsum from string notation over read-only inputs into caller-provided output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
-    /// output do not match, or [`Error::Tensor`] for a typed backend failure.
+pub(crate) trait ReadEinsumInto {
     fn einsum_read_into(
         &self,
         subscripts: &str,
@@ -1111,19 +210,6 @@ pub trait TensorReadEinsumIntoExt {
         out: TensorWrite<'_>,
     ) -> Result<()>;
 
-    /// Execute an einsum from rank-unresolved notation over read-only inputs into output.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_einsum::{EinsumAxis, EinsumNotation};
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[]);
-    /// assert_eq!(notation.input_count(), 1);
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation or backend error when notation, shapes, or output are invalid.
     fn einsum_read_into_notation(
         &self,
         notation: &EinsumNotation,
@@ -1131,13 +217,6 @@ pub trait TensorReadEinsumIntoExt {
         out: TensorWrite<'_>,
     ) -> Result<()>;
 
-    /// Execute an einsum from parsed integer-label subscripts over read-only inputs into output.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
-    /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
-    /// failure.
     fn einsum_read_into_subscripts(
         &self,
         subscripts: &EinsumSubscripts,
@@ -1146,7 +225,7 @@ pub trait TensorReadEinsumIntoExt {
     ) -> Result<()>;
 }
 
-impl<'a> TensorReadEinsumIntoExt for [TensorRead<'a>] {
+impl<'a> ReadEinsumInto for [TensorRead<'a>] {
     fn einsum_read_into(
         &self,
         subscripts: &str,
@@ -1211,37 +290,6 @@ impl<'a> TensorReadEinsumIntoExt for [TensorRead<'a>] {
     }
 }
 
-impl<'a, const N: usize> TensorReadEinsumIntoExt for [TensorRead<'a>; N] {
-    fn einsum_read_into(
-        &self,
-        subscripts: &str,
-        session: &mut dyn Engine,
-        out: TensorWrite<'_>,
-    ) -> Result<()> {
-        self.as_slice().einsum_read_into(subscripts, session, out)
-    }
-
-    fn einsum_read_into_notation(
-        &self,
-        notation: &EinsumNotation,
-        session: &mut dyn Engine,
-        out: TensorWrite<'_>,
-    ) -> Result<()> {
-        self.as_slice()
-            .einsum_read_into_notation(notation, session, out)
-    }
-
-    fn einsum_read_into_subscripts(
-        &self,
-        subscripts: &EinsumSubscripts,
-        session: &mut dyn Engine,
-        out: TensorWrite<'_>,
-    ) -> Result<()> {
-        self.as_slice()
-            .einsum_read_into_subscripts(subscripts, session, out)
-    }
-}
-
 /// Prepared concrete einsum plan for repeated executions with fixed input
 /// dtype and shape metadata.
 ///
@@ -1258,12 +306,12 @@ impl<'a, const N: usize> TensorReadEinsumIntoExt for [TensorRead<'a>; N] {
 ///
 /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
-/// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
+/// let plan = ConcreteEinsumPlan::prepare(&[&lhs, &rhs], "ij,jk->ik", &Default::default())?;
 ///
 /// let mut backend = CpuEngine::serial();
-/// let out = { let session = &mut backend;  plan.execute([&lhs, &rhs], session) }?;
+/// let out = plan.execute(&[&lhs, &rhs], &mut backend)?;
 /// assert_eq!(out.shape(), &[2, 4]);
-/// # Ok::<(), tenferro_einsum::Error>(())
+/// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[derive(Debug)]
 pub struct ConcreteEinsumPlan {
@@ -1272,6 +320,8 @@ pub struct ConcreteEinsumPlan {
     output_shape: Vec<usize>,
     binary_dot: Option<crate::binary_dot::BinaryDotPlan>,
     cpu_plan: crate::cpu_concrete::Cache,
+    /// Per-operand conjugation chosen at preparation (#2552 `EinsumOptions::conj`).
+    conj: crate::api::ConjMask,
 }
 
 impl ConcreteEinsumPlan {
@@ -1284,10 +334,11 @@ impl ConcreteEinsumPlan {
     /// use tenferro_einsum::ConcreteEinsumPlan;
     /// use tenferro_tensor::Tensor;
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
-    /// let mut plan = ConcreteEinsumPlan::prepare([&a, &a, &a], "ij,jk,kl->il")?;
+    /// let mut plan =
+    ///     ConcreteEinsumPlan::prepare(&[&a, &a, &a], "ij,jk,kl->il", &Default::default())?;
     /// plan.clear_cpu_cache();
     /// assert_eq!(plan.cpu_cache_stats()?.entries, 0);
-    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn clear_cpu_cache(&mut self) {
         self.cpu_plan.clear();
@@ -1303,9 +354,10 @@ impl ConcreteEinsumPlan {
     /// use tenferro_einsum::ConcreteEinsumPlan;
     /// use tenferro_tensor::Tensor;
     /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
-    /// let plan = ConcreteEinsumPlan::prepare([&a, &a, &a], "ij,jk,kl->il")?;
+    /// let plan =
+    ///     ConcreteEinsumPlan::prepare(&[&a, &a, &a], "ij,jk,kl->il", &Default::default())?;
     /// assert_eq!(plan.cpu_cache_stats()?.entries, 0);
-    /// # Ok::<(), tenferro_einsum::Error>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
     /// # Errors
@@ -1315,31 +367,10 @@ impl ConcreteEinsumPlan {
         self.cpu_plan.stats().map_err(Error::from)
     }
 
-    /// Prepare a plan from dtype-erased concrete tensor inputs and string
-    /// notation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] for rank, shape, or dtype contract violations, or
-    /// [`Error::Planning`] when no valid contraction tree can be built.
-    pub fn prepare<'a, I>(inputs: I, subscripts: &str) -> Result<Self>
-    where
-        I: AsRef<[&'a Tensor]>,
-    {
-        let notation = parse_einsum_notation(subscripts)?;
-        Self::prepare_notation(inputs, &notation)
-    }
-
-    /// Prepare a plan from dtype-erased concrete tensor inputs and parsed
-    /// integer-label subscripts.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for rank, shape, or dtype contract
-    /// violations, or [`Error::Planning`] when no valid contraction tree can be
-    /// built.
-    pub fn prepare_subscripts<'a, I>(inputs: I, subscripts: &EinsumSubscripts) -> Result<Self>
+    pub(crate) fn prepare_owned_subscripts<'a, I>(
+        inputs: I,
+        subscripts: &EinsumSubscripts,
+    ) -> Result<Self>
     where
         I: AsRef<[&'a Tensor]>,
     {
@@ -1347,98 +378,10 @@ impl ConcreteEinsumPlan {
         Self::prepare_subscripts_internal(input_specs(inputs.as_ref()), &subscripts)
     }
 
-    /// Prepare a plan from rank-unresolved notation and concrete tensor inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed axis tokens,
-    /// [`Error::Validation`] for rank, shape, or dtype violations, or
-    /// [`Error::Planning`] when no contraction tree can be built.
-    pub fn prepare_notation<'a, I>(inputs: I, notation: &EinsumNotation) -> Result<Self>
-    where
-        I: AsRef<[&'a Tensor]>,
-    {
-        let inputs = inputs.as_ref();
-        let subscripts = resolve_tensor_notation(inputs, notation)?;
-        Self::prepare_subscripts_internal(input_specs(inputs), &subscripts)
-    }
-
-    /// Prepare a plan from typed concrete tensor inputs and string notation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] for rank or shape contract violations, or
-    /// [`Error::Planning`] when no valid contraction tree can be built.
-    pub fn prepare_typed<'a, T, I>(inputs: I, subscripts: &str) -> Result<Self>
-    where
-        T: TensorScalar,
-        I: AsRef<[&'a TypedTensor<T>]>,
-    {
-        let notation = parse_einsum_notation(subscripts)?;
-        Self::prepare_typed_notation(inputs, &notation)
-    }
-
-    /// Prepare a plan from typed concrete tensor inputs and parsed integer-label
-    /// subscripts.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for rank or shape contract violations, or
-    /// [`Error::Planning`] when no valid contraction tree can be built.
-    pub fn prepare_typed_subscripts<'a, T, I>(
+    pub(crate) fn prepare_read_subscripts<'a, I>(
         inputs: I,
         subscripts: &EinsumSubscripts,
     ) -> Result<Self>
-    where
-        T: TensorScalar,
-        I: AsRef<[&'a TypedTensor<T>]>,
-    {
-        let subscripts = Subscripts::from(subscripts);
-        Self::prepare_subscripts_internal(typed_input_specs(inputs.as_ref()), &subscripts)
-    }
-
-    /// Prepare a plan from rank-unresolved notation and typed concrete inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed axis tokens,
-    /// [`Error::Validation`] for rank or shape violations, or [`Error::Planning`]
-    /// when no contraction tree can be built.
-    pub fn prepare_typed_notation<'a, T, I>(inputs: I, notation: &EinsumNotation) -> Result<Self>
-    where
-        T: TensorScalar,
-        I: AsRef<[&'a TypedTensor<T>]>,
-    {
-        let inputs = inputs.as_ref();
-        let subscripts = resolve_typed_notation(inputs, notation)?;
-        Self::prepare_subscripts_internal(typed_input_specs(inputs), &subscripts)
-    }
-
-    /// Prepare a plan from read-only tensor inputs and string notation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] for rank, shape, or dtype contract violations, or
-    /// [`Error::Planning`] when no valid contraction tree can be built.
-    pub fn prepare_read<'a, I>(inputs: I, subscripts: &str) -> Result<Self>
-    where
-        I: AsRef<[TensorRead<'a>]>,
-    {
-        let notation = parse_einsum_notation(subscripts)?;
-        Self::prepare_read_notation(inputs, &notation)
-    }
-
-    /// Prepare a plan from read-only tensor inputs and parsed integer-label
-    /// subscripts.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for rank, shape, or dtype contract
-    /// violations, or [`Error::Planning`] when no valid contraction tree can be
-    /// built.
-    pub fn prepare_read_subscripts<'a, I>(inputs: I, subscripts: &EinsumSubscripts) -> Result<Self>
     where
         I: AsRef<[TensorRead<'a>]>,
     {
@@ -1446,58 +389,12 @@ impl ConcreteEinsumPlan {
         Self::prepare_subscripts_internal(read_input_specs(inputs.as_ref()), &subscripts)
     }
 
-    /// Prepare a plan from rank-unresolved notation and read-only inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed axis tokens,
-    /// [`Error::Validation`] for rank, shape, or dtype violations, or
-    /// [`Error::Planning`] when no contraction tree can be built.
-    pub fn prepare_read_notation<'a, I>(inputs: I, notation: &EinsumNotation) -> Result<Self>
-    where
-        I: AsRef<[TensorRead<'a>]>,
-    {
-        let inputs = inputs.as_ref();
-        let subscripts = resolve_read_notation(inputs, notation)?;
-        Self::prepare_subscripts_internal(read_input_specs(inputs), &subscripts)
-    }
-
     /// Number of binary contraction steps in the prepared tree (diagnostics).
     pub(crate) fn step_count(&self) -> usize {
         self.tree.step_count()
     }
 
-    /// Execute this plan on dtype-erased concrete tensor inputs inside a
-    /// borrowed backend session.
-    ///
-    /// Validation and the contraction itself run in the caller's `session`;
-    /// this method never enters a new backend session.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::Tensor;
-    ///
-    /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
-    /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
-    ///
-    /// let mut backend = CpuEngine::serial();
-    /// let out = { let session = &mut backend;  plan.execute([&lhs, &rhs], session) }?;
-    /// assert_eq!(out.shape(), &[2, 4]);
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
-    /// shape, or input-count contract, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
-    /// input dtype differs from the prepared contract, or [`Error::Tensor`]
-    /// for a typed backend failure.
-    pub fn execute<'a, I>(&self, inputs: I, session: &mut dyn Engine) -> Result<Tensor>
+    pub(crate) fn run_owned<'a, I>(&self, inputs: I, session: &mut dyn Engine) -> Result<Tensor>
     where
         I: AsRef<[&'a Tensor]>,
     {
@@ -1524,99 +421,7 @@ impl ConcreteEinsumPlan {
         eager_einsum_exec(session, inputs, &self.tree).map_err(Error::from)
     }
 
-    /// Execute this plan on typed concrete tensor inputs inside a borrowed
-    /// backend session.
-    ///
-    /// Validation and the contraction itself run in the caller's `session`;
-    /// this method never enters a new backend session.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-    /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![1.0; 12]).unwrap();
-    /// let plan = ConcreteEinsumPlan::prepare_typed([&lhs, &rhs], "ij,jk->ik")?;
-    ///
-    /// let mut backend = CpuEngine::serial();
-    /// let out = { let session = &mut backend;  plan.execute_typed([&lhs, &rhs], session) }?;
-    /// assert_eq!(out.shape(), &[2, 4]);
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
-    /// shape, or input-count contract, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
-    /// prepared dtype differs from `T` or the eager result dtype, or
-    /// [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_typed<'a, T, I>(
-        &self,
-        inputs: I,
-        session: &mut dyn Engine,
-    ) -> Result<TypedTensor<T>>
-    where
-        T: TensorScalar,
-        I: AsRef<[&'a TypedTensor<T>]>,
-    {
-        let inputs = inputs.as_ref();
-        self.validate_typed_inputs(inputs, PLAN_EXECUTE_OP)?;
-        let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-        if let Some(plan) = self.binary_dot_shortcut() {
-            let result = execute_binary_dot_shortcut(session, &reads, plan)?;
-            return into_typed_result(result, PLAN_EXECUTE_OP);
-        }
-        let result = match crate::cpu_concrete::execute_cached(
-            session,
-            &reads,
-            &self.tree,
-            Some(&self.cpu_plan),
-        ) {
-            Some(result) => result?,
-            None => eager_einsum_exec_read(session, &reads, &self.tree)?,
-        };
-        into_typed_result(result, PLAN_EXECUTE_OP)
-    }
-
-    /// Execute this plan on read-only tensor inputs inside a borrowed backend
-    /// session.
-    ///
-    /// Validation and the contraction itself run in the caller's `session`;
-    /// this method never enters a new backend session.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{Tensor, TensorRead};
-    ///
-    /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
-    /// let plan = ConcreteEinsumPlan::prepare_read(
-    ///     [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
-    ///     "ij,jk->ik",
-    /// )?;
-    ///
-    /// let mut backend = CpuEngine::serial();
-    /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
-    /// let out = { let session = &mut backend;  plan.execute_read(reads, session) }?;
-    /// assert_eq!(out.shape(), &[2, 4]);
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] when inputs violate the prepared rank,
-    /// shape, or input-count contract, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when an
-    /// input dtype differs from the prepared contract, or [`Error::Tensor`]
-    /// for a typed backend failure.
-    pub fn execute_read<'a, I>(&self, inputs: I, session: &mut dyn Engine) -> Result<Tensor>
+    pub(crate) fn run_reads<'a, I>(&self, inputs: I, session: &mut dyn Engine) -> Result<Tensor>
     where
         I: AsRef<[TensorRead<'a>]>,
     {
@@ -1633,43 +438,7 @@ impl ConcreteEinsumPlan {
         eager_einsum_exec_read(session, inputs, &self.tree).map_err(Error::from)
     }
 
-    /// Execute this plan on dtype-erased concrete tensor inputs into
-    /// caller-provided output inside a borrowed backend session.
-    ///
-    /// Validation and the contraction itself run in the caller's `session`;
-    /// this method never enters a new backend session.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{Tensor, TensorWrite};
-    ///
-    /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
-    /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik")?;
-    ///
-    /// let mut backend = CpuEngine::serial();
-    /// let mut out = Tensor::from_vec_col_major(vec![2, 4], vec![0.0_f64; 8]).unwrap();
-    /// { let session = &mut backend;  {
-    ///     plan.execute_into(
-    ///         [&lhs, &rhs],
-    ///         session,
-    ///         TensorWrite::from_tensor(&mut out),
-    ///     )
-    /// } }?;
-    /// assert_eq!(out.as_slice::<f64>()?, vec![3.0_f64; 8].as_slice());
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or
-    /// input-count contract violations, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
-    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_into<'a, I>(
+    pub(crate) fn run_owned_into<'a, I>(
         &self,
         inputs: I,
         session: &mut dyn Engine,
@@ -1696,103 +465,7 @@ impl ConcreteEinsumPlan {
             .map_err(Error::from)
     }
 
-    /// Execute this plan on typed concrete tensor inputs into caller-provided
-    /// output inside a borrowed backend session.
-    ///
-    /// Validation and the contraction itself run in the caller's `session`;
-    /// this method never enters a new backend session.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::TypedTensor;
-    ///
-    /// let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0; 6]).unwrap();
-    /// let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], vec![1.0; 12]).unwrap();
-    /// let plan = ConcreteEinsumPlan::prepare_typed([&lhs, &rhs], "ij,jk->ik")?;
-    ///
-    /// let mut backend = CpuEngine::serial();
-    /// let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 4], vec![0.0; 8]).unwrap();
-    /// { let session = &mut backend;  {
-    ///     plan.execute_typed_into([&lhs, &rhs], session, &mut out)
-    /// } }?;
-    /// assert_eq!(out.as_slice()?, vec![3.0_f64; 8].as_slice());
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or
-    /// input-count contract violations, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload when the
-    /// prepared dtype differs from `T` or the output dtype, or
-    /// [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_typed_into<'a, 'out, T, I, O>(
-        &self,
-        inputs: I,
-        session: &mut dyn Engine,
-        out: O,
-    ) -> Result<()>
-    where
-        T: TensorScalar,
-        I: AsRef<[&'a TypedTensor<T>]>,
-        O: Into<TypedTensorWrite<'out, T>>,
-    {
-        let inputs = inputs.as_ref();
-        self.validate_typed_inputs(inputs, PLAN_EXECUTE_OP)?;
-        let out = out.into().into_tensor_write();
-        self.validate_cached_output(&out, PLAN_EXECUTE_OP)?;
-        if let Some(binary_dot) = &self.binary_dot {
-            if let [lhs, rhs] = inputs {
-                let reads = [T::tensor_read(lhs), T::tensor_read(rhs)];
-                return execute_binary_dot_read_into(session, &reads, binary_dot, out)
-                    .map_err(Error::from);
-            }
-        }
-        let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-        self.execute_cpu_or_fallback_into(session, &reads, out)
-            .map_err(Error::from)
-    }
-
-    /// Execute this plan on read-only tensor inputs into caller-provided output
-    /// inside a borrowed backend session.
-    ///
-    /// Validation and the contraction itself run in the caller's `session`;
-    /// this method never enters a new backend session.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{Tensor, TensorRead, TensorWrite};
-    ///
-    /// let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    /// let rhs = Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
-    /// let plan = ConcreteEinsumPlan::prepare_read(
-    ///     [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
-    ///     "ij,jk->ik",
-    /// )?;
-    ///
-    /// let mut backend = CpuEngine::serial();
-    /// let mut out = Tensor::from_vec_col_major(vec![2, 4], vec![0.0_f64; 8]).unwrap();
-    /// let reads = [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)];
-    /// { let session = &mut backend;  {
-    ///     plan.execute_read_into(reads, session, TensorWrite::from_tensor(&mut out))
-    /// } }?;
-    /// assert_eq!(out.as_slice::<f64>()?, vec![3.0_f64; 8].as_slice());
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or
-    /// input-count contract violations, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
-    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
-    pub fn execute_read_into<'a, I>(
+    pub(crate) fn run_reads_into<'a, I>(
         &self,
         inputs: I,
         session: &mut dyn Engine,
@@ -1812,52 +485,7 @@ impl ConcreteEinsumPlan {
             .map_err(Error::from)
     }
 
-    /// Execute this plan on read-only inputs with scaled output accumulation
-    /// inside a borrowed backend session.
-    ///
-    /// `accumulation` follows the dot-general contract:
-    /// `out = alpha * einsum(inputs) + beta * out`.
-    ///
-    /// `accumulation.lhs_conj` conjugates the first input and
-    /// `accumulation.rhs_conj` the second, on every execution path. A
-    /// contraction over more than two inputs conjugates only those two
-    /// operands; per-operand conjugation is not part of this contract.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::CpuEngine;
-    /// use tenferro_einsum::ConcreteEinsumPlan;
-    /// use tenferro_tensor::{
-    ///     DotGeneralAccumulation, DType, Tensor, TensorRead, TensorWrite,
-    /// };
-    ///
-    /// let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
-    /// let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
-    /// let mut out = Tensor::from_vec_col_major(vec![], vec![1.0_f64])?;
-    /// let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "i,i->")?;
-    /// let mut backend = CpuEngine::serial();
-    /// { let session = &mut backend;  {
-    ///     plan.execute_read_into_accum(
-    ///         [TensorRead::from_tensor(&lhs), TensorRead::from_tensor(&rhs)],
-    ///         session,
-    ///         DotGeneralAccumulation::add_to(DType::F64)?,
-    ///         TensorWrite::from_tensor(&mut out),
-    ///     )
-    /// } }?;
-    /// assert_eq!(out.as_slice::<f64>()?, &[7.0]);
-    /// # Ok::<(), tenferro_einsum::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for input or output rank, shape, or
-    /// input-count contract violations, [`Error::Tensor`] with a
-    /// `tenferro_tensor::Error::Validation` `DTypeMismatch` payload for dtype
-    /// mismatches, [`Error::Numerical`] for an invalid accumulation, or
-    /// [`Error::Tensor`] for a typed backend failure, including a requested
-    /// conjugation the backend cannot apply.
-    pub fn execute_read_into_accum<'a, I>(
+    pub(crate) fn run_reads_into_accum<'a, I>(
         &self,
         inputs: I,
         session: &mut dyn Engine,
@@ -1883,7 +511,7 @@ impl ConcreteEinsumPlan {
         if crate::cpu_concrete::supports(session, inputs) {
             let mut accumulation = accumulation;
             let conjugated = ConjugatedOperands::apply(session, inputs, &mut accumulation)?;
-            let result = self.execute_read(conjugated.reads(inputs), session)?;
+            let result = self.run_reads(conjugated.reads(inputs), session)?;
             let mut out = out;
             return tenferro_tensor::backend::accumulate_dot_result_into(
                 &result,
@@ -1942,7 +570,72 @@ impl ConcreteEinsumPlan {
             output_shape,
             binary_dot,
             cpu_plan: crate::cpu_concrete::Cache::default(),
+            conj: crate::api::ConjMask::default(),
         })
+    }
+
+    /// Prepare from input metadata with an explicit contraction order and
+    /// conjugation (#2552). The automatic order without annealing plans
+    /// exactly as [`Self::prepare_subscripts_internal`]; every other order is
+    /// honoured as given.
+    pub(crate) fn prepare_planned(
+        inputs: Vec<ConcreteEinsumInputSpec>,
+        subscripts: &Subscripts,
+        optimize: &crate::EinsumOptimize,
+        conj: crate::api::ConjMask,
+    ) -> Result<Self> {
+        if conj.len() > inputs.len() {
+            return Err(Error::invalid_argument(
+                "einsum",
+                "conj",
+                format!(
+                    "the conjugation mask has {} entries for {} inputs",
+                    conj.len(),
+                    inputs.len()
+                ),
+            ));
+        }
+        let mut plan = match optimize {
+            crate::EinsumOptimize::Auto(options) if !options.anneals() => {
+                Self::prepare_subscripts_internal(inputs, subscripts)?
+            }
+            optimize => {
+                if inputs.is_empty() || subscripts.inputs.len() != inputs.len() {
+                    // Same validation and message as the automatic route.
+                    return Self::prepare_subscripts_internal(inputs, subscripts);
+                }
+                let shapes: Vec<&[usize]> =
+                    inputs.iter().map(|input| input.shape.as_slice()).collect();
+                let binary_dot = binary_dot_plan_for_shapes(&shapes, subscripts);
+                let (_, tree) = crate::optimize::resolve_einsum_strategy_with_spec(
+                    optimize.clone(),
+                    subscripts,
+                    &shapes,
+                )?;
+                let output_shape = tree.output_shape();
+                Self {
+                    tree,
+                    inputs,
+                    output_shape,
+                    binary_dot,
+                    cpu_plan: crate::cpu_concrete::Cache::default(),
+                    conj: crate::api::ConjMask::default(),
+                }
+            }
+        };
+        plan.conj = conj;
+        Ok(plan)
+    }
+
+    /// The conjugation chosen at preparation.
+    pub(crate) fn conj_mask(&self) -> &crate::api::ConjMask {
+        &self.conj
+    }
+
+    /// The operand pair contracted at `step` of the prepared tree.
+    #[cfg(test)]
+    pub(crate) fn tree_step_pair(&self, step: usize) -> Option<(usize, usize)> {
+        self.tree.step_pair(step)
     }
 
     fn validate_tensor_inputs(&self, actual: &[&Tensor], op: &'static str) -> Result<()> {
@@ -1950,14 +643,6 @@ impl ConcreteEinsumPlan {
             actual.iter().map(|tensor| (tensor.dtype(), tensor.shape())),
             op,
         )
-    }
-
-    fn validate_typed_inputs<T: TensorScalar>(
-        &self,
-        actual: &[&TypedTensor<T>],
-        op: &'static str,
-    ) -> Result<()> {
-        self.validate_input_metadata(actual.iter().map(|tensor| (T::dtype(), tensor.shape())), op)
     }
 
     fn validate_read_inputs(&self, actual: &[TensorRead<'_>], op: &'static str) -> Result<()> {
@@ -2026,7 +711,7 @@ impl ConcreteEinsumPlan {
 }
 
 #[derive(Clone, Debug)]
-struct ConcreteEinsumInputSpec {
+pub(crate) struct ConcreteEinsumInputSpec {
     dtype: DType,
     shape: Vec<usize>,
 }
@@ -2042,24 +727,7 @@ fn resolve_tensor_notation(inputs: &[&Tensor], notation: &EinsumNotation) -> Res
     )
 }
 
-fn resolve_typed_notation<T: TensorScalar>(
-    inputs: &[&TypedTensor<T>],
-    notation: &EinsumNotation,
-) -> Result<Subscripts> {
-    resolve_shapes(
-        notation,
-        inputs.iter().map(|tensor| tensor.shape()).collect(),
-    )
-}
-
-fn resolve_view_notation<'a, T: TensorScalar>(
-    inputs: &[TypedTensorView<'a, T>],
-    notation: &EinsumNotation,
-) -> Result<Subscripts> {
-    resolve_shapes(notation, inputs.iter().map(|view| view.shape()).collect())
-}
-
-fn resolve_read_notation<'a>(
+pub(crate) fn resolve_read_notation<'a>(
     inputs: &[TensorRead<'a>],
     notation: &EinsumNotation,
 ) -> Result<Subscripts> {
@@ -2076,17 +744,7 @@ fn input_specs(inputs: &[&Tensor]) -> Vec<ConcreteEinsumInputSpec> {
         .collect()
 }
 
-fn typed_input_specs<T: TensorScalar>(inputs: &[&TypedTensor<T>]) -> Vec<ConcreteEinsumInputSpec> {
-    inputs
-        .iter()
-        .map(|tensor| ConcreteEinsumInputSpec {
-            dtype: T::dtype(),
-            shape: tensor.shape().to_vec(),
-        })
-        .collect()
-}
-
-fn read_input_specs(inputs: &[TensorRead<'_>]) -> Vec<ConcreteEinsumInputSpec> {
+pub(crate) fn read_input_specs(inputs: &[TensorRead<'_>]) -> Vec<ConcreteEinsumInputSpec> {
     inputs
         .iter()
         .map(|tensor| ConcreteEinsumInputSpec {
@@ -2094,26 +752,6 @@ fn read_input_specs(inputs: &[TensorRead<'_>]) -> Vec<ConcreteEinsumInputSpec> {
             shape: tensor.shape().to_vec(),
         })
         .collect()
-}
-
-fn typed_view_einsum_subscripts<T: TensorScalar>(
-    session: &mut dyn Engine,
-    inputs: &[TypedTensorView<'_, T>],
-    subscripts: &Subscripts,
-    op: &'static str,
-) -> Result<TypedTensor<T>> {
-    let reads: Vec<_> = inputs
-        .iter()
-        .cloned()
-        .map(|view| TensorRead::from_view(T::tensor_view(view)))
-        .collect();
-    if let Some(result) = try_binary_dot_shortcut(session, &reads, subscripts) {
-        return into_typed_result(result?, op);
-    }
-    let plan =
-        ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
-    let result = plan.execute_read(&reads, session)?;
-    into_typed_result(result, op)
 }
 
 fn read_binary_dot_config_for_labels<L: Copy + PartialEq>(
@@ -2184,7 +822,7 @@ fn tensor_einsum_into_subscripts(
     }
     let plan = ConcreteEinsumPlan::prepare_subscripts_internal(input_specs(inputs), subscripts)?;
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
-    plan.execute_into(inputs, session, out)
+    plan.run_owned_into(inputs, session, out)
 }
 
 fn parse_fast_ascii_binary_labels(notation: &str) -> Option<(&[u8], &[u8], &[u8])> {
@@ -2213,95 +851,6 @@ fn borrowed_notation_labels(notation: &EinsumNotation) -> Option<[TinyVec<[u32; 
     Some([labels(lhs)?, labels(rhs)?, labels(&notation.output)?])
 }
 
-fn typed_view_binary_dot_config<T: TensorScalar, L: Copy + PartialEq>(
-    inputs: &[TypedTensorView<'_, T>],
-    lhs_labels: &[L],
-    rhs_labels: &[L],
-    output_labels: &[L],
-    out: &TensorWrite<'_>,
-) -> Option<(BinaryDotOperandOrder, tenferro_tensor::DotGeneralConfig)> {
-    if inputs.len() != 2 || out.dtype() != T::dtype() {
-        return None;
-    }
-    binary_dot_config_for_into(
-        inputs[0].shape(),
-        inputs[1].shape(),
-        lhs_labels,
-        rhs_labels,
-        output_labels,
-        out.shape(),
-    )
-}
-
-fn execute_typed_view_binary_dot_into<T: TensorScalar>(
-    session: &mut dyn Engine,
-    inputs: &[TypedTensorView<'_, T>],
-    order: BinaryDotOperandOrder,
-    config: &tenferro_tensor::DotGeneralConfig,
-    out: TensorWrite<'_>,
-) -> Result<()> {
-    let (lhs, rhs) = match order {
-        BinaryDotOperandOrder::Original => (0, 1),
-        BinaryDotOperandOrder::Swapped => (1, 0),
-    };
-    let lhs = TensorRead::from_view(T::tensor_view(inputs[lhs].clone()));
-    let rhs = TensorRead::from_view(T::tensor_view(inputs[rhs].clone()));
-    session
-        .dot_general_read_into(lhs, rhs, config, out)
-        .map_err(Error::from)
-}
-
-fn typed_view_einsum_into_subscripts<T: TensorScalar>(
-    session: &mut dyn Engine,
-    inputs: &[TypedTensorView<'_, T>],
-    subscripts: &Subscripts,
-    out: TensorWrite<'_>,
-    op: &'static str,
-) -> Result<()> {
-    let reads: Vec<_> = inputs
-        .iter()
-        .cloned()
-        .map(|view| TensorRead::from_view(T::tensor_view(view)))
-        .collect();
-    let plan =
-        ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
-    validate_output(&plan.inputs, &plan.tree, &out, op)?;
-    plan.execute_read_into(&reads, session, out)
-}
-
-fn typed_einsum_into_subscripts<T: TensorScalar>(
-    session: &mut dyn Engine,
-    inputs: &[&TypedTensor<T>],
-    subscripts: &Subscripts,
-    out: TensorWrite<'_>,
-    op: &'static str,
-) -> Result<()> {
-    if inputs.len() == 2 {
-        if let [lhs, rhs] = subscripts.inputs.as_slice() {
-            if let Some((order, config)) = binary_dot_config_for_into(
-                inputs[0].shape(),
-                inputs[1].shape(),
-                lhs,
-                rhs,
-                &subscripts.output,
-                out.shape(),
-            ) {
-                if out.dtype() == T::dtype() {
-                    let reads = [T::tensor_read(inputs[0]), T::tensor_read(inputs[1])];
-                    return execute_binary_dot_config_read_into(
-                        session, &reads, order, &config, out,
-                    );
-                }
-            }
-        }
-    }
-    let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-    let plan =
-        ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
-    validate_output(&plan.inputs, &plan.tree, &out, op)?;
-    plan.execute_read_into(&reads, session, out)
-}
-
 fn tensor_read_einsum_into_subscripts(
     session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
@@ -2315,7 +864,7 @@ fn tensor_read_einsum_into_subscripts(
     let plan =
         ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(inputs), subscripts)?;
     validate_output(&plan.inputs, &plan.tree, &out, op)?;
-    plan.execute_read_into(inputs, session, out)
+    plan.run_reads_into(inputs, session, out)
 }
 
 fn validate_output(
@@ -2372,28 +921,4 @@ fn output_spec(
         dtype,
         shape: output_shape,
     })
-}
-
-fn typed_einsum_subscripts<T: TensorScalar>(
-    session: &mut dyn Engine,
-    inputs: &[&TypedTensor<T>],
-    subscripts: &Subscripts,
-    op: &'static str,
-) -> Result<TypedTensor<T>> {
-    let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-    if let Some(result) = try_binary_dot_shortcut(session, &reads, subscripts) {
-        return into_typed_result(result?, op);
-    }
-    let plan =
-        ConcreteEinsumPlan::prepare_subscripts_internal(read_input_specs(&reads), subscripts)?;
-    let result = plan.execute_read(&reads, session)?;
-    into_typed_result(result, op)
-}
-
-pub(crate) fn into_typed_result<T: TensorScalar>(
-    result: Tensor,
-    op: &'static str,
-) -> Result<TypedTensor<T>> {
-    let actual = result.dtype();
-    T::into_typed(result).map_err(|_| Error::dtype_mismatch(op, T::dtype(), actual))
 }

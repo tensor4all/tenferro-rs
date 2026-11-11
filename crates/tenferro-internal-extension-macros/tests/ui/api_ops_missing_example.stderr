@@ -1,0 +1,5 @@
+error: op `o` is missing `example concrete: r#"..."#;` required by generating layer `concrete`
+  --> tests/ui/api_ops_missing_example.rs:12:8
+   |
+12 |     op o {
+   |        ^

@@ -6,8 +6,8 @@ use crate::QrGauge;
 ///
 /// `Q` and `R` use `T`; the column permutation and numerical rank use `M`.
 /// For dynamic, eager, and traced tensors, `T` and `M` are the same tensor
-/// type. Typed tensors use [`crate::TypedRankRevealingQrResult`], whose metadata
-/// tensors have scalar type `i64`.
+/// type. For typed tensors `LinalgOps::rank_revealing_qr` returns
+/// `RankRevealingQrResult<TypedTensor<T>, TypedTensor<i64>>`.
 ///
 /// # Examples
 ///
@@ -55,6 +55,7 @@ pub struct RankRevealingQrResult<T, M = T> {
 /// assert_eq!(options.atol, 1.0e-14);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct RankRevealingQrOptions {
     /// QR sign or phase convention. The default is [`QrGauge::Raw`].
     pub gauge: QrGauge,

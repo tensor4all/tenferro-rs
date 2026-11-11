@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use num_complex::Complex64;
 use tenferro_cpu::{with_cpu_engine, CpuEngine};
-use tenferro_linalg::{LinalgBackend, RankRevealingQrOptions, TensorLinalgExt};
+use tenferro_linalg::{LinalgBackend, LinalgOps, RankRevealingQrOptions, TriangularSolveOptions};
 use tenferro_tensor::{Engine, Tensor, TypedTensor};
 
 /// Counts allocations and live bytes while armed.
@@ -488,7 +488,7 @@ fn check_remaining_families(host: &mut CpuEngine, kind: &str, failures: &mut Vec
         spd.cholesky(session).unwrap();
     });
     check(host, failures, &name("triangular_solve/48"), |session| {
-        spd.triangular_solve(&a, true, true, false, false, session)
+        spd.triangular_solve_with(&a, &TriangularSolveOptions::default(), session)
             .unwrap();
     });
     check(host, failures, &name("lu/48"), |session| {
@@ -513,7 +513,7 @@ fn check_remaining_families(host: &mut CpuEngine, kind: &str, failures: &mut Vec
         tall.householder_qr(session).unwrap();
     });
     check(host, failures, &name("rank_revealing_qr/tall"), |session| {
-        tall.rank_revealing_qr(RankRevealingQrOptions::default(), session)
+        tall.rank_revealing_qr_with(&RankRevealingQrOptions::default(), session)
             .unwrap();
     });
     check(host, failures, &name("eigh/48"), |session| {
@@ -586,36 +586,40 @@ const BORROWED_ENTRY_CEILINGS: &[(&str, usize)] = &[
 #[test]
 fn borrowed_entries_keep_their_steady_state_allocation_counts() {
     use tenferro_cpu::linalg_interop::BufferPool;
-    use tenferro_linalg::{
-        eig_values_with_exec, eigh_values_with_exec, eigh_with_exec, qr_with_exec,
-        svd_values_with_exec, svd_with_exec,
-    };
+    use tenferro_linalg::{SvdOptions, SvdShape};
+    use tenferro_tensor::TensorRead;
 
     let _serial = serial_test();
     let mut engine = faer_backend();
-    let mut lane_pool = BufferPool::new();
+    let mut lane_pools = [BufferPool::new()];
     let a = f64_matrix(48);
     let spd = f64_spd(48);
     let c = c64_matrix(32);
     let herm = c64_hermitian(32);
-    let a = a.as_typed::<f64>().unwrap().as_view();
-    let spd = spd.as_typed::<f64>().unwrap().as_view();
-    let c = c.as_typed::<Complex64>().unwrap().as_view();
-    let herm = herm.as_typed::<Complex64>().unwrap().as_view();
+    let a = TensorRead::from_tensor(&a);
+    let spd = TensorRead::from_tensor(&spd);
+    let c = TensorRead::from_tensor(&c);
+    let herm = TensorRead::from_tensor(&herm);
+    let full = SvdOptions::default().shape(SvdShape::Full);
 
     let mut failures = Vec::new();
-    let mut run = |name: &str,
-                   call: &mut dyn FnMut(&mut tcontract_exec::Exec<'_>, &mut BufferPool)|
-     -> AllocationReport {
-        let mut best: Option<AllocationReport> = None;
-        for _ in 0..4 {
-            let report = measure(|| {
-                engine.with_exec(|exec| call(exec, &mut lane_pool)).unwrap();
-            });
-            if best.is_none_or(|best| report.allocations < best.allocations) {
-                best = Some(report);
-            }
-        }
+    let mut run = |name: &str, call: &(dyn Fn(&mut dyn Engine) + Sync)| -> AllocationReport {
+        // The counter is armed inside the lane closure, so the one-off bookkeeping of
+        // `with_lanes` itself is not part of a round.
+        let best = engine
+            .with_lanes(&[1], &mut lane_pools, |_, lane| {
+                let mut best: Option<AllocationReport> = None;
+                for _ in 0..4 {
+                    let report = measure(|| call(&mut *lane));
+                    if best.is_none_or(|best| report.allocations < best.allocations) {
+                        best = Some(report);
+                    }
+                }
+                best
+            })
+            .unwrap()
+            .pop()
+            .flatten();
         let report = best.unwrap_or_default();
         let ceiling = ceiling(name);
         println!("{name}: {report:?} (ceiling {ceiling})");
@@ -624,33 +628,19 @@ fn borrowed_entries_keep_their_steady_state_allocation_counts() {
         }
         report
     };
-    run("borrowed/svd/48", &mut |e, b| {
-        drop(svd_with_exec(e, b, &a, false).unwrap())
+    run("borrowed/svd/48", &|l| drop(a.svd(l).unwrap()));
+    run("borrowed/svd_full/48", &|l| {
+        drop(a.svd_with(&full, l).unwrap())
     });
-    run("borrowed/svd_full/48", &mut |e, b| {
-        drop(svd_with_exec(e, b, &a, true).unwrap())
+    run("borrowed/svd_values/48", &|l| drop(a.svdvals(l).unwrap()));
+    run("borrowed/qr/48", &|l| drop(a.qr(l).unwrap()));
+    run("borrowed/eigh/48", &|l| drop(spd.eigh(l).unwrap()));
+    run("borrowed/eigh_values/48", &|l| {
+        drop(spd.eigvalsh(l).unwrap())
     });
-    run("borrowed/svd_values/48", &mut |e, b| {
-        drop(svd_values_with_exec(e, b, &a).unwrap())
-    });
-    run("borrowed/qr/48", &mut |e, b| {
-        drop(qr_with_exec(e, b, &a).unwrap())
-    });
-    run("borrowed/eigh/48", &mut |e, b| {
-        drop(eigh_with_exec(e, b, &spd).unwrap())
-    });
-    run("borrowed/eigh_values/48", &mut |e, b| {
-        drop(eigh_values_with_exec(e, b, &spd).unwrap())
-    });
-    run("borrowed/eig_values/48", &mut |e, b| {
-        drop(eig_values_with_exec(e, b, &a).unwrap())
-    });
-    run("borrowed/svd/complex64", &mut |e, b| {
-        drop(svd_with_exec(e, b, &c, false).unwrap())
-    });
-    run("borrowed/eigh/complex64", &mut |e, b| {
-        drop(eigh_with_exec(e, b, &herm).unwrap())
-    });
+    run("borrowed/eig_values/48", &|l| drop(a.eigvals(l).unwrap()));
+    run("borrowed/svd/complex64", &|l| drop(c.svd(l).unwrap()));
+    run("borrowed/eigh/complex64", &|l| drop(herm.eigh(l).unwrap()));
 
     // The rank boundary of the storage guarantee (#2505). One 4x4 operand at two ranks, so only
     // the metadata length differs: at rank 8 the dims and strides still fit `INLINE_RANK`, and at
@@ -665,19 +655,15 @@ fn borrowed_entries_keep_their_steady_state_allocation_counts() {
     let rank9 = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![4, 4, 1, 1, 1, 1, 1, 1, 1], block).unwrap(),
     );
-    let rank8 = rank8.as_typed::<f64>().unwrap().as_view();
-    let rank9 = rank9.as_typed::<f64>().unwrap().as_view();
+    let rank8 = TensorRead::from_tensor(&rank8);
+    let rank9 = TensorRead::from_tensor(&rank9);
 
-    let report = run("borrowed/qr/rank8", &mut |e, b| {
-        drop(qr_with_exec(e, b, &rank8).unwrap())
-    });
+    let report = run("borrowed/qr/rank8", &|l| drop(rank8.qr(l).unwrap()));
     assert_eq!(
         report.allocations, 0,
         "a rank-8 operand fits `INLINE_RANK`, so its metadata stays inline"
     );
-    let report = run("borrowed/qr/rank9", &mut |e, b| {
-        drop(qr_with_exec(e, b, &rank9).unwrap())
-    });
+    let report = run("borrowed/qr/rank9", &|l| drop(rank9.qr(l).unwrap()));
     assert!(
         report.allocations > 0,
         "a rank-9 operand spilled nothing: the documented metadata spill above `INLINE_RANK` \

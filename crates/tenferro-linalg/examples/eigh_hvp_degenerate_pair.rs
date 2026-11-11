@@ -16,7 +16,7 @@
 
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TracedTensorLinalgExt;
+use tenferro_linalg::TracedLinalgOps;
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext, TracedTensor};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;

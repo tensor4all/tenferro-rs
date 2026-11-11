@@ -366,7 +366,7 @@ pub fn infer_output_shapes(
             let shape = require_input(op, input_shapes, 0)?.to_vec();
             if *axis >= shape.len() {
                 return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-                    axis: *axis,
+                    axis: isize::try_from(*axis).unwrap_or(isize::MAX),
                     rank: shape.len(),
                 }));
             }
@@ -406,7 +406,7 @@ pub fn infer_output_extents(
             let shape = require_input(op, input_shapes, 0)?;
             if *axis >= shape.len() {
                 return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-                    axis: *axis,
+                    axis: isize::try_from(*axis).unwrap_or(isize::MAX),
                     rank: shape.len(),
                 }));
             }
@@ -768,7 +768,7 @@ fn extract_diag_shape(
 ) -> Result<Vec<DimExpr>> {
     if axis_a >= input_shape.len() || axis_b >= input_shape.len() {
         return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-            axis: axis_a.max(axis_b),
+            axis: isize::try_from(axis_a.max(axis_b)).unwrap_or(isize::MAX),
             rank: input_shape.len(),
         }));
     }
@@ -789,7 +789,7 @@ fn extract_diag_shape(
 fn embed_diag_shape(input_shape: &[DimExpr], axis_a: usize, axis_b: usize) -> Result<Vec<DimExpr>> {
     if axis_a >= input_shape.len() {
         return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-            axis: axis_a,
+            axis: isize::try_from(axis_a).unwrap_or(isize::MAX),
             rank: input_shape.len(),
         }));
     }
@@ -875,7 +875,7 @@ fn gather_shape_from_slice_sizes(
     validate_slice_sizes_within_operand(operand_shape, slice_sizes)?;
     if index_vector_dim > index_shape.len() {
         return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-            axis: index_vector_dim,
+            axis: isize::try_from(index_vector_dim).unwrap_or(isize::MAX),
             rank: index_shape.len(),
         }));
     }
@@ -891,7 +891,7 @@ fn gather_shape_from_slice_sizes(
             .find(|&axis| axis >= operand_shape.len())
             .unwrap_or(operand_shape.len());
         return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-            axis,
+            axis: isize::try_from(axis).unwrap_or(isize::MAX),
             rank: operand_shape.len(),
         }));
     }
@@ -922,7 +922,7 @@ fn gather_shape_from_slice_sizes(
     for (offset_axis, &out_axis) in offset_dims.iter().enumerate() {
         let Some(target) = out_axis_to_operand_dim.get_mut(out_axis) else {
             return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-                axis: out_axis,
+                axis: isize::try_from(out_axis).unwrap_or(isize::MAX),
                 rank: out_rank,
             }));
         };
@@ -1171,7 +1171,7 @@ fn concatenate_shape(input_shapes: &[&[DimExpr]], axis: usize) -> Result<Vec<Dim
     })?;
     if axis >= first.len() {
         return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-            axis,
+            axis: isize::try_from(axis).unwrap_or(isize::MAX),
             rank: first.len(),
         }));
     }
@@ -1214,13 +1214,13 @@ fn pad_to_match_shape(
 ) -> Result<Vec<DimExpr>> {
     if axis >= input_shape.len() {
         return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-            axis,
+            axis: isize::try_from(axis).unwrap_or(isize::MAX),
             rank: input_shape.len(),
         }));
     }
     if axis >= reference_shape.len() {
         return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
-            axis,
+            axis: isize::try_from(axis).unwrap_or(isize::MAX),
             rank: reference_shape.len(),
         }));
     }

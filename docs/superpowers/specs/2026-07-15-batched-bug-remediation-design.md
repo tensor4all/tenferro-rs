@@ -1,5 +1,7 @@
 # Batched Bug Remediation Design
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 ## Status
 
 The six-issue batch and the one-PR strategy were approved interactively on

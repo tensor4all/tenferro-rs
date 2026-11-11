@@ -5,7 +5,7 @@
 //! asymmetry so the extension cannot be dropped accidentally.
 
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, Tensor};
 
 #[test]
 fn session_tensor_extension() {

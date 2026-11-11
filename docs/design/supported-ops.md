@@ -54,8 +54,8 @@ CPU execution, and backend-parametric concrete tensor kernels.
 family, `layer_norm`, `rms_norm` and `take_along_axis` are not primitives.
 Each is written once in `tenferro-runtime/src/composite.rs` over a small
 primitive vocabulary (`CompositeOps`) that the traced (`TracedTensor`), eager
-(`EagerSession`, implemented in `tenferro-ad`) and concrete-session
-(`TensorSessionOpsExt` / `TypedTensorSessionOpsExt`) surfaces implement, so the
+(`EagerSession`, implemented in `tenferro-ad`) and concrete (`CoreOps`)
+surfaces implement, so the
 formulation, validation and edge-case policy cannot drift between surfaces or
 backends; backend parity reduces to the parity of the primitives used. Index
 tuples for `take_along_axis` are built on the backend from scalar constants
@@ -154,11 +154,14 @@ Implemented:
 
 - `Subscripts::parse` and integer-label `Subscripts::new`.
 - `NestedEinsum::parse` for parenthesized contraction order.
-- `ContractionTree::optimize`, `optimize_with_options`, and `from_pairs`.
+- `ContractionTree::optimize`, `optimize_with_options`, and `from_pairs`
+  (planner entry points, exception E09 of the generated API page).
 - `build_einsum_fragment` for traced graph lowering.
-- `eager_einsum` and `eager_einsum_owned` for concrete `Tensor` execution.
-- `TraceContextEinsumExt::einsum` and `tenferro_einsum::extension_module` for
-  traced runtime execution.
+- `EinsumOps` (`[&a, &b].einsum(spec, exec)`, `einsum_with`, `einsum_into`)
+  and `ConcreteEinsumPlan` for concrete execution, over the crate-private
+  `eager_einsum` executor.
+- `TracedEinsumOps::einsum` on `TraceContext` and
+  `tenferro_einsum::extension_module` for traced runtime execution.
 - Repeated-label semantics:
   - `ii->` trace,
   - `ii->i` diagonal extraction,

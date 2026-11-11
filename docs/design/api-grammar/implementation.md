@@ -177,9 +177,9 @@ pub enum KeepDims { No, Yes }
 - 既定値は `Default` で明示します。現行の暗黙の既定に合わせて、`Side::Left`、`Uplo::Lower`、`MatOp::None`、`Diag::NonUnit`、`Conj::No`、`KeepDims::No` とします。
 - `MatOp::Adjoint` は現行の4つの bool では表せません。**[本書で決定]** 複素入力で `Adjoint` が来た場合は、実装できていなければ `Error::Unsupported` を返します。黙って `Transpose` として扱ってはいけません。
 
-### 3.4 Options の形（全演算共通の約束）
+### 3.4 Options の形
 
-すべての演算に `XxxOptions` を 1 つ置きます。設定項目のない演算も例外ではなく、空の `DetOptions` などを置きます（決定 2）。
+意味のある設定項目を持つ演算にだけ `XxxOptions` を 1 つ置き、`op_with` を生成します。設定項目のない演算には Options 型も `op_with` も置きません（#2552 Q14 の決定。決定 2 を改める）。あとから最初の設定項目が必要になったら、レジストリに `options: XxxOptions` を書き、`op_with` を生成します。名前は文法で決まり、既存の呼び出しは壊れません。空の Options を先に公開すると、後で消すことが破壊的変更になるため置きません。
 
 ```rust
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -258,7 +258,7 @@ api_ops! {
     }
     op solve {
         operands: (a, b),
-        options: SolveOptions,
+        options: none,                     // 設定項目のない演算。Options 型も _with も置かない
         output: V,
         dtypes: floating_or_complex,
         layers: [concrete, eager, traced],
@@ -396,16 +396,16 @@ impl<T: LinalgScalar> AsView for TypedTensorView<'_, T> { type Repr = Typed<T>; 
 | svd | `SvdOptions` | `shape: SvdShape::{Thin, Full}`（旧 `svd_full`）、`gauge`、`driver`、`derivative_eps` |
 | svdvals | `SvdvalsOptions` | `driver` |
 | qr | `QrOptions` | `gauge`（既存） |
-| householder_qr | `HouseholderQrOptions` | 空 |
+| householder_qr | なし | 設定項目がないので Options 型も `_with` も置かない |
 | rank_revealing_qr | `RankRevealingQrOptions` | 既存（`gauge`、`rtol`、`atol`） |
-| lu / full_piv_lu | `LuOptions` / `FullPivLuOptions` | 空 |
-| full_piv_lu_solve | `FullPivLuSolveOptions` | 空 |
-| solve / lstsq | `SolveOptions` / `LstsqOptions` | 空 |
+| lu / full_piv_lu | なし | 同上 |
+| full_piv_lu_solve | なし | 同上 |
+| solve / lstsq | なし | 同上 |
 | triangular_solve | `TriangularSolveOptions` | §3.3 |
 | cholesky | `CholeskyOptions` | `uplo`（現行は下三角固定なので、既定を `Lower` にし、`Upper` は未対応なら `Unsupported`） |
-| eig / eigvals | `EigOptions` / `EigvalsOptions` | 空 |
+| eig / eigvals | なし | 同上 |
 | eigh / eigvalsh | `EighOptions` / `EigvalshOptions` | 既存（`gauge`、`driver`、`derivative_eps`） |
-| slogdet / det / inv | `SlogdetOptions` / `DetOptions` / `InvOptions` | 空 |
+| slogdet / det / inv | なし | 同上 |
 | pinv | `PinvOptions` | `rtol: Option<f64>`（旧 `pinv_with_rtol`） |
 | norm | `NormOptions` | §3.3 |
 
@@ -547,7 +547,7 @@ pub struct EinsumOptions {
 | 旧 | 新 |
 |---|---|
 | `TensorEinsumExt`、`TypedTensorEinsumExt`、`TensorReadEinsumExt`、`TypedTensorReadEinsumExt`、`*EinsumIntoExt`（計 8 トレイト、それぞれ bare / `_notation` / `_subscripts`） | `EinsumOps`。`[&a, &b].einsum(spec, exec)`、`.einsum_with(spec, &opts, exec)`、`.einsum_into(spec, &opts, exec, dest)` |
-| `TensorTensordotExt`、`TypedTensorTensordotExt` | `TensordotOps`。`a.tensordot(&b, axes, exec)`、`a.tensordot_with(&b, axes, &opts, exec)` |
+| `TensorTensordotExt`、`TypedTensorTensordotExt` | `TensordotOps`。`a.tensordot(&b, axes, exec)`（設定項目がないので `_with` は置かない） |
 | `ConcreteEinsumPlan::prepare{,_subscripts,_notation,_typed*,_read*}`（9 本） | `ConcreteEinsumPlan::prepare(inputs, spec, &opts)`（1 本） |
 | `execute`、`execute_typed`、`execute_read`、`execute_into`、`execute_typed_into`、`execute_read_into`、`execute_read_into_accum`（7 本） | `plan.execute(inputs, exec)`、`plan.execute_into(inputs, exec, dest)` |
 
@@ -608,7 +608,7 @@ einsum は、現在どの層でも `tenferro_einsum::Error` を返していま�
 | eager | `EagerSession` の固有メソッド | 固有メソッドのまま。同上 |
 
 - concrete の `exec` は最後の引数です。現在のコードはすでにそうなっています。REPOSITORY_RULES.md の「engine は第1引数」という記述のほうが間違っているので、§8 で直します。
-- `dot_general_with_conj` は削除し、`dot_general_with(&rhs, config, &DotGeneralOptions { lhs: Conj, rhs: Conj }, exec)` にします。`add_into`（typed のみ）は、`add_into(&rhs, &AddOptions::default(), exec, Dest::overwrite(&mut out))` にします。それ以外の `_into` は、今回は増やしません（決定 5：レジストリで演算ごとに宣言する）。
+- `dot_general_with_conj` は削除し、`dot_general_with(&rhs, config, &DotGeneralOptions { lhs: Conj, rhs: Conj }, exec)` にします。`add_into`（typed のみ）は、`add_into(&rhs, exec, Dest::overwrite(&mut out))` にします（`add` は設定項目がないので Options を持ちません）。それ以外の `_into` は、今回は増やしません（決定 5：レジストリで演算ごとに宣言する）。
 - 軸の引数は `isize` にします（§3.2）。
 - 型変換（`convert`、`cast`）は明示的な演算のまま残します。データの移動が必要な `reshape` を、メタデータだけの操作として扱ってはいけません。
 - 層ごとの演算の集合の差（たとえば `EagerSession` に `softmax` などがない）は、この作業では埋めません。レジストリの `layers` と `omissions` に、現状をそのまま書きます。
@@ -712,7 +712,7 @@ cargo doc --workspace --no-deps
 | `a.svd_with_options(opts, eng)` | `a.svd_with(&opts, eng)` |
 | `a.pinv_with_rtol(rtol, eng)` | `a.pinv_with(&PinvOptions::default().rtol(Some(rtol)), eng)` |
 | `a.triangular_solve(&b, true, true, false, false, eng)` | `a.triangular_solve_with(&b, &TriangularSolveOptions::default(), eng)` |
-| `r.solve_read_into(b, out, eng)` | `r.solve_into(&b, &SolveOptions::default(), eng, Dest::overwrite(out))` |
+| `r.solve_read_into(b, out, eng)` | `r.solve_into(&b, eng, Dest::overwrite(out))` |
 | `a.norm(None, Some(&[0]), false, eng)` | `a.norm_with(&NormOptions::default().axes(Some([0].into())), eng)` |
 | `x.solve(engine, &b)`（`EagerTensor`） | `sess.solve(&x, &b)` |
 | `ctx.svd(a_value)`（`TraceContextLinalgExt`） | `t.svd()`（`TracedTensor`） |

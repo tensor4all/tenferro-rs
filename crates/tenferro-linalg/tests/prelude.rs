@@ -4,7 +4,9 @@ use tenferro_linalg::prelude::*;
 fn prelude_calls_concrete_linalg_operation() {
     let input = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap();
     let mut backend = tenferro_cpu::CpuEngine::serial();
-    let (_u, singular_values, _vt) = input.svd(&mut backend).unwrap();
+    let Svd {
+        s: singular_values, ..
+    } = input.svd(&mut backend).unwrap();
     assert_eq!(singular_values.shape(), &[2]);
 }
 
@@ -17,10 +19,22 @@ fn prelude_calls_eager_linalg_operation() {
         runtime.clone(),
     )
     .unwrap();
-    let (_u, singular_values, _vt) = runtime
+    let Svd {
+        s: singular_values, ..
+    } = runtime
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.svd(&input)
         })
         .unwrap();
     assert_eq!(singular_values.shape(), &[2]);
+}
+
+#[test]
+fn prelude_calls_traced_linalg_operation() {
+    let trace = tenferro_runtime::TraceContext::new();
+    let input: TracedTensor = trace
+        .from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])
+        .unwrap();
+    let Svd { s, .. } = input.svd().unwrap();
+    assert_eq!(s.dtype(), tenferro_runtime::DType::F64);
 }

@@ -319,8 +319,8 @@ The trailing-batch convention also applies to `DotGeneral` / `BatchedGemm`
 `erf` is a core primitive; the operations below it are composites of existing
 primitives. Each is offered under the same name on the eager surface
 (`EagerSession`), the traced surface (`TracedTensor`) and the concrete-session
-surface (`TensorSessionOpsExt`; `TypedTensorSessionOpsExt` for all but
-`take_along_axis`, which is an indexing operation). The formulation and the
+surface (`CoreOps`, for dynamic and typed receivers alike). Axis arguments are
+signed `isize`; `-1` is the last axis. The formulation and the
 edge-case policy live once in `tenferro-runtime/src/composite.rs`, so every
 surface and backend computes the same primitive sequence; AD of the eager and
 traced forms follows from the primitives' rules. The traced composites require

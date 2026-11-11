@@ -7,7 +7,7 @@
 //!
 //! ```rust
 //! use tenferro_ad::AdContext;
-//! use tenferro_linalg::TracedTensorLinalgExt;
+//! use tenferro_linalg::{Svd, TracedLinalgOps};
 //! use tenferro_runtime::{TraceContext, TracedTensor};
 //!
 //! let ad = AdContext::builder()
@@ -17,7 +17,7 @@
 //!     .unwrap();
 //! let trace = TraceContext::new();
 //! let x = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
-//! let (_u, s, _vt) = x.svd().unwrap();
+//! let Svd { s, .. } = x.svd().unwrap();
 //! let loss = s.reduce_sum(Some(&[0])).unwrap();
 //! let grad = ad.grad(&loss, &x).unwrap();
 //! assert_eq!(grad.rank(), 2);

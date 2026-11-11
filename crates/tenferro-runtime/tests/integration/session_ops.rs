@@ -8,7 +8,7 @@
 //! backend session entry.
 
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt, TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{CoreOps, Tensor, TypedTensor};
 use tenferro_tensor::backend::{
     TensorAnalytic, TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion,
     TensorIndexing, TensorReduction, TensorStructural,
@@ -81,7 +81,7 @@ fn assert_rank_mismatch_error(error: Error) {
 }
 
 // ---------------------------------------------------------------------------
-// Dynamic surface (TensorSessionOpsExt)
+// Dynamic surface (CoreOps)
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -163,7 +163,7 @@ fn session_dynamic_dtype_error() {
 }
 
 // ---------------------------------------------------------------------------
-// Typed surface (TypedTensorSessionOpsExt)
+// Typed surface (CoreOps)
 // ---------------------------------------------------------------------------
 
 #[test]

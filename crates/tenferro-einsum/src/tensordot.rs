@@ -4,7 +4,7 @@ use tenferro_runtime::error::{Error, ErrorPhase, Result};
 use tenferro_runtime::{DotGeneralConfig, TracedTensor};
 use tenferro_tensor::{ShapeMismatch, ValidationError};
 
-/// Axis specification for [`TracedTensorEinsumExt::tensordot`](crate::TracedTensorEinsumExt::tensordot)
+/// Axis specification for [`TensordotOps::tensordot`](crate::TensordotOps::tensordot)
 /// contraction sugar.
 ///
 /// `Count(n)` contracts the last `n` axes of the left operand with the first
@@ -126,8 +126,8 @@ pub(crate) fn validate_traced_contract_dims(
         .iter()
         .zip(config.rhs_contracting_dims.iter())
     {
-        let lhs_dim = lhs.axis_sym_dim(lhs_axis)?;
-        let rhs_dim = rhs.axis_sym_dim(rhs_axis)?;
+        let lhs_dim = lhs.axis_sym_dim(signed_axis(lhs_axis)?)?;
+        let rhs_dim = rhs.axis_sym_dim(signed_axis(rhs_axis)?)?;
         if lhs_dim == rhs_dim {
             continue;
         }
@@ -177,10 +177,7 @@ fn normalize_axis(axis: isize, rank: usize, _operand: &'static str) -> Result<us
         return Err(Error::validation(
             "tensordot",
             ErrorPhase::GraphBuild,
-            ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
-                rank,
-            },
+            ValidationError::AxisOutOfBounds { axis, rank },
         ));
     }
     usize::try_from(normalized).map_err(|_| {
@@ -222,3 +219,9 @@ fn graph_build_tensor_error(op: &'static str, error: tenferro_tensor::Error) -> 
 
 #[cfg(test)]
 mod tests;
+
+/// A validated contracting axis as the signed form of `TracedTensor::axis_sym_dim`.
+fn signed_axis(axis: usize) -> tenferro_runtime::Result<isize> {
+    isize::try_from(axis)
+        .map_err(|_| tenferro_runtime::Error::Internal(format!("axis {axis} does not fit isize")))
+}

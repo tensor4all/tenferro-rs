@@ -541,7 +541,7 @@ impl<R: TensorRank> TensorLayout<R> {
         for (input_axis, &output_axis) in broadcast_dims.iter().enumerate() {
             if output_axis >= output_rank {
                 return Err(ValidationError::AxisOutOfBounds {
-                    axis: output_axis,
+                    axis: isize::try_from(output_axis).unwrap_or(isize::MAX),
                     rank: output_rank,
                 });
             }

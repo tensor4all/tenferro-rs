@@ -2,7 +2,7 @@ use std::ops::{Add, Mul, Sub};
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{HouseholderQr, QrOptions, TensorLinalgExt};
+use tenferro_linalg::{HouseholderQr, LinalgOps, QrOptions};
 use tenferro_tensor::{Tensor, TensorScalar};
 
 fn product(a: &[f64], rows: usize, inner: usize, b: &[f64], cols: usize) -> Vec<f64> {
@@ -242,7 +242,7 @@ fn concrete_from_factors_requires_upper_trapezoidal_r() {
 #[test]
 fn traced_compact_qr_preserves_known_shapes() {
     let trace = tenferro_runtime::TraceContext::new();
-    use tenferro_linalg::TracedTensorLinalgExt;
+    use tenferro_linalg::TracedLinalgOps;
     use tenferro_runtime::GraphCompiler;
 
     let a = trace
@@ -265,7 +265,7 @@ fn traced_compact_qr_preserves_known_shapes() {
 fn householder_qr_r_grad_matches_finite_difference() {
     let trace = tenferro_runtime::TraceContext::new();
     use tenferro_ad::AdContext;
-    use tenferro_linalg::TracedTensorLinalgExt;
+    use tenferro_linalg::TracedLinalgOps;
     use tenferro_runtime::GraphCompiler;
 
     let values = vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0];
@@ -315,7 +315,7 @@ fn householder_qr_r_grad_matches_finite_difference() {
 fn householder_qr_two_appends_produce_all_input_gradients() {
     let trace = tenferro_runtime::TraceContext::new();
     use tenferro_ad::AdContext;
-    use tenferro_linalg::{QrGauge, TracedTensorLinalgExt};
+    use tenferro_linalg::{QrGauge, TracedLinalgOps};
     use tenferro_runtime::GraphCompiler;
 
     let a = trace
@@ -369,7 +369,7 @@ fn householder_qr_two_appends_produce_all_input_gradients() {
 #[test]
 fn eager_compact_qr_executes_on_cpu() {
     use tenferro_ad::{EagerRuntime, EagerTensor};
-    use tenferro_linalg::EagerSessionLinalgExt;
+    use tenferro_linalg::EagerLinalgOps;
 
     let runtime = EagerRuntime::new().unwrap();
     let a = EagerTensor::from_tensor_in(
@@ -394,7 +394,7 @@ fn eager_compact_qr_executes_on_cpu() {
 #[test]
 fn eager_borrowed_compact_qr_append_import_and_ad() {
     use tenferro_ad::{AdContext, EagerRuntime, EagerTensor};
-    use tenferro_linalg::{EagerSessionLinalgExt, HouseholderQr};
+    use tenferro_linalg::{EagerLinalgOps, HouseholderQr};
 
     let ad = AdContext::builder()
         .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
@@ -635,7 +635,7 @@ fn q_column_ranges_past_the_full_q_width_are_rejected() {
 #[test]
 fn traced_full_q_columns_carry_the_full_width_shape() {
     let trace = tenferro_runtime::TraceContext::new();
-    use tenferro_linalg::TracedTensorLinalgExt;
+    use tenferro_linalg::TracedLinalgOps;
     use tenferro_runtime::GraphCompiler;
 
     let a = trace
@@ -669,7 +669,7 @@ fn traced_full_q_columns_carry_the_full_width_shape() {
 fn differentiating_through_complement_q_columns_is_refused() {
     let trace = tenferro_runtime::TraceContext::new();
     use tenferro_ad::AdContext;
-    use tenferro_linalg::TracedTensorLinalgExt;
+    use tenferro_linalg::TracedLinalgOps;
 
     // The complement basis is only defined up to a rotation inside the
     // nullspace, and the thin `dQ` this rule builds has no column there, so the

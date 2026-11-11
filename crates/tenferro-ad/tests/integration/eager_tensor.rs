@@ -476,7 +476,12 @@ fn eager_dot_general_with_conj_uses_untracked_fast_path() {
 
     let (fused, explicit) = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            let fused = session.dot_general_with_conj(&lhs, &rhs, config.clone(), true, false)?;
+            let fused = session.dot_general_with(
+                &lhs,
+                &rhs,
+                config.clone(),
+                &tenferro_tensor::DotGeneralOptions::default().lhs(tenferro_tensor::Conj::Yes),
+            )?;
             let conjugated = session.conj(&lhs)?;
             let explicit = session.dot_general(&conjugated, &rhs, config)?;
             Ok::<_, RuntimeError>((fused, explicit))
@@ -523,7 +528,12 @@ fn eager_dot_general_with_conj_validates_config_before_untracked_backend_dispatc
     let err = lhs
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.dot_general_with_conj(&lhs, &rhs, config, true, false)
+            session.dot_general_with(
+                &lhs,
+                &rhs,
+                config,
+                &tenferro_tensor::DotGeneralOptions::default().lhs(tenferro_tensor::Conj::Yes),
+            )
         })
         .unwrap_err();
 
@@ -990,7 +1000,7 @@ fn eager_reduce_sum_squares_gradient_matches_finite_difference() {
 #[test]
 fn reduce_sum_squares_none_reduces_all_axes_on_every_surface() {
     let trace = TraceContext::new();
-    use tenferro_runtime::{GraphCompiler, TensorSessionOpsExt};
+    use tenferro_runtime::{CoreOps, GraphCompiler};
 
     let data = vec![1.0_f64, -2.0, 3.0, 0.5];
     let x = EagerTensor::from_tensor_in(

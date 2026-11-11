@@ -313,7 +313,7 @@ fn reduction_output_meta(
             return Err(graph_validation(
                 op,
                 ValidationError::AxisOutOfBounds {
-                    axis,
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
                     rank: tensor.rank,
                 },
             ));
@@ -344,7 +344,7 @@ fn validate_traced_axis(tensor: &TracedTensor, axis: usize, op: &'static str) ->
         return Err(graph_validation(
             op,
             ValidationError::AxisOutOfBounds {
-                axis,
+                axis: isize::try_from(axis).unwrap_or(isize::MAX),
                 rank: tensor.rank,
             },
         ));
@@ -358,7 +358,10 @@ fn validate_traced_axes(rank: usize, axes: &[usize], op: &'static str) -> Result
         if axis >= rank {
             return Err(graph_validation(
                 op,
-                ValidationError::AxisOutOfBounds { axis, rank },
+                ValidationError::AxisOutOfBounds {
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                    rank,
+                },
             ));
         }
         if seen[axis] {
@@ -398,7 +401,10 @@ fn validate_traced_perm(rank: usize, perm: &[usize], op: &'static str) -> Result
         if axis >= rank {
             return Err(graph_validation(
                 op,
-                ValidationError::AxisOutOfBounds { axis, rank },
+                ValidationError::AxisOutOfBounds {
+                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                    rank,
+                },
             ));
         }
         if seen[axis] {
@@ -453,7 +459,7 @@ fn validate_broadcast_in_dim_args(
             return Err(graph_validation(
                 op,
                 ValidationError::AxisOutOfBounds {
-                    axis: dim,
+                    axis: isize::try_from(dim).unwrap_or(isize::MAX),
                     rank: output_shape.len(),
                 },
             ));
@@ -1669,8 +1675,15 @@ impl TracedTensor {
     /// outside the input rank or `DuplicateAxis` when `axes` repeats an axis,
     /// or [`Error::RuntimeStateSource`] when output metadata cannot be
     /// registered.
-    pub fn reduce_sum(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
-        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
+    pub fn reduce_sum(&self, axes: Option<&[isize]>) -> Result<TracedTensor> {
+        let axes = match axes {
+            Some(axes) => crate::shape_packing::normalize_existing_axes(
+                "TracedTensor::reduce_sum",
+                axes,
+                self.rank,
+            )?,
+            None => (0..self.rank).collect(),
+        };
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, &axes, "TracedTensor::reduce_sum")?;
         apply_unary(
@@ -1718,8 +1731,15 @@ impl TracedTensor {
     /// assert_eq!(total.rank(), 0);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
-    pub fn reduce_sum_squares(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
-        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
+    pub fn reduce_sum_squares(&self, axes: Option<&[isize]>) -> Result<TracedTensor> {
+        let axes = match axes {
+            Some(axes) => crate::shape_packing::normalize_existing_axes(
+                "TracedTensor::reduce_sum_squares",
+                axes,
+                self.rank,
+            )?,
+            None => (0..self.rank).collect(),
+        };
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, &axes, "TracedTensor::reduce_sum_squares")?;
         apply_unary(
@@ -1753,8 +1773,15 @@ impl TracedTensor {
     /// [`Error::Unsupported`] when a non-empty maximum reduction receives a
     /// complex dtype, or [`Error::RuntimeStateSource`] when output metadata
     /// cannot be registered.
-    pub fn reduce_max(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
-        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
+    pub fn reduce_max(&self, axes: Option<&[isize]>) -> Result<TracedTensor> {
+        let axes = match axes {
+            Some(axes) => crate::shape_packing::normalize_existing_axes(
+                "TracedTensor::reduce_max",
+                axes,
+                self.rank,
+            )?,
+            None => (0..self.rank).collect(),
+        };
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, &axes, "TracedTensor::reduce_max")?;
         try_apply_unary(
@@ -1789,8 +1816,15 @@ impl TracedTensor {
     /// [`Error::Unsupported`] when a non-empty minimum reduction receives a
     /// complex dtype, or [`Error::RuntimeStateSource`] when output metadata
     /// cannot be registered.
-    pub fn reduce_min(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
-        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
+    pub fn reduce_min(&self, axes: Option<&[isize]>) -> Result<TracedTensor> {
+        let axes = match axes {
+            Some(axes) => crate::shape_packing::normalize_existing_axes(
+                "TracedTensor::reduce_min",
+                axes,
+                self.rank,
+            )?,
+            None => (0..self.rank).collect(),
+        };
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, &axes, "TracedTensor::reduce_min")?;
         try_apply_unary(
@@ -1821,8 +1855,15 @@ impl TracedTensor {
     /// outside the input rank or `DuplicateAxis` when `axes` repeats an axis,
     /// or [`Error::RuntimeStateSource`] when output metadata cannot be
     /// registered.
-    pub fn reduce_prod(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
-        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
+    pub fn reduce_prod(&self, axes: Option<&[isize]>) -> Result<TracedTensor> {
+        let axes = match axes {
+            Some(axes) => crate::shape_packing::normalize_existing_axes(
+                "TracedTensor::reduce_prod",
+                axes,
+                self.rank,
+            )?,
+            None => (0..self.rank).collect(),
+        };
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, &axes, "TracedTensor::reduce_prod")?;
         apply_unary(
@@ -1901,7 +1942,12 @@ impl TracedTensor {
     ///
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
     /// outside this tensor's rank.
-    pub fn sym_size(&self, axis: usize) -> Result<SymDim> {
+    pub fn sym_size(&self, axis: isize) -> Result<SymDim> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::sym_size",
+            axis,
+            self.rank,
+        )?;
         validate_traced_axis(self, axis, "TracedTensor::sym_size")?;
         Ok(self
             .shape_hint
@@ -1943,7 +1989,12 @@ impl TracedTensor {
     ///
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
     /// outside this tensor's rank.
-    pub fn axis_sym_dim(&self, axis: usize) -> Result<SymDim> {
+    pub fn axis_sym_dim(&self, axis: isize) -> Result<SymDim> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::axis_sym_dim",
+            axis,
+            self.rank,
+        )?;
         validate_traced_axis(self, axis, "TracedTensor::axis_sym_dim")?;
         match self.shape_hint.as_ref().and_then(|shape| shape.get(axis)) {
             Some(dim) => Ok(dim.clone()),
@@ -2206,13 +2257,46 @@ impl TracedTensor {
 
     /// Reverse the order of elements along the requested axes.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    /// let y = x.reverse(&[-1])?;
+    /// let mut compiler = GraphCompiler::new();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let mut engine = CpuEngine::serial();
+    /// let mut builder = Runtime::builder();
+    /// builder
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&engine).unwrap())
+    ///     .unwrap();
+    /// let runtime = builder.build().unwrap();
+    /// let prepared = runtime
+    ///     .prepare(&program, &[], &[engine.target()])
+    ///     .unwrap();
+    /// let mut outputs = runtime
+    ///     .run(&mut [&mut engine], &prepared, &[])
+    ///     .unwrap();
+    /// let out = outputs.remove(0).into_tensor(&mut engine).unwrap();
+    /// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 2.0, 1.0]);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when an axis is
     /// outside the input rank or `DuplicateAxis` when `axes` repeats one, or
     /// [`Error::RuntimeStateSource`] when result metadata cannot be
     /// registered.
-    pub fn reverse(&self, axes: &[usize]) -> Result<TracedTensor> {
+    pub fn reverse(&self, axes: &[isize]) -> Result<TracedTensor> {
+        let axes = &crate::shape_packing::normalize_existing_axes(
+            "TracedTensor::reverse",
+            axes,
+            self.rank,
+        )?[..];
         validate_traced_axes(self.rank, axes, "TracedTensor::reverse")?;
         apply_unary(
             StdTensorOp::Reverse {
@@ -2410,7 +2494,12 @@ impl TracedTensor {
     /// `AxisOutOfBounds`, or `DuplicateAxis` when `perm` is not a valid
     /// permutation of the tensor axes, or [`Error::RuntimeStateSource`] when
     /// output metadata registration fails.
-    pub fn transpose(&self, perm: &[usize]) -> Result<TracedTensor> {
+    pub fn transpose(&self, perm: &[isize]) -> Result<TracedTensor> {
+        let perm = &crate::shape_packing::normalize_existing_axes(
+            "TracedTensor::transpose",
+            perm,
+            self.rank,
+        )?[..];
         validate_traced_perm(self.rank, perm, "TracedTensor::transpose")?;
         let out_shape_hint = self
             .shape_hint
@@ -2443,7 +2532,17 @@ impl TracedTensor {
     ///
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when either axis
     /// is outside the input rank or `InvalidArgument` when `axis_a == axis_b`.
-    pub fn extract_diag(&self, axis_a: usize, axis_b: usize) -> Result<TracedTensor> {
+    pub fn extract_diag(&self, axis_a: isize, axis_b: isize) -> Result<TracedTensor> {
+        let axis_a = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::extract_diag",
+            axis_a,
+            self.rank,
+        )?;
+        let axis_b = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::extract_diag",
+            axis_b,
+            self.rank,
+        )?;
         validate_traced_axis(self, axis_a, "TracedTensor::extract_diag")?;
         validate_traced_axis(self, axis_b, "TracedTensor::extract_diag")?;
         if axis_a == axis_b {
@@ -2477,7 +2576,17 @@ impl TracedTensor {
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis_a` is
     /// outside the input rank or `InvalidArgument` when `axis_b` is not a
     /// valid insertion axis.
-    pub fn embed_diag(&self, axis_a: usize, axis_b: usize) -> Result<TracedTensor> {
+    pub fn embed_diag(&self, axis_a: isize, axis_b: isize) -> Result<TracedTensor> {
+        let axis_a = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::embed_diag",
+            axis_a,
+            self.rank,
+        )?;
+        let axis_b = crate::shape_packing::normalize_insert_axis(
+            "TracedTensor::embed_diag",
+            axis_b,
+            self.rank,
+        )?;
         validate_traced_axis(self, axis_a, "TracedTensor::embed_diag")?;
         validate_traced_insert_axis(self.rank, axis_b, "TracedTensor::embed_diag")?;
         let out_shape_hint = self.shape_hint.as_ref().map(|shape| {
@@ -2531,7 +2640,12 @@ impl TracedTensor {
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
     /// outside the input rank, or [`Error::RuntimeStateSource`] when scalar
     /// output metadata cannot be registered.
-    pub fn shape_of(&self, axis: usize) -> Result<TracedTensor> {
+    pub fn shape_of(&self, axis: isize) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::shape_of",
+            axis,
+            self.rank,
+        )?;
         validate_traced_axis(self, axis, "TracedTensor::shape_of")?;
         apply_unary_with_dtype(
             StdTensorOp::ShapeOf { axis },
@@ -2589,7 +2703,12 @@ impl TracedTensor {
     /// [`Error::TensorRuntime`] with `Unsupported`, non-finite size values
     /// return a typed `InvalidArgument`, and an empty scalar buffer returns a
     /// typed runtime-state source.
-    pub fn dynamic_truncate(&self, size: &TracedTensor, axis: usize) -> Result<TracedTensor> {
+    pub fn dynamic_truncate(&self, size: &TracedTensor, axis: isize) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::dynamic_truncate",
+            axis,
+            self.rank,
+        )?;
         validate_traced_axis(self, axis, "TracedTensor::dynamic_truncate")?;
         if size.rank != 0 {
             return Err(graph_validation(
@@ -2649,7 +2768,12 @@ impl TracedTensor {
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
     /// outside either tensor's rank, or [`Error::RuntimeStateSource`] when
     /// output metadata cannot be registered.
-    pub fn pad_to_match(&self, reference: &TracedTensor, axis: usize) -> Result<TracedTensor> {
+    pub fn pad_to_match(&self, reference: &TracedTensor, axis: isize) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::pad_to_match",
+            axis,
+            self.rank,
+        )?;
         validate_traced_axis(self, axis, "TracedTensor::pad_to_match")?;
         validate_traced_axis(reference, axis, "TracedTensor::pad_to_match")?;
         let op = StdTensorOp::PadToMatch { axis };

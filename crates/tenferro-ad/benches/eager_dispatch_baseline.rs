@@ -87,7 +87,10 @@ fn bench_lazy(c: &mut Criterion) {
                 consume_lazy(
                     runtime
                         .with_eager_session(&mut engine, |session| {
-                            session.reduce_sum(black_box(&lhs), Some(&axes))
+                            session.reduce_sum(
+                                black_box(&lhs),
+                                Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+                            )
                         })
                         .expect("reduce_sum should succeed"),
                 )
@@ -171,7 +174,10 @@ fn bench_materialized(c: &mut Criterion) {
                 consume_materialized(
                     runtime
                         .with_eager_session(&mut engine, |session| {
-                            session.reduce_sum(black_box(&lhs), Some(&axes))
+                            session.reduce_sum(
+                                black_box(&lhs),
+                                Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+                            )
                         })
                         .expect("reduce_sum should succeed"),
                     &mut engine,

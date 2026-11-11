@@ -200,7 +200,7 @@ fn tensor_meta_of(tensor: &TracedTensor) -> Result<TensorMeta> {
     let extents = match tensor.sym_shape() {
         Some(shape) => shape.to_vec(),
         None => (0..tensor.rank())
-            .map(|axis| tensor.axis_sym_dim(axis))
+            .map(|axis| tensor.axis_sym_dim(crate::shape_packing::signed_axis(axis)?))
             .collect::<std::result::Result<_, _>>()?,
     };
     Ok(TensorMeta::exact(tensor.dtype(), extents))
@@ -297,7 +297,7 @@ fn program_metadata_to_tensor_meta(
         };
         extents.push(match expr.eval(&[]) {
             Ok(size) => tenferro_ops::SymDim::from(size),
-            Err(_) => output.axis_sym_dim(axis)?,
+            Err(_) => output.axis_sym_dim(crate::shape_packing::signed_axis(axis)?)?,
         });
     }
     Ok(TensorMeta::exact(metadata.dtype(), extents))

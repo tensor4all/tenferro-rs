@@ -52,9 +52,10 @@ diff-scoped review bot must be listed in that script's `ALWAYS_SECTIONS` or
   repository and whether tenferro will support its semantics as a public
   contract. If unclear, keep it `pub(crate)` and expose a smaller high-level
   API.
-- Tensor operation names are public vocabulary: unsuffixed names take owned
-  compact tensor inputs; `_read` marks APIs that accept borrowed views or
-  `TensorRead`-style references.
+- Tensor operation names are public vocabulary and follow the registry
+  grammar (`Public API Convention`): the receiver type, not a suffix, says
+  whether an input is owned, borrowed, typed or a strided view; there is no
+  `_read` operation name.
 - Owned tensor constructors use `impl IntoRankShape<R>` for rank-aware
   shape input and `impl IntoShapeVec` at dynamic-rank boundaries. Static-rank
   arrays (including array references) must match the rank at compile time;
@@ -250,6 +251,17 @@ repeatedly reporting the same intentional invariant.
 - When macro/codegen produces public wrappers, keep generated names, docs,
   feature gating, and error behavior obvious at the call site, and add focused
   tests or doctests that fail if one generated wrapper stops forwarding.
+- The `api_ops!` operation registry is the sanctioned generator for the public
+  operation grammar. It generates the per-layer trait declarations, the
+  forwarding of `op` → `op_with(&Default::default(), ..)` and of each spelling
+  to one hand-written body, the rustdoc (summary, `layout` sentence, error
+  list, the entry's `# Examples`), the `API_OPS` / `API_EXCEPTIONS` metadata
+  and the generated page. It never generates numerical bodies or the
+  `Dest`-to-write-mode mapping. Each registry keeps the §4.4 tests of the
+  #2552 implementation guide: forwarding bit-identity per op and layer, input
+  kinds (owned, compact view, transposed, negative stride, typed), `_into`
+  semantics, undeclared modes and omissions `Unsupported` before any write,
+  and `api_docs_are_current`.
 
 ## Work Logs And Design Records
 
@@ -400,8 +412,8 @@ constraints.
   paths such as `tenferro::einsum`, `tenferro::linalg`, or `tenferro::fft`.
 - Users import operation crates directly, bring their extension traits into
   scope, and register runtimes explicitly when graph execution reaches an
-  extension family: for example `tenferro_einsum::TraceContextEinsumExt` /
-  `tenferro_einsum::TracedTensorEinsumExt` plus
+  extension family: for example `tenferro_einsum::TracedEinsumOps` /
+  `tenferro_einsum::TracedTensordotOps` plus
   `Runtime::builder().install_extension_module(...)` after registering the
   target engine.
 - Extension runtime dispatch fails explicitly when a runtime owner exists but
@@ -902,63 +914,86 @@ inline `#[cfg(test)]` restriction from it.
 
 ## Public API Convention
 
-- **AD core ops**: `TracedTensor` uses methods for single-output operations
-  (`x.exp()`, `x.reshape(shape)`, `a.dot_general(&b, config)`), operator
-  overloads where they read naturally (`&a + &b`), and associated functions
-  without a natural receiver (`TracedTensor::concatenate(...)`). Eager
-  operations instead use a runtime-bound, explicitly borrowed `EagerSession`
-  over a caller-supplied engine (`ctx.with_eager_session(engine, |s| s.exp(&x))`,
-  `s.where_select(&cond, &x, &y)`); `EagerTensor` remains the value/trace
-  handle, not an implicit per-operation backend entry point. This holds for
-  every eager operation surface, including extension crates (einsum, linalg,
-  FFT, ...): a tensor-, slice- or typed-owned eager operation must not open a
-  session, engine or hidden pool internally; it runs on the engine the caller
-  passed in. Do not add operator overloads that hide eager entry. The only
-  exceptions are the tensor-owned linalg `solve`, which preserves
-  calling-thread `no_grad` behavior, and consuming in-place FFT, which preserves
-  exclusive ownership; neither is a precedent for new implicit eager operation
-  methods.
-- **Non-AD concrete ops**: `Tensor` and dynamic-rank `TypedTensor<T>` use
-  crate-root extension traits (`TensorSessionOpsExt`,
-  `TypedTensorSessionOpsExt`, and `TypedTensorMaskSessionOpsExt`) whose
-  methods run on a caller-provided `&mut dyn Engine` (the engine is the first
-  argument and a fallible operation is written `?`). The facade targets the
-  `Dynamic` representation; a `Host` owner reaches it through the zero-copy
-  `into_dynamic()`. Private helper modules are fine, but public `tensor` /
-  `typed_tensor` module free functions are not part of the release API.
-- **Extension families**: extension crates cannot add inherent methods to
-  external tensor types, so their canonical tensor-facing surface is extension
-  traits (`TracedTensorLinalgExt`, `EagerSessionEinsumExt`, `EagerSessionLinalgExt`,
-  `EagerSessionFftExt`, `TraceContextEinsumExt`, `TracedTensorEinsumExt`,
-  `TracedTensorFftExt`) re-exported at the crate root. Do not expose public
-  `traced_tensor` / `eager_tensor` module free functions for standard
-  operation families.
+The public operation grammar is the #2552 decision. Each operation family
+declares every operation once in an `api_ops!` registry
+(`crates/<family>/src/api/registry.rs`; core in `tenferro-runtime`), and the
+generated page [`docs/spec/generated/api-ops.md`](docs/spec/generated/api-ops.md)
+is the authoritative list of operations, layers, options, `_into` modes,
+layout handling, errors, omissions and exceptions.
+
+- **Three spellings, three layers.** Every operation has the same three
+  spellings on every layer it is declared for:
+  - concrete: `recv.op(operands…, exec)`, `recv.op_with(operands…, &opts, exec)`,
+    `recv.op_into(operands…, &opts, exec, dest)`. The receiver is anything that
+    implements `AsView` (`Tensor`, `TensorRead`, `TypedTensor<T>`,
+    `TypedTensorView<T>`); typed inputs return typed results. `exec`
+    (`&mut dyn Engine`) is the last argument, followed only by `dest` for
+    `_into`.
+  - traced: `t.op(operands…)`, `t.op_with(operands…, &opts)` on `TracedTensor`
+    (einsum: on `TraceContext`, which takes `&[&TracedTensor]`); execution
+    happens through `Runtime::prepare` / `Runtime::run`.
+  - eager: `sess.op(&x, operands…)`, `sess.op_with(&x, operands…, &opts)` on a
+    borrowed `EagerSession` over a caller-supplied engine
+    (`ctx.with_eager_session(engine, |s| s.exp(&x))`). `EagerTensor` is the
+    value/trace handle, never an implicit per-operation engine entry: no
+    tensor-, slice- or typed-owned eager operation opens a session, engine or
+    hidden pool. Consuming in-place FFT (exception E01) is the only receiver
+    exception.
+- **Options.** Every semantic choice lives in one `XxxOptions` per operation
+  (`#[non_exhaustive]`, `Default`, one setter per field named like the field,
+  `Copy` where possible). Options never carry the executor, the destination or
+  an input. Control flags are enums (`Side`, `Uplo`, `MatOp`, `Diag`, `Conj`,
+  `KeepDims`), never `bool`. Axis arguments are `isize`, negative counting from
+  the end, normalized once by `normalize_axis` / `normalize_axes`.
+- **Suffixes.** Only `_with` (explicit options) and `_into` (caller-provided
+  destination) are operation suffixes. `_into` exists only where the registry
+  declares it, and takes a `Dest` (`Overwrite`, `Accumulate`, `Scaled`);
+  accumulation is a `Dest` value, never a suffix. An undeclared mode is
+  `Unsupported` before anything is written. Input kind, parameters, layer and
+  output mode are never spelled as suffixes; `_in_place` (E01) is the one
+  listed exception.
+- **Results.** Multi-output operations return named structs with public fields
+  (`Svd { u, s, vh }`, `Qr`, `Lu`, `Eig`, ...), destructured by field; no tuple
+  aliases.
+- **Errors.** Concrete operations return `tenferro_tensor::Result`; traced and
+  eager return `tenferro_runtime::Result` (`tenferro_ad::Result` is the same
+  type). A family's domain error stays reachable through `source()` and
+  `downcast_ref` on every layer.
+- **Traits.** Extension crates cannot add inherent methods to external types,
+  so families expose the generated traits re-exported at the crate root:
+  `LinalgOps`, `TracedLinalgOps`, `EagerLinalgOps`; `EinsumOps`,
+  `TensordotOps`, `TracedEinsumOps`, `EagerEinsumOps`; `FftOps`,
+  `TracedFftOps`, `EagerFftOps`; and the core `CoreOps`. Core traced and eager
+  operations stay inherent methods of `TracedTensor` and `EagerSession`. Do not
+  expose public `traced_tensor` / `eager_tensor` module free functions for
+  operation families, and do not add a parallel spelling outside the registry.
+- **Exceptions.** Anything outside the grammar is a row of a registry's
+  `exceptions` block, named by concrete symbol (E01–E10 in the generated page):
+  lifecycle (`TraceContext`, compile, prepare, run), descriptor-only and
+  metadata operations, cache owners, approved bridges (`api/allowlist.txt`),
+  domain parser/planner errors, and backend traits with their
+  `*_read_into_accum` hooks, which are provider contracts and not public
+  operation grammar.
 - **No compatibility shims for operation-surface style changes**: when API
-  compatibility is not explicitly required, remove old module functions
-  instead of keeping wrappers beside the canonical surface.
+  compatibility is not explicitly required, remove old spellings instead of
+  keeping wrappers beside the canonical surface.
 - No `traced_` prefix on methods. `TracedTensor` methods are inherently traced.
 
 ### Output And Write Surface Vocabulary
 
-- Operation suffixes describe ownership and output-update semantics; never use
-  a suffix only to avoid a naming conflict.
-- Unsuffixed operation names allocate and return a fresh result tensor.
-- `_read` means one or more inputs are `TensorRead`/borrowed views; the output
-  is still backend-allocated unless another suffix names an output.
-- Bare `_into` overwrites a caller-provided output. The operation validates
-  dtype and shape, does not resize the destination, and does not read the
-  previous output value as part of the semantic update.
-- `_read_into` is the main backend hook shape for borrowed inputs plus an
-  overwritten `TensorWrite` output.
-- `_in_place` is a destructive update of an input tensor, distinct from
-  `_into`. Do not implement in-place elementwise variants by passing aliased
-  input/output views into generic `*_into` kernels unless the kernel's
-  aliasing contract is proven and tested.
-- `_add_to` is read-modify-write accumulation, `out += op(...)`. Do not hide
-  accumulation behind a bare `_into` method.
-- Dot/GEMM read-modify-write uses the existing `_into_accum` vocabulary with a
-  `DotGeneralAccumulation` argument; do not introduce `_linear_into` as a
-  second spelling.
-- Typed-face preallocated methods may take `&mut TypedTensor<T>` when the dtype
-  is statically known. Erased-face methods should take `TensorWrite<'_>` so
-  dynamic dtype and view outputs are validated at the backend boundary.
+- Operation spellings and their write semantics are the registry's (see
+  `docs/spec/generated/api-ops.md`): unsuffixed and `_with` return a fresh
+  result; `_into` writes through `Dest` with the declared modes only;
+  `Dest::Overwrite` never reads the previous destination and
+  `Dest::Scaled { beta: 0, .. }` leaks no NaN or `-0` from it.
+- `_in_place` (exception E01) is a destructive update of a consumed input,
+  distinct from `_into`. Do not implement in-place elementwise variants by
+  passing aliased input/output views into generic write kernels unless the
+  kernel's aliasing contract is proven and tested.
+- Backend hooks (`*_read`, `*_read_into`, `*_read_into_accum` with a
+  `DotGeneralAccumulation`) are provider contracts (E10), not public operation
+  names; `Dest` maps onto `DotGeneralAccumulation` in one place
+  (`Dest::into_accumulation`).
+- Typed-face destinations take `&mut TypedTensor<T>` through `Dest<TypedTensorWrite<'_, T>>`;
+  erased-face destinations take `TensorWrite<'_>` so dynamic dtype and view
+  outputs are validated at the backend boundary.

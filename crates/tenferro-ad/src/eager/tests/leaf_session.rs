@@ -444,10 +444,32 @@ fn runtime_bound_conjugating_dot_preserves_fast_and_tracked_paths() -> Result<()
     let (plain, lhs_conj, both, tracked_out) =
         ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             Ok::<_, Error>((
-                session.dot_general_with_conj(&lhs, &rhs, config.clone(), false, false)?,
-                session.dot_general_with_conj(&lhs, &rhs, config.clone(), true, false)?,
-                session.dot_general_with_conj(&lhs, &rhs, config.clone(), true, true)?,
-                session.dot_general_with_conj(&tracked, &rhs, config.clone(), true, false)?,
+                session.dot_general_with(
+                    &lhs,
+                    &rhs,
+                    config.clone(),
+                    &tenferro_tensor::DotGeneralOptions::default(),
+                )?,
+                session.dot_general_with(
+                    &lhs,
+                    &rhs,
+                    config.clone(),
+                    &tenferro_tensor::DotGeneralOptions::default().lhs(tenferro_tensor::Conj::Yes),
+                )?,
+                session.dot_general_with(
+                    &lhs,
+                    &rhs,
+                    config.clone(),
+                    &tenferro_tensor::DotGeneralOptions::default()
+                        .lhs(tenferro_tensor::Conj::Yes)
+                        .rhs(tenferro_tensor::Conj::Yes),
+                )?,
+                session.dot_general_with(
+                    &tracked,
+                    &rhs,
+                    config.clone(),
+                    &tenferro_tensor::DotGeneralOptions::default().lhs(tenferro_tensor::Conj::Yes),
+                )?,
             ))
         })?;
     assert_eq!(

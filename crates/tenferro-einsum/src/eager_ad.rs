@@ -42,168 +42,6 @@ use crate::{
     TensorDotAxes,
 };
 
-/// Eager einsum and tensordot on a runtime-bound borrowed eager session.
-///
-/// Every operation runs inside the caller's session, so it composes with other
-/// eager operations in the same [`tenferro_ad::EagerRuntime::with_eager_session`]
-/// callback and never reopens the runtime. The calling thread's `no_grad` and
-/// `capture_trace` modes govern it like any other eager operation.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-/// use tenferro_einsum::EagerSessionEinsumExt;
-///
-/// let ctx = EagerRuntime::new()?;
-/// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?, ctx.clone())?;
-/// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12])?, ctx.clone())?;
-/// let product = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-///     let c = session.einsum(&[&a, &b], "ij,jk->ik")?;
-///     session.einsum(&[&c], "ij->")
-/// })?;
-/// assert_eq!(product.value()?.as_slice::<f64>()?, &[24.0]);
-/// # Ok::<(), Box<dyn std::error::Error>>(())
-/// ```
-#[cfg_attr(docsrs, doc(cfg(feature = "autodiff")))]
-pub trait EagerSessionEinsumExt {
-    /// Execute an einsum from string notation.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_einsum::EagerSessionEinsumExt;
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, ctx.clone())?;
-    /// let dot = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.einsum(&[&x, &x], "i,i->"))?;
-    /// assert_eq!(dot.value()?.as_slice::<f64>()?, &[13.0]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
-    /// [`Error::Validation`] for rank/shape/dtype mismatches, or
-    /// [`Error::Planning`] / [`Error::Runtime`] for contraction planning and
-    /// execution failures, including inputs owned by another runtime.
-    fn einsum(&mut self, inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor>;
-
-    /// Execute an einsum from rank-unresolved notation.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_einsum::{EagerSessionEinsumExt, EinsumAxis, EinsumNotation};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, ctx.clone())?;
-    /// // `...->...` keeps every axis the ellipsis covers.
-    /// let notation = EinsumNotation::new(&[&[EinsumAxis::Ellipsis]], &[EinsumAxis::Ellipsis]);
-    /// let same = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.einsum_notation(&[&x], &notation))?;
-    /// assert_eq!(same.value()?.as_slice::<f64>()?, &[2.0, 3.0]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed validation, planning, or runtime error when notation or
-    /// execution is invalid.
-    fn einsum_notation(
-        &mut self,
-        inputs: &[&EagerTensor],
-        notation: &EinsumNotation,
-    ) -> Result<EagerTensor>;
-
-    /// Execute an einsum from parsed integer labels.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_einsum::{EagerSessionEinsumExt, EinsumSubscripts};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?, ctx.clone())?;
-    /// let subscripts = EinsumSubscripts::new(&[&[0], &[0]], &[]);
-    /// let dot = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.einsum_subscripts(&[&x, &x], &subscripts))?;
-    /// assert_eq!(dot.value()?.as_slice::<f64>()?, &[13.0]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for rank/shape/dtype mismatches,
-    /// [`Error::Planning`] for an invalid contraction plan, or
-    /// [`Error::Runtime`] for extension registration or backend execution
-    /// failures.
-    fn einsum_subscripts(
-        &mut self,
-        inputs: &[&EagerTensor],
-        subscripts: &EinsumSubscripts,
-    ) -> Result<EagerTensor>;
-
-    /// Contract two eager tensors over the requested axes.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    /// use tenferro_einsum::{EagerSessionEinsumExt, TensorDotAxes};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let a = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6])?, ctx.clone())?;
-    /// let b = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12])?, ctx.clone())?;
-    /// let c = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.tensordot(&a, &b, TensorDotAxes::Count(1)))?;
-    /// assert_eq!(c.shape(), &[2, 4]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::Validation`] for invalid axes or mismatched contracted
-    /// extents, or [`Error::Runtime`] for execution failures.
-    fn tensordot(
-        &mut self,
-        lhs: &EagerTensor,
-        rhs: &EagerTensor,
-        axes: TensorDotAxes<'_>,
-    ) -> Result<EagerTensor>;
-}
-
-impl EagerSessionEinsumExt for EagerSession<'_> {
-    fn einsum(&mut self, inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> {
-        einsum(self, inputs, subscripts)
-    }
-
-    fn einsum_notation(
-        &mut self,
-        inputs: &[&EagerTensor],
-        notation: &EinsumNotation,
-    ) -> Result<EagerTensor> {
-        einsum_notation(self, inputs, notation)
-    }
-
-    fn einsum_subscripts(
-        &mut self,
-        inputs: &[&EagerTensor],
-        subscripts: &EinsumSubscripts,
-    ) -> Result<EagerTensor> {
-        einsum_subscripts_with_broadcast(self, inputs, subscripts, false)
-    }
-
-    fn tensordot(
-        &mut self,
-        lhs: &EagerTensor,
-        rhs: &EagerTensor,
-        axes: TensorDotAxes<'_>,
-    ) -> Result<EagerTensor> {
-        tensordot(self, lhs, rhs, axes)
-    }
-}
-
 fn eager_extension_module(
     target: EagerExtensionTarget,
 ) -> tenferro_runtime::Result<Arc<dyn ExtensionModule>> {
@@ -234,29 +72,76 @@ fn eager_runtime_config_error(
     )
 }
 
-fn einsum(
-    session: &mut EagerSession<'_>,
-    inputs: &[&EagerTensor],
-    subscripts: &str,
-) -> Result<EagerTensor> {
-    let notation = parse_einsum_notation(subscripts)?;
-    einsum_notation(session, inputs, &notation)
-}
-
-fn einsum_notation(
-    session: &mut EagerSession<'_>,
+/// Resolved subscripts and whether the notation used an ellipsis.
+fn resolve_eager_notation(
     inputs: &[&EagerTensor],
     notation: &EinsumNotation,
-) -> Result<EagerTensor> {
+) -> Result<(EinsumSubscripts, bool)> {
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    let subscripts = resolve_einsum_notation(notation, &shapes)?;
-    let subscripts = EinsumSubscripts::from(subscripts);
+    let subscripts = EinsumSubscripts::from(resolve_einsum_notation(notation, &shapes)?);
     let ellipsis = notation
         .inputs
         .iter()
         .chain(std::iter::once(&notation.output))
         .any(|term| term.contains(&crate::EinsumAxis::Ellipsis));
-    einsum_subscripts_with_broadcast(session, inputs, &subscripts, ellipsis)
+    Ok((subscripts, ellipsis))
+}
+
+/// Eager einsum of a #2552 [`Spec`](crate::Spec) with an explicit contraction
+/// order. `None` plans as the former entries do (automatic, no annealing).
+pub(crate) fn einsum_spec_planned(
+    session: &mut EagerSession<'_>,
+    inputs: &[&EagerTensor],
+    spec: crate::Spec<'_>,
+    optimize: Option<&crate::EinsumOptimize>,
+) -> Result<EagerTensor> {
+    match spec {
+        crate::Spec::Text(text) => {
+            let notation = parse_einsum_notation(text)?;
+            einsum_notation_planned(session, inputs, &notation, optimize)
+        }
+        crate::Spec::Notation(notation) => {
+            einsum_notation_planned(session, inputs, notation, optimize)
+        }
+        crate::Spec::Subscripts(subscripts) => {
+            let plan_spec = eager_plan_spec(inputs, subscripts, optimize)?;
+            einsum_subscripts_with_broadcast(session, inputs, subscripts, false, plan_spec)
+        }
+    }
+}
+
+fn eager_plan_spec(
+    inputs: &[&EagerTensor],
+    subscripts: &EinsumSubscripts,
+    optimize: Option<&crate::EinsumOptimize>,
+) -> Result<EinsumPlanSpec> {
+    let Some(optimize) = optimize else {
+        return Ok(EinsumPlanSpec::Auto(default_auto_options()));
+    };
+    let subs = Subscripts::from(subscripts);
+    match optimize {
+        crate::EinsumOptimize::Tree(_) => {
+            let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
+            Ok(crate::optimize::resolve_einsum_strategy_with_spec(
+                optimize.clone(),
+                &subs,
+                &shapes,
+            )?
+            .0)
+        }
+        optimize => crate::optimize::plan_spec_from_optimize(optimize.clone(), &subs),
+    }
+}
+
+fn einsum_notation_planned(
+    session: &mut EagerSession<'_>,
+    inputs: &[&EagerTensor],
+    notation: &EinsumNotation,
+    optimize: Option<&crate::EinsumOptimize>,
+) -> Result<EagerTensor> {
+    let (subscripts, ellipsis) = resolve_eager_notation(inputs, notation)?;
+    let plan_spec = eager_plan_spec(inputs, &subscripts, optimize)?;
+    einsum_subscripts_with_broadcast(session, inputs, &subscripts, ellipsis, plan_spec)
 }
 
 fn einsum_subscripts_with_broadcast(
@@ -264,6 +149,7 @@ fn einsum_subscripts_with_broadcast(
     inputs: &[&EagerTensor],
     subscripts: &EinsumSubscripts,
     ellipsis: bool,
+    plan_spec: EinsumPlanSpec,
 ) -> Result<EagerTensor> {
     if let Some(result) = try_direct_binary_dot_general(session, inputs, subscripts) {
         return result;
@@ -273,12 +159,11 @@ fn einsum_subscripts_with_broadcast(
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let requires_broadcast = crate::broadcast::requires_broadcast(&shapes, &subscripts.inputs);
     if !requires_broadcast {
-        if let Some(result) = try_expand_eager_einsum(session, inputs, subscripts)? {
+        if let Some(result) = try_expand_eager_einsum(session, inputs, subscripts, &plan_spec)? {
             return Ok(result);
         }
     }
 
-    let plan_spec = EinsumPlanSpec::Auto(default_auto_options());
     let op = Arc::new(if ellipsis || requires_broadcast {
         EinsumExtensionOp::with_output_shape_hint_and_broadcast(
             subscripts.clone(),
@@ -357,6 +242,7 @@ fn try_expand_eager_einsum(
     session: &mut EagerSession<'_>,
     inputs: &[&EagerTensor],
     subscripts: &EinsumSubscripts,
+    plan_spec: &EinsumPlanSpec,
 ) -> Result<Option<EagerTensor>> {
     if inputs.len() <= 1 {
         return Ok(None);
@@ -368,16 +254,9 @@ fn try_expand_eager_einsum(
         .collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
     let subs = Subscripts::from(subscripts);
-    let plan_spec = EinsumPlanSpec::Auto(default_auto_options());
 
-    let program = cached_expanded_eager_program(
-        session,
-        subscripts,
-        &subs,
-        &plan_spec,
-        &shape_refs,
-        &shapes,
-    )?;
+    let program =
+        cached_expanded_eager_program(session, subscripts, &subs, plan_spec, &shape_refs, &shapes)?;
     execute_eager_einsum_program_in_session(session, inputs, &program)
 }
 
@@ -907,7 +786,7 @@ fn runtime_missing(message: impl Into<String>) -> Error {
     Error::Runtime(tenferro_runtime::Error::MissingInput(message.into()))
 }
 
-fn tensordot(
+pub(crate) fn tensordot(
     session: &mut EagerSession<'_>,
     lhs: &EagerTensor,
     rhs: &EagerTensor,

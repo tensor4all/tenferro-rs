@@ -9,9 +9,8 @@ use tenferro_gpu::{
     cuda::CudaEngine,
 };
 use tenferro_linalg::{
-    EighDriver, EighOptions, HouseholderQr, LinalgBackend, QrGauge, QrOptions,
-    RankRevealingQrOptions, SvdDriver, SvdOptions, TensorLinalgExt, TensorReadLinalgExt,
-    TracedTensorLinalgExt,
+    EighDriver, EighOptions, HouseholderQr, LinalgBackend, LinalgOps, PinvOptions, QrGauge,
+    QrOptions, RankRevealingQrOptions, SvdDriver, SvdOptions, TracedLinalgOps,
 };
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 use tenferro_tensor::{DType, Error, Tensor, TensorRead, TypedTensor};
@@ -2062,7 +2061,7 @@ fn empty_square_slogdet_keeps_input_residency_check_on_cpu_and_cuda() {
         matches!(owned, Err(tenferro_tensor::Error::RuntimeState { .. })),
         "a CUDA-resident empty tensor must be refused by the CPU engine, got {owned:?}"
     );
-    let read = TensorRead::from_tensor(&device_empty).slogdet_read(&mut cpu);
+    let read = TensorRead::from_tensor(&device_empty).slogdet(&mut cpu);
     assert!(
         matches!(read, Err(tenferro_tensor::Error::RuntimeState { .. })),
         "a CUDA-resident empty read must be refused by the CPU engine, got {read:?}"
@@ -2073,7 +2072,7 @@ fn empty_square_slogdet_keeps_input_residency_check_on_cpu_and_cuda() {
         matches!(owned, Err(tenferro_tensor::Error::RuntimeState { .. })),
         "a host empty tensor must be refused by the CUDA engine, got {owned:?}"
     );
-    let read = TensorRead::from_tensor(&host_empty).slogdet_read(&mut gpu);
+    let read = TensorRead::from_tensor(&host_empty).slogdet(&mut gpu);
     assert!(
         matches!(read, Err(tenferro_tensor::Error::RuntimeState { .. })),
         "a host empty read must be refused by the CUDA engine, got {read:?}"
@@ -2619,7 +2618,9 @@ fn test_cuda_direct_inv_and_pinv_with_rtol_accept_internal_scalars() {
     let (inverse, pseudoinverse) = with_cuda_linalg_session(&mut gpu, |session| {
         (
             device_input.inv(session).unwrap(),
-            device_input.pinv_with_rtol(1.0e-5, session).unwrap(),
+            device_input
+                .pinv_with(&PinvOptions::default().rtol(Some(1.0e-5)), session)
+                .unwrap(),
         )
     });
     for (label, tensor) in [("inv", inverse), ("pinv_with_rtol", pseudoinverse)] {

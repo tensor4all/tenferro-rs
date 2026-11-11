@@ -1,7 +1,6 @@
-//! Common runtime tensor and graph types plus backend-explicit operations.
+//! Common runtime tensor and graph types plus the core operation grammar.
 
 pub use crate::{
-    CompareDir, DType, Engine, GraphCompiler, Runtime, Tensor, TensorScalar, TensorSessionOpsExt,
-    TraceContext, TraceValue, TracedGraph, TracedTensor, TypedTensor, TypedTensorMaskSessionOpsExt,
-    TypedTensorSessionOpsExt,
+    CompareDir, CoreOps, DType, Engine, GraphCompiler, Runtime, Tensor, TensorScalar, TraceContext,
+    TraceValue, TracedGraph, TracedTensor, TypedTensor,
 };

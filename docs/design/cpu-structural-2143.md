@@ -1,5 +1,7 @@
 # CPU structural materialization, view metadata, and cached-plan execution (#2143)
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 Status: **implementation record, in progress on branch `cpu_issue_burn`**. Not yet a
 PR. Decision record for the six work items of
 [#2143](https://github.com/tensor4all/tenferro-rs/issues/2143), which folds in

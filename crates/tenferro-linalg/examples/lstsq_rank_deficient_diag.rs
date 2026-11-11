@@ -1,6 +1,6 @@
 //! Where the eager `lstsq` rank check (#2583) gets its cutoff from.
 //!
-//! `EagerSessionLinalgExt::lstsq` refuses a rank-deficient `A` when some pivot
+//! `EagerLinalgOps::lstsq` refuses a rank-deficient `A` when some pivot
 //! of the thin `R` satisfies `|R_ii| <= max(m, n) * eps * max_j |R_jj|`. This
 //! example prints the distribution that cutoff has to separate: the pivot ratios
 //! of the rank-deficient fixtures, the ratios of a full-rank corpus, and what the
@@ -26,7 +26,7 @@
 use std::time::Instant;
 
 use tenferro_ad::{DotGeneralConfig, EagerRuntime, EagerSession, EagerTensor, Tensor};
-use tenferro_linalg::EagerSessionLinalgExt;
+use tenferro_linalg::EagerLinalgOps;
 
 type Outcome<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -135,8 +135,8 @@ fn full_rank_fixtures() -> Vec<Fixture> {
     fixtures
 }
 
-fn transpose_perm(rank: usize) -> Vec<usize> {
-    let mut perm: Vec<usize> = (0..rank).collect();
+fn transpose_perm(rank: usize) -> Vec<isize> {
+    let mut perm: Vec<isize> = (0..rank as isize).collect();
     perm.swap(0, 1);
     perm
 }
@@ -153,7 +153,7 @@ fn trailing_batch_dot_config(rank: usize) -> DotGeneralConfig {
 
 /// `|R_ii|` of the thin `A = QR`, one entry per column.
 fn pivots(session: &mut EagerSession<'_>, a: &EagerTensor) -> tenferro_ad::Result<Vec<f64>> {
-    let (_q, r) = session.qr(a)?;
+    let r = session.qr(a)?.r;
     let diagonal = session.extract_diag(&r, 0, 1)?;
     let magnitudes = session.abs(&diagonal)?;
     let host = session.duplicate_value(&magnitudes)?;
@@ -174,11 +174,16 @@ fn lstsq_without_check(
     a: &EagerTensor,
     b: &EagerTensor,
 ) -> tenferro_ad::Result<EagerTensor> {
-    let (q, r) = session.qr(a)?;
+    let qr = session.qr(a)?;
+    let (q, r) = (qr.q, qr.r);
     let q_conj = session.conj(&q)?;
     let qh = session.transpose(&q_conj, &transpose_perm(q.shape().len()))?;
     let qh_b = session.dot_general(&qh, b, trailing_batch_dot_config(qh.shape().len()))?;
-    session.triangular_solve(&r, &qh_b, true, false, false, false)
+    session.triangular_solve_with(
+        &r,
+        &qh_b,
+        &tenferro_linalg::TriangularSolveOptions::default().uplo(tenferro_linalg::Uplo::Upper),
+    )
 }
 
 /// `max |A x - b|` through the session's own contraction and reduction.

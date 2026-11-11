@@ -1,16 +1,16 @@
 # Einsum Design
 
 Einsum is a standard extension crate, not part of a root facade.
-The public user-facing paths live under `tenferro_einsum` as crate-root
-extension traits: `TensorEinsumExt` and `TypedTensorEinsumExt` for owned
-concrete inputs, `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for
-borrowed inputs, and their `*IntoExt` counterparts for preallocated output
-execution,
-`TraceContextEinsumExt` for traced graph construction, `EagerSessionEinsumExt`
-for autodiff eager execution on a borrowed `EagerSession`, and
-`TracedTensorEinsumExt` for traced `tensordot` contraction sugar (eager
-`tensordot` is an `EagerSessionEinsumExt` method). `ConcreteEinsumPlan` owns repeated concrete executions with
-fixed input dtype and shape metadata. `tensordot` is not a `tenferro-linalg`
+The public user-facing paths live under `tenferro_einsum` as the
+registry-generated traits of the 0.12 call grammar (#2552; the operation
+table is `docs/spec/generated/api-ops.md`): `EinsumOps` on input slices and
+arrays of any `AsView` (`Tensor`, `TensorRead`, `TypedTensor<T>`,
+`TypedTensorView<T>`) with `einsum`, `einsum_with`, and `einsum_into`;
+`TensordotOps` for concrete `tensordot`; `TracedEinsumOps` on `TraceContext`
+for traced graph construction; `TracedTensordotOps` on `TracedTensor` for
+traced `tensordot`; and `EagerEinsumOps` on a borrowed `EagerSession` for
+autodiff eager `einsum` and `tensordot`. `ConcreteEinsumPlan` owns repeated
+concrete executions with fixed input dtype and shape metadata. `tensordot` is not a `tenferro-linalg`
 API.
 
 The workspace intentionally has no root `tenferro` crate and no einsum facade
@@ -40,85 +40,90 @@ Historical design notes that refer to direct `CudaBackend`/`RocmBackend`,
 
 ## Public Traced API
 
-The extension crate exposes lazy traced einsum:
+The extension crate exposes lazy traced einsum on the `TraceContext` that
+owns the inputs:
 
 ```rust
-use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
-use tenferro_einsum::TraceContextEinsumExt;
-use tenferro_ops::dim_expr::DimExpr;
-use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{DType, GraphCompiler, Runtime, TraceContext};
+use tenferro_cpu::CpuEngine;
+use tenferro_einsum::{EinsumOptimize, EinsumOptions, TracedEinsumOps};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
-let mut trace = TraceContext::new();
-let a = trace.input(ProgramInputSpec::new(
-    DType::F64,
-    DimExpr::from_concrete(&[2, 3]),
-)).unwrap();
-let b = trace.input(ProgramInputSpec::new(
-    DType::F64,
-    DimExpr::from_concrete(&[3, 2]),
-)).unwrap();
-let c = trace.einsum(&[a, b], "ij,jk->ik").unwrap();
-let graph = trace.finish(&[c]).unwrap();
-let program = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
-let backend = CpuBackend::new();
+let trace = TraceContext::new();
+let a = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+let b = trace.from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+let c = trace.einsum(&[&a, &b], "ij,jk->ik")?;
+let d = trace.einsum_with(
+    &[&a, &b, &b],
+    "ij,jk,kl->il",
+    &EinsumOptions::default().optimize(EinsumOptimize::False),
+)?;
+
+let program = GraphCompiler::new().compile_many(&[&c, &d])?;
+let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
-builder
-    .register_engine(runtime_engine_registration(&backend).unwrap())
-    .unwrap();
-builder
-    .install_extension_module(
-        tenferro_einsum::extension_module::<CpuBackend>(runtime_engine_id().unwrap()).unwrap(),
-    )
-    .unwrap();
-let runtime = builder.build().unwrap();
-let lhs = tenferro_runtime::Tensor::from_vec_col_major(
-    vec![2, 3],
-    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-).unwrap();
-let rhs = tenferro_runtime::Tensor::from_vec_col_major(
-    vec![3, 2],
-    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
-).unwrap();
-let mut outputs = runtime.run_compiled(&program, &[&lhs, &rhs]).unwrap();
-let result = outputs.remove(0);
-assert_eq!(result.shape(), &[2, 2]);
+builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuEngine>(
+    tenferro_cpu::runtime_engine_id()?,
+)?)?;
+let runtime = builder.build()?;
+let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
+let outputs = {
+    let mut engines: [&mut dyn ExecutionEngine; 1] = [&mut engine];
+    runtime.run(&mut engines, &prepared, &[])?
+};
+for output in outputs {
+    let t = output.into_tensor(&mut engine)?;
+    assert_eq!(t.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
+}
 ```
 
 ## Concrete Tensor API
 
-Concrete non-AD execution is exposed through crate-root extension traits on
-input slices and arrays, not through public module free functions:
+Concrete non-AD execution is exposed through `EinsumOps` on input slices
+and arrays, not through public module free functions:
 
 ```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_einsum::TensorEinsumExt;
-use tenferro_tensor::Tensor;
+use tenferro_cpu::CpuEngine;
+use tenferro_einsum::{ConjMask, EinsumOps, EinsumOptions};
+use tenferro_tensor::{Conj, Dest, Tensor};
 
-let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
-let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
-let mut backend = CpuBackend::new();
-let c = [&a, &b].einsum("ij,jk->ik", &mut backend).unwrap();
+let mut engine = CpuEngine::serial();
+let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+let c = [&a, &b].einsum("ij,jk->ik", &mut engine)?;
 
-assert_eq!(c.shape(), &[2, 2]);
+// Options: conjugate the first operand (a no-op for real data).
+let opts = EinsumOptions::default().conj(ConjMask::new([Conj::Yes]));
+let d = [&a, &b].einsum_with("ij,jk->ik", &opts, &mut engine)?;
+assert_eq!(d.as_slice::<f64>()?, c.as_slice::<f64>()?);
+
+// Accumulate into an existing result: out = a b + out.
+let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+[&a, &b].einsum_into(
+    "ij,jk->ik",
+    &EinsumOptions::default(),
+    &mut engine,
+    Dest::accumulate(&mut out),
+)?;
+assert_eq!(out.as_slice::<f64>()?, &[2.0, 3.0, 4.0, 5.0]);
 ```
 
-`TensorEinsumExt` is the unsuffixed API for compact `Tensor` references.
-`TypedTensorEinsumExt` preserves a statically known scalar type for owned typed
-tensors. Borrowed typed strided views use
-`TypedTensorReadEinsumExt::einsum_read`; dtype-erased borrowed inputs use
-`TensorReadEinsumExt::einsum_read`. Both follow the repository-wide `_read`
-suffix convention. The matching `*IntoExt` traits write into caller-provided
-outputs. Typed output methods accept `TypedTensorWrite`, which represents an
-owned typed tensor or a mutable typed view. All paths validate output dtype and
-shape before any writes and never resize the destination.
+The input representation, not a method suffix, selects the route: owned
+`Tensor` and borrowed `TensorRead` inputs give a dtype-erased `Tensor`,
+`TypedTensor<T>` and `TypedTensorView<T>` inputs keep the statically known
+scalar type. The spec is a `&str`, `EinsumNotation`, `EinsumSubscripts`, or
+`Spec`. `einsum_into` writes into a caller-provided `Dest` (`Overwrite`,
+`Accumulate`, or `Scaled`; typed destinations accept an owned typed tensor or a
+mutable typed view). All paths validate output dtype and shape before any
+writes and never resize the destination.
 
 `ConcreteEinsumPlan` precomputes the contraction tree for fixed input metadata
 and validates later executions against the prepared input count, dtypes, and
-shapes. Plan execution exposes both owned-output methods and `execute_into`,
-`execute_typed_into`, and `execute_read_into`.
+shapes. It is built with `ConcreteEinsumPlan::prepare(inputs, spec, &opts)`
+(the plan records `opts.optimize` and `opts.conj`) and run with `execute`
+(new result in the inputs' representation) or `execute_into(.., Dest)`.
 
-`einsum_with` accepts an explicit `EinsumOptimize` strategy:
+`EinsumOptions::optimize` holds an explicit `EinsumOptimize` strategy:
 
 | Strategy | Meaning |
 | --- | --- |
@@ -136,36 +141,36 @@ contraction pairs when accepted for concrete inputs.
 
 ## Eager Tensor API
 
-`EagerSessionEinsumExt` exposes immediate execution over `EagerTensor` inputs
-on a borrowed `EagerSession`, so eager einsum composes with other eager
-operations inside one `with_eager_session` callback and never opens a session
-of its own:
+`EagerEinsumOps` exposes immediate execution over `EagerTensor` inputs
+with the borrowed `EagerSession` as receiver, so eager einsum composes with
+other eager operations inside one `with_eager_session` callback and never opens
+a session of its own:
 
 ```rust
-use tenferro_ad::{EagerRuntime, Tensor};
-use tenferro_einsum::EagerSessionEinsumExt;
+use tenferro_ad::EagerRuntime;
+use tenferro_cpu::CpuEngine;
+use tenferro_einsum::{EagerEinsumOps, EinsumOptimize, EinsumOptions};
+use tenferro_tensor::Tensor;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-let ctx = EagerRuntime::new()?;
-let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
-let b = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
-let a = ctx.constant_from(a)?;
-let b = ctx.constant_from(b)?;
-let c = ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?;
-
-assert_eq!(c.shape(), &[2, 2]);
-Ok(())
-}
+let runtime = EagerRuntime::new()?;
+let (c, d) = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+    let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    let b = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?)?;
+    let c = s.einsum(&[&a, &b], "ij,jk->ik")?;
+    let opts = EinsumOptions::default().optimize(EinsumOptimize::Path(vec![(0, 1)]));
+    let d = s.einsum_with(&[&a, &b], "ij,jk->ik", &opts)?;
+    Ok::<_, tenferro_ad::Error>((c, d))
+})?;
+assert_eq!(c.value()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
+assert_eq!(d.value()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
 ```
 
-The trait also provides `einsum_notation`, `einsum_subscripts`, and
-`tensordot`. The former tensor-side eager traits (`EagerEinsumExt` on input
-slices/arrays and `EagerTensorEinsumExt::tensordot`), which each opened their
-own eager session, were removed by #1946 F5.
+The trait also provides `tensordot` / `tensordot_with`. The former
+tensor-side eager traits, which each opened their own eager session, were
+removed by #1946 F5.
 
 Autodiff eager execution remains separate from concrete `Tensor` execution:
-`EagerSessionEinsumExt` is available only when the `autodiff` feature is
-enabled.
+`EagerEinsumOps` is available only when the `autodiff` feature is enabled.
 
 ## Subscripts And Repeated Labels
 
@@ -299,7 +304,7 @@ contiguous block for the underlying tensor backend.
 
 For a whole-expression binary GEMM-compatible contraction such as
 `ij,jk->ik`, `einsum_into` and `ConcreteEinsumPlan::execute_into` dispatch to
-the backend `dot_general_read_into` hook before the owned-output fallback. The
+the backend `dot_general_read_into` hook (a provider contract) before the owned-output fallback. The
 CPU faer provider writes directly into caller-provided output storage through
 its validated `FaerGemm` path and does not allocate the final output tensor. General
 multi-step einsums may still allocate intermediates; their `*_into` contract is

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_einsum::TracedEinsumOps;
 
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
@@ -134,7 +134,7 @@ fn stablehlo_dot_add_reduce_module() -> tenferro_xla::StableHloModule {
 }
 
 fn stablehlo_nary_einsum_module() -> tenferro_xla::StableHloModule {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let lhs = trace
         .input(ProgramInputSpec::new(
             DType::F32,
@@ -153,8 +153,9 @@ fn stablehlo_nary_einsum_module() -> tenferro_xla::StableHloModule {
             DimExpr::from_concrete(&[4, 2]),
         ))
         .unwrap();
-    let product = trace.einsum(&[lhs, mid, rhs], "ij,jk,kl->il").unwrap();
-    let graph = trace.finish(&[product]).unwrap();
+    let [lhs, mid, rhs] = [lhs, mid, rhs].map(|value| trace.derive_tensor(value).unwrap());
+    let product = trace.einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il").unwrap();
+    let graph = trace.finish(&[product.trace_value()]).unwrap();
     let program = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
     lower_to_stablehlo(program.program()).unwrap()
 }

@@ -211,7 +211,12 @@ pub enum Error {
     },
 
     /// Runtime tensor execution failed in the backend layer.
-    #[error(transparent)]
+    ///
+    /// The display text is the wrapped error's text. Unlike a transparent
+    /// wrapper, [`std::error::Error::source`] returns the wrapped
+    /// `tenferro_tensor::Error` itself, so a `source()` walk reaches it and,
+    /// through it, a family error such as `tenferro_linalg::Error` (#2552).
+    #[error("{0}")]
     TensorRuntime(#[from] tenferro_tensor::Error),
 
     /// A typed extension-domain error crossed a runtime registry boundary.

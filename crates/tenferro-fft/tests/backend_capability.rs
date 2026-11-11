@@ -1,6 +1,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
-use tenferro_fft::{FftBackend, FftExecutor, FftNorm, TensorFftExt};
+use tenferro_fft::FftOptions;
+use tenferro_fft::{FftBackend, FftExecutor, FftOps};
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::CudaEngine;
 use tenferro_runtime::Runtime;
@@ -414,7 +415,7 @@ fn cpu_fft_is_invoked_through_the_borrowed_provider_session() {
     let mut owner = CpuEngine::serial();
     let output = {
         let session: &mut dyn tenferro_tensor::Engine = &mut owner;
-        input.fft(None, -1, FftNorm::Backward, session)
+        input.fft(session)
     }
     .unwrap();
 
@@ -437,10 +438,10 @@ fn caller_owned_cache_is_backend_neutral_and_reports_reuse_clear_and_stats() {
     {
         let session: &mut dyn tenferro_tensor::Engine = &mut owner;
         executor
-            .fft(&input, None, -1, FftNorm::Backward, session)
+            .fft_with(&input, &FftOptions::default(), session)
             .unwrap();
         executor
-            .fft(&input, None, -1, FftNorm::Backward, session)
+            .fft_with(&input, &FftOptions::default(), session)
             .unwrap();
     };
 
@@ -456,7 +457,7 @@ fn caller_owned_cache_is_backend_neutral_and_reports_reuse_clear_and_stats() {
     {
         let session: &mut dyn tenferro_tensor::Engine = &mut owner;
         executor
-            .fft(&input, None, -1, FftNorm::Backward, session)
+            .fft_with(&input, &FftOptions::default(), session)
             .unwrap();
     };
     assert_eq!(executor.cache_stats().entries, 1);
@@ -474,9 +475,7 @@ fn direct_concrete_api_returns_typed_capability_error_without_fft_capability() {
     .unwrap();
     let mut session = TensorOnlyBackend;
 
-    let error = input
-        .fft(None, -1, FftNorm::Backward, &mut session)
-        .unwrap_err();
+    let error = input.fft(&mut session).unwrap_err();
 
     assert_eq!(error.kind(), ErrorKind::Unsupported);
     assert!(error
@@ -491,14 +490,14 @@ fn concrete_cpu_execution_preserves_all_four_scalar_dtypes() {
     {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
         let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-        let f32_output = f32_input.fft(None, -1, FftNorm::Backward, session).unwrap();
+        let f32_output = f32_input.fft(session).unwrap();
         assert_eq!(
             f32_output.as_slice::<Complex32>().unwrap()[0],
             Complex32::new(3.0, 0.0)
         );
 
         let f64_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-        let f64_output = f64_input.fft(None, -1, FftNorm::Backward, session).unwrap();
+        let f64_output = f64_input.fft(session).unwrap();
         assert_eq!(
             f64_output.as_slice::<Complex64>().unwrap()[0],
             Complex64::new(3.0, 0.0)
@@ -509,7 +508,7 @@ fn concrete_cpu_execution_preserves_all_four_scalar_dtypes() {
             vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
         )
         .unwrap();
-        let c32_output = c32_input.fft(None, -1, FftNorm::Backward, session).unwrap();
+        let c32_output = c32_input.fft(session).unwrap();
         assert_eq!(
             c32_output.as_slice::<Complex32>().unwrap()[0],
             Complex32::new(3.0, 0.0)
@@ -520,7 +519,7 @@ fn concrete_cpu_execution_preserves_all_four_scalar_dtypes() {
             vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
         )
         .unwrap();
-        let c64_output = c64_input.fft(None, -1, FftNorm::Backward, session).unwrap();
+        let c64_output = c64_input.fft(session).unwrap();
         assert_eq!(
             c64_output.as_slice::<Complex64>().unwrap()[0],
             Complex64::new(3.0, 0.0)
@@ -556,7 +555,7 @@ fn foreign_placement_is_unsupported_without_transfer() {
 
     let error = {
         let session: &mut dyn tenferro_tensor::Engine = &mut owner;
-        input.fft(None, -1, FftNorm::Backward, session)
+        input.fft(session)
     }
     .unwrap_err();
 

@@ -3,12 +3,17 @@ use std::env;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use tenferro_linalg::{
+    Diag, Eig, Eigh, FullPivLu, KeepDims, Lu, NormOptions, NormOrd, PinvOptions, Qr, Side, Slogdet,
+    Svd, TriangularSolveOptions, Uplo,
+};
+use tenferro_tensor::AxisVec;
 
 use num_complex::{Complex32, Complex64};
 use serde_json::Value;
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{HouseholderQr, QrGauge, QrOptions, TracedTensorLinalgExt};
+use tenferro_linalg::{HouseholderQr, QrGauge, QrOptions, TracedLinalgOps};
 use tenferro_runtime::{
     DType, DotGeneralConfig, GraphCompiler, Runtime, Tensor, TraceContext, TracedTensor,
 };
@@ -525,8 +530,16 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
             let unit_diagonal = bool_kwarg(case, "unitriangular")?.unwrap_or(false);
             let b_tf = oracle_to_tenferro(b, rhs_core_rank)?;
             let b_solve = promote_vector_rhs_for_triangular_solve(&b_tf, rhs_core_rank, left_side)?;
+            let options = TriangularSolveOptions::default()
+                .side(if left_side { Side::Left } else { Side::Right })
+                .uplo(if lower { Uplo::Lower } else { Uplo::Upper })
+                .diag(if unit_diagonal {
+                    Diag::Unit
+                } else {
+                    Diag::NonUnit
+                });
             let solution = oracle_to_tenferro(a, 2)?
-                .triangular_solve(&b_solve, left_side, lower, false, unit_diagonal)
+                .triangular_solve_with(&b_solve, &options)
                 .map_err(to_string)?;
             let solution =
                 demote_vector_solution_after_triangular_solve(&solution, rhs_core_rank, left_side)?;
@@ -556,7 +569,7 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "qr" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (q_tf, r_tf) = a_tf.qr().map_err(to_string)?;
+            let Qr { q: q_tf, r: r_tf } = a_tf.qr().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -567,7 +580,10 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "slogdet" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (sign_tf, logabsdet_tf) = a_tf.slogdet().map_err(to_string)?;
+            let Slogdet {
+                sign: sign_tf,
+                log_abs_det: logabsdet_tf,
+            } = a_tf.slogdet().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -605,7 +621,12 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
                 ));
             }
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (p_tf, l_tf, u_tf, _parity_tf) = a_tf.lu().map_err(to_string)?;
+            let Lu {
+                p: p_tf,
+                l: l_tf,
+                u: u_tf,
+                parity: _parity_tf,
+            } = a_tf.lu().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -617,7 +638,13 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "full_pivot_lu" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (_p_tf, l_tf, u_tf, _q_tf, _parity_tf) = a_tf.full_piv_lu().map_err(to_string)?;
+            let FullPivLu {
+                p: _p_tf,
+                l: l_tf,
+                u: u_tf,
+                q: _q_tf,
+                parity: _parity_tf,
+            } = a_tf.full_piv_lu().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -628,12 +655,19 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "svd" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (u_tf, s_tf, vh_tf) = a_tf.svd().map_err(to_string)?;
+            let Svd {
+                u: u_tf,
+                s: s_tf,
+                vh: vh_tf,
+            } = a_tf.svd().map_err(to_string)?;
             svd_observable_execution(case, inputs, &u_tf, &s_tf, &vh_tf)
         }
         "eigh" => {
             let a_tf = hermitian_wrapper_tenferro(&oracle_to_tenferro(a, 2)?)?;
-            let (values_tf, vectors_tf) = a_tf.eigh().map_err(to_string)?;
+            let Eigh {
+                values: values_tf,
+                vectors: vectors_tf,
+            } = a_tf.eigh().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -647,7 +681,10 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         }
         "eig" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
-            let (values_tf, vectors_tf) = a_tf.eig().map_err(to_string)?;
+            let Eig {
+                values: values_tf,
+                vectors: vectors_tf,
+            } = a_tf.eig().map_err(to_string)?;
             Ok(CaseExecution {
                 inputs,
                 outputs: vec![
@@ -662,15 +699,32 @@ fn dispatch_case(trace: &TraceContext, case: &CaseRecord) -> Result<CaseExecutio
         "pinv" => {
             let a_tf = oracle_to_tenferro(a, 2)?;
             let inverse = match optional_f64_kwarg(case, "rtol")? {
-                Some(rtol) => a_tf.pinv_with_rtol(rtol).map_err(to_string)?,
+                Some(rtol) => a_tf
+                    .pinv_with(&PinvOptions::default().rtol(Some(rtol)))
+                    .map_err(to_string)?,
                 None => a_tf.pinv().map_err(to_string)?,
             };
             single_output(inputs, "value", tenferro_to_oracle(&inverse, 2)?)
         }
         "norm" | "vector_norm" | "matrix_norm" => {
             let (ord, dim, keepdim) = norm_arguments(case, a.rank())?;
-            let dim_ref = dim.as_deref();
-            let value = a.norm(ord, dim_ref, keepdim).map_err(to_string)?;
+            let ord = match ord {
+                None => NormOrd::Frobenius,
+                Some(0.0) => NormOrd::Zero,
+                Some(p) if p == f64::INFINITY => NormOrd::Inf,
+                Some(p) if p == f64::NEG_INFINITY => NormOrd::NegInf,
+                Some(p) => NormOrd::P(p),
+            };
+            let axes = dim.map(|dim| dim.iter().map(|&axis| axis as isize).collect::<AxisVec>());
+            let keep_dims = if keepdim { KeepDims::Yes } else { KeepDims::No };
+            let value = a
+                .norm_with(
+                    &NormOptions::default()
+                        .ord(ord)
+                        .axes(axes)
+                        .keep_dims(keep_dims),
+                )
+                .map_err(to_string)?;
             single_output(inputs, "value", value)
         }
         "lstsq_grad_oriented" => {
@@ -1186,7 +1240,11 @@ fn cotangent_scalar(
         };
         let product = (&output.tensor * &cotangent).map_err(to_string)?;
         let axes: Vec<usize> = (0..product.rank()).collect();
-        scalar_terms.push(product.reduce_sum(Some(&axes)).map_err(to_string)?);
+        scalar_terms.push(
+            product
+                .reduce_sum(Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()))
+                .map_err(to_string)?,
+        );
     }
 
     let mut iter = scalar_terms.into_iter();
@@ -1464,7 +1522,9 @@ fn oracle_to_tenferro(tensor: &TracedTensor, core_rank: usize) -> Result<TracedT
     let mut perm = Vec::with_capacity(rank);
     perm.extend(split..rank);
     perm.extend(0..split);
-    tensor.transpose(&perm).map_err(to_string)
+    tensor
+        .transpose(&perm.iter().map(|&a| a as isize).collect::<Vec<_>>())
+        .map_err(to_string)
 }
 
 fn tenferro_to_oracle(tensor: &TracedTensor, core_rank: usize) -> Result<TracedTensor, String> {
@@ -1475,7 +1535,9 @@ fn tenferro_to_oracle(tensor: &TracedTensor, core_rank: usize) -> Result<TracedT
     let mut perm = Vec::with_capacity(rank);
     perm.extend(core_rank..rank);
     perm.extend(0..core_rank);
-    tensor.transpose(&perm).map_err(to_string)
+    tensor
+        .transpose(&perm.iter().map(|&a| a as isize).collect::<Vec<_>>())
+        .map_err(to_string)
 }
 
 fn rhs_core_rank(a: &TracedTensor, b: &TracedTensor) -> usize {
@@ -1612,7 +1674,9 @@ fn swap_tenferro_matrix_axes(tensor: &TracedTensor) -> Result<TracedTensor, Stri
     }
     let mut perm: Vec<usize> = (0..tensor.rank()).collect();
     perm.swap(0, 1);
-    tensor.transpose(&perm).map_err(to_string)
+    tensor
+        .transpose(&perm.iter().map(|&a| a as isize).collect::<Vec<_>>())
+        .map_err(to_string)
 }
 
 fn adjoint_tenferro_matrix_axes(tensor: &TracedTensor) -> Result<TracedTensor, String> {

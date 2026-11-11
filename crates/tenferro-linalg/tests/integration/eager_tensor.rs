@@ -8,12 +8,18 @@ use tenferro_gpu::{
     cuda::download_tensor, cuda::gpu_available, cuda::upload_tensor, cuda::CudaDeviceId,
     cuda::CudaEngine,
 };
+use tenferro_linalg::SvdShape;
 use tenferro_linalg::{
-    EagerSessionLinalgExt, EagerTensorLinalgExt, EighGauge, EighOptions, LinalgBackend, QrGauge,
-    QrOptions, RankRevealingQrOptions, SvdGauge, SvdOptions,
+    EagerLinalgOps, EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions,
+    RankRevealingQrOptions, SvdGauge, SvdOptions,
 };
+use tenferro_linalg::{
+    Eig, Eigh, FullPivLu, KeepDims, Lu, NormOptions, NormOrd, PinvOptions, Qr, Slogdet, Svd,
+    TriangularSolveOptions,
+};
+use tenferro_tensor::AxisVec;
 
-fn eager_svd(input: &EagerTensor) -> tenferro_ad::Result<(EagerTensor, EagerTensor, EagerTensor)> {
+fn eager_svd(input: &EagerTensor) -> tenferro_ad::Result<Svd<EagerTensor>> {
     input
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.svd(input))
@@ -49,14 +55,14 @@ fn eager_rank_revealing_qr_keeps_metadata_in_runtime() {
     let result = runtime
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             assert!(matches!(
-                session.rank_revealing_qr(&foreign, RankRevealingQrOptions::default()),
+                session.rank_revealing_qr_with(&foreign, &RankRevealingQrOptions::default()),
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
             let invalid = session
-                .rank_revealing_qr(&input, RankRevealingQrOptions::default().rtol(-1.0))
+                .rank_revealing_qr_with(&input, &RankRevealingQrOptions::default().rtol(-1.0))
                 .unwrap_err();
             assert!(invalid.to_string().contains("rtol"));
-            session.rank_revealing_qr(&input, RankRevealingQrOptions::default().rtol(1.0e-12))
+            session.rank_revealing_qr_with(&input, &RankRevealingQrOptions::default().rtol(1.0e-12))
         })
         .unwrap();
     assert!(Arc::ptr_eq(result.q.runtime(), &runtime));
@@ -128,7 +134,10 @@ fn weighted_square_sum(input: &EagerTensor, weights: Vec<f64>) -> EagerTensor {
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(input, input)?;
             let weighted = s.mul(&squared, &weights)?;
-            s.reduce_sum(&weighted, Some(&axes))
+            s.reduce_sum(
+                &weighted,
+                Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+            )
         })
         .unwrap()
 }
@@ -353,7 +362,10 @@ fn eager_solve_f64(ctx: &Arc<EagerRuntime>, a: &[f64], b: &[f64]) -> [f64; 2] {
     )
     .unwrap();
     let solved = a
-        .solve(&mut tenferro_cpu::CpuEngine::serial(), &b)
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
         .unwrap()
         .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
@@ -374,7 +386,10 @@ fn eager_solve_f32(ctx: &Arc<EagerRuntime>, a: &[f64], b: &[f64]) -> [f64; 2] {
     )
     .unwrap();
     let solved = a
-        .solve(&mut tenferro_cpu::CpuEngine::serial(), &b)
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
         .unwrap()
         .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
@@ -395,7 +410,10 @@ fn eager_solve_c64(ctx: &Arc<EagerRuntime>, a: &[Complex64], b: &[Complex64]) ->
     )
     .unwrap();
     let solved = a
-        .solve(&mut tenferro_cpu::CpuEngine::serial(), &b)
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
         .unwrap()
         .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
         .unwrap();
@@ -410,7 +428,7 @@ fn svd_returns_correct_shapes() {
         test_ctx(),
     )
     .unwrap();
-    let (u, s, vt) = eager_svd(&a).unwrap();
+    let Svd { u, s, vh: vt } = eager_svd(&a).unwrap();
 
     assert_eq!(u.shape(), &[2, 2]);
     assert_eq!(s.shape(), &[2]);
@@ -425,32 +443,35 @@ fn eager_decomposition_options_execute_and_return_expected_shapes() {
     )
     .unwrap();
 
-    let (u, s, vt) = a
+    let Svd { u, s, vh: vt } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.svd_with_options(
+            session.svd_with(
                 &a,
-                SvdOptions::default()
+                &SvdOptions::default()
                     .gauge(SvdGauge::CanonicalPivot)
                     .derivative_eps(1.0e-10),
             )
         })
         .unwrap();
-    let (eigh_values, eigh_vectors) = a
+    let Eigh {
+        values: eigh_values,
+        vectors: eigh_vectors,
+    } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.eigh_with_options(
+            session.eigh_with(
                 &a,
-                EighOptions::default()
+                &EighOptions::default()
                     .gauge(EighGauge::CanonicalPivot)
                     .derivative_eps(1.0e-10),
             )
         })
         .unwrap();
-    let (q, r) = a
+    let Qr { q, r } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-            s.qr_with_options(&a, QrOptions::default().gauge(QrGauge::PositiveDiagonal))
+            s.qr_with(&a, &QrOptions::default().gauge(QrGauge::PositiveDiagonal))
         })
         .unwrap();
 
@@ -476,7 +497,7 @@ fn svd_saved_outputs_preserve_higher_order_derivatives_after_handles_drop() {
         .unwrap()
     };
     let a = make_input(values.clone());
-    let (_, s, _) = eager_svd(&a).unwrap();
+    let Svd { s, .. } = eager_svd(&a).unwrap();
     let loss = s
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
@@ -508,7 +529,7 @@ fn svd_saved_outputs_preserve_higher_order_derivatives_after_handles_drop() {
                 .map(|(x, d)| x + sign * 1e-5 * d)
                 .collect(),
         );
-        let (_, s, _) = eager_svd(&input).unwrap();
+        let Svd { s, .. } = eager_svd(&input).unwrap();
         let loss = s
             .runtime()
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
@@ -547,7 +568,7 @@ fn svd_singular_value_sum_backward_does_not_panic() {
         ctx,
     )
     .unwrap();
-    let (_, s, _) = eager_svd(&a).unwrap();
+    let Svd { s, .. } = eager_svd(&a).unwrap();
     let loss = s
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
@@ -569,7 +590,7 @@ fn svd_vector_observable_backward_grad_is_finite() {
         ctx,
     )
     .unwrap();
-    let (u, _s, vt) = eager_svd(&a).unwrap();
+    let Svd { u, vh: vt, .. } = eager_svd(&a).unwrap();
     let u_loss = weighted_square_sum(&u, vec![0.5, -0.2, 0.7, 1.1, -0.4, 0.3]);
     let vt_loss = weighted_square_sum(&vt, vec![1.3, -0.6, 0.8, 0.2]);
     let loss = a
@@ -629,7 +650,7 @@ fn qr_returns_correct_shapes() {
         test_ctx(),
     )
     .unwrap();
-    let (q, r) = a
+    let Qr { q, r } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.qr(&a))
         .unwrap();
@@ -720,7 +741,10 @@ fn borrowed_lu_determinants_preserve_gradients_and_runtime() {
                 session.det(&foreign),
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
-            let (sign, logabs) = session.slogdet(&input)?;
+            let Slogdet {
+                sign,
+                log_abs_det: logabs,
+            } = session.slogdet(&input)?;
             let det = session.det(&input)?;
             Ok::<_, tenferro_ad::Error>((sign, logabs, det))
         })
@@ -827,8 +851,10 @@ fn borrowed_qr_and_svd_preserve_values_gradients_and_runtime() {
                 session.qr(&foreign),
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
-            let (q, r) = session.qr(&input)?;
-            let (_, singular_values, _) = session.svd(&input)?;
+            let Qr { q, r } = session.qr(&input)?;
+            let Svd {
+                s: singular_values, ..
+            } = session.svd(&input)?;
             let loss = session.reduce_sum(&singular_values, None)?;
             Ok::<_, tenferro_ad::Error>((q, r, singular_values, loss))
         })
@@ -868,12 +894,29 @@ fn borrowed_norm_preserves_gradient_keepdim_and_runtime() {
     let (norm, no_op, loss) = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             assert!(matches!(
-                session.norm(&foreign, None, Some(&[0]), false),
+                session.norm_with(
+                    &foreign,
+                    &NormOptions::default().axes(Some([0].into_iter().collect::<AxisVec>()))
+                ),
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
-            assert!(session.norm(&input, None, Some(&[2]), false).is_err());
-            let norm = session.norm(&input, Some(2.0), Some(&[0]), true)?;
-            let no_op = session.norm(&input, None, Some(&[]), false)?;
+            assert!(session
+                .norm_with(
+                    &input,
+                    &NormOptions::default().axes(Some([2].into_iter().collect::<AxisVec>()))
+                )
+                .is_err());
+            let norm = session.norm_with(
+                &input,
+                &NormOptions::default()
+                    .ord(NormOrd::P(2.0))
+                    .axes(Some([0].into_iter().collect::<AxisVec>()))
+                    .keep_dims(KeepDims::Yes),
+            )?;
+            let no_op = session.norm_with(
+                &input,
+                &NormOptions::default().axes(Some([].into_iter().collect::<AxisVec>())),
+            )?;
             let loss = session.reduce_sum(&norm, None)?;
             Ok::<_, tenferro_ad::Error>((norm, no_op, loss))
         })
@@ -902,7 +945,10 @@ fn borrowed_norm_preserves_gradient_keepdim_and_runtime() {
     let guarded = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let _guard = ctx.no_grad();
-            session.norm(&input, None, Some(&[0]), false)
+            session.norm_with(
+                &input,
+                &NormOptions::default().axes(Some([0].into_iter().collect::<AxisVec>())),
+            )
         })
         .unwrap();
     assert!(!guarded.tracks_grad());
@@ -928,11 +974,11 @@ fn borrowed_pseudoinverse_preserves_values_gradients_and_runtime() {
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
             assert!(matches!(
-                session.pinv_with_rtol(&foreign, 1e-12),
+                session.pinv_with(&foreign, &PinvOptions::default().rtol(Some(1e-12))),
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
             let inverse = session.pinv(&input)?;
-            let explicit = session.pinv_with_rtol(&input, 1e-12)?;
+            let explicit = session.pinv_with(&input, &PinvOptions::default().rtol(Some(1e-12)))?;
             let loss = session.reduce_sum(&inverse, None)?;
             Ok::<_, tenferro_ad::Error>((inverse, explicit, loss))
         })
@@ -988,12 +1034,15 @@ fn borrowed_eigendecompositions_preserve_values_gradients_and_runtime() {
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
             let invalid = session
-                .eigh_with_options(&input, EighOptions::default().derivative_eps(f64::NAN))
+                .eigh_with(&input, &EighOptions::default().derivative_eps(f64::NAN))
                 .unwrap_err();
             assert!(invalid.to_string().contains("derivative_eps"));
-            let (values, vectors) =
-                session.eigh_with_options(&input, EighOptions::default().derivative_eps(1e-10))?;
-            let (general_values, general_vectors) = session.eig(&plain)?;
+            let Eigh { values, vectors } =
+                session.eigh_with(&input, &EighOptions::default().derivative_eps(1e-10))?;
+            let Eig {
+                values: general_values,
+                vectors: general_vectors,
+            } = session.eig(&plain)?;
             let loss = session.reduce_sum(&values, None)?;
             Ok::<_, tenferro_ad::Error>((values, vectors, general_values, general_vectors, loss))
         })
@@ -1042,20 +1091,24 @@ fn borrowed_decomposition_options_and_full_svd_validate_in_session() {
     let (values, q, r, full_u, full_s, full_vh) = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             assert!(matches!(
-                session.svd_full(&foreign),
+                session.svd_with(&foreign, &SvdOptions::default().shape(SvdShape::Full)),
                 Err(tenferro_ad::Error::ContextMismatch { .. })
             ));
             let invalid = session
-                .svd_with_options(&input, SvdOptions::default().derivative_eps(f64::NAN))
+                .svd_with(&input, &SvdOptions::default().derivative_eps(f64::NAN))
                 .unwrap_err();
             assert!(invalid.to_string().contains("derivative_eps"));
-            let (_, values, _) =
-                session.svd_with_options(&input, SvdOptions::default().derivative_eps(1.0e-10))?;
-            let (q, r) = session.qr_with_options(
+            let Svd { s: values, .. } =
+                session.svd_with(&input, &SvdOptions::default().derivative_eps(1.0e-10))?;
+            let Qr { q, r } = session.qr_with(
                 &input,
-                QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+                &QrOptions::default().gauge(QrGauge::PositiveDiagonal),
             )?;
-            let (full_u, full_s, full_vh) = session.svd_full(&wide)?;
+            let Svd {
+                u: full_u,
+                s: full_s,
+                vh: full_vh,
+            } = session.svd_with(&wide, &SvdOptions::default().shape(SvdShape::Full))?;
             Ok::<_, tenferro_ad::Error>((values, q, r, full_u, full_s, full_vh))
         })
         .unwrap();
@@ -1179,7 +1232,7 @@ fn lu_returns_expected_factors_for_swap_matrix() {
         test_ctx(),
     )
     .unwrap();
-    let (p, l, u, parity) = a
+    let Lu { p, l, u, parity } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.lu(&a))
         .unwrap();
@@ -1295,7 +1348,7 @@ fn full_piv_lu_reconstructs_input() {
         test_ctx(),
     )
     .unwrap();
-    let (p, l, u, q, parity) = a
+    let FullPivLu { p, l, u, q, parity } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.full_piv_lu(&a)
@@ -1330,7 +1383,12 @@ fn solve_returns_expected_solution() {
         test_ctx(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
+        .unwrap();
 
     assert_eq!(x.shape(), &[2, 1]);
     assert_eq!(
@@ -1357,7 +1415,12 @@ fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
     )
     .unwrap();
 
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
+        .unwrap();
     let loss = x
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
@@ -1399,12 +1462,13 @@ fn solve_matches_concrete_partial_pivot_backend() {
         let b = Tensor::from_vec_col_major(vec![2, 1], rhs.to_vec()).unwrap();
         let concrete =
             crate::support::with_cpu_linalg(&mut backend, |session| session.solve(&a, &b)).unwrap();
-        let eager = EagerTensor::from_tensor_in(a, test_ctx())
-            .unwrap()
-            .solve(
-                &mut tenferro_cpu::CpuEngine::serial(),
-                &EagerTensor::from_tensor_in(b, test_ctx()).unwrap(),
-            )
+        let eager_a = EagerTensor::from_tensor_in(a, test_ctx()).unwrap();
+        let eager_b = EagerTensor::from_tensor_in(b, test_ctx()).unwrap();
+        let eager = eager_a
+            .runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                session.solve(&eager_a, &eager_b)
+            })
             .unwrap()
             .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
             .unwrap();
@@ -1443,12 +1507,13 @@ fn solve_matches_concrete_partial_pivot_backend() {
         let b = Tensor::from_vec_col_major(vec![2, 1], rhs.to_vec()).unwrap();
         let concrete =
             crate::support::with_cpu_linalg(&mut backend, |session| session.solve(&a, &b)).unwrap();
-        let eager = EagerTensor::from_tensor_in(a, test_ctx())
-            .unwrap()
-            .solve(
-                &mut tenferro_cpu::CpuEngine::serial(),
-                &EagerTensor::from_tensor_in(b, test_ctx()).unwrap(),
-            )
+        let eager_a = EagerTensor::from_tensor_in(a, test_ctx()).unwrap();
+        let eager_b = EagerTensor::from_tensor_in(b, test_ctx()).unwrap();
+        let eager = eager_a
+            .runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                session.solve(&eager_a, &eager_b)
+            })
             .unwrap()
             .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
             .unwrap();
@@ -1486,7 +1551,12 @@ fn solve_forward_jvp_wrt_matrix_and_rhs_matches_analytic_and_finite_difference()
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
+        .unwrap();
     let da = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0]).unwrap(),
         ctx.clone(),
@@ -1580,7 +1650,12 @@ fn solve_backward_wrt_matrix_and_rhs_matches_analytic_and_finite_difference() {
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
+        .unwrap();
     let loss = x
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
@@ -1676,7 +1751,12 @@ fn solve_forward_and_backward_match_finite_difference_in_f32() {
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
+        .unwrap();
     let da = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32, 0.0, 0.0, 1.0]).unwrap(),
         ctx.clone(),
@@ -1787,7 +1867,12 @@ fn solve_forward_jvp_complex_matches_analytic_and_finite_difference() {
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
+        .unwrap();
     let da_data = [
         Complex64::new(1.0, 1.0),
         Complex64::new(0.0, 0.0),
@@ -1889,7 +1974,12 @@ fn solve_backward_complex_uses_adjoint_and_matches_finite_difference() {
         ctx.clone(),
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
+        .unwrap();
     // Real loss L = sum(|x|^2); tenferro's Hermitian convention gives the
     // cotangent into x as 2x (grad(sum(|z|^2)) = 2z).
     let loss = ctx
@@ -1989,7 +2079,7 @@ fn eigh_returns_expected_values_for_diagonal_matrix() {
         test_ctx(),
     )
     .unwrap();
-    let (values, vectors) = a
+    let Eigh { values, vectors } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.eigh(&a))
         .unwrap();
@@ -2015,7 +2105,10 @@ fn eigh_vector_observable_backward_grad_is_finite() {
         ctx,
     )
     .unwrap();
-    let (_values, vectors) = a
+    let Eigh {
+        values: _values,
+        vectors,
+    } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.eigh(&a))
         .unwrap();
@@ -2060,7 +2153,10 @@ fn mixed_real_constant_and_tracked_complex_eigh_vector_backward() {
             s.add(&real, &complex)
         })
         .unwrap();
-    let (_values, vectors) = mixed
+    let Eigh {
+        values: _values,
+        vectors,
+    } = mixed
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.eigh(&mixed))
         .unwrap();
@@ -2083,7 +2179,7 @@ fn eig_returns_expected_complex_values_for_diagonal_matrix() {
         test_ctx(),
     )
     .unwrap();
-    let (values, vectors) = a
+    let Eig { values, vectors } = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.eig(&a))
         .unwrap();
@@ -2123,7 +2219,7 @@ fn triangular_solve_returns_expected_solution() {
     let x = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-            s.triangular_solve(&a, &b, true, true, false, false)
+            s.triangular_solve_with(&a, &b, &TriangularSolveOptions::default())
         })
         .unwrap();
 
@@ -2150,7 +2246,10 @@ fn cuda_eager_solve_uses_registered_linalg_runtime() {
     let a = EagerTensor::from_tensor_in(a_gpu, ctx.clone()).unwrap();
     let b = EagerTensor::from_tensor_in(b_gpu, ctx).unwrap();
 
-    let x = a.solve(&mut upload_backend, &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut upload_backend, |session| session.solve(&a, &b))
+        .unwrap();
 
     let x_host = download_resident(&mut upload_backend, &x);
     assert_eq!(x_host.shape(), &[2, 1]);
@@ -2195,10 +2294,12 @@ fn cuda_borrowed_qr_and_svd_options_preserve_values() {
         .unwrap();
     let (q, r, singular_values, full_values) = runtime
         .with_eager_session(&mut backend, |session| {
-            let (q, r) = session.qr_with_options(&input, QrOptions::default())?;
-            let (_, singular_values, _) =
-                session.svd_with_options(&input, SvdOptions::default())?;
-            let (_, full_values, _) = session.svd_full(&input)?;
+            let Qr { q, r } = session.qr_with(&input, &QrOptions::default())?;
+            let Svd {
+                s: singular_values, ..
+            } = session.svd_with(&input, &SvdOptions::default())?;
+            let Svd { s: full_values, .. } =
+                session.svd_with(&input, &SvdOptions::default().shape(SvdShape::Full))?;
             Ok::<_, tenferro_ad::Error>((q, r, singular_values, full_values))
         })
         .unwrap();
@@ -2330,7 +2431,12 @@ fn cuda_borrowed_norm_preserves_residency_and_value() {
         .unwrap();
     let result = runtime
         .with_eager_session(&mut backend, |session| {
-            session.norm(&input, Some(2.0), Some(&[0]), false)
+            session.norm_with(
+                &input,
+                &NormOptions::default()
+                    .ord(NormOrd::P(2.0))
+                    .axes(Some([0].into_iter().collect::<AxisVec>())),
+            )
         })
         .unwrap();
     assert_eq!(
@@ -2357,7 +2463,9 @@ fn cuda_borrowed_pseudoinverse_reports_unsupported_bool_intermediate() {
         .with_eager_session(&mut backend, |session| {
             Ok::<_, tenferro_ad::Error>((
                 session.pinv(&input).unwrap_err(),
-                session.pinv_with_rtol(&input, 1e-12).unwrap_err(),
+                session
+                    .pinv_with(&input, &PinvOptions::default().rtol(Some(1e-12)))
+                    .unwrap_err(),
             ))
         })
         .unwrap();
@@ -2384,7 +2492,10 @@ fn cuda_borrowed_determinants_and_inverse_preserve_value() {
         .unwrap();
     let (sign, logabs, det, inverse) = runtime
         .with_eager_session(&mut backend, |session| {
-            let (sign, logabs) = session.slogdet(&input)?;
+            let Slogdet {
+                sign,
+                log_abs_det: logabs,
+            } = session.slogdet(&input)?;
             let det = session.det(&input)?;
             let inverse = session.inv(&input)?;
             Ok::<_, tenferro_ad::Error>((sign, logabs, det, inverse))
@@ -2415,10 +2526,10 @@ fn cuda_eager_qr_and_svd_f64_stay_resident_and_reconstruct() {
 
     let (q, r, rrqr, u, s, vt) = runtime
         .with_eager_session(&mut backend, |session| {
-            let (q, r) = session.qr(&input)?;
+            let Qr { q, r } = session.qr(&input)?;
             let rrqr = session
-                .rank_revealing_qr(&input, RankRevealingQrOptions::default().rtol(1.0e-12))?;
-            let (u, s, vt) = session.svd(&input)?;
+                .rank_revealing_qr_with(&input, &RankRevealingQrOptions::default().rtol(1.0e-12))?;
+            let Svd { u, s, vh: vt } = session.svd(&input)?;
             Ok::<_, tenferro_ad::Error>((q, r, rrqr, u, s, vt))
         })
         .unwrap();
@@ -2502,8 +2613,8 @@ fn cuda_eager_qr_and_svd_c64_stay_resident_and_reconstruct() {
 
     let (q, r, u, s, vt) = runtime
         .with_eager_session(&mut backend, |session| {
-            let (q, r) = session.qr(&input)?;
-            let (u, s, vt) = session.svd(&input)?;
+            let Qr { q, r } = session.qr(&input)?;
+            let Svd { u, s, vh: vt } = session.svd(&input)?;
             Ok::<_, tenferro_ad::Error>((q, r, u, s, vt))
         })
         .unwrap();
@@ -2585,7 +2696,12 @@ fn tracked_batched_solve_backward_matches_finite_diff() {
         ctx,
     )
     .unwrap();
-    let x = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+    let x = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.solve(&a, &b)
+        })
+        .unwrap();
     let loss = x
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {

@@ -65,9 +65,10 @@ Same traps, keyed by the priors you arrived with.
 - nalgebra is column-major like tenferro, so `.data` / `as_slice()` buffers map
   directly to `from_vec_col_major`.
 - `Matrix::dot` / `gemm` are methods without an execution context; tenferro
-  direct ops need the explicit backend session. Eager and traced tiers drop
-  it: `EagerTensor` methods run through the `EagerRuntime`, traced methods
-  build a graph.
+  direct ops take the caller's engine as the last argument
+  (`a.matmul(&b, &mut engine)`). Eager and traced tiers drop it: eager
+  operations are `EagerSession` methods (`s.matmul(&a, &b)`) inside
+  `EagerRuntime::with_eager_session`, traced methods build a graph.
 - A single `DMatrix<T>` maps to `TypedTensor<T>`; there is no separate runtime
   dtype type unless you actually need runtime dtype selection.
 

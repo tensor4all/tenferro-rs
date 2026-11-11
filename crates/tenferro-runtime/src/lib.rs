@@ -19,6 +19,21 @@
 //! <https://tensor4all.org/tenferro-rs/guides/choosing-an-api.html> and
 //! <https://tensor4all.org/tenferro-rs/guides/execution-models.html>.
 //!
+//! `add` has no settings, so it has no options type and no `_with` form; only
+//! operations with semantic options (such as `dot_general`) have one:
+//!
+//! ```compile_fail,E0599
+//! use tenferro_cpu::CpuEngine;
+//! use tenferro_runtime::{CoreOps, Tensor};
+//!
+//! let a = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+//! let _ = a.add_with(&a, &mut CpuEngine::serial());
+//! ```
+//!
+//! ```compile_fail,E0432
+//! use tenferro_runtime::AddOptions;
+//! ```
+//!
 //! # Examples
 //!
 //! ```rust
@@ -50,6 +65,7 @@
 
 #[doc(hidden)]
 pub mod ad_support;
+mod api;
 mod checkpoint;
 mod compiler;
 #[doc(hidden)]
@@ -69,7 +85,6 @@ pub mod scalar_semantics;
 #[doc(hidden)]
 pub mod scale;
 mod segment;
-mod session_ext;
 mod shape_constraint;
 mod shape_infer;
 mod shape_packing;
@@ -78,9 +93,9 @@ mod tensor;
 mod trace;
 mod trace_ops;
 pub mod traced;
-mod typed_session_ext;
 mod typed_tensor;
 
+pub use api::{CoreOps, CoreRepr, SelectCondition, SelectOperand};
 pub use compiler::{CompilerOptions, OptimizerConfig};
 pub use error::{
     ContextId, Error, ErrorPhase, Result, RuntimeFailureReasonRef, ShapeConstraintEvalError,
@@ -123,7 +138,6 @@ pub use runtime::{
     TransferError, TransferProvider, TransferProviderContractError, TransferRequest,
     UnsupportedReason,
 };
-pub use session_ext::TensorSessionOpsExt;
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;
 pub use shape_packing::TracedSliceBuilder;
@@ -135,6 +149,5 @@ pub use tenferro_tensor::{
     TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
-pub use typed_session_ext::{TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt};
 
 pub use traced::TracedTensor;

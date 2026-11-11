@@ -26,7 +26,7 @@ let mut engine = CpuEngine::serial();
         // snippet-start:eager_operations_mixing
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let runtime = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
@@ -121,7 +121,7 @@ assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     fn snippet_eager_operations_4() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_4
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
@@ -144,7 +144,7 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
     fn snippet_eager_operations_5() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_5
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::LinalgOps;
 use tenferro_runtime::Tensor;
 
 let mut engine = CpuEngine::serial();
@@ -159,11 +159,11 @@ let qr = a.qr(&mut engine)?;
 let chol = a.cholesky(&mut engine)?;
 let eigh = a.eigh(&mut engine)?;
 let x = a.solve(&b, &mut engine)?;
-assert_eq!(svd.1.shape(), &[3]);
-assert_eq!(qr.0.shape(), &[3, 3]);
+assert_eq!(svd.s.shape(), &[3]);
+assert_eq!(qr.q.shape(), &[3, 3]);
 assert_eq!(chol.shape(), &[3, 3]);
-assert_eq!(eigh.0.shape(), &[3]);
-assert_eq!(eigh.1.shape(), &[3, 3]);
+assert_eq!(eigh.values.shape(), &[3]);
+assert_eq!(eigh.vectors.shape(), &[3, 3]);
 assert_eq!(x.shape(), &[3]);
         // snippet-end:eager_operations_5
         Ok(())
@@ -175,7 +175,7 @@ assert_eq!(x.shape(), &[3]);
     fn snippet_eager_operations_6() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:eager_operations_6
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
@@ -460,8 +460,7 @@ assert_eq!(static_rank.rank(), 2);
         // snippet-start:tensor_operations_15
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::{
-    CompareDir, TypedTensor, TypedTensorMaskSessionOpsExt, TypedTensorSessionOpsExt,
-};
+    CompareDir, TypedTensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let x = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
@@ -506,7 +505,7 @@ assert_eq!(x.as_slice().unwrap(), &[2.0, 4.0, 6.0]);
     fn snippet_tensor_operations_17() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_17
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
@@ -635,7 +634,7 @@ Ok(())
     fn snippet_tensor_operations_22() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_22
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(
@@ -681,7 +680,7 @@ Ok(())
     fn snippet_tensor_operations_24() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_24
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(
@@ -709,7 +708,7 @@ assert_eq!(total.as_slice::<f64>().unwrap(), &[21.0]);
     fn snippet_tensor_operations_dot_general_layout() -> Result<(), Box<dyn std::error::Error>> {
         // snippet-start:tensor_operations_dot_general_layout
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{DotGeneralConfig, Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{DotGeneralConfig, Tensor, CoreOps};
 
 // Attention scores: q[d, lq, b] and k[d, lk, b] (column-major, batch last).
 let (d, lq, lk, b) = (2, 3, 4, 2);
@@ -834,6 +833,32 @@ use tenferro_cpu::CpuEngine;
 let engine = CpuEngine::serial();
 assert_eq!(engine.num_threads(), 1);
         // snippet-end:cpu_execution_29
+        Ok(())
+    }
+
+    snippet_cpu_execution_lanes()?;
+
+    // snippet source: docs/guides/cpu-execution.md (lanes)
+    fn snippet_cpu_execution_lanes() -> Result<(), Box<dyn std::error::Error>> {
+        // snippet-start:cpu_execution_lanes
+use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine, Pool};
+use tenferro_linalg::{LinalgOps, Svd};
+use tenferro_tensor::Tensor;
+
+let mut engine = CpuEngine::new(Pool::builder().threads(2).build()?);
+// One pool per lane, owned by the caller and reused across calls.
+let mut pools = [BufferPool::new(), BufferPool::new()];
+let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 1.0])?;
+let b = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 1.0])?;
+let results = engine.with_lanes(&[1, 1], &mut pools, |index, lane| {
+    let input = if index == 0 { &a } else { &b };
+    input.svd(lane)
+})?;
+for result in results {
+    let Svd { s, .. } = result?;
+    assert_eq!(s.shape(), &[2]);
+}
+        // snippet-end:cpu_execution_lanes
         Ok(())
     }
 

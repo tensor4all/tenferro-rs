@@ -1,0 +1,582 @@
+pub mod tenferro_einsum
+pub mod tenferro_einsum::lowering
+pub struct tenferro_einsum::lowering::DiagPlan<'a>
+impl<'a> tenferro_einsum::lowering::DiagPlan<'a>
+pub fn tenferro_einsum::lowering::DiagPlan<'a>::result_subs(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::DiagPlan<'a>::stages(self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = tenferro_einsum::lowering::DiagStage<'a>> + 'a
+impl<'a> core::clone::Clone for tenferro_einsum::lowering::DiagPlan<'a>
+pub fn tenferro_einsum::lowering::DiagPlan<'a>::clone(&self) -> tenferro_einsum::lowering::DiagPlan<'a>
+impl<'a> core::fmt::Debug for tenferro_einsum::lowering::DiagPlan<'a>
+pub fn tenferro_einsum::lowering::DiagPlan<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::lowering::DiagPlan<'a>
+pub struct tenferro_einsum::lowering::DiagStage<'a>
+impl<'a> tenferro_einsum::lowering::DiagStage<'a>
+pub fn tenferro_einsum::lowering::DiagStage<'a>::axis_pairs(&self) -> &'a [(usize, usize)]
+pub fn tenferro_einsum::lowering::DiagStage<'a>::result_subs(&self) -> &'a [u32]
+impl<'a> core::clone::Clone for tenferro_einsum::lowering::DiagStage<'a>
+pub fn tenferro_einsum::lowering::DiagStage<'a>::clone(&self) -> tenferro_einsum::lowering::DiagStage<'a>
+impl<'a> core::fmt::Debug for tenferro_einsum::lowering::DiagStage<'a>
+pub fn tenferro_einsum::lowering::DiagStage<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::lowering::DiagStage<'a>
+pub struct tenferro_einsum::lowering::GemmPlan<'a>
+impl<'a> tenferro_einsum::lowering::GemmPlan<'a>
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::batch_modes(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::batch_shape(&self) -> &'a [usize]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::canonical_output_modes(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::contracted_modes(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::contracted_shape(&self) -> &'a [usize]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::expanded_output_shape(&self) -> &'a [usize]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::k(&self) -> usize
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::left_only_modes(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::left_only_shape(&self) -> &'a [usize]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::lhs_gemm_shape(&self) -> &'a [usize]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::lhs_target_modes(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::m(&self) -> usize
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::n(&self) -> usize
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::needs_final_permute(&self) -> bool
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::output_gemm_shape(&self) -> &'a [usize]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::rhs_gemm_shape(&self) -> &'a [usize]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::rhs_target_modes(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::right_only_modes(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::right_only_shape(&self) -> &'a [usize]
+impl<'a> core::clone::Clone for tenferro_einsum::lowering::GemmPlan<'a>
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::clone(&self) -> tenferro_einsum::lowering::GemmPlan<'a>
+impl<'a> core::fmt::Debug for tenferro_einsum::lowering::GemmPlan<'a>
+pub fn tenferro_einsum::lowering::GemmPlan<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::lowering::GemmPlan<'a>
+pub struct tenferro_einsum::lowering::PairwiseStepPlan<'a>
+impl<'a> tenferro_einsum::lowering::PairwiseStepPlan<'a>
+pub fn tenferro_einsum::lowering::PairwiseStepPlan<'a>::gemm(&self) -> tenferro_einsum::lowering::GemmPlan<'a>
+pub fn tenferro_einsum::lowering::PairwiseStepPlan<'a>::lhs_diag(&self) -> core::option::Option<tenferro_einsum::lowering::DiagPlan<'a>>
+pub fn tenferro_einsum::lowering::PairwiseStepPlan<'a>::lhs_reduce(&self) -> core::option::Option<tenferro_einsum::lowering::ReducePlan<'a>>
+pub fn tenferro_einsum::lowering::PairwiseStepPlan<'a>::rhs_diag(&self) -> core::option::Option<tenferro_einsum::lowering::DiagPlan<'a>>
+pub fn tenferro_einsum::lowering::PairwiseStepPlan<'a>::rhs_reduce(&self) -> core::option::Option<tenferro_einsum::lowering::ReducePlan<'a>>
+impl<'a> core::clone::Clone for tenferro_einsum::lowering::PairwiseStepPlan<'a>
+pub fn tenferro_einsum::lowering::PairwiseStepPlan<'a>::clone(&self) -> tenferro_einsum::lowering::PairwiseStepPlan<'a>
+impl<'a> core::fmt::Debug for tenferro_einsum::lowering::PairwiseStepPlan<'a>
+pub fn tenferro_einsum::lowering::PairwiseStepPlan<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::lowering::PairwiseStepPlan<'a>
+pub struct tenferro_einsum::lowering::ReducePlan<'a>
+impl<'a> tenferro_einsum::lowering::ReducePlan<'a>
+pub fn tenferro_einsum::lowering::ReducePlan<'a>::kept_subs(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::ReducePlan<'a>::original_subs(&self) -> &'a [u32]
+pub fn tenferro_einsum::lowering::ReducePlan<'a>::out_shape(&self) -> &'a [usize]
+impl<'a> core::clone::Clone for tenferro_einsum::lowering::ReducePlan<'a>
+pub fn tenferro_einsum::lowering::ReducePlan<'a>::clone(&self) -> tenferro_einsum::lowering::ReducePlan<'a>
+impl<'a> core::fmt::Debug for tenferro_einsum::lowering::ReducePlan<'a>
+pub fn tenferro_einsum::lowering::ReducePlan<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::lowering::ReducePlan<'a>
+pub mod tenferro_einsum::prelude
+pub use tenferro_einsum::prelude::Conj
+pub use tenferro_einsum::prelude::DType
+pub use tenferro_einsum::prelude::Dest
+pub use tenferro_einsum::prelude::Tensor
+pub use tenferro_einsum::prelude::TensorRead
+pub use tenferro_einsum::prelude::TensorScalar
+pub use tenferro_einsum::prelude::TensorView
+pub use tenferro_einsum::prelude::TensorWrite
+pub use tenferro_einsum::prelude::TraceContext
+pub use tenferro_einsum::prelude::TracedTensor
+pub use tenferro_einsum::prelude::TypedTensor
+pub use tenferro_einsum::prelude::TypedTensorView
+pub use tenferro_einsum::prelude::TypedTensorWrite
+pub enum tenferro_einsum::prelude::EinsumAxis
+pub tenferro_einsum::prelude::EinsumAxis::Ellipsis
+pub tenferro_einsum::prelude::EinsumAxis::Label(u32)
+impl core::clone::Clone for tenferro_einsum::EinsumAxis
+pub fn tenferro_einsum::EinsumAxis::clone(&self) -> tenferro_einsum::EinsumAxis
+impl core::cmp::Eq for tenferro_einsum::EinsumAxis
+impl core::cmp::PartialEq for tenferro_einsum::EinsumAxis
+pub fn tenferro_einsum::EinsumAxis::eq(&self, &tenferro_einsum::EinsumAxis) -> bool
+impl core::fmt::Debug for tenferro_einsum::EinsumAxis
+pub fn tenferro_einsum::EinsumAxis::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::EinsumAxis
+pub fn tenferro_einsum::EinsumAxis::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_einsum::EinsumAxis
+impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumAxis
+pub enum tenferro_einsum::prelude::EinsumOptimize
+pub tenferro_einsum::prelude::EinsumOptimize::Auto(tenferro_einsum::ContractionOptimizerOptions)
+pub tenferro_einsum::prelude::EinsumOptimize::False
+pub tenferro_einsum::prelude::EinsumOptimize::Nested(tenferro_einsum::NestedEinsum)
+pub tenferro_einsum::prelude::EinsumOptimize::Path(alloc::vec::Vec<(usize, usize)>)
+pub tenferro_einsum::prelude::EinsumOptimize::Tree(tenferro_einsum::ContractionTree)
+impl core::clone::Clone for tenferro_einsum::EinsumOptimize
+pub fn tenferro_einsum::EinsumOptimize::clone(&self) -> tenferro_einsum::EinsumOptimize
+impl core::default::Default for tenferro_einsum::EinsumOptimize
+pub fn tenferro_einsum::EinsumOptimize::default() -> Self
+impl core::fmt::Debug for tenferro_einsum::EinsumOptimize
+pub fn tenferro_einsum::EinsumOptimize::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_einsum::prelude::Spec<'a>
+pub tenferro_einsum::prelude::Spec::Notation(&'a tenferro_einsum::EinsumNotation)
+pub tenferro_einsum::prelude::Spec::Subscripts(&'a tenferro_einsum::EinsumSubscripts)
+pub tenferro_einsum::prelude::Spec::Text(&'a str)
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
+pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::clone::Clone for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::clone(&self) -> tenferro_einsum::Spec<'a>
+impl<'a> core::convert::From<&'a alloc::string::String> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a alloc::string::String) -> Self
+impl<'a> core::convert::From<&'a str> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a str) -> Self
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumNotation> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumNotation) -> Self
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumSubscripts) -> Self
+impl<'a> core::fmt::Debug for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::Spec<'a>
+pub enum tenferro_einsum::prelude::TensorDotAxes<'a>
+pub tenferro_einsum::prelude::TensorDotAxes::Axes
+pub tenferro_einsum::prelude::TensorDotAxes::Axes::lhs: &'a [isize]
+pub tenferro_einsum::prelude::TensorDotAxes::Axes::rhs: &'a [isize]
+pub tenferro_einsum::prelude::TensorDotAxes::Count(usize)
+impl<'a> core::clone::Clone for tenferro_einsum::TensorDotAxes<'a>
+pub fn tenferro_einsum::TensorDotAxes<'a>::clone(&self) -> tenferro_einsum::TensorDotAxes<'a>
+impl<'a> core::cmp::Eq for tenferro_einsum::TensorDotAxes<'a>
+impl<'a> core::cmp::PartialEq for tenferro_einsum::TensorDotAxes<'a>
+pub fn tenferro_einsum::TensorDotAxes<'a>::eq(&self, &tenferro_einsum::TensorDotAxes<'a>) -> bool
+impl<'a> core::fmt::Debug for tenferro_einsum::TensorDotAxes<'a>
+pub fn tenferro_einsum::TensorDotAxes<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::TensorDotAxes<'a>
+impl<'a> core::marker::StructuralPartialEq for tenferro_einsum::TensorDotAxes<'a>
+pub struct tenferro_einsum::prelude::ConcreteEinsumPlan
+impl tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache(&mut self)
+pub fn tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats(&self) -> tenferro_einsum::Result<tenferro_tensor::cache::CacheStats>
+impl tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::execute<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&self, &I, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<<I as tenferro_einsum::EinsumInputs>::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::ConcreteEinsumPlan::execute_into<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&self, &I, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<<I as tenferro_einsum::EinsumInputs>::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_einsum::ConcreteEinsumPlan::prepare<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&I, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_tensor::error::Result<Self>
+impl core::fmt::Debug for tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_einsum::prelude::ConjMask
+impl tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::get(&self, usize) -> tenferro_tensor::dest::Conj
+pub fn tenferro_einsum::ConjMask::is_empty(&self) -> bool
+pub fn tenferro_einsum::ConjMask::is_none(&self) -> bool
+pub fn tenferro_einsum::ConjMask::len(&self) -> usize
+pub fn tenferro_einsum::ConjMask::new(impl core::iter::traits::collect::IntoIterator<Item = tenferro_tensor::dest::Conj>) -> Self
+impl core::clone::Clone for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::clone(&self) -> tenferro_einsum::ConjMask
+impl core::cmp::Eq for tenferro_einsum::ConjMask
+impl core::cmp::PartialEq for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::eq(&self, &tenferro_einsum::ConjMask) -> bool
+impl core::default::Default for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::default() -> tenferro_einsum::ConjMask
+impl core::fmt::Debug for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_einsum::ConjMask
+pub struct tenferro_einsum::prelude::ContractionTree
+impl tenferro_einsum::ContractionTree
+pub fn tenferro_einsum::ContractionTree::from_pairs(&tenferro_einsum::Subscripts, &[&[usize]], &[(usize, usize)]) -> tenferro_einsum::Result<Self>
+pub fn tenferro_einsum::ContractionTree::optimize(&tenferro_einsum::Subscripts, &[&[usize]]) -> tenferro_einsum::Result<Self>
+pub fn tenferro_einsum::ContractionTree::optimize_with_options(&tenferro_einsum::Subscripts, &[&[usize]], &tenferro_einsum::ContractionOptimizerOptions) -> tenferro_einsum::Result<Self>
+pub fn tenferro_einsum::ContractionTree::step_count(&self) -> usize
+pub fn tenferro_einsum::ContractionTree::step_pair(&self, usize) -> core::option::Option<(usize, usize)>
+pub fn tenferro_einsum::ContractionTree::step_plan(&self, usize) -> core::option::Option<tenferro_einsum::lowering::PairwiseStepPlan<'_>>
+pub fn tenferro_einsum::ContractionTree::step_subscripts(&self, usize) -> core::option::Option<(&[u32], &[u32], &[u32])>
+impl core::clone::Clone for tenferro_einsum::ContractionTree
+pub fn tenferro_einsum::ContractionTree::clone(&self) -> tenferro_einsum::ContractionTree
+impl core::fmt::Debug for tenferro_einsum::ContractionTree
+pub fn tenferro_einsum::ContractionTree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_einsum::prelude::EinsumNotation
+pub tenferro_einsum::prelude::EinsumNotation::inputs: alloc::vec::Vec<alloc::vec::Vec<tenferro_einsum::EinsumAxis>>
+pub tenferro_einsum::prelude::EinsumNotation::output: alloc::vec::Vec<tenferro_einsum::EinsumAxis>
+impl tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::input_count(&self) -> usize
+pub fn tenferro_einsum::EinsumNotation::new(&[&[tenferro_einsum::EinsumAxis]], &[tenferro_einsum::EinsumAxis]) -> Self
+pub fn tenferro_einsum::EinsumNotation::parse(&str) -> tenferro_einsum::Result<Self>
+impl core::clone::Clone for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::clone(&self) -> tenferro_einsum::EinsumNotation
+impl core::cmp::Eq for tenferro_einsum::EinsumNotation
+impl core::cmp::PartialEq for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::eq(&self, &tenferro_einsum::EinsumNotation) -> bool
+impl core::fmt::Debug for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumNotation
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumNotation> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumNotation) -> Self
+#[non_exhaustive] pub struct tenferro_einsum::prelude::EinsumOptions
+pub tenferro_einsum::prelude::EinsumOptions::conj: tenferro_einsum::ConjMask
+pub tenferro_einsum::prelude::EinsumOptions::optimize: tenferro_einsum::EinsumOptimize
+impl tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::conj(self, tenferro_einsum::ConjMask) -> Self
+pub fn tenferro_einsum::EinsumOptions::optimize(self, tenferro_einsum::EinsumOptimize) -> Self
+impl core::clone::Clone for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::clone(&self) -> tenferro_einsum::EinsumOptions
+impl core::default::Default for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::default() -> tenferro_einsum::EinsumOptions
+impl core::fmt::Debug for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_einsum::prelude::EinsumSubscripts
+pub tenferro_einsum::prelude::EinsumSubscripts::inputs: alloc::vec::Vec<alloc::vec::Vec<u32>>
+pub tenferro_einsum::prelude::EinsumSubscripts::output: alloc::vec::Vec<u32>
+impl tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::input_count(&self) -> usize
+pub fn tenferro_einsum::EinsumSubscripts::new(&[&[u32]], &[u32]) -> Self
+impl core::clone::Clone for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::clone(&self) -> tenferro_einsum::EinsumSubscripts
+impl core::cmp::Eq for tenferro_einsum::EinsumSubscripts
+impl core::cmp::PartialEq for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::eq(&self, &tenferro_einsum::EinsumSubscripts) -> bool
+impl core::convert::From<&tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::from(&tenferro_einsum::EinsumSubscripts) -> Self
+impl core::convert::From<&tenferro_einsum::Subscripts> for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::from(&tenferro_einsum::Subscripts) -> Self
+impl core::convert::From<tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::from(tenferro_einsum::EinsumSubscripts) -> Self
+impl core::convert::From<tenferro_einsum::Subscripts> for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::from(tenferro_einsum::Subscripts) -> Self
+impl core::fmt::Debug for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumSubscripts
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumSubscripts) -> Self
+pub trait tenferro_einsum::prelude::EinsumOps: tenferro_einsum::EinsumInputs
+pub fn tenferro_einsum::prelude::EinsumOps::einsum(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::prelude::EinsumOps::einsum_into(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_einsum::prelude::EinsumOps::einsum_with(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+impl<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized> tenferro_einsum::EinsumOps for I
+pub fn I::einsum(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn I::einsum_into(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn I::einsum_with(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub trait tenferro_einsum::prelude::EinsumSpec
+pub fn tenferro_einsum::prelude::EinsumSpec::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for alloc::string::String
+pub fn alloc::string::String::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for str
+pub fn str::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
+pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
+pub trait tenferro_einsum::prelude::TensordotOps: tenferro_tensor::view::AsView
+pub fn tenferro_einsum::prelude::TensordotOps::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_einsum::TensordotOps for X
+pub fn X::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub trait tenferro_einsum::prelude::TracedEinsumOps
+pub fn tenferro_einsum::prelude::TracedEinsumOps::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_einsum::prelude::TracedEinsumOps::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_einsum::TracedEinsumOps for tenferro_runtime::trace::TraceContext
+pub fn tenferro_runtime::trace::TraceContext::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::trace::TraceContext::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub trait tenferro_einsum::prelude::TracedTensordotOps
+pub fn tenferro_einsum::prelude::TracedTensordotOps::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_einsum::TracedTensordotOps for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub enum tenferro_einsum::EinsumAxis
+pub tenferro_einsum::EinsumAxis::Ellipsis
+pub tenferro_einsum::EinsumAxis::Label(u32)
+impl core::clone::Clone for tenferro_einsum::EinsumAxis
+pub fn tenferro_einsum::EinsumAxis::clone(&self) -> tenferro_einsum::EinsumAxis
+impl core::cmp::Eq for tenferro_einsum::EinsumAxis
+impl core::cmp::PartialEq for tenferro_einsum::EinsumAxis
+pub fn tenferro_einsum::EinsumAxis::eq(&self, &tenferro_einsum::EinsumAxis) -> bool
+impl core::fmt::Debug for tenferro_einsum::EinsumAxis
+pub fn tenferro_einsum::EinsumAxis::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::EinsumAxis
+pub fn tenferro_einsum::EinsumAxis::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_einsum::EinsumAxis
+impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumAxis
+pub enum tenferro_einsum::EinsumOptimize
+pub tenferro_einsum::EinsumOptimize::Auto(tenferro_einsum::ContractionOptimizerOptions)
+pub tenferro_einsum::EinsumOptimize::False
+pub tenferro_einsum::EinsumOptimize::Nested(tenferro_einsum::NestedEinsum)
+pub tenferro_einsum::EinsumOptimize::Path(alloc::vec::Vec<(usize, usize)>)
+pub tenferro_einsum::EinsumOptimize::Tree(tenferro_einsum::ContractionTree)
+impl core::clone::Clone for tenferro_einsum::EinsumOptimize
+pub fn tenferro_einsum::EinsumOptimize::clone(&self) -> tenferro_einsum::EinsumOptimize
+impl core::default::Default for tenferro_einsum::EinsumOptimize
+pub fn tenferro_einsum::EinsumOptimize::default() -> Self
+impl core::fmt::Debug for tenferro_einsum::EinsumOptimize
+pub fn tenferro_einsum::EinsumOptimize::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub enum tenferro_einsum::Error
+pub tenferro_einsum::Error::InvalidSubscripts
+pub tenferro_einsum::Error::InvalidSubscripts::message: alloc::string::String
+pub tenferro_einsum::Error::Numerical
+pub tenferro_einsum::Error::Numerical::message: alloc::string::String
+pub tenferro_einsum::Error::Planning
+pub tenferro_einsum::Error::Planning::source: tenferro_einsum::PlanningError
+pub tenferro_einsum::Error::Runtime(tenferro_runtime::error::Error)
+pub tenferro_einsum::Error::Tensor(tenferro_tensor::error::Error)
+pub tenferro_einsum::Error::Validation
+pub tenferro_einsum::Error::Validation::op: &'static str
+pub tenferro_einsum::Error::Validation::source: tenferro_tensor_core::error::ValidationError
+impl tenferro_einsum::Error
+pub fn tenferro_einsum::Error::dtype_mismatch(&'static str, tenferro_tensor_core::DType, tenferro_tensor_core::DType) -> Self
+pub fn tenferro_einsum::Error::into_tensor_error(self, &'static str) -> tenferro_tensor::error::Error
+pub fn tenferro_einsum::Error::invalid_argument(&'static str, &'static str, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn tenferro_einsum::Error::invalid_subscripts(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn tenferro_einsum::Error::kind(&self) -> tenferro_tensor_core::error::ErrorKind
+pub fn tenferro_einsum::Error::numerical(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn tenferro_einsum::Error::planning(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn tenferro_einsum::Error::planning_runtime_state(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn tenferro_einsum::Error::rank_mismatch(&'static str, usize, usize) -> Self
+pub fn tenferro_einsum::Error::shape_mismatch(&'static str, impl core::convert::Into<alloc::vec::Vec<usize>>, impl core::convert::Into<alloc::vec::Vec<usize>>) -> Self
+pub fn tenferro_einsum::Error::validation(&'static str, tenferro_tensor_core::error::ValidationError) -> Self
+impl core::convert::From<tenferro_runtime::error::Error> for tenferro_einsum::Error
+pub fn tenferro_einsum::Error::from(tenferro_runtime::error::Error) -> Self
+impl core::convert::From<tenferro_tensor::error::Error> for tenferro_einsum::Error
+pub fn tenferro_einsum::Error::from(tenferro_tensor::error::Error) -> Self
+impl core::error::Error for tenferro_einsum::Error
+pub fn tenferro_einsum::Error::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_einsum::Error
+pub fn tenferro_einsum::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_einsum::Error
+pub fn tenferro_einsum::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_einsum::NestedEinsum
+pub tenferro_einsum::NestedEinsum::Leaf(usize)
+pub tenferro_einsum::NestedEinsum::Node
+pub tenferro_einsum::NestedEinsum::Node::children: alloc::vec::Vec<tenferro_einsum::NestedEinsum>
+pub tenferro_einsum::NestedEinsum::Node::subscripts: tenferro_einsum::Subscripts
+impl tenferro_einsum::NestedEinsum
+pub fn tenferro_einsum::NestedEinsum::count_leaves(&self) -> usize
+pub fn tenferro_einsum::NestedEinsum::parse(&str) -> tenferro_einsum::Result<Self>
+impl core::clone::Clone for tenferro_einsum::NestedEinsum
+pub fn tenferro_einsum::NestedEinsum::clone(&self) -> tenferro_einsum::NestedEinsum
+impl core::fmt::Debug for tenferro_einsum::NestedEinsum
+pub fn tenferro_einsum::NestedEinsum::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_einsum::PlanningError
+pub tenferro_einsum::PlanningError::InvalidConfiguration
+pub tenferro_einsum::PlanningError::InvalidConfiguration::message: alloc::string::String
+pub tenferro_einsum::PlanningError::RuntimeState
+pub tenferro_einsum::PlanningError::RuntimeState::message: alloc::string::String
+impl core::error::Error for tenferro_einsum::PlanningError
+impl core::fmt::Debug for tenferro_einsum::PlanningError
+pub fn tenferro_einsum::PlanningError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_einsum::PlanningError
+pub fn tenferro_einsum::PlanningError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_einsum::Spec<'a>
+pub tenferro_einsum::Spec::Notation(&'a tenferro_einsum::EinsumNotation)
+pub tenferro_einsum::Spec::Subscripts(&'a tenferro_einsum::EinsumSubscripts)
+pub tenferro_einsum::Spec::Text(&'a str)
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
+pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::clone::Clone for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::clone(&self) -> tenferro_einsum::Spec<'a>
+impl<'a> core::convert::From<&'a alloc::string::String> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a alloc::string::String) -> Self
+impl<'a> core::convert::From<&'a str> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a str) -> Self
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumNotation> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumNotation) -> Self
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumSubscripts) -> Self
+impl<'a> core::fmt::Debug for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::Spec<'a>
+pub enum tenferro_einsum::TensorDotAxes<'a>
+pub tenferro_einsum::TensorDotAxes::Axes
+pub tenferro_einsum::TensorDotAxes::Axes::lhs: &'a [isize]
+pub tenferro_einsum::TensorDotAxes::Axes::rhs: &'a [isize]
+pub tenferro_einsum::TensorDotAxes::Count(usize)
+impl<'a> core::clone::Clone for tenferro_einsum::TensorDotAxes<'a>
+pub fn tenferro_einsum::TensorDotAxes<'a>::clone(&self) -> tenferro_einsum::TensorDotAxes<'a>
+impl<'a> core::cmp::Eq for tenferro_einsum::TensorDotAxes<'a>
+impl<'a> core::cmp::PartialEq for tenferro_einsum::TensorDotAxes<'a>
+pub fn tenferro_einsum::TensorDotAxes<'a>::eq(&self, &tenferro_einsum::TensorDotAxes<'a>) -> bool
+impl<'a> core::fmt::Debug for tenferro_einsum::TensorDotAxes<'a>
+pub fn tenferro_einsum::TensorDotAxes<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for tenferro_einsum::TensorDotAxes<'a>
+impl<'a> core::marker::StructuralPartialEq for tenferro_einsum::TensorDotAxes<'a>
+pub struct tenferro_einsum::ConcreteEinsumPlan
+impl tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache(&mut self)
+pub fn tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats(&self) -> tenferro_einsum::Result<tenferro_tensor::cache::CacheStats>
+impl tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::execute<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&self, &I, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<<I as tenferro_einsum::EinsumInputs>::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::ConcreteEinsumPlan::execute_into<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&self, &I, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<<I as tenferro_einsum::EinsumInputs>::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_einsum::ConcreteEinsumPlan::prepare<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized>(&I, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_tensor::error::Result<Self>
+impl core::fmt::Debug for tenferro_einsum::ConcreteEinsumPlan
+pub fn tenferro_einsum::ConcreteEinsumPlan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_einsum::ConjMask
+impl tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::get(&self, usize) -> tenferro_tensor::dest::Conj
+pub fn tenferro_einsum::ConjMask::is_empty(&self) -> bool
+pub fn tenferro_einsum::ConjMask::is_none(&self) -> bool
+pub fn tenferro_einsum::ConjMask::len(&self) -> usize
+pub fn tenferro_einsum::ConjMask::new(impl core::iter::traits::collect::IntoIterator<Item = tenferro_tensor::dest::Conj>) -> Self
+impl core::clone::Clone for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::clone(&self) -> tenferro_einsum::ConjMask
+impl core::cmp::Eq for tenferro_einsum::ConjMask
+impl core::cmp::PartialEq for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::eq(&self, &tenferro_einsum::ConjMask) -> bool
+impl core::default::Default for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::default() -> tenferro_einsum::ConjMask
+impl core::fmt::Debug for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::ConjMask
+pub fn tenferro_einsum::ConjMask::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_einsum::ConjMask
+pub struct tenferro_einsum::ContractionOptimizerOptions
+pub tenferro_einsum::ContractionOptimizerOptions::betas: alloc::vec::Vec<f64>
+pub tenferro_einsum::ContractionOptimizerOptions::niters: usize
+pub tenferro_einsum::ContractionOptimizerOptions::ntrials: usize
+pub tenferro_einsum::ContractionOptimizerOptions::score: omeco::score::ScoreFunction
+impl core::clone::Clone for tenferro_einsum::ContractionOptimizerOptions
+pub fn tenferro_einsum::ContractionOptimizerOptions::clone(&self) -> tenferro_einsum::ContractionOptimizerOptions
+impl core::default::Default for tenferro_einsum::ContractionOptimizerOptions
+pub fn tenferro_einsum::ContractionOptimizerOptions::default() -> Self
+impl core::fmt::Debug for tenferro_einsum::ContractionOptimizerOptions
+pub fn tenferro_einsum::ContractionOptimizerOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_einsum::ContractionTree
+impl tenferro_einsum::ContractionTree
+pub fn tenferro_einsum::ContractionTree::from_pairs(&tenferro_einsum::Subscripts, &[&[usize]], &[(usize, usize)]) -> tenferro_einsum::Result<Self>
+pub fn tenferro_einsum::ContractionTree::optimize(&tenferro_einsum::Subscripts, &[&[usize]]) -> tenferro_einsum::Result<Self>
+pub fn tenferro_einsum::ContractionTree::optimize_with_options(&tenferro_einsum::Subscripts, &[&[usize]], &tenferro_einsum::ContractionOptimizerOptions) -> tenferro_einsum::Result<Self>
+pub fn tenferro_einsum::ContractionTree::step_count(&self) -> usize
+pub fn tenferro_einsum::ContractionTree::step_pair(&self, usize) -> core::option::Option<(usize, usize)>
+pub fn tenferro_einsum::ContractionTree::step_plan(&self, usize) -> core::option::Option<tenferro_einsum::lowering::PairwiseStepPlan<'_>>
+pub fn tenferro_einsum::ContractionTree::step_subscripts(&self, usize) -> core::option::Option<(&[u32], &[u32], &[u32])>
+impl core::clone::Clone for tenferro_einsum::ContractionTree
+pub fn tenferro_einsum::ContractionTree::clone(&self) -> tenferro_einsum::ContractionTree
+impl core::fmt::Debug for tenferro_einsum::ContractionTree
+pub fn tenferro_einsum::ContractionTree::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_einsum::EinsumNotation
+pub tenferro_einsum::EinsumNotation::inputs: alloc::vec::Vec<alloc::vec::Vec<tenferro_einsum::EinsumAxis>>
+pub tenferro_einsum::EinsumNotation::output: alloc::vec::Vec<tenferro_einsum::EinsumAxis>
+impl tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::input_count(&self) -> usize
+pub fn tenferro_einsum::EinsumNotation::new(&[&[tenferro_einsum::EinsumAxis]], &[tenferro_einsum::EinsumAxis]) -> Self
+pub fn tenferro_einsum::EinsumNotation::parse(&str) -> tenferro_einsum::Result<Self>
+impl core::clone::Clone for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::clone(&self) -> tenferro_einsum::EinsumNotation
+impl core::cmp::Eq for tenferro_einsum::EinsumNotation
+impl core::cmp::PartialEq for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::eq(&self, &tenferro_einsum::EinsumNotation) -> bool
+impl core::fmt::Debug for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumNotation
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumNotation> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumNotation) -> Self
+#[non_exhaustive] pub struct tenferro_einsum::EinsumOptions
+pub tenferro_einsum::EinsumOptions::conj: tenferro_einsum::ConjMask
+pub tenferro_einsum::EinsumOptions::optimize: tenferro_einsum::EinsumOptimize
+impl tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::conj(self, tenferro_einsum::ConjMask) -> Self
+pub fn tenferro_einsum::EinsumOptions::optimize(self, tenferro_einsum::EinsumOptimize) -> Self
+impl core::clone::Clone for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::clone(&self) -> tenferro_einsum::EinsumOptions
+impl core::default::Default for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::default() -> tenferro_einsum::EinsumOptions
+impl core::fmt::Debug for tenferro_einsum::EinsumOptions
+pub fn tenferro_einsum::EinsumOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_einsum::EinsumSubscripts
+pub tenferro_einsum::EinsumSubscripts::inputs: alloc::vec::Vec<alloc::vec::Vec<u32>>
+pub tenferro_einsum::EinsumSubscripts::output: alloc::vec::Vec<u32>
+impl tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::input_count(&self) -> usize
+pub fn tenferro_einsum::EinsumSubscripts::new(&[&[u32]], &[u32]) -> Self
+impl core::clone::Clone for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::clone(&self) -> tenferro_einsum::EinsumSubscripts
+impl core::cmp::Eq for tenferro_einsum::EinsumSubscripts
+impl core::cmp::PartialEq for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::eq(&self, &tenferro_einsum::EinsumSubscripts) -> bool
+impl core::convert::From<&tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::from(&tenferro_einsum::EinsumSubscripts) -> Self
+impl core::convert::From<&tenferro_einsum::Subscripts> for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::from(&tenferro_einsum::Subscripts) -> Self
+impl core::convert::From<tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::from(tenferro_einsum::EinsumSubscripts) -> Self
+impl core::convert::From<tenferro_einsum::Subscripts> for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::from(tenferro_einsum::Subscripts) -> Self
+impl core::fmt::Debug for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_einsum::EinsumSubscripts
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::spec(&self) -> tenferro_einsum::Spec<'_>
+impl<'a> core::convert::From<&'a tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Spec<'a>
+pub fn tenferro_einsum::Spec<'a>::from(&'a tenferro_einsum::EinsumSubscripts) -> Self
+pub struct tenferro_einsum::Subscripts
+pub tenferro_einsum::Subscripts::inputs: alloc::vec::Vec<alloc::vec::Vec<u32>>
+pub tenferro_einsum::Subscripts::output: alloc::vec::Vec<u32>
+impl tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::new(&[&[u32]], &[u32]) -> Self
+pub fn tenferro_einsum::Subscripts::parse(&str) -> tenferro_einsum::Result<Self>
+impl core::clone::Clone for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::clone(&self) -> tenferro_einsum::Subscripts
+impl core::cmp::Eq for tenferro_einsum::Subscripts
+impl core::cmp::PartialEq for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::eq(&self, &tenferro_einsum::Subscripts) -> bool
+impl core::convert::From<&tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::from(&tenferro_einsum::EinsumSubscripts) -> Self
+impl core::convert::From<&tenferro_einsum::Subscripts> for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::from(&tenferro_einsum::Subscripts) -> Self
+impl core::convert::From<tenferro_einsum::EinsumSubscripts> for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::from(tenferro_einsum::EinsumSubscripts) -> Self
+impl core::convert::From<tenferro_einsum::Subscripts> for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::from(tenferro_einsum::Subscripts) -> Self
+impl core::fmt::Debug for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_einsum::Subscripts
+pub fn tenferro_einsum::Subscripts::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for tenferro_einsum::Subscripts
+pub const tenferro_einsum::EINSUM_EXTENSION_FAMILY_ID: &str
+pub trait tenferro_einsum::EinsumInputs: tenferro_einsum::api::options::sealed::Sealed
+pub type tenferro_einsum::EinsumInputs::Repr: tenferro_tensor::view::Repr
+pub fn tenferro_einsum::EinsumInputs::reads(&self) -> alloc::vec::Vec<tenferro_tensor::types::TensorRead<'_>>
+impl<X: tenferro_tensor::view::AsView, const N: usize> tenferro_einsum::EinsumInputs for [X; N]
+pub type [X; N]::Repr = <X as tenferro_tensor::view::AsView>::Repr
+pub fn [X; N]::reads(&self) -> alloc::vec::Vec<tenferro_tensor::types::TensorRead<'_>>
+impl<X: tenferro_tensor::view::AsView> tenferro_einsum::EinsumInputs for [X]
+pub type [X]::Repr = <X as tenferro_tensor::view::AsView>::Repr
+pub fn [X]::reads(&self) -> alloc::vec::Vec<tenferro_tensor::types::TensorRead<'_>>
+impl<X: tenferro_tensor::view::AsView> tenferro_einsum::EinsumInputs for alloc::vec::Vec<X>
+pub type alloc::vec::Vec<X>::Repr = <X as tenferro_tensor::view::AsView>::Repr
+pub fn alloc::vec::Vec<X>::reads(&self) -> alloc::vec::Vec<tenferro_tensor::types::TensorRead<'_>>
+pub trait tenferro_einsum::EinsumOps: tenferro_einsum::EinsumInputs
+pub fn tenferro_einsum::EinsumOps::einsum(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn tenferro_einsum::EinsumOps::einsum_into(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_einsum::EinsumOps::einsum_with(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+impl<I: tenferro_einsum::EinsumInputs + ?core::marker::Sized> tenferro_einsum::EinsumOps for I
+pub fn I::einsum(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub fn I::einsum_into(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine, tenferro_tensor::dest::Dest<<Self::Repr as tenferro_tensor::view::Repr>::Write>) -> tenferro_tensor::error::Result<()>
+pub fn I::einsum_with(&self, &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub trait tenferro_einsum::EinsumSpec
+pub fn tenferro_einsum::EinsumSpec::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for alloc::string::String
+pub fn alloc::string::String::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for str
+pub fn str::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumNotation
+pub fn tenferro_einsum::EinsumNotation::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::EinsumSubscripts
+pub fn tenferro_einsum::EinsumSubscripts::spec(&self) -> tenferro_einsum::Spec<'_>
+impl tenferro_einsum::EinsumSpec for tenferro_einsum::Spec<'_>
+pub fn tenferro_einsum::Spec<'_>::spec(&self) -> tenferro_einsum::Spec<'_>
+pub trait tenferro_einsum::TensordotOps: tenferro_tensor::view::AsView
+pub fn tenferro_einsum::TensordotOps::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+impl<X: tenferro_tensor::view::AsView + ?core::marker::Sized> tenferro_einsum::TensordotOps for X
+pub fn X::tensordot(&self, &impl tenferro_tensor::view::AsView<Repr = Self::Repr>, tenferro_einsum::TensorDotAxes<'_>, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_tensor::error::Result<<Self::Repr as tenferro_tensor::view::Repr>::Value>
+pub trait tenferro_einsum::TracedEinsumOps
+pub fn tenferro_einsum::TracedEinsumOps::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_einsum::TracedEinsumOps::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_einsum::TracedEinsumOps for tenferro_runtime::trace::TraceContext
+pub fn tenferro_runtime::trace::TraceContext::einsum(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::trace::TraceContext::einsum_with(&self, &[&tenferro_runtime::traced::TracedTensor], &impl tenferro_einsum::EinsumSpec + ?core::marker::Sized, &tenferro_einsum::EinsumOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub trait tenferro_einsum::TracedTensordotOps
+pub fn tenferro_einsum::TracedTensordotOps::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+impl tenferro_einsum::TracedTensordotOps for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::tensordot(&self, &tenferro_runtime::traced::TracedTensor, tenferro_einsum::TensorDotAxes<'_>) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_einsum::extension_module<B: tenferro_tensor::backend::Engine + 'static>(tenferro_runtime::runtime::identity::EngineId) -> core::result::Result<alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>, tenferro_runtime::runtime::error::RuntimeConfigError> where EinsumExtensionOp: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
+pub fn tenferro_einsum::parse_einsum_notation(&str) -> tenferro_einsum::Result<tenferro_einsum::EinsumNotation>
+pub fn tenferro_einsum::parse_einsum_subscripts(&str) -> tenferro_einsum::Result<tenferro_einsum::EinsumSubscripts>
+pub type tenferro_einsum::Result<T> = core::result::Result<T, tenferro_einsum::Error>

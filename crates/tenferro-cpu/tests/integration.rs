@@ -9,6 +9,8 @@ mod backend_capability_contracts;
 mod inject_dual_abi_tests;
 #[path = "integration/inject_tests.rs"]
 mod inject_tests;
+#[path = "integration/lanes.rs"]
+mod lanes;
 #[path = "integration/runtime_error_tests.rs"]
 mod runtime_error_tests;
 #[path = "integration/static_replay.rs"]

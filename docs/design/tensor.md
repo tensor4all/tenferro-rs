@@ -66,24 +66,33 @@ transfer mechanism.
 
 ## Operation Vocabulary
 
-Unsuffixed operation names take owned compact tensor inputs. APIs that accept
-borrowed view inputs or `TensorRead` inputs use a `_read` suffix. Examples
-include `add_read`, `reduce_sum_read`, and `dot_general_read`.
+Public operations follow the 0.12 call grammar (#2552; the generated list is
+[`docs/spec/generated/api-ops.md`](../spec/generated/api-ops.md)): `CoreOps`
+spells each concrete operation `op(..., exec)`, `op_with(..., &opts, exec)`,
+and, where declared, `op_into(..., &opts, exec, dest)`. The receiver is any
+`AsView` (`Tensor`, `TensorRead`, `TypedTensor<T>`, `TypedTensorView<T>`); the
+receiver type, not a suffix, says whether an input is owned, borrowed, typed,
+or a strided view. Axis arguments are `isize`, negative counting from the end.
+Backend hooks keep the `_read` spelling (`add_read`, `reduce_sum_read`,
+`dot_general_read` on the backend traits behind `Engine`); they are provider contracts, not public
+operation names.
 
-Preallocated-output APIs use `TensorWrite` when the output may be either an
-owned tensor or a mutable view. These APIs validate output dtype and shape
-before writing and do not resize the destination.
+Preallocated outputs are a `Dest` over `TensorWrite` (or a typed write) when
+the output may be either an owned tensor or a mutable view. These APIs validate
+output dtype and shape before writing and do not resize the destination.
 
-Bare `_into` methods overwrite caller-provided outputs. Read-modify-write
-updates use `_add_to` for elementwise-style accumulation or `_into_accum` for
-dot/GEMM accumulation with an explicit `DotGeneralAccumulation` argument. See
+`Dest::overwrite` overwrites the caller output; `Dest::accumulate` and
+`Dest::scaled(out, alpha, beta)` are read-modify-write updates. Only the modes
+the registry declares for an operation are accepted. See
 [Output Modes And Write Surfaces](./output-modes.md).
 
 Dot-general accumulation keeps contraction axes and output-update semantics in
-separate contracts. `DotGeneralConfig` describes only dimension roles. Output
-updates such as `out = alpha * op(lhs) * op(rhs) + beta * out` use
-`DotGeneralAccumulation`, including conjugation flags and the floating/complex
-`ContractionScalar` coefficients. Cache ownership stays on `SessionCachedDot`
+separate contracts. `DotGeneralConfig` describes only dimension roles.
+Conjugation is `DotGeneralOptions` (`dot_general_with`). At the provider
+boundary, output updates such as `out = alpha * op(lhs) * op(rhs) + beta * out`
+use `DotGeneralAccumulation` on the `dot_general_read_into_accum` hook,
+including conjugation flags and the floating/complex `ContractionScalar`
+coefficients. Cache ownership stays on `SessionCachedDot`
 and `BackendCachedDot`; non-cached `TensorDot` methods do not take cache slots.
 
 Metadata-only APIs that produce views use `_view`. APIs that allocate,

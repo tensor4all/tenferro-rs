@@ -1,6 +1,6 @@
 use tenferro_einsum::{
-    parse_einsum_subscripts, EinsumAxis, EinsumNotation, EinsumOptimize, TraceContextEinsumExt,
-    EINSUM_EXTENSION_FAMILY_ID,
+    parse_einsum_subscripts, EinsumAxis, EinsumNotation, EinsumOptimize, EinsumOptions,
+    TracedEinsumOps, EINSUM_EXTENSION_FAMILY_ID,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef};
@@ -12,12 +12,12 @@ use super::support;
 #[test]
 fn trace_context_einsum_ext_emits_one_ordered_semantic_extension() {
     let matrix = || ProgramInputSpec::new(DType::F64, [DimExpr::Const(2), DimExpr::Const(2)]);
-    let mut trace = TraceContext::new();
-    let lhs = trace.input(matrix()).unwrap();
-    let rhs = trace.input(matrix()).unwrap();
+    let trace = TraceContext::new();
+    let lhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+    let rhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
 
-    let output = trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     let operations = graph.program().operations().collect::<Vec<_>>();
 
     assert_eq!(operations.len(), 1);
@@ -70,11 +70,15 @@ fn trace_context_einsum_supports_ellipsis_broadcast_and_programmatic_notation() 
         ],
     );
 
-    let mut trace = TraceContext::new();
-    let lhs = trace.input(batch_matrix()).unwrap();
-    let rhs = trace.input(single_batch_matrix()).unwrap();
-    let string_output = trace.einsum(&[lhs, rhs], "...ij,...jk->...ik").unwrap();
-    let string_graph = trace.finish(&[string_output]).unwrap();
+    let trace = TraceContext::new();
+    let lhs = trace
+        .derive_tensor(trace.input(batch_matrix()).unwrap())
+        .unwrap();
+    let rhs = trace
+        .derive_tensor(trace.input(single_batch_matrix()).unwrap())
+        .unwrap();
+    let string_output = trace.einsum(&[&lhs, &rhs], "...ij,...jk->...ik").unwrap();
+    let string_graph = trace.finish(&[string_output.trace_value()]).unwrap();
     let compiled = GraphCompiler::new()
         .compile_traced_graph(&string_graph)
         .unwrap();
@@ -99,11 +103,15 @@ fn trace_context_einsum_supports_ellipsis_broadcast_and_programmatic_notation() 
         ]
     );
 
-    let mut trace = TraceContext::new();
-    let lhs = trace.input(batch_matrix()).unwrap();
-    let rhs = trace.input(single_batch_matrix()).unwrap();
-    let output = trace.einsum_notation(&[lhs, rhs], &notation).unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let trace = TraceContext::new();
+    let lhs = trace
+        .derive_tensor(trace.input(batch_matrix()).unwrap())
+        .unwrap();
+    let rhs = trace
+        .derive_tensor(trace.input(single_batch_matrix()).unwrap())
+        .unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], &notation).unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     assert_eq!(
         graph.program().semantic_fingerprint(),
         string_graph.program().semantic_fingerprint()
@@ -116,22 +124,30 @@ fn trace_context_einsum_ext_exposes_all_four_entry_points() {
     let mut fingerprints = Vec::new();
     for entry in 0..4 {
         let matrix = || ProgramInputSpec::new(DType::F64, [DimExpr::Const(2), DimExpr::Const(2)]);
-        let mut trace = TraceContext::new();
-        let lhs = trace.input(matrix()).unwrap();
-        let rhs = trace.input(matrix()).unwrap();
-        let inputs = [lhs, rhs];
+        let trace = TraceContext::new();
+        let lhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+        let rhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+        let inputs = [&lhs, &rhs];
         let output = match entry {
             0 => trace.einsum(&inputs, "ij,jk->ik").unwrap(),
-            1 => trace.einsum_subscripts(&inputs, &parsed).unwrap(),
+            1 => trace.einsum(&inputs, &parsed).unwrap(),
             2 => trace
-                .einsum_with(&inputs, "ij,jk->ik", EinsumOptimize::False)
+                .einsum_with(
+                    &inputs,
+                    "ij,jk->ik",
+                    &EinsumOptions::default().optimize(EinsumOptimize::False),
+                )
                 .unwrap(),
             3 => trace
-                .einsum_subscripts_with(&inputs, &parsed, EinsumOptimize::Path(vec![(0, 1)]))
+                .einsum_with(
+                    &inputs,
+                    &parsed,
+                    &EinsumOptions::default().optimize(EinsumOptimize::Path(vec![(0, 1)])),
+                )
                 .unwrap(),
             _ => unreachable!(),
         };
-        let graph = trace.finish(&[output]).unwrap();
+        let graph = trace.finish(&[output.trace_value()]).unwrap();
         fingerprints.push(graph.program().semantic_fingerprint());
     }
 
@@ -144,25 +160,28 @@ fn trace_context_einsum_ext_exposes_all_four_entry_points() {
 fn trace_context_einsum_rejects_foreign_values_without_mutating_the_trace() {
     let vector = || ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]);
     let owner = TraceContext::new();
-    let foreign = owner.input(vector()).unwrap();
-    let mut trace = TraceContext::new();
-    let local = trace.input(vector()).unwrap();
+    let foreign = owner.derive_tensor(owner.input(vector()).unwrap()).unwrap();
+    let trace = TraceContext::new();
+    let local = trace.derive_tensor(trace.input(vector()).unwrap()).unwrap();
 
-    let error = trace.einsum(&[local, foreign], "i,i->").unwrap_err();
-    assert!(matches!(error, tenferro_einsum::Error::Runtime(_)));
+    let error = trace.einsum(&[&local, &foreign], "i,i->").unwrap_err();
+    assert!(matches!(
+        error.kind(),
+        tenferro_tensor::ErrorKind::Validation(_)
+    ));
 
-    let graph = trace.finish(&[local]).unwrap();
+    let graph = trace.finish(&[local.trace_value()]).unwrap();
     assert!(graph.program().operations().next().is_none());
 }
 
 #[test]
 fn traced_semantic_einsum_compiles_and_executes_with_ordered_inputs() {
     let matrix = || ProgramInputSpec::new(DType::F64, [DimExpr::Const(2), DimExpr::Const(2)]);
-    let mut trace = TraceContext::new();
-    let lhs = trace.input(matrix()).unwrap();
-    let rhs = trace.input(matrix()).unwrap();
-    let output = trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
-    let traced = trace.finish(&[output]).unwrap();
+    let trace = TraceContext::new();
+    let lhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+    let rhs = trace.derive_tensor(trace.input(matrix()).unwrap()).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let traced = trace.finish(&[output.trace_value()]).unwrap();
     let compiled = GraphCompiler::new().compile_traced_graph(&traced).unwrap();
 
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
@@ -192,17 +211,26 @@ fn traced_einsum_broadcasts_singleton_contracting_extent() {
     let rhs_tensor = Tensor::from_vec_col_major(vec![4, 2, 3], vec![1.0_f64; 24]).unwrap();
 
     for entry in 0..3 {
-        let mut trace = TraceContext::new();
-        let lhs = trace.input(lhs_spec()).unwrap();
-        let rhs = trace.input(rhs_spec()).unwrap();
+        let trace = TraceContext::new();
+        let lhs = trace
+            .derive_tensor(trace.input(lhs_spec()).unwrap())
+            .unwrap();
+        let rhs = trace
+            .derive_tensor(trace.input(rhs_spec()).unwrap())
+            .unwrap();
         let output = match entry {
-            0 => trace.einsum(&[lhs, rhs], "ij,pqj->pqi").unwrap(),
-            1 => trace.einsum_subscripts(&[lhs, rhs], &parsed).unwrap(),
+            0 => trace.einsum(&[&lhs, &rhs], "ij,pqj->pqi").unwrap(),
+            1 => trace.einsum(&[&lhs, &rhs], &parsed).unwrap(),
             _ => trace
-                .einsum_subscripts_with(&[lhs, rhs], &parsed, EinsumOptimize::Path(vec![(0, 1)]))
+                .einsum_with(
+                    &[&lhs, &rhs],
+                    &parsed,
+                    &tenferro_einsum::EinsumOptions::default()
+                        .optimize(EinsumOptimize::Path(vec![(0, 1)])),
+                )
                 .unwrap(),
         };
-        let graph = trace.finish(&[output]).unwrap();
+        let graph = trace.finish(&[output.trace_value()]).unwrap();
         assert_eq!(
             graph
                 .program()
@@ -227,27 +255,35 @@ fn traced_einsum_broadcasts_singleton_contracting_extent() {
 
 #[test]
 fn traced_einsum_broadcasts_singleton_extent_with_symbolic_axes() {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let lhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [
-                DimExpr::InputDim {
-                    input_idx: 0,
-                    axis: 0,
-                },
-                DimExpr::Const(1),
-            ],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [
+                        DimExpr::InputDim {
+                            input_idx: 0,
+                            axis: 0,
+                        },
+                        DimExpr::Const(1),
+                    ],
+                ))
+                .unwrap(),
+        )
         .unwrap();
     let rhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [DimExpr::Const(4), DimExpr::Const(2), DimExpr::Const(3)],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [DimExpr::Const(4), DimExpr::Const(2), DimExpr::Const(3)],
+                ))
+                .unwrap(),
+        )
         .unwrap();
-    let output = trace.einsum(&[lhs, rhs], "ij,pqj->pqi").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,pqj->pqi").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
     let lhs_tensor = Tensor::from_vec_col_major(vec![4, 1], vec![2.0_f64; 4]).unwrap();
     let rhs_tensor = Tensor::from_vec_col_major(vec![4, 2, 3], vec![1.0_f64; 24]).unwrap();
@@ -265,27 +301,35 @@ fn traced_einsum_broadcasts_singleton_extent_with_symbolic_axes() {
 /// `[3]`.
 #[test]
 fn traced_einsum_merges_symbolic_extent_with_constant_under_unrelated_broadcast() {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let lhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [
-                DimExpr::InputDim {
-                    input_idx: 0,
-                    axis: 0,
-                },
-                DimExpr::Const(1),
-            ],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [
+                        DimExpr::InputDim {
+                            input_idx: 0,
+                            axis: 0,
+                        },
+                        DimExpr::Const(1),
+                    ],
+                ))
+                .unwrap(),
+        )
         .unwrap();
     let rhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [DimExpr::Const(3), DimExpr::Const(2)],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [DimExpr::Const(3), DimExpr::Const(2)],
+                ))
+                .unwrap(),
+        )
         .unwrap();
-    let output = trace.einsum(&[lhs, rhs], "ij,ij->i").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,ij->i").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
 
     let output_extents: Vec<_> = compiled
@@ -320,11 +364,15 @@ fn compile_ij_ij_to_i_with_separate_symbolic_i() -> CompiledGraph {
             ],
         )
     };
-    let mut trace = TraceContext::new();
-    let lhs = trace.input(symbolic_i(0)).unwrap();
-    let rhs = trace.input(symbolic_i(1)).unwrap();
-    let output = trace.einsum(&[lhs, rhs], "ij,ij->i").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let trace = TraceContext::new();
+    let lhs = trace
+        .derive_tensor(trace.input(symbolic_i(0)).unwrap())
+        .unwrap();
+    let rhs = trace
+        .derive_tensor(trace.input(symbolic_i(1)).unwrap())
+        .unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,ij->i").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     GraphCompiler::new().compile_traced_graph(&graph).unwrap()
 }
 
@@ -405,18 +453,26 @@ fn traced_einsum_rejects_an_invalid_symbolic_binding_as_a_shape_mismatch() {
 
 #[test]
 fn traced_einsum_rejects_a_diagonal_mismatch_while_another_label_broadcasts() {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let diagonal = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [DimExpr::Const(1), DimExpr::Const(3)],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [DimExpr::Const(1), DimExpr::Const(3)],
+                ))
+                .unwrap(),
+        )
         .unwrap();
     let vector = trace
-        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(1)]))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(1)]))
+                .unwrap(),
+        )
         .unwrap();
-    let output = trace.einsum(&[diagonal, vector], "ii,i->i").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let output = trace.einsum(&[&diagonal, &vector], "ii,i->i").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
 
     assert!(GraphCompiler::new().compile_traced_graph(&graph).is_err());
 }

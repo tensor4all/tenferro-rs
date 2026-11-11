@@ -2,8 +2,11 @@
 
 use num_complex::Complex64;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
-use tenferro_linalg::{EagerSessionLinalgExt, TracedTensorLinalgExt};
+use tenferro_linalg::{EagerLinalgOps, TracedLinalgOps};
+use tenferro_linalg::{KeepDims, NormOptions, NormOrd};
+use tenferro_linalg::{PinvOptions, Slogdet};
 use tenferro_runtime::{DType, Error, ErrorPhase, TraceContext, TracedTensor, TypedTensor};
+use tenferro_tensor::AxisVec;
 use tenferro_tensor::Error as TensorError;
 
 fn eager(data: Vec<f64>, shape: Vec<usize>) -> EagerTensor {
@@ -112,7 +115,23 @@ fn eager_norm(
     input
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.norm(input, ord, dim, keepdim)
+            let mut options = NormOptions::default();
+            options = match ord {
+                None => options,
+                Some(0.0) => options.ord(NormOrd::Zero),
+                Some(p) if p == f64::INFINITY => options.ord(NormOrd::Inf),
+                Some(p) if p == f64::NEG_INFINITY => options.ord(NormOrd::NegInf),
+                Some(p) => options.ord(NormOrd::P(p)),
+            };
+            if let Some(dim) = dim {
+                options = options.axes(Some(
+                    dim.iter().map(|&axis| axis as isize).collect::<AxisVec>(),
+                ));
+            }
+            if keepdim {
+                options = options.keep_dims(KeepDims::Yes);
+            }
+            session.norm_with(input, &options)
         })
 }
 
@@ -123,7 +142,10 @@ fn eager_composites_match_diagonal_matrix_values() {
     let (sign, logabsdet, det, inv, eigvalsh, eigvals, inverse, inverse_with_rtol) = a
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            let (sign, logabsdet) = session.slogdet(&a)?;
+            let Slogdet {
+                sign,
+                log_abs_det: logabsdet,
+            } = session.slogdet(&a)?;
             Ok::<_, tenferro_ad::Error>((
                 sign,
                 logabsdet,
@@ -132,7 +154,7 @@ fn eager_composites_match_diagonal_matrix_values() {
                 session.eigvalsh(&a)?,
                 session.eigvals(&a)?,
                 session.pinv(&a)?,
-                session.pinv_with_rtol(&a, 1.0e-12)?,
+                session.pinv_with(&a, &PinvOptions::default().rtol(Some(1.0e-12)))?,
             ))
         })
         .unwrap();
@@ -530,7 +552,7 @@ fn eager_norm_covers_remaining_orders_permutations_and_errors() {
                 op: "norm",
                 source: tenferro_tensor::ValidationError::DuplicateAxis {
                     axis: 0,
-                    role: "dim"
+                    role: "axes"
                 }
             })
         ));

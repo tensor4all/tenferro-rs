@@ -1,0 +1,426 @@
+pub mod tenferro_tensor_core
+pub macro tenferro_tensor_core::define_scalar_tag!
+#[non_exhaustive] pub enum tenferro_tensor_core::AdAdmissionError
+pub tenferro_tensor_core::AdAdmissionError::AdRuleUnavailable
+pub tenferro_tensor_core::AdAdmissionError::NonFieldScalar
+pub tenferro_tensor_core::AdAdmissionError::UnsupportedAdOrder
+pub tenferro_tensor_core::AdAdmissionError::UnsupportedAdOrder::order: u32
+impl core::clone::Clone for tenferro_tensor_core::AdAdmissionError
+pub fn tenferro_tensor_core::AdAdmissionError::clone(&self) -> tenferro_tensor_core::AdAdmissionError
+impl core::cmp::Eq for tenferro_tensor_core::AdAdmissionError
+impl core::cmp::PartialEq for tenferro_tensor_core::AdAdmissionError
+pub fn tenferro_tensor_core::AdAdmissionError::eq(&self, &tenferro_tensor_core::AdAdmissionError) -> bool
+impl core::error::Error for tenferro_tensor_core::AdAdmissionError
+impl core::fmt::Debug for tenferro_tensor_core::AdAdmissionError
+pub fn tenferro_tensor_core::AdAdmissionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_tensor_core::AdAdmissionError
+pub fn tenferro_tensor_core::AdAdmissionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::AdAdmissionError
+pub enum tenferro_tensor_core::DType
+pub tenferro_tensor_core::DType::Bool
+pub tenferro_tensor_core::DType::C32
+pub tenferro_tensor_core::DType::C64
+pub tenferro_tensor_core::DType::External(core::any::TypeId)
+pub tenferro_tensor_core::DType::F32
+pub tenferro_tensor_core::DType::F64
+pub tenferro_tensor_core::DType::I32
+pub tenferro_tensor_core::DType::I64
+impl tenferro_tensor_core::DType
+pub const tenferro_tensor_core::DType::SPECS: &'static [tenferro_tensor_core::MemberSpec]
+pub const tenferro_tensor_core::DType::TAGS: &'static [Self]
+pub const fn tenferro_tensor_core::DType::spec(self) -> tenferro_tensor_core::MemberSpec
+impl core::clone::Clone for tenferro_tensor_core::DType
+pub fn tenferro_tensor_core::DType::clone(&self) -> tenferro_tensor_core::DType
+impl core::cmp::Eq for tenferro_tensor_core::DType
+impl core::cmp::PartialEq for tenferro_tensor_core::DType
+pub fn tenferro_tensor_core::DType::eq(&self, &tenferro_tensor_core::DType) -> bool
+impl core::fmt::Debug for tenferro_tensor_core::DType
+pub fn tenferro_tensor_core::DType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_tensor_core::DType
+pub fn tenferro_tensor_core::DType::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_tensor_core::DType
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::DType
+#[non_exhaustive] pub enum tenferro_tensor_core::ErrorKind
+pub tenferro_tensor_core::ErrorKind::BackendFailure
+pub tenferro_tensor_core::ErrorKind::Internal
+pub tenferro_tensor_core::ErrorKind::Io
+pub tenferro_tensor_core::ErrorKind::NumericalFailure
+pub tenferro_tensor_core::ErrorKind::RuntimeState
+pub tenferro_tensor_core::ErrorKind::Unsupported
+pub tenferro_tensor_core::ErrorKind::Validation(tenferro_tensor_core::ValidationKind)
+impl core::clone::Clone for tenferro_tensor_core::ErrorKind
+pub fn tenferro_tensor_core::ErrorKind::clone(&self) -> tenferro_tensor_core::ErrorKind
+impl core::cmp::Eq for tenferro_tensor_core::ErrorKind
+impl core::cmp::PartialEq for tenferro_tensor_core::ErrorKind
+pub fn tenferro_tensor_core::ErrorKind::eq(&self, &tenferro_tensor_core::ErrorKind) -> bool
+impl core::fmt::Debug for tenferro_tensor_core::ErrorKind
+pub fn tenferro_tensor_core::ErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_tensor_core::ErrorKind
+pub fn tenferro_tensor_core::ErrorKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_tensor_core::ErrorKind
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::ErrorKind
+#[non_exhaustive] pub enum tenferro_tensor_core::MemberKind
+pub tenferro_tensor_core::MemberKind::Boolean
+pub tenferro_tensor_core::MemberKind::Complex
+pub tenferro_tensor_core::MemberKind::External
+pub tenferro_tensor_core::MemberKind::Float
+pub tenferro_tensor_core::MemberKind::Integer
+impl core::clone::Clone for tenferro_tensor_core::MemberKind
+pub fn tenferro_tensor_core::MemberKind::clone(&self) -> tenferro_tensor_core::MemberKind
+impl core::cmp::Eq for tenferro_tensor_core::MemberKind
+impl core::cmp::PartialEq for tenferro_tensor_core::MemberKind
+pub fn tenferro_tensor_core::MemberKind::eq(&self, &tenferro_tensor_core::MemberKind) -> bool
+impl core::fmt::Debug for tenferro_tensor_core::MemberKind
+pub fn tenferro_tensor_core::MemberKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_tensor_core::MemberKind
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::MemberKind
+#[non_exhaustive] pub enum tenferro_tensor_core::ScalarDomain
+pub tenferro_tensor_core::ScalarDomain::Field
+pub tenferro_tensor_core::ScalarDomain::NonField
+impl core::clone::Clone for tenferro_tensor_core::ScalarDomain
+pub fn tenferro_tensor_core::ScalarDomain::clone(&self) -> tenferro_tensor_core::ScalarDomain
+impl core::cmp::Eq for tenferro_tensor_core::ScalarDomain
+impl core::cmp::PartialEq for tenferro_tensor_core::ScalarDomain
+pub fn tenferro_tensor_core::ScalarDomain::eq(&self, &tenferro_tensor_core::ScalarDomain) -> bool
+impl core::fmt::Debug for tenferro_tensor_core::ScalarDomain
+pub fn tenferro_tensor_core::ScalarDomain::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_tensor_core::ScalarDomain
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::ScalarDomain
+#[non_exhaustive] pub enum tenferro_tensor_core::ShapeMismatch
+pub tenferro_tensor_core::ShapeMismatch::ContractedDimensions
+pub tenferro_tensor_core::ShapeMismatch::ContractedDimensions::lhs_axis: usize
+pub tenferro_tensor_core::ShapeMismatch::ContractedDimensions::lhs_size: usize
+pub tenferro_tensor_core::ShapeMismatch::ContractedDimensions::rhs_axis: usize
+pub tenferro_tensor_core::ShapeMismatch::ContractedDimensions::rhs_size: usize
+pub tenferro_tensor_core::ShapeMismatch::ExpectedActual
+pub tenferro_tensor_core::ShapeMismatch::ExpectedActual::actual: tenferro_tensor_core::ShapeVec
+pub tenferro_tensor_core::ShapeMismatch::ExpectedActual::expected: tenferro_tensor_core::ShapeVec
+pub tenferro_tensor_core::ShapeMismatch::IncompatibleShapes
+pub tenferro_tensor_core::ShapeMismatch::IncompatibleShapes::lhs: tenferro_tensor_core::ShapeVec
+pub tenferro_tensor_core::ShapeMismatch::IncompatibleShapes::rhs: tenferro_tensor_core::ShapeVec
+pub tenferro_tensor_core::ShapeMismatch::ReshapeElementCount
+pub tenferro_tensor_core::ShapeMismatch::ReshapeElementCount::from: usize
+pub tenferro_tensor_core::ShapeMismatch::ReshapeElementCount::to: usize
+impl core::clone::Clone for tenferro_tensor_core::ShapeMismatch
+pub fn tenferro_tensor_core::ShapeMismatch::clone(&self) -> tenferro_tensor_core::ShapeMismatch
+impl core::cmp::Eq for tenferro_tensor_core::ShapeMismatch
+impl core::cmp::PartialEq for tenferro_tensor_core::ShapeMismatch
+pub fn tenferro_tensor_core::ShapeMismatch::eq(&self, &tenferro_tensor_core::ShapeMismatch) -> bool
+impl core::convert::From<tenferro_tensor_core::ShapeMismatch> for tenferro_tensor_core::ValidationError
+pub fn tenferro_tensor_core::ValidationError::from(tenferro_tensor_core::ShapeMismatch) -> Self
+impl core::error::Error for tenferro_tensor_core::ShapeMismatch
+impl core::fmt::Debug for tenferro_tensor_core::ShapeMismatch
+pub fn tenferro_tensor_core::ShapeMismatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_tensor_core::ShapeMismatch
+pub fn tenferro_tensor_core::ShapeMismatch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::ShapeMismatch
+#[non_exhaustive] pub enum tenferro_tensor_core::ValidationError
+pub tenferro_tensor_core::ValidationError::AxisOutOfBounds
+pub tenferro_tensor_core::ValidationError::AxisOutOfBounds::axis: isize
+pub tenferro_tensor_core::ValidationError::AxisOutOfBounds::rank: usize
+pub tenferro_tensor_core::ValidationError::AxisRoleConflict
+pub tenferro_tensor_core::ValidationError::AxisRoleConflict::axis: usize
+pub tenferro_tensor_core::ValidationError::AxisRoleConflict::first_role: &'static str
+pub tenferro_tensor_core::ValidationError::AxisRoleConflict::second_role: &'static str
+pub tenferro_tensor_core::ValidationError::DTypeMismatch
+pub tenferro_tensor_core::ValidationError::DTypeMismatch::actual: tenferro_tensor_core::DType
+pub tenferro_tensor_core::ValidationError::DTypeMismatch::expected: tenferro_tensor_core::DType
+pub tenferro_tensor_core::ValidationError::DuplicateAxis
+pub tenferro_tensor_core::ValidationError::DuplicateAxis::axis: usize
+pub tenferro_tensor_core::ValidationError::DuplicateAxis::role: &'static str
+pub tenferro_tensor_core::ValidationError::IntegerOverflow
+pub tenferro_tensor_core::ValidationError::InvalidArgument
+pub tenferro_tensor_core::ValidationError::InvalidArgument::argument: &'static str
+pub tenferro_tensor_core::ValidationError::InvalidArgument::message: alloc::string::String
+pub tenferro_tensor_core::ValidationError::InvalidPermutationLength
+pub tenferro_tensor_core::ValidationError::InvalidPermutationLength::actual: usize
+pub tenferro_tensor_core::ValidationError::InvalidPermutationLength::expected: usize
+pub tenferro_tensor_core::ValidationError::InvalidSliceBounds
+pub tenferro_tensor_core::ValidationError::InvalidSliceBounds::axis_len: usize
+pub tenferro_tensor_core::ValidationError::InvalidSliceBounds::end: isize
+pub tenferro_tensor_core::ValidationError::InvalidSliceBounds::start: isize
+pub tenferro_tensor_core::ValidationError::InvalidSliceStep
+pub tenferro_tensor_core::ValidationError::InvalidSliceStep::step: isize
+pub tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice
+pub tenferro_tensor_core::ValidationError::OverlappingMutableLayout
+pub tenferro_tensor_core::ValidationError::RankMismatch
+pub tenferro_tensor_core::ValidationError::RankMismatch::actual: usize
+pub tenferro_tensor_core::ValidationError::RankMismatch::expected: usize
+pub tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch
+pub tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch::actual: usize
+pub tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch::expected: usize
+pub tenferro_tensor_core::ValidationError::ShapeMismatch(alloc::boxed::Box<tenferro_tensor_core::ShapeMismatch>)
+pub tenferro_tensor_core::ValidationError::ViewOutOfBounds
+impl tenferro_tensor_core::ValidationError
+pub fn tenferro_tensor_core::ValidationError::kind(&self) -> tenferro_tensor_core::ValidationKind
+impl core::clone::Clone for tenferro_tensor_core::ValidationError
+pub fn tenferro_tensor_core::ValidationError::clone(&self) -> tenferro_tensor_core::ValidationError
+impl core::cmp::Eq for tenferro_tensor_core::ValidationError
+impl core::cmp::PartialEq for tenferro_tensor_core::ValidationError
+pub fn tenferro_tensor_core::ValidationError::eq(&self, &tenferro_tensor_core::ValidationError) -> bool
+impl core::convert::From<tenferro_tensor_core::ShapeMismatch> for tenferro_tensor_core::ValidationError
+pub fn tenferro_tensor_core::ValidationError::from(tenferro_tensor_core::ShapeMismatch) -> Self
+impl core::error::Error for tenferro_tensor_core::ValidationError
+pub fn tenferro_tensor_core::ValidationError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_tensor_core::ValidationError
+pub fn tenferro_tensor_core::ValidationError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_tensor_core::ValidationError
+pub fn tenferro_tensor_core::ValidationError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::ValidationError
+#[non_exhaustive] pub enum tenferro_tensor_core::ValidationKind
+pub tenferro_tensor_core::ValidationKind::AxisOutOfBounds
+pub tenferro_tensor_core::ValidationKind::DTypeMismatch
+pub tenferro_tensor_core::ValidationKind::InvalidArgument
+pub tenferro_tensor_core::ValidationKind::RankMismatch
+pub tenferro_tensor_core::ValidationKind::ShapeMismatch
+impl core::clone::Clone for tenferro_tensor_core::ValidationKind
+pub fn tenferro_tensor_core::ValidationKind::clone(&self) -> tenferro_tensor_core::ValidationKind
+impl core::cmp::Eq for tenferro_tensor_core::ValidationKind
+impl core::cmp::PartialEq for tenferro_tensor_core::ValidationKind
+pub fn tenferro_tensor_core::ValidationKind::eq(&self, &tenferro_tensor_core::ValidationKind) -> bool
+impl core::fmt::Debug for tenferro_tensor_core::ValidationKind
+pub fn tenferro_tensor_core::ValidationKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_tensor_core::ValidationKind
+pub fn tenferro_tensor_core::ValidationKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_tensor_core::ValidationKind
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::ValidationKind
+pub struct tenferro_tensor_core::DynRank
+impl core::clone::Clone for tenferro_tensor_core::DynRank
+pub fn tenferro_tensor_core::DynRank::clone(&self) -> tenferro_tensor_core::DynRank
+impl core::cmp::Eq for tenferro_tensor_core::DynRank
+impl core::cmp::PartialEq for tenferro_tensor_core::DynRank
+pub fn tenferro_tensor_core::DynRank::eq(&self, &tenferro_tensor_core::DynRank) -> bool
+impl core::fmt::Debug for tenferro_tensor_core::DynRank
+pub fn tenferro_tensor_core::DynRank::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_tensor_core::DynRank
+pub fn tenferro_tensor_core::DynRank::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_tensor_core::DynRank
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::DynRank
+impl tenferro_tensor_core::TensorRank for tenferro_tensor_core::DynRank
+pub type tenferro_tensor_core::DynRank::Shape = tinyvec::tinyvec::TinyVec<[usize; 8]>
+pub type tenferro_tensor_core::DynRank::Strides = tinyvec::tinyvec::TinyVec<[isize; 8]>
+pub const tenferro_tensor_core::DynRank::RANK: core::option::Option<usize>
+pub fn tenferro_tensor_core::DynRank::shape_from_vec(tenferro_tensor_core::ShapeVec) -> tenferro_tensor_core::Result<Self::Shape>
+pub fn tenferro_tensor_core::DynRank::shape_into_vec(Self::Shape) -> tenferro_tensor_core::ShapeVec
+pub fn tenferro_tensor_core::DynRank::strides_from_vec(tenferro_tensor_core::StrideVec) -> tenferro_tensor_core::Result<Self::Strides>
+pub fn tenferro_tensor_core::DynRank::strides_into_vec(Self::Strides) -> tenferro_tensor_core::StrideVec
+impl<S> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::DynRank> for S where S: tenferro_tensor_core::IntoShapeVec
+pub fn S::into_rank_shape(self) -> tenferro_tensor_core::Result<tenferro_tensor_core::ShapeVec>
+pub struct tenferro_tensor_core::MemberSpec
+pub tenferro_tensor_core::MemberSpec::kind: tenferro_tensor_core::MemberKind
+pub tenferro_tensor_core::MemberSpec::level: u32
+pub tenferro_tensor_core::MemberSpec::width: u32
+impl tenferro_tensor_core::MemberSpec
+pub const fn tenferro_tensor_core::MemberSpec::new(tenferro_tensor_core::MemberKind, u32, u32) -> Self
+impl core::clone::Clone for tenferro_tensor_core::MemberSpec
+pub fn tenferro_tensor_core::MemberSpec::clone(&self) -> tenferro_tensor_core::MemberSpec
+impl core::cmp::Eq for tenferro_tensor_core::MemberSpec
+impl core::cmp::PartialEq for tenferro_tensor_core::MemberSpec
+pub fn tenferro_tensor_core::MemberSpec::eq(&self, &tenferro_tensor_core::MemberSpec) -> bool
+impl core::fmt::Debug for tenferro_tensor_core::MemberSpec
+pub fn tenferro_tensor_core::MemberSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_tensor_core::MemberSpec
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::MemberSpec
+pub struct tenferro_tensor_core::Rank<const N: usize>
+impl<const N: usize> core::clone::Clone for tenferro_tensor_core::Rank<N>
+pub fn tenferro_tensor_core::Rank<N>::clone(&self) -> tenferro_tensor_core::Rank<N>
+impl<const N: usize> core::cmp::Eq for tenferro_tensor_core::Rank<N>
+impl<const N: usize> core::cmp::PartialEq for tenferro_tensor_core::Rank<N>
+pub fn tenferro_tensor_core::Rank<N>::eq(&self, &tenferro_tensor_core::Rank<N>) -> bool
+impl<const N: usize> core::fmt::Debug for tenferro_tensor_core::Rank<N>
+pub fn tenferro_tensor_core::Rank<N>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<const N: usize> core::hash::Hash for tenferro_tensor_core::Rank<N>
+pub fn tenferro_tensor_core::Rank<N>::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl<const N: usize> core::marker::Copy for tenferro_tensor_core::Rank<N>
+impl<const N: usize> core::marker::StructuralPartialEq for tenferro_tensor_core::Rank<N>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for &[usize; N]
+pub fn &[usize; N]::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for &[usize]
+pub fn &[usize]::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for [usize; N]
+pub fn [usize; N]::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for alloc::vec::Vec<usize>
+pub fn alloc::vec::Vec<usize>::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for tenferro_tensor_core::ShapeVec
+pub fn tenferro_tensor_core::ShapeVec::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+impl<const N: usize> tenferro_tensor_core::TensorRank for tenferro_tensor_core::Rank<N>
+pub type tenferro_tensor_core::Rank<N>::Shape = [usize; N]
+pub type tenferro_tensor_core::Rank<N>::Strides = [isize; N]
+pub const tenferro_tensor_core::Rank<N>::RANK: core::option::Option<usize>
+pub fn tenferro_tensor_core::Rank<N>::shape_from_vec(tenferro_tensor_core::ShapeVec) -> tenferro_tensor_core::Result<Self::Shape>
+pub fn tenferro_tensor_core::Rank<N>::shape_into_vec(Self::Shape) -> tenferro_tensor_core::ShapeVec
+pub fn tenferro_tensor_core::Rank<N>::strides_from_vec(tenferro_tensor_core::StrideVec) -> tenferro_tensor_core::Result<Self::Strides>
+pub fn tenferro_tensor_core::Rank<N>::strides_into_vec(Self::Strides) -> tenferro_tensor_core::StrideVec
+pub struct tenferro_tensor_core::SliceSpec
+pub tenferro_tensor_core::SliceSpec::end: isize
+pub tenferro_tensor_core::SliceSpec::start: isize
+pub tenferro_tensor_core::SliceSpec::step: isize
+impl core::clone::Clone for tenferro_tensor_core::SliceSpec
+pub fn tenferro_tensor_core::SliceSpec::clone(&self) -> tenferro_tensor_core::SliceSpec
+impl core::cmp::Eq for tenferro_tensor_core::SliceSpec
+impl core::cmp::PartialEq for tenferro_tensor_core::SliceSpec
+pub fn tenferro_tensor_core::SliceSpec::eq(&self, &tenferro_tensor_core::SliceSpec) -> bool
+impl core::default::Default for tenferro_tensor_core::SliceSpec
+pub fn tenferro_tensor_core::SliceSpec::default() -> Self
+impl core::fmt::Debug for tenferro_tensor_core::SliceSpec
+pub fn tenferro_tensor_core::SliceSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_tensor_core::SliceSpec
+impl core::marker::StructuralPartialEq for tenferro_tensor_core::SliceSpec
+pub struct tenferro_tensor_core::TensorLayout<R: tenferro_tensor_core::TensorRank>
+impl<R: tenferro_tensor_core::TensorRank> tenferro_tensor_core::TensorLayout<R>
+pub fn tenferro_tensor_core::TensorLayout<R>::broadcast_in_dim_view<R2: tenferro_tensor_core::TensorRank>(&self, impl core::convert::Into<<R2 as tenferro_tensor_core::TensorRank>::Shape>, impl core::convert::AsRef<[usize]>, usize) -> tenferro_tensor_core::Result<tenferro_tensor_core::TensorLayout<R2>>
+pub fn tenferro_tensor_core::TensorLayout<R>::compact(<R as tenferro_tensor_core::TensorRank>::Shape) -> tenferro_tensor_core::Result<Self>
+pub fn tenferro_tensor_core::TensorLayout<R>::from_parts(<R as tenferro_tensor_core::TensorRank>::Shape, <R as tenferro_tensor_core::TensorRank>::Strides, isize, usize) -> tenferro_tensor_core::Result<Self>
+pub fn tenferro_tensor_core::TensorLayout<R>::is_compact_col_major(&self) -> tenferro_tensor_core::Result<bool>
+pub fn tenferro_tensor_core::TensorLayout<R>::offset(&self) -> isize
+pub fn tenferro_tensor_core::TensorLayout<R>::reshape_view_as<R2: tenferro_tensor_core::TensorRank>(&self, impl core::convert::Into<<R2 as tenferro_tensor_core::TensorRank>::Shape>, usize) -> tenferro_tensor_core::Result<tenferro_tensor_core::TensorLayout<R2>>
+pub fn tenferro_tensor_core::TensorLayout<R>::shape(&self) -> &[usize]
+pub fn tenferro_tensor_core::TensorLayout<R>::slice_view(&self, impl core::convert::AsRef<[tenferro_tensor_core::SliceSpec]>, usize) -> tenferro_tensor_core::Result<Self>
+pub fn tenferro_tensor_core::TensorLayout<R>::strides(&self) -> &[isize]
+pub fn tenferro_tensor_core::TensorLayout<R>::transpose_view(&self, impl core::convert::AsRef<[usize]>) -> tenferro_tensor_core::Result<Self>
+pub fn tenferro_tensor_core::TensorLayout<R>::validate_mutable_no_overlap(&self) -> tenferro_tensor_core::Result<()>
+impl<const N: usize> tenferro_tensor_core::TensorLayout<tenferro_tensor_core::Rank<N>>
+pub fn tenferro_tensor_core::TensorLayout<tenferro_tensor_core::Rank<N>>::shape_array(&self) -> &[usize; N]
+impl<R: core::clone::Clone + tenferro_tensor_core::TensorRank> core::clone::Clone for tenferro_tensor_core::TensorLayout<R> where <R as tenferro_tensor_core::TensorRank>::Shape: core::clone::Clone, <R as tenferro_tensor_core::TensorRank>::Strides: core::clone::Clone
+pub fn tenferro_tensor_core::TensorLayout<R>::clone(&self) -> tenferro_tensor_core::TensorLayout<R>
+impl<R: core::cmp::Eq + tenferro_tensor_core::TensorRank> core::cmp::Eq for tenferro_tensor_core::TensorLayout<R> where <R as tenferro_tensor_core::TensorRank>::Shape: core::cmp::Eq, <R as tenferro_tensor_core::TensorRank>::Strides: core::cmp::Eq
+impl<R: core::cmp::PartialEq + tenferro_tensor_core::TensorRank> core::cmp::PartialEq for tenferro_tensor_core::TensorLayout<R> where <R as tenferro_tensor_core::TensorRank>::Shape: core::cmp::PartialEq, <R as tenferro_tensor_core::TensorRank>::Strides: core::cmp::PartialEq
+pub fn tenferro_tensor_core::TensorLayout<R>::eq(&self, &tenferro_tensor_core::TensorLayout<R>) -> bool
+impl<R: core::cmp::PartialEq + tenferro_tensor_core::TensorRank> core::marker::StructuralPartialEq for tenferro_tensor_core::TensorLayout<R> where <R as tenferro_tensor_core::TensorRank>::Shape: core::cmp::PartialEq, <R as tenferro_tensor_core::TensorRank>::Strides: core::cmp::PartialEq
+impl<R: core::fmt::Debug + tenferro_tensor_core::TensorRank> core::fmt::Debug for tenferro_tensor_core::TensorLayout<R> where <R as tenferro_tensor_core::TensorRank>::Shape: core::fmt::Debug, <R as tenferro_tensor_core::TensorRank>::Strides: core::fmt::Debug
+pub fn tenferro_tensor_core::TensorLayout<R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const tenferro_tensor_core::INLINE_RANK: usize
+pub trait tenferro_tensor_core::IntoRankShape<R: tenferro_tensor_core::TensorRank>
+pub fn tenferro_tensor_core::IntoRankShape::into_rank_shape(self) -> tenferro_tensor_core::Result<<R as tenferro_tensor_core::TensorRank>::Shape>
+impl<S> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::DynRank> for S where S: tenferro_tensor_core::IntoShapeVec
+pub fn S::into_rank_shape(self) -> tenferro_tensor_core::Result<tenferro_tensor_core::ShapeVec>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for &[usize; N]
+pub fn &[usize; N]::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for &[usize]
+pub fn &[usize]::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for [usize; N]
+pub fn [usize; N]::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for alloc::vec::Vec<usize>
+pub fn alloc::vec::Vec<usize>::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+impl<const N: usize> tenferro_tensor_core::IntoRankShape<tenferro_tensor_core::Rank<N>> for tenferro_tensor_core::ShapeVec
+pub fn tenferro_tensor_core::ShapeVec::into_rank_shape(self) -> tenferro_tensor_core::Result<[usize; N]>
+pub trait tenferro_tensor_core::IntoShapeVec
+pub fn tenferro_tensor_core::IntoShapeVec::into_shape_vec(self) -> tenferro_tensor_core::ShapeVec
+impl<S> tenferro_tensor_core::IntoShapeVec for S where S: core::convert::AsRef<[usize]>
+pub fn S::into_shape_vec(self) -> tenferro_tensor_core::ShapeVec
+pub trait tenferro_tensor_core::Scalar: core::marker::Copy + core::marker::Send + core::marker::Sync + 'static
+pub const tenferro_tensor_core::Scalar::DOMAIN: tenferro_tensor_core::ScalarDomain
+impl tenferro_tensor_core::Scalar for bool
+pub const bool::DOMAIN: tenferro_tensor_core::ScalarDomain
+impl tenferro_tensor_core::Scalar for f32
+pub const f32::DOMAIN: tenferro_tensor_core::ScalarDomain
+impl tenferro_tensor_core::Scalar for f64
+pub const f64::DOMAIN: tenferro_tensor_core::ScalarDomain
+impl tenferro_tensor_core::Scalar for i32
+pub const i32::DOMAIN: tenferro_tensor_core::ScalarDomain
+impl tenferro_tensor_core::Scalar for i64
+pub const i64::DOMAIN: tenferro_tensor_core::ScalarDomain
+impl tenferro_tensor_core::Scalar for num_complex::Complex32
+pub const num_complex::Complex32::DOMAIN: tenferro_tensor_core::ScalarDomain
+impl tenferro_tensor_core::Scalar for num_complex::Complex64
+pub const num_complex::Complex64::DOMAIN: tenferro_tensor_core::ScalarDomain
+pub trait tenferro_tensor_core::ScalarArithmetic: tenferro_tensor_core::Scalar
+pub fn tenferro_tensor_core::ScalarArithmetic::scalar_add(self, Self) -> Self
+pub fn tenferro_tensor_core::ScalarArithmetic::scalar_mul(self, Self) -> Self
+pub fn tenferro_tensor_core::ScalarArithmetic::scalar_one() -> Self
+pub fn tenferro_tensor_core::ScalarArithmetic::scalar_sub(self, Self) -> Self
+pub fn tenferro_tensor_core::ScalarArithmetic::scalar_zero() -> Self
+impl tenferro_tensor_core::ScalarArithmetic for f32
+pub fn f32::scalar_add(self, Self) -> Self
+pub fn f32::scalar_mul(self, Self) -> Self
+pub fn f32::scalar_one() -> Self
+pub fn f32::scalar_sub(self, Self) -> Self
+pub fn f32::scalar_zero() -> Self
+impl tenferro_tensor_core::ScalarArithmetic for f64
+pub fn f64::scalar_add(self, Self) -> Self
+pub fn f64::scalar_mul(self, Self) -> Self
+pub fn f64::scalar_one() -> Self
+pub fn f64::scalar_sub(self, Self) -> Self
+pub fn f64::scalar_zero() -> Self
+impl tenferro_tensor_core::ScalarArithmetic for i32
+pub fn i32::scalar_add(self, Self) -> Self
+pub fn i32::scalar_mul(self, Self) -> Self
+pub fn i32::scalar_one() -> Self
+pub fn i32::scalar_sub(self, Self) -> Self
+pub fn i32::scalar_zero() -> Self
+impl tenferro_tensor_core::ScalarArithmetic for i64
+pub fn i64::scalar_add(self, Self) -> Self
+pub fn i64::scalar_mul(self, Self) -> Self
+pub fn i64::scalar_one() -> Self
+pub fn i64::scalar_sub(self, Self) -> Self
+pub fn i64::scalar_zero() -> Self
+impl tenferro_tensor_core::ScalarArithmetic for num_complex::Complex32
+pub fn num_complex::Complex32::scalar_add(self, Self) -> Self
+pub fn num_complex::Complex32::scalar_mul(self, Self) -> Self
+pub fn num_complex::Complex32::scalar_one() -> Self
+pub fn num_complex::Complex32::scalar_sub(self, Self) -> Self
+pub fn num_complex::Complex32::scalar_zero() -> Self
+impl tenferro_tensor_core::ScalarArithmetic for num_complex::Complex64
+pub fn num_complex::Complex64::scalar_add(self, Self) -> Self
+pub fn num_complex::Complex64::scalar_mul(self, Self) -> Self
+pub fn num_complex::Complex64::scalar_one() -> Self
+pub fn num_complex::Complex64::scalar_sub(self, Self) -> Self
+pub fn num_complex::Complex64::scalar_zero() -> Self
+pub trait tenferro_tensor_core::TensorRank: tenferro_tensor_core::rank::private::Sealed + core::clone::Clone + core::marker::Copy + core::fmt::Debug + core::cmp::Eq + core::marker::Send + core::marker::Sync + 'static
+pub type tenferro_tensor_core::TensorRank::Shape: core::clone::Clone + core::fmt::Debug + core::cmp::PartialEq + core::cmp::Eq + core::convert::AsRef<[usize]> + tenferro_tensor_core::IntoRankShape<Self>
+pub type tenferro_tensor_core::TensorRank::Strides: core::clone::Clone + core::fmt::Debug + core::cmp::PartialEq + core::cmp::Eq + core::convert::AsRef<[isize]>
+pub const tenferro_tensor_core::TensorRank::RANK: core::option::Option<usize>
+pub fn tenferro_tensor_core::TensorRank::shape_from_vec(tenferro_tensor_core::ShapeVec) -> tenferro_tensor_core::Result<Self::Shape>
+pub fn tenferro_tensor_core::TensorRank::shape_into_vec(Self::Shape) -> tenferro_tensor_core::ShapeVec
+pub fn tenferro_tensor_core::TensorRank::strides_from_vec(tenferro_tensor_core::StrideVec) -> tenferro_tensor_core::Result<Self::Strides>
+pub fn tenferro_tensor_core::TensorRank::strides_into_vec(Self::Strides) -> tenferro_tensor_core::StrideVec
+impl tenferro_tensor_core::TensorRank for tenferro_tensor_core::DynRank
+pub type tenferro_tensor_core::DynRank::Shape = tinyvec::tinyvec::TinyVec<[usize; 8]>
+pub type tenferro_tensor_core::DynRank::Strides = tinyvec::tinyvec::TinyVec<[isize; 8]>
+pub const tenferro_tensor_core::DynRank::RANK: core::option::Option<usize>
+pub fn tenferro_tensor_core::DynRank::shape_from_vec(tenferro_tensor_core::ShapeVec) -> tenferro_tensor_core::Result<Self::Shape>
+pub fn tenferro_tensor_core::DynRank::shape_into_vec(Self::Shape) -> tenferro_tensor_core::ShapeVec
+pub fn tenferro_tensor_core::DynRank::strides_from_vec(tenferro_tensor_core::StrideVec) -> tenferro_tensor_core::Result<Self::Strides>
+pub fn tenferro_tensor_core::DynRank::strides_into_vec(Self::Strides) -> tenferro_tensor_core::StrideVec
+impl<const N: usize> tenferro_tensor_core::TensorRank for tenferro_tensor_core::Rank<N>
+pub type tenferro_tensor_core::Rank<N>::Shape = [usize; N]
+pub type tenferro_tensor_core::Rank<N>::Strides = [isize; N]
+pub const tenferro_tensor_core::Rank<N>::RANK: core::option::Option<usize>
+pub fn tenferro_tensor_core::Rank<N>::shape_from_vec(tenferro_tensor_core::ShapeVec) -> tenferro_tensor_core::Result<Self::Shape>
+pub fn tenferro_tensor_core::Rank<N>::shape_into_vec(Self::Shape) -> tenferro_tensor_core::ShapeVec
+pub fn tenferro_tensor_core::Rank<N>::strides_from_vec(tenferro_tensor_core::StrideVec) -> tenferro_tensor_core::Result<Self::Strides>
+pub fn tenferro_tensor_core::Rank<N>::strides_into_vec(Self::Strides) -> tenferro_tensor_core::StrideVec
+pub trait tenferro_tensor_core::TensorScalar: tenferro_tensor_core::Scalar + core::marker::Copy + core::clone::Clone + core::marker::Send + core::marker::Sync + 'static + tenferro_tensor_core::private::Sealed
+pub type tenferro_tensor_core::TensorScalar::Real: tenferro_tensor_core::TensorScalar
+pub fn tenferro_tensor_core::TensorScalar::dtype() -> tenferro_tensor_core::DType
+impl tenferro_tensor_core::TensorScalar for bool
+pub type bool::Real = bool
+pub fn bool::dtype() -> tenferro_tensor_core::DType
+impl tenferro_tensor_core::TensorScalar for f32
+pub type f32::Real = f32
+pub fn f32::dtype() -> tenferro_tensor_core::DType
+impl tenferro_tensor_core::TensorScalar for f64
+pub type f64::Real = f64
+pub fn f64::dtype() -> tenferro_tensor_core::DType
+impl tenferro_tensor_core::TensorScalar for i32
+pub type i32::Real = i32
+pub fn i32::dtype() -> tenferro_tensor_core::DType
+impl tenferro_tensor_core::TensorScalar for i64
+pub type i64::Real = i64
+pub fn i64::dtype() -> tenferro_tensor_core::DType
+impl tenferro_tensor_core::TensorScalar for num_complex::Complex32
+pub type num_complex::Complex32::Real = f32
+pub fn num_complex::Complex32::dtype() -> tenferro_tensor_core::DType
+impl tenferro_tensor_core::TensorScalar for num_complex::Complex64
+pub type num_complex::Complex64::Real = f64
+pub fn num_complex::Complex64::dtype() -> tenferro_tensor_core::DType
+pub fn tenferro_tensor_core::ad_admission<T: tenferro_tensor_core::Scalar>(u32) -> core::result::Result<(), tenferro_tensor_core::AdAdmissionError>
+pub fn tenferro_tensor_core::col_major_strides(&[usize]) -> tenferro_tensor_core::Result<tenferro_tensor_core::StrideVec>
+pub fn tenferro_tensor_core::normalize_axes(&[isize], usize) -> core::result::Result<tinyvec::tinyvec::TinyVec<[usize; 8]>, tenferro_tensor_core::ValidationError>
+pub fn tenferro_tensor_core::normalize_axis(isize, usize) -> core::result::Result<usize, tenferro_tensor_core::ValidationError>
+pub fn tenferro_tensor_core::promote_in_set<Tag: core::marker::Copy + core::cmp::PartialEq>(&[Tag], &[tenferro_tensor_core::MemberSpec], Tag, Tag) -> Tag
+pub const fn tenferro_tensor_core::promote_specs(tenferro_tensor_core::MemberSpec, tenferro_tensor_core::MemberSpec) -> tenferro_tensor_core::MemberSpec
+pub type tenferro_tensor_core::AxisVec = tinyvec::tinyvec::TinyVec<[isize; 8]>
+pub type tenferro_tensor_core::Result<T> = core::result::Result<T, tenferro_tensor_core::ValidationError>
+pub type tenferro_tensor_core::ShapeVec = tinyvec::tinyvec::TinyVec<[usize; 8]>
+pub type tenferro_tensor_core::StrideVec = tinyvec::tinyvec::TinyVec<[isize; 8]>

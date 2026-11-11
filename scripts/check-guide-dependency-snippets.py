@@ -31,8 +31,7 @@ class GuideCase:
 EINSUM_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_einsum::{EagerSessionEinsumExt, TraceContextEinsumExt};
-use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_einsum::{EagerEinsumOps, TracedEinsumOps};
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,12 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     )?;
 
-    let mut trace = TraceContext::new();
-    let a_value = trace.input(ProgramInputSpec::new(a.dtype(), [2.into(), 3.into()]))?;
-    let b_value = trace.input(ProgramInputSpec::new(b.dtype(), [3.into(), 2.into()]))?;
-    let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
-    let graph = trace.finish(&[c])?;
-    let program = GraphCompiler::new().compile_traced_graph(&graph)?;
+    let trace = TraceContext::new();
+    let a_in = trace.input_concrete_shape(a.dtype(), &[2, 3])?;
+    let b_in = trace.input_concrete_shape(b.dtype(), &[3, 2])?;
+    let c = trace.einsum(&[&a_in, &b_in], "ij,jk->ik")?;
+    let program = GraphCompiler::new().compile(&c)?;
     let mut engine = CpuEngine::serial();
     let mut runtime_builder = Runtime::builder();
     runtime_builder.register_engine(runtime_engine_registration(&engine)?)?;
@@ -80,8 +78,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 LINALG_SOURCE = r"""
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_linalg::{FullPivLu, LinalgOps};
+use tenferro_runtime::{Tensor, CoreOps};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
     lhs.as_slice::<f64>()
@@ -102,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         vec![2, 2],
         vec![0.0_f64, 2.0, 1.0, 3.0],
     )?;
-    let (p, l, u, q, parity) = a.full_piv_lu(&mut engine)?;
+    let FullPivLu { p, l, u, q, parity } = a.full_piv_lu(&mut engine)?;
 
     let pt = p.transpose(&[1, 0], &mut engine)?;
     let pt_l = pt.matmul(&l, &mut engine)?;
@@ -126,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 TENSOR_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{CompareDir, TypedTensorSessionOpsExt};
+use tenferro_runtime::{CompareDir, CoreOps};
 use tenferro_tensor::{Rank, TypedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -164,7 +162,7 @@ FFT_SOURCE = r"""
 use num_complex::Complex64;
 use tenferro_ad::AdContext;
 use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuEngine};
-use tenferro_fft::{FftNorm, TracedTensorFftExt};
+use tenferro_fft::TracedFftOps;
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -179,7 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Complex64::new(4.0, 0.0),
         ],
     )?;
-    let y = x.fft(None, -1, FftNorm::Backward)?;
+    let y = x.fft()?;
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;

@@ -1,11 +1,16 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_linalg::{
-    EighDriver, EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, RankRevealingQrOptions,
-    SvdDriver, SvdGauge, SvdOptions, TracedTensorLinalgExt,
+    Diag, Eig, Eigh, FullPivLu, KeepDims, MatOp, NormOptions, NormOrd, PinvOptions, Qr, Svd,
+    SvdShape, TriangularSolveOptions, Uplo,
+};
+use tenferro_linalg::{
+    EighDriver, EighGauge, EighOptions, EigvalshOptions, LinalgOps, QrGauge, QrOptions,
+    RankRevealingQrOptions, SvdDriver, SvdGauge, SvdOptions, SvdvalsOptions, TracedLinalgOps,
 };
 use tenferro_runtime::{
     DType, Error, GraphCompiler, Runtime, Tensor, TraceContext, TracedTensor, TypedTensor,
 };
+use tenferro_tensor::AxisVec;
 use tenferro_tensor::Error as TensorError;
 
 use super::support;
@@ -56,7 +61,7 @@ fn rank_revealing_qr_traced_fixed_outputs_execute() {
         )
         .unwrap();
     let result = a
-        .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12))
+        .rank_revealing_qr_with(&RankRevealingQrOptions::default().rtol(1.0e-12))
         .unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
@@ -84,7 +89,7 @@ fn svd_executes_after_runtime_registration() {
             Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
         )
         .unwrap();
-    let (u, s, vt) = a.svd().unwrap();
+    let Svd { u, s, vh: vt } = a.svd().unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&u, &s, &vt]).unwrap();
@@ -103,26 +108,29 @@ fn concrete_decomposition_options_execute_through_backend_defaults() {
 
     let (svd_outputs, eigh_outputs, qr_outputs) =
         support::with_cpu_linalg(&mut backend, |backend| {
-            let svd_outputs = backend
-                .svd_with_options(
-                    &a,
-                    SvdOptions::default()
+            let Svd { u, s, vh } = a
+                .svd_with(
+                    &SvdOptions::default()
                         .gauge(SvdGauge::CanonicalPivot)
                         .derivative_eps(1.0e-10),
+                    backend,
                 )
                 .unwrap();
-            let eigh_outputs = backend
-                .eigh_with_options(
-                    &a,
-                    EighOptions::default()
+            let Eigh { values, vectors } = a
+                .eigh_with(
+                    &EighOptions::default()
                         .gauge(EighGauge::CanonicalPivot)
                         .derivative_eps(1.0e-10),
+                    backend,
                 )
                 .unwrap();
-            let qr_outputs = backend
-                .qr_with_options(&a, QrOptions::default().gauge(QrGauge::PositiveDiagonal))
+            let Qr { q, r } = a
+                .qr_with(
+                    &QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+                    backend,
+                )
                 .unwrap();
-            (svd_outputs, eigh_outputs, qr_outputs)
+            ([u, s, vh], [values, vectors], [q, r])
         });
 
     assert_eq!(svd_outputs[0].shape(), &[2, 2]);
@@ -142,22 +150,25 @@ fn traced_decomposition_options_execute_through_registered_runtime() {
             Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap(),
         )
         .unwrap();
-    let (u, s, vt) = a
-        .svd_with_options(
-            SvdOptions::default()
+    let Svd { u, s, vh: vt } = a
+        .svd_with(
+            &SvdOptions::default()
                 .gauge(SvdGauge::CanonicalPivot)
                 .derivative_eps(1.0e-10),
         )
         .unwrap();
-    let (eigh_values, eigh_vectors) = a
-        .eigh_with_options(
-            EighOptions::default()
+    let Eigh {
+        values: eigh_values,
+        vectors: eigh_vectors,
+    } = a
+        .eigh_with(
+            &EighOptions::default()
                 .gauge(EighGauge::CanonicalPivot)
                 .derivative_eps(1.0e-10),
         )
         .unwrap();
-    let (q, r) = a
-        .qr_with_options(QrOptions::default().gauge(QrGauge::PositiveDiagonal))
+    let Qr { q, r } = a
+        .qr_with(&QrOptions::default().gauge(QrGauge::PositiveDiagonal))
         .unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -193,12 +204,16 @@ fn check_cpu_ignores_svd_driver(trace: &TraceContext, driver: SvdDriver) {
 
     let (default_outputs, forced_outputs, default_values, forced_values) =
         support::with_cpu_linalg(&mut backend, |backend| {
-            let default_outputs = backend.svd_with_options(&a, SvdOptions::default()).unwrap();
-            let forced_outputs = backend
-                .svd_with_options(&a, SvdOptions::default().driver(driver))
+            let Svd { u, s, vh } = a.svd(backend).unwrap();
+            let default_outputs = [u, s, vh];
+            let Svd { u, s, vh } = a
+                .svd_with(&SvdOptions::default().driver(driver), backend)
                 .unwrap();
-            let default_values = backend.svd_values(&a).unwrap();
-            let forced_values = backend.svd_values_with_driver(&a, driver).unwrap();
+            let forced_outputs = [u, s, vh];
+            let default_values = a.svdvals(backend).unwrap();
+            let forced_values = a
+                .svdvals_with(&SvdvalsOptions::default().driver(driver), backend)
+                .unwrap();
             (
                 default_outputs,
                 forced_outputs,
@@ -229,13 +244,13 @@ fn check_cpu_ignores_svd_driver(trace: &TraceContext, driver: SvdDriver) {
     let traced = trace
         .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3, 2], data).unwrap())
         .unwrap();
-    let (u, s, vt) = traced
-        .svd_with_options(SvdOptions::default().driver(driver))
+    let Svd { u, s, vh: vt } = traced
+        .svd_with(&SvdOptions::default().driver(driver))
         .unwrap();
     // Only `S` is live here, so the op prunes to a values-only op that keeps
     // the forced driver; the CPU runtime must still execute it.
-    let (_, s_only, _) = traced
-        .svd_with_options(SvdOptions::default().driver(driver).derivative_eps(2.0e-12))
+    let Svd { s: s_only, .. } = traced
+        .svd_with(&SvdOptions::default().driver(driver).derivative_eps(2.0e-12))
         .unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -274,15 +289,18 @@ fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
 
     let (default_outputs, forced_outputs, default_values, forced_values) =
         support::with_cpu_linalg(&mut backend, |backend| {
-            let default_outputs = backend
-                .eigh_with_options(&a, EighOptions::default())
+            let Eigh { values, vectors } = a.eigh(backend).unwrap();
+            let default_outputs = [values, vectors];
+            let Eigh { values, vectors } = a
+                .eigh_with(&EighOptions::default().driver(EighDriver::Jacobi), backend)
                 .unwrap();
-            let forced_outputs = backend
-                .eigh_with_options(&a, EighOptions::default().driver(EighDriver::Jacobi))
-                .unwrap();
-            let default_values = backend.eigh_values(&a).unwrap();
-            let forced_values = backend
-                .eigh_values_with_driver(&a, EighDriver::DivideAndConquer)
+            let forced_outputs = [values, vectors];
+            let default_values = a.eigvalsh(backend).unwrap();
+            let forced_values = a
+                .eigvalsh_with(
+                    &EigvalshOptions::default().driver(EighDriver::DivideAndConquer),
+                    backend,
+                )
                 .unwrap();
             (
                 default_outputs,
@@ -309,13 +327,16 @@ fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
     let traced = trace
         .from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![3, 3], data).unwrap())
         .unwrap();
-    let (w, v) = traced
-        .eigh_with_options(EighOptions::default().driver(EighDriver::Jacobi))
+    let Eigh {
+        values: w,
+        vectors: v,
+    } = traced
+        .eigh_with(&EighOptions::default().driver(EighDriver::Jacobi))
         .unwrap();
     // Only the eigenvalues are live here, so the op prunes to a values-only
     // op that keeps the forced driver; the CPU runtime must still execute it.
-    let (w_only, _) = traced
-        .eigh_with_options(EighOptions::default().driver(EighDriver::DivideAndConquer))
+    let Eigh { values: w_only, .. } = traced
+        .eigh_with(&EighOptions::default().driver(EighDriver::DivideAndConquer))
         .unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -373,7 +394,7 @@ fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
             .unwrap(),
         ))
         .unwrap();
-    let (_u, s, _vt) = a.svd().unwrap();
+    let Svd { u: _u, s, vh: _vt } = a.svd().unwrap();
     assert_eq!(s.dtype(), DType::F64);
 
     let weights = trace
@@ -401,7 +422,13 @@ fn spectral_norm_compile_prunes_residual_svd_to_values_only_op() {
             Tensor::from_vec_col_major(vec![3, 2], vec![3.0_f64, 0.1, 0.2, 0.3, 2.0, 0.4]).unwrap(),
         )
         .unwrap();
-    let norm = a.norm(Some(2.0), Some(&[0, 1]), false).unwrap();
+    let norm = a
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::P(2.0))
+                .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+        )
+        .unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&norm).unwrap();
@@ -461,7 +488,7 @@ fn full_piv_lu_multi_output_slots_are_preserved() {
             Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64, 2.0, 1.0, 3.0]).unwrap(),
         )
         .unwrap();
-    let (p, l, u, q, parity) = a.full_piv_lu().unwrap();
+    let FullPivLu { p, l, u, q, parity } = a.full_piv_lu().unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&p, &l, &u, &q, &parity]).unwrap();
@@ -498,28 +525,34 @@ fn traced_metadata_matches_linalg_extension_shapes_and_dtypes() {
         ))
         .unwrap();
 
-    let (u, s, vt) = rectangular.svd().unwrap();
+    let Svd { u, s, vh: vt } = rectangular.svd().unwrap();
     assert_eq!(u.concrete_shape().unwrap(), vec![3, 3, 2]);
     assert_eq!(s.concrete_shape().unwrap(), vec![3, 2]);
     assert_eq!(vt.concrete_shape().unwrap(), vec![3, 4, 2]);
 
-    let (q, r) = rectangular.qr().unwrap();
+    let Qr { q, r } = rectangular.qr().unwrap();
     assert_eq!(q.concrete_shape().unwrap(), vec![3, 3, 2]);
     assert_eq!(r.concrete_shape().unwrap(), vec![3, 4, 2]);
 
-    let (values, vectors) = ints.eig().unwrap();
+    let Eig { values, vectors } = ints.eig().unwrap();
     assert_eq!(values.dtype(), DType::C64);
     assert_eq!(vectors.dtype(), DType::C64);
 
-    let (eigh_values, eigh_vectors) = square.eigh().unwrap();
+    let Eigh {
+        values: eigh_values,
+        vectors: eigh_vectors,
+    } = square.eigh().unwrap();
     assert_eq!(eigh_values.concrete_shape().unwrap(), vec![3, 2]);
     assert_eq!(eigh_vectors.concrete_shape().unwrap(), vec![3, 3, 2]);
 
-    let (complex_eigh_values, complex_eigh_vectors) = complex_square.eigh().unwrap();
+    let Eigh {
+        values: complex_eigh_values,
+        vectors: complex_eigh_vectors,
+    } = complex_square.eigh().unwrap();
     assert_eq!(complex_eigh_values.dtype(), DType::F64);
     assert_eq!(complex_eigh_vectors.dtype(), DType::C64);
 
-    let (p, l, u, q, parity) = complex_square.full_piv_lu().unwrap();
+    let FullPivLu { p, l, u, q, parity } = complex_square.full_piv_lu().unwrap();
     assert_eq!(p.dtype(), DType::C64);
     assert_eq!(l.dtype(), DType::C64);
     assert_eq!(u.dtype(), DType::C64);
@@ -552,12 +585,12 @@ fn traced_metadata_promotes_linalg_dtypes_broadly() {
     }
 
     let triangular = traced_with_dtype(&trace, DType::Bool, vec![2, 2])
-        .triangular_solve(
+        .triangular_solve_with(
             &traced_with_dtype(&trace, DType::F32, vec![2, 1]),
-            true,
-            false,
-            true,
-            true,
+            &TriangularSolveOptions::default()
+                .uplo(Uplo::Upper)
+                .op(MatOp::Transpose)
+                .diag(Diag::Unit),
         )
         .unwrap();
     assert_eq!(triangular.dtype(), DType::F32);
@@ -577,7 +610,7 @@ fn traced_metadata_covers_eig_output_dtype_rules() {
         (DType::Bool, DType::C64),
     ] {
         let a = traced_with_dtype(&trace, input_dtype, vec![2, 2]);
-        let (values, vectors) = a.eig().unwrap();
+        let Eig { values, vectors } = a.eig().unwrap();
         assert_eq!(values.dtype(), expected_dtype);
         assert_eq!(vectors.dtype(), expected_dtype);
         assert_eq!(values.concrete_shape().unwrap(), vec![2]);
@@ -590,7 +623,11 @@ fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
     let trace = TraceContext::new();
     for dtype in [DType::I32, DType::I64, DType::Bool] {
         let tensor = traced_with_dtype(&trace, dtype, vec![3]);
-        let err = match tensor.norm(Some(2.0), Some(&[0]), false) {
+        let err = match tensor.norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::P(2.0))
+                .axes(Some([0].into_iter().collect::<AxisVec>())),
+        ) {
             Ok(_) => panic!("expected unsupported dtype error for {dtype:?}"),
             Err(err) => err,
         };
@@ -607,7 +644,7 @@ fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
             "expected unsupported dtype error for {dtype:?}, got {err:?}"
         );
 
-        let err = match tensor.pinv_with_rtol(1.0e-12) {
+        let err = match tensor.pinv_with(&PinvOptions::default().rtol(Some(1.0e-12))) {
             Ok(_) => panic!("expected unsupported dtype error for {dtype:?}"),
             Err(err) => err,
         };
@@ -696,8 +733,19 @@ fn traced_linalg_helpers_reject_symbolic_shapes_without_panicking() {
     for (op, result) in [
         ("inv", matrix.inv()),
         ("pinv", matrix.pinv()),
-        ("pinv_with_rtol", matrix.pinv_with_rtol(1.0e-12)),
-        ("norm", matrix.norm(Some(2.0), Some(&[0, 1]), true)),
+        (
+            "pinv_with_rtol",
+            matrix.pinv_with(&PinvOptions::default().rtol(Some(1.0e-12))),
+        ),
+        (
+            "norm",
+            matrix.norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::P(2.0))
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>()))
+                    .keep_dims(KeepDims::Yes),
+            ),
+        ),
     ] {
         let err = result.unwrap_err();
         assert!(
@@ -729,8 +777,12 @@ fn traced_norm_rejects_duplicate_axis_before_empty_shortcut() {
         .unwrap();
 
     for err in [
-        nonempty.norm(None, Some(&[0, 0]), false).unwrap_err(),
-        empty.norm(None, Some(&[0, 0]), false).unwrap_err(),
+        nonempty
+            .norm_with(&NormOptions::default().axes(Some([0, 0].into_iter().collect::<AxisVec>())))
+            .unwrap_err(),
+        empty
+            .norm_with(&NormOptions::default().axes(Some([0, 0].into_iter().collect::<AxisVec>())))
+            .unwrap_err(),
     ] {
         assert!(matches!(
             err,
@@ -738,7 +790,7 @@ fn traced_norm_rejects_duplicate_axis_before_empty_shortcut() {
                 op: "norm",
                 source: tenferro_tensor::ValidationError::DuplicateAxis {
                     axis: 0,
-                    role: "dim"
+                    role: "axes"
                 }
             })
         ));
@@ -752,7 +804,13 @@ fn traced_norm_rejects_out_of_range_axis_without_panicking() {
         .from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])
         .unwrap();
 
-    let err = tensor.norm(Some(2.0), Some(&[5]), false).unwrap_err();
+    let err = tensor
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::P(2.0))
+                .axes(Some([5].into_iter().collect::<AxisVec>())),
+        )
+        .unwrap_err();
 
     assert!(matches!(
         err,
@@ -816,7 +874,13 @@ fn traced_svd_eigh_qr_cholesky_reject_integer_and_bool_dtypes_at_construction() 
     for dtype in [DType::I32, DType::I64, DType::Bool] {
         let tensor = traced_with_dtype(&trace, dtype, vec![2, 2]);
         assert_unsupported_dtype_at_construction(tensor.svd().map(|_| ()), "svd", dtype);
-        assert_unsupported_dtype_at_construction(tensor.svd_full().map(|_| ()), "svd_full", dtype);
+        assert_unsupported_dtype_at_construction(
+            tensor
+                .svd_with(&SvdOptions::default().shape(SvdShape::Full))
+                .map(|_| ()),
+            "svd_full",
+            dtype,
+        );
         assert_unsupported_dtype_at_construction(tensor.eigh().map(|_| ()), "eigh", dtype);
         assert_unsupported_dtype_at_construction(tensor.eigvalsh().map(|_| ()), "eigvalsh", dtype);
         assert_unsupported_dtype_at_construction(tensor.qr().map(|_| ()), "qr", dtype);

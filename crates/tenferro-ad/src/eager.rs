@@ -1271,8 +1271,13 @@ impl EagerSession<'_> {
     ///
     /// Returns [`Error::ContextMismatch`] for a foreign runtime, or a typed
     /// axis/backend error for an invalid permutation or copy.
-    pub fn transpose(&mut self, input: &EagerTensor, perm: &[usize]) -> Result<EagerTensor> {
+    pub fn transpose(&mut self, input: &EagerTensor, perm: &[isize]) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
+        let perm = &crate::shape_packing::normalize_existing_axes(
+            "EagerSession::transpose",
+            perm,
+            input.shape().len(),
+        )?[..];
         input.transpose_in_session(perm, &mut *self.engine)
     }
 
@@ -1437,8 +1442,13 @@ impl EagerSession<'_> {
     /// ```
     /// # Errors
     /// Returns a typed foreign-runtime, invalid-axis, or backend error.
-    pub fn reverse(&mut self, input: &EagerTensor, axes: &[usize]) -> Result<EagerTensor> {
+    pub fn reverse(&mut self, input: &EagerTensor, axes: &[isize]) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
+        let axes = &crate::shape_packing::normalize_existing_axes(
+            "EagerSession::reverse",
+            axes,
+            input.shape().len(),
+        )?[..];
         crate::eager_ops::validate_eager_axes("EagerSession::reverse", input.shape().len(), axes)?;
         self.run_unary(
             input,
@@ -1532,10 +1542,20 @@ impl EagerSession<'_> {
     /// ```
     /// # Errors
     /// Returns a typed empty-input, foreign-runtime, invalid-axis/shape, or backend error.
-    pub fn concatenate(&mut self, inputs: &[&EagerTensor], axis: usize) -> Result<EagerTensor> {
+    pub fn concatenate(&mut self, inputs: &[&EagerTensor], axis: isize) -> Result<EagerTensor> {
         for input in inputs {
             self.ensure_runtime(input)?;
         }
+        // An empty list is reported by the operation itself (as before #2552);
+        // only a non-empty list has a rank to normalize the axis against.
+        let axis = match inputs.first() {
+            Some(first) => crate::shape_packing::normalize_existing_axis(
+                "EagerSession::concatenate",
+                axis,
+                first.shape().len(),
+            )?,
+            None => 0,
+        };
         EagerTensor::nary_op_in_session(
             inputs,
             StdTensorOp::Concatenate {
@@ -1603,10 +1623,21 @@ impl EagerSession<'_> {
     pub fn extract_diag(
         &mut self,
         input: &EagerTensor,
-        axis_a: usize,
-        axis_b: usize,
+        axis_a: isize,
+        axis_b: isize,
     ) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
+        let rank = input.shape().len();
+        let axis_a = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::extract_diag",
+            axis_a,
+            rank,
+        )?;
+        let axis_b = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::extract_diag",
+            axis_b,
+            rank,
+        )?;
         self.run_unary(input, StdTensorOp::ExtractDiag { axis_a, axis_b })
     }
 
@@ -1628,10 +1659,18 @@ impl EagerSession<'_> {
     pub fn embed_diag(
         &mut self,
         input: &EagerTensor,
-        axis_a: usize,
-        axis_b: usize,
+        axis_a: isize,
+        axis_b: isize,
     ) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
+        let rank = input.shape().len();
+        let axis_a = crate::shape_packing::normalize_existing_axis(
+            "EagerSession::embed_diag",
+            axis_a,
+            rank,
+        )?;
+        let axis_b =
+            crate::shape_packing::normalize_insert_axis("EagerSession::embed_diag", axis_b, rank)?;
         self.run_unary(input, StdTensorOp::EmbedDiag { axis_a, axis_b })
     }
 
@@ -1656,10 +1695,19 @@ impl EagerSession<'_> {
     pub fn reduce_sum(
         &mut self,
         input: &EagerTensor,
-        axes: Option<&[usize]>,
+        axes: Option<&[isize]>,
     ) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
-        input.reduce_sum_in_session(axes, &mut *self.engine)
+        let axes = axes
+            .map(|axes| {
+                crate::shape_packing::normalize_existing_axes(
+                    "EagerTensor::reduce_sum",
+                    axes,
+                    input.shape().len(),
+                )
+            })
+            .transpose()?;
+        input.reduce_sum_in_session(axes.as_deref(), &mut *self.engine)
     }
 
     /// Sum elementwise squares over the selected axes in this borrowed session.
@@ -1686,10 +1734,17 @@ impl EagerSession<'_> {
     pub fn reduce_sum_squares(
         &mut self,
         input: &EagerTensor,
-        axes: Option<&[usize]>,
+        axes: Option<&[isize]>,
     ) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
-        let axes = axes.map_or_else(|| (0..input.shape().len()).collect(), <[usize]>::to_vec);
+        let axes = match axes {
+            Some(axes) => crate::shape_packing::normalize_existing_axes(
+                "EagerSession::reduce_sum_squares",
+                axes,
+                input.shape().len(),
+            )?,
+            None => (0..input.shape().len()).collect(),
+        };
         crate::eager_ops::validate_eager_axes(
             "EagerSession::reduce_sum_squares",
             input.shape().len(),
@@ -1717,10 +1772,17 @@ impl EagerSession<'_> {
     pub fn reduce_prod(
         &mut self,
         input: &EagerTensor,
-        axes: Option<&[usize]>,
+        axes: Option<&[isize]>,
     ) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
-        let axes = axes.map_or_else(|| (0..input.shape().len()).collect(), <[usize]>::to_vec);
+        let axes = match axes {
+            Some(axes) => crate::shape_packing::normalize_existing_axes(
+                "EagerSession::reduce_prod",
+                axes,
+                input.shape().len(),
+            )?,
+            None => (0..input.shape().len()).collect(),
+        };
         crate::eager_ops::validate_eager_axes(
             "EagerSession::reduce_prod",
             input.shape().len(),
@@ -1748,10 +1810,17 @@ impl EagerSession<'_> {
     pub fn reduce_max(
         &mut self,
         input: &EagerTensor,
-        axes: Option<&[usize]>,
+        axes: Option<&[isize]>,
     ) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
-        let axes = axes.map_or_else(|| (0..input.shape().len()).collect(), <[usize]>::to_vec);
+        let axes = match axes {
+            Some(axes) => crate::shape_packing::normalize_existing_axes(
+                "EagerSession::reduce_max",
+                axes,
+                input.shape().len(),
+            )?,
+            None => (0..input.shape().len()).collect(),
+        };
         crate::eager_ops::validate_eager_axes(
             "EagerSession::reduce_max",
             input.shape().len(),
@@ -1779,10 +1848,17 @@ impl EagerSession<'_> {
     pub fn reduce_min(
         &mut self,
         input: &EagerTensor,
-        axes: Option<&[usize]>,
+        axes: Option<&[isize]>,
     ) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
-        let axes = axes.map_or_else(|| (0..input.shape().len()).collect(), <[usize]>::to_vec);
+        let axes = match axes {
+            Some(axes) => crate::shape_packing::normalize_existing_axes(
+                "EagerSession::reduce_min",
+                axes,
+                input.shape().len(),
+            )?,
+            None => (0..input.shape().len()).collect(),
+        };
         crate::eager_ops::validate_eager_axes(
             "EagerSession::reduce_min",
             input.shape().len(),
@@ -2339,12 +2415,13 @@ impl EagerSession<'_> {
     /// let result = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
     ///     let lhs = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64])?)?;
     ///     let rhs = session.constant_from(Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64])?)?;
-    ///     session.dot_general_with_conj(&lhs, &rhs, DotGeneralConfig {
+    ///     let conj_lhs = tenferro_tensor::DotGeneralOptions::default().lhs(tenferro_tensor::Conj::Yes);
+    ///     session.dot_general_with(&lhs, &rhs, DotGeneralConfig {
     ///         lhs_contracting_dims: [1].as_slice().into(),
     ///         rhs_contracting_dims: [0].as_slice().into(),
     ///         lhs_batch_dims: [].as_slice().into(),
     ///         rhs_batch_dims: [].as_slice().into(),
-    ///     }, true, false)
+    ///     }, &conj_lhs)
     /// })?;
     /// assert_eq!(result.value()?.as_slice::<f64>()?, &[6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2354,14 +2431,14 @@ impl EagerSession<'_> {
     ///
     /// Returns [`Error::ContextMismatch`] for a foreign eager runtime,
     /// a typed validation error for invalid dimensions, or a backend error.
-    pub fn dot_general_with_conj(
+    pub fn dot_general_with(
         &mut self,
         lhs: &EagerTensor,
         rhs: &EagerTensor,
         config: DotGeneralConfig,
-        lhs_conj: bool,
-        rhs_conj: bool,
+        options: &tenferro_tensor::DotGeneralOptions,
     ) -> Result<EagerTensor> {
+        let (lhs_conj, rhs_conj) = (options.lhs.is_yes(), options.rhs.is_yes());
         self.ensure_runtime(lhs)?;
         self.ensure_runtime(rhs)?;
         config

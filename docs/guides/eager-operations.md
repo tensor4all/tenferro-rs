@@ -65,30 +65,34 @@ stores no engine, so every eager session borrows the one you pass in. Untracked 
 one context across multiple tracked tensors, their gradients accumulate into
 the same state and you can reset them together with `clear_grads()`.
 
-Most broad non-AD concrete operations are available as `TensorSessionOpsExt` /
-`TypedTensorSessionOpsExt` methods that take `&mut dyn Engine`. AD workflows use the
-`EagerTensor` method surface instead. `TypedTensor<T, R>` is the first layer to
-consider when you want compile-time dtype safety, optional rank typing, or typed
-data that may live on the host or in backend-owned storage. Einsum is provided
-by the separate `tenferro-einsum` standard extension.
+Most broad non-AD concrete operations are available as `CoreOps` methods
+(`tenferro_runtime::CoreOps`) on any `Tensor`, `TensorRead`, `TypedTensor<T>`,
+or `TypedTensorView<T>`, with the caller's `&mut dyn Engine` as the last
+argument: `x.exp(exec)`, `a.matmul(&b, exec)`. AD workflows use the eager
+session surface instead. `TypedTensor<T, R>` is the first layer to consider
+when you want compile-time dtype safety, optional rank typing, or typed data
+that may live on the host or in backend-owned storage. Einsum is provided by
+the separate `tenferro-einsum` standard extension.
 
-Tracked `EagerTensor` values support the differentiable method surface most
-loss functions need:
+Eager core operations are inherent methods of the `EagerSession` borrowed with
+`runtime.with_eager_session(&mut engine, |session| { ... })`; the session is
+the receiver and the tensors are arguments, for example
+`session.add(&a, &b)` or `session.reduce_sum(&x, Some(&[-1]))`. Tracked
+inputs record the operation for `backward()` and functional transforms. The
+differentiable surface most loss functions need:
 
-| Category | `EagerTensor` methods |
+| Category | `EagerSession` methods |
 | --- | --- |
-| Elementwise | `add`, `mul`, `neg` |
-| Reduction | `reduce_sum`, `reduce_max`, `reduce_min` |
-| Matrix products | `dot_general` |
-| Shape/layout | `reshape`, `transpose`, `broadcast_in_dim` |
+| Elementwise | `add`, `mul`, `neg`, `sign`, `exp`, `log` |
+| Reduction | `reduce_sum`, `reduce_max`, `reduce_min`, `reduce_prod` |
+| Matrix products | `dot_general`, `dot_general_with` (per-operand conjugation through `DotGeneralOptions`), `matmul` |
+| Shape/layout | `reshape`, `transpose`, `broadcast_in_dim`, `slice`, `dynamic_slice`, `pad`, `reverse`, `tril`, `triu`, `concatenate`, `stack` |
+| Indexing | `gather`, `scatter`, index-selection and diagonal routes |
 | DType | checked `convert`, explicit lossy `cast` |
 
-For operations that have moved to an explicit boundary, borrow the engine with
-`runtime.with_eager_session(&mut engine, |session| { ... })`. This includes
-`matmul`, `dot_general_with_conj`, `scatter`, `sign`, `exp`, `log`, `reduce_prod`,
-`slice`, `dynamic_slice`, `pad`, `reverse`, `tril`, `triu`, `concatenate`,
-`stack`, `gather`, and the borrowed index-selection/diagonal routes. Do not call a remaining implicit
-`EagerTensor` operation while holding a borrowed session.
+Axis arguments are `isize`; a negative axis counts from the end. The generated
+[operation registry](../spec/generated/api-ops.md#core) lists which core
+operations exist on each layer.
 
 `with_eager_session` returns the callback's own `Result<T, E>`, so one `?`
 propagates both a failed engine registration and a failed operation. `E` is any
@@ -99,10 +103,11 @@ for example `Ok::<_, tenferro_ad::Error>(value)`, and a tensor-level error from
 `session.backend_session()` (an alias of `session.engine()`) converts with
 `.map_err(tenferro_ad::Error::from)`.
 
-Operation-family crates add eager extension traits. For example,
-`tenferro_linalg::EagerTensorLinalgExt` owns linalg eager methods and
-`tenferro_einsum::EagerSessionEinsumExt` owns eager einsum and `tensordot` on a
-borrowed session, for example
+Operation-family crates add eager traits on the same session. For example,
+`tenferro_linalg::EagerLinalgOps` provides `session.svd(&x)` and the other
+linalg operations, `tenferro_fft::EagerFftOps` provides `session.fft(&x)`, and
+`tenferro_einsum::EagerEinsumOps` provides eager einsum and `tensordot`, for
+example
 `ctx.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?`.
 
 For CUDA, eager means the operation is submitted immediately. It does not mean
@@ -181,7 +186,7 @@ a runtime reentry error. Nothing is locked and nothing deadlocks.
 ```rust
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let runtime = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
@@ -252,7 +257,7 @@ canonicalization never performs a hidden CPU/GPU transfer.
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_4 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
@@ -273,7 +278,7 @@ assert_eq!(negated.as_slice::<f64>().unwrap(), &[-1.0, -2.0, -3.0]);
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_5 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::TensorLinalgExt;
+use tenferro_linalg::LinalgOps;
 use tenferro_runtime::Tensor;
 
 let mut engine = CpuEngine::serial();
@@ -288,11 +293,11 @@ let qr = a.qr(&mut engine)?;
 let chol = a.cholesky(&mut engine)?;
 let eigh = a.eigh(&mut engine)?;
 let x = a.solve(&b, &mut engine)?;
-assert_eq!(svd.1.shape(), &[3]);
-assert_eq!(qr.0.shape(), &[3, 3]);
+assert_eq!(svd.s.shape(), &[3]);
+assert_eq!(qr.q.shape(), &[3, 3]);
 assert_eq!(chol.shape(), &[3, 3]);
-assert_eq!(eigh.0.shape(), &[3]);
-assert_eq!(eigh.1.shape(), &[3, 3]);
+assert_eq!(eigh.values.shape(), &[3]);
+assert_eq!(eigh.vectors.shape(), &[3, 3]);
 assert_eq!(x.shape(), &[3]);
 ```
 <!-- end-snippet-source -->
@@ -302,7 +307,7 @@ assert_eq!(x.shape(), &[3]);
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_6 -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{Tensor, TensorSessionOpsExt};
+use tenferro_runtime::{Tensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 let a = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0])?;
@@ -322,10 +327,12 @@ means summing down each column and keeping one value per column.
 
 ## Einsum
 
-Use `tenferro_einsum::EagerSessionEinsumExt` on a borrowed session when working
-with `EagerTensor`: `ctx.with_eager_session(|s| s.einsum(&[&a, &b], "ij,jk->ik"))?`.
-For traced graph execution, use `tenferro_einsum::TraceContextEinsumExt` and
-install `tenferro_einsum::extension_module` on the `Runtime`.
+Use `tenferro_einsum::EagerEinsumOps` on a borrowed session when working
+with `EagerTensor`:
+`ctx.with_eager_session(&mut engine, |s| s.einsum(&[&a, &b], "ij,jk->ik"))?`.
+For traced graph execution, use `tenferro_einsum::TracedEinsumOps` on the
+`TraceContext` (`trace.einsum(&[&a, &b], "ij,jk->ik")`) and install
+`tenferro_einsum::extension_module` on the `Runtime`.
 
 ## Extracting data
 

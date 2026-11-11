@@ -72,13 +72,15 @@ pub type Complex32 = Complex<f32>;
 pub type Complex64 = Complex<f64>;
 
 pub use tenferro_tensor_core::{
-    ErrorKind, IntoRankShape, IntoShapeVec, ShapeMismatch, ShapeVec, SliceSpec, StrideVec,
-    ValidationError, ValidationKind, INLINE_RANK,
+    normalize_axes, normalize_axis, AxisVec, ErrorKind, IntoRankShape, IntoShapeVec, ShapeMismatch,
+    ShapeVec, SliceSpec, StrideVec, ValidationError, ValidationKind, INLINE_RANK,
 };
 
 mod default_scalars;
+mod dest;
 mod erased_host;
 mod scalar_set;
+mod view;
 
 pub mod backend;
 pub mod cache;
@@ -106,10 +108,12 @@ pub use config::{
     degenerate_dot_kind, CompareDir, DegenerateDotKind, DotGeneralConfig, GatherConfig, PadConfig,
     ScatterConfig, SliceConfig,
 };
+pub use dest::{Conj, Dest, DestMode, DotGeneralOptions};
 pub use erased_host::ErasedHostTensor;
 pub use error::{BoxError, Error, ReinterpretError, Result};
 pub use native_engine::NativeSessionRef;
 pub use scalar_set::ScalarSet;
+pub use view::{AsView, Erased, Repr, Typed};
 
 pub use default_scalars::{DefaultScalars, DefaultScalarsRef, DefaultScalarsView};
 

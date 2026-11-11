@@ -1,5 +1,7 @@
 # Review decision records
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 tenferro keeps three different kinds of long-lived engineering notes:
 
 - `docs/plans/`: historical implementation plans and prior discussions. These

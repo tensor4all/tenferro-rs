@@ -7,22 +7,13 @@ fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> crate:
         axis as usize
     } else {
         rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
-            crate::Error::validation(
-                op,
-                ValidationError::AxisOutOfBounds {
-                    axis: axis.unsigned_abs(),
-                    rank,
-                },
-            )
+            crate::Error::validation(op, ValidationError::AxisOutOfBounds { axis, rank })
         })?
     };
     if normalized >= rank {
         return Err(crate::Error::validation(
             op,
-            ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
-                rank,
-            },
+            ValidationError::AxisOutOfBounds { axis, rank },
         ));
     }
     Ok(normalized)
@@ -30,13 +21,7 @@ fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> crate:
 
 fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> crate::Result<usize> {
     let insert_rank = rank.checked_add(1).ok_or_else(|| {
-        crate::Error::validation(
-            op,
-            ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
-                rank,
-            },
-        )
+        crate::Error::validation(op, ValidationError::AxisOutOfBounds { axis, rank })
     })?;
     let normalized = if axis >= 0 {
         axis as usize
@@ -47,7 +32,7 @@ fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> crate::R
                 crate::Error::validation(
                     op,
                     ValidationError::AxisOutOfBounds {
-                        axis: axis.unsigned_abs(),
+                        axis,
                         rank: insert_rank,
                     },
                 )
@@ -57,7 +42,7 @@ fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> crate::R
         return Err(crate::Error::validation(
             op,
             ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
+                axis,
                 rank: insert_rank,
             },
         ));

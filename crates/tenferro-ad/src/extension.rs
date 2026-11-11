@@ -172,6 +172,21 @@ fn apply_eager_in_session(
     finish_eager_extension_outputs(ctx, std_op, inputs, outputs, session)
 }
 
+/// Refuse `input` when it belongs to a different eager runtime than `session`.
+///
+/// Bridge for session entries implemented outside this crate, such as the
+/// consuming in-place FFT (owner: `tenferro-fft`, exception E01), which must
+/// return [`Error::ContextMismatch`] like every other session operation.
+///
+/// # Errors
+///
+/// Returns [`Error::ContextMismatch`] when `input` was created in another
+/// runtime.
+#[doc(hidden)]
+pub fn ensure_session_owns(session: &EagerSession<'_>, input: &EagerTensor) -> Result<()> {
+    ensure_session_runtime(session, &input.ctx)
+}
+
 fn ensure_session_runtime(session: &EagerSession<'_>, ctx: &Arc<EagerRuntime>) -> Result<()> {
     if !Arc::ptr_eq(session.runtime(), ctx) {
         return Err(Error::ContextMismatch {

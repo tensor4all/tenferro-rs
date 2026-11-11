@@ -6,6 +6,110 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking changes — one call grammar (#2552, planned for 0.12)
+
+Every operation family (core, linalg, einsum, FFT) now has one spelling per
+layer, generated from a per-family registry. The operation list, options,
+`_into` modes, layout behaviour and declared omissions are in
+`docs/spec/generated/api-ops.md`; the migration table is in
+`docs/getting-started/api-migration.md`.
+
+- **The grammar.** Concrete: `x.op(…, exec)`, `x.op_with(…, &opts, exec)` and,
+  where declared, `x.op_into(…, &opts, exec, dest)`; the engine is always the
+  last argument. Traced: `t.op(…)` / `t.op_with(…, &opts)`. Eager: the
+  `EagerSession` is the receiver, `sess.op(&x, …)` / `sess.op_with(&x, …, &opts)`.
+  A concrete receiver is any `AsView` (`Tensor`, `TensorRead`, `TypedTensor<T>`,
+  `TypedTensorView<T>`, and references to them): owned, borrowed, typed and
+  strided inputs call the same method, and typed inputs return typed results.
+  Options are `#[non_exhaustive]` structs built with setters
+  (`SvdOptions::default().shape(SvdShape::Full)`).
+  An operation has an `XxxOptions` type and an `op_with` form only when it has
+  semantic options: `add`, `solve`, `lstsq`, `householder_qr`, `lu`,
+  `full_piv_lu`, `full_piv_lu_solve`, `eig`, `eigvals`, `slogdet`, `det`, `inv`
+  and `tensordot` have none, so their `_into` forms (`solve_into`, `add_into`)
+  take no options either (#2552 Q14).
+- **New traits.** `CoreOps` (tenferro-runtime), `LinalgOps`, `TracedLinalgOps`,
+  `EagerLinalgOps`, `EinsumOps` (on `[X]` / `[X; N]`), `TensordotOps`,
+  `TracedEinsumOps` (on `TraceContext`), `TracedTensordotOps`, `EagerEinsumOps`,
+  `FftOps`, `TracedFftOps`, `EagerFftOps`. Core traced and eager operations
+  stay inherent `TracedTensor` / `EagerSession` methods.
+- **Removed traits.** `TensorLinalgExt`, `TensorReadLinalgExt`,
+  `TypedTensorLinalgExt`, `TracedTensorLinalgExt`, `TraceContextLinalgExt`,
+  `EagerSessionLinalgExt`, `EagerTensorLinalgExt`; `TensorEinsumExt`,
+  `TensorEinsumIntoExt`, `TensorReadEinsumExt`, `TensorReadEinsumIntoExt`,
+  `TypedTensorEinsumExt`, `TypedTensorEinsumIntoExt`,
+  `TypedTensorReadEinsumExt`, `TypedTensorReadEinsumIntoExt`,
+  `TensorTensordotExt`, `TypedTensorTensordotExt`, `TraceContextEinsumExt`,
+  `TracedTensorEinsumExt`, `EagerSessionEinsumExt`; `TensorFftExt`,
+  `TensorReadFftExt`, `TracedTensorFftExt`, `TraceContextFftExt`,
+  `EagerSessionFftExt`, `EagerTensorFftExt`; `TensorSessionOpsExt`,
+  `TypedTensorSessionOpsExt`, `TypedTensorMaskSessionOpsExt`.
+- **Removed spellings.** Every `*_read` operation (`svd_read`,
+  `einsum_read_into`, `fft_read`, …: pass the `TensorRead` to the plain
+  method), `svd_full` (`svd_with` + `SvdShape::Full`), `*_with_options`
+  (`*_with`), `pinv_with_rtol` (`PinvOptions::rtol`), `solve_read_into`
+  (`solve_into` with `Dest::overwrite`), positional `triangular_solve` and
+  `norm` arguments (`TriangularSolveOptions`, `NormOptions`),
+  `einsum_notation` / `einsum_subscripts` (`einsum` takes any `EinsumSpec`),
+  `ConcreteEinsumPlan::prepare_{subscripts,notation,typed*,read*}` and
+  `execute_{typed,read}*` / `execute_read_into_accum`
+  (`prepare(inputs, spec, &opts)`, `execute`, `execute_into(.., dest)`),
+  `dot_general_with_conj` (`dot_general_with` +
+  `DotGeneralOptions::default().lhs(Conj::Yes)`), the positional
+  `FftExecutor::{fft, ifft, rfft, irfft, fftn, ifftn, rfftn, irfftn}`
+  (`FftExecutor::*_with(&x, &opts, exec)`), the typed
+  `add_into(&rhs, &mut out, exec)` (`add_into(&rhs, &opts, exec, dest)`), and
+  the six free functions `svd_with_exec`, `svd_values_with_exec`,
+  `qr_with_exec`, `eigh_with_exec`, `eigh_values_with_exec`,
+  `eig_values_with_exec`. Backend and provider hooks (`*_read`,
+  `*_read_into_accum` on `Engine`, `TensorDot`, `LinalgBackend`, `FftBackend`,
+  and `LinalgBackend::svd_full`) are provider contracts and are unchanged.
+- **Results are structs.** `Svd { u, s, vh }`, `Qr { q, r }`,
+  `Lu { p, l, u, parity }`, `FullPivLu { p, l, u, q, parity }`,
+  `Eig { values, vectors }`, `Eigh { values, vectors }` and
+  `Slogdet { sign, log_abs_det }` replace the tuples and the aliases
+  `TypedSvd`, `TypedLu`, `TypedFullPivLu`, `TypedEig` and
+  `TypedRankRevealingQrResult`; fields keep the former tuple order.
+- **Destinations.** `_into` writes into a `tenferro_tensor::Dest`
+  (`Dest::overwrite`, `Dest::accumulate`, `Dest::scaled(out, alpha, beta)`) and
+  exists only where the registry declares it: `add_into` and `solve_into`
+  (overwrite), `einsum_into` and `ConcreteEinsumPlan::execute_into` (overwrite,
+  accumulate, scaled). An undeclared mode is `Unsupported` before any write.
+- **Signed axes.** Public axis arguments of `CoreOps`, `TracedTensor`,
+  `EagerSession`, linalg `norm`, FFT options and `TensorDotAxes::Axes` are
+  `isize`; a negative axis counts from the end. `AxisVec`, `normalize_axis`
+  and `normalize_axes` are public, and `AxisOutOfBounds.axis` is `isize`.
+  IR-shaped configurations (`DotGeneralConfig`, `GatherConfig`) and the
+  dimension map of `broadcast_in_dim` keep `usize`.
+- **Lanes.** `CpuEngine::with_lanes(&shares, &mut pools, |i, lane| ..)` splits
+  the engine's thread budget into lanes, each with a caller-owned
+  `BufferPool` (now re-exported at the `tenferro-cpu` root), and replaces the
+  `*_with_exec` entries: inside a lane the ordinary grammar runs
+  (`view.svd(lane)`). Only `svd`, `svdvals`, `qr`, `eigh`, `eigvalsh` and
+  `eigvals` run in a lane; every other operation returns `Unsupported`. Under
+  the `blas` provider a lane returns `Unsupported`.
+- **New operations.** Concrete and eager `fftn`, `ifftn`, `rfftn`, `irfftn`;
+  `EagerFftOps::{fft_in_place, ifft_in_place}` replace the eager-tensor
+  in-place FFT (`sess.fft_in_place(x, &opts)`).
+- **Behaviour changes.**
+  - linalg: the typed complex `lu` / `full_piv_lu` now succeed (their `parity`
+    has the input dtype); the `norm` duplicate-axis error names the role
+    `"axes"` instead of `"dim"`.
+  - einsum: concrete einsum and plan errors are `tenferro_tensor::Error`
+    (einsum-domain errors are `Extension` with the einsum error as source);
+    traced and eager errors are `tenferro_runtime::Error`, and a traced input
+    from another `TraceContext` is a `Validation` error; the `_into` error
+    label is `einsum_into`; a backend returning the wrong dtype for a typed
+    plan result is `Error::Internal`.
+  - FFT: concrete error labels are the operation name (`fft`, not
+    `TensorFftExt::fft`), executor labels are `FftExecutor::fft_with` etc.;
+    `ifft_in_place` validation errors name `ifft_in_place`; `FftnOptions` with
+    empty `axes` transforms every axis (NumPy) instead of failing.
+  - core: concrete reductions, `transpose` and `reverse` reject a repeated
+    axis as `DuplicateAxis { role: "axes" }` before the engine; a typed
+    `where_select` whose branch has another dtype reports `Error::Internal`;
+    `convert` / `cast` accept any receiver and gather a non-owned one once.
+
 ### Added
 
 - **`CpuEngine::dispatch_costs` is public** (#2590). The read-only accessor

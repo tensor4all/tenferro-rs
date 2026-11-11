@@ -1,5 +1,5 @@
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_einsum::TracedEinsumOps;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
 use tenferro_runtime::{GraphCompiler, Tensor, TraceContext, TypedTensor};
@@ -18,13 +18,14 @@ fn get_f64_data(tensor: &Tensor) -> &[f64] {
         .unwrap()
 }
 
-fn traced_input(trace: &TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {
-    trace
+fn traced_input(trace: &TraceContext, tensor: &Tensor) -> tenferro_runtime::TracedTensor {
+    let value = trace
         .input_with_default(
             ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape())),
             tensor.duplicate().unwrap(),
         )
-        .unwrap()
+        .unwrap();
+    trace.derive_tensor(value).unwrap()
 }
 
 fn compile_nary(
@@ -33,12 +34,12 @@ fn compile_nary(
     b: &Tensor,
     c: &Tensor,
 ) -> tenferro_runtime::CompiledGraph {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let a = traced_input(&trace, a);
     let b = traced_input(&trace, b);
     let c = traced_input(&trace, c);
-    let output = trace.einsum(&[a, b, c], "ij,jk,kl->il").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let output = trace.einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     compiler.compile_traced_graph(&graph).unwrap()
 }
 

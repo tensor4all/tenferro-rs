@@ -1,10 +1,10 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    EighOptions, LinalgBackend, QrOptions, RankRevealingQrOptions, SvdOptions, TensorLinalgExt,
-    TensorReadLinalgExt, TypedTensorLinalgExt,
+    Eig, EighOptions, KeepDims, LinalgBackend, LinalgOps, NormOptions, NormOrd, PinvOptions, Qr,
+    QrOptions, RankRevealingQrOptions, Slogdet, Svd, SvdOptions, TriangularSolveOptions, Uplo,
 };
-use tenferro_tensor::{Tensor, TensorRead, TensorScalar, TypedTensor};
+use tenferro_tensor::{AxisVec, Dest, Tensor, TensorRead, TensorScalar, TypedTensor};
 
 #[test]
 fn cpu_execution_session_implements_linalg_backend() {
@@ -19,10 +19,13 @@ fn dynamic_and_read_surfaces_return_fixed_tuples() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let (_u, s, _vt) = input.svd(&mut host).unwrap();
+        let Svd { s, .. } = input.svd(&mut host).unwrap();
         let svdvals = input.svdvals(&mut host).unwrap();
-        let (_q, r) = TensorRead::from_tensor(&input).qr_read(&mut host).unwrap();
-        let (sign, logabsdet) = input.slogdet(&mut host).unwrap();
+        let Qr { r, .. } = TensorRead::from_tensor(&input).qr(&mut host).unwrap();
+        let Slogdet {
+            sign,
+            log_abs_det: logabsdet,
+        } = input.slogdet(&mut host).unwrap();
 
         assert_eq!(s.as_slice::<f64>().unwrap(), &[4.0, 2.0]);
         assert_eq!(svdvals.as_slice::<f64>().unwrap(), &[4.0, 2.0]);
@@ -49,7 +52,7 @@ fn rank_revealing_qr_handles_interspersed_dependence() {
 
     {
         let result = input
-            .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12), &mut host)
+            .rank_revealing_qr_with(&RankRevealingQrOptions::default().rtol(1.0e-12), &mut host)
             .unwrap();
         assert_eq!(result.q.shape(), &[4, 3]);
         assert_eq!(result.r.shape(), &[3, 3]);
@@ -118,7 +121,7 @@ fn rank_revealing_qr_supports_all_float_and_complex_dtypes() {
     {
         for input in &inputs {
             let result = input
-                .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-6), &mut host)
+                .rank_revealing_qr_with(&RankRevealingQrOptions::default().rtol(1.0e-6), &mut host)
                 .unwrap();
             assert_eq!(result.q.dtype(), input.dtype());
             assert_eq!(result.r.dtype(), input.dtype());
@@ -139,7 +142,7 @@ fn rank_revealing_qr_handles_empty_dimensions_and_empty_batches() {
         for (shape, data) in inputs {
             let input = Tensor::from_vec_col_major(shape, data).unwrap();
             let result = input
-                .rank_revealing_qr(RankRevealingQrOptions::default(), &mut host)
+                .rank_revealing_qr_with(&RankRevealingQrOptions::default(), &mut host)
                 .unwrap();
             let ranks = result.rank.as_slice::<i64>().unwrap();
             if result.rank.shape().is_empty() {
@@ -157,7 +160,7 @@ fn rank_revealing_qr_rejects_non_finite_input() {
     let mut host = tenferro_cpu::CpuEngine::serial();
     {
         assert!(input
-            .rank_revealing_qr(RankRevealingQrOptions::default(), &mut host)
+            .rank_revealing_qr_with(&RankRevealingQrOptions::default(), &mut host)
             .is_err());
     };
 }
@@ -172,7 +175,7 @@ fn rank_revealing_qr_rejects_invalid_tolerances() {
             RankRevealingQrOptions::default().rtol(-1.0),
             RankRevealingQrOptions::default().atol(f64::INFINITY),
         ] {
-            assert!(input.rank_revealing_qr(options, &mut host).is_err());
+            assert!(input.rank_revealing_qr_with(&options, &mut host).is_err());
         }
     };
 }
@@ -183,7 +186,7 @@ fn rank_revealing_qr_zero_and_batched_metadata() {
     let mut host = tenferro_cpu::CpuEngine::serial();
     {
         let result = input
-            .rank_revealing_qr(RankRevealingQrOptions::default(), &mut host)
+            .rank_revealing_qr_with(&RankRevealingQrOptions::default(), &mut host)
             .unwrap();
         assert_eq!(result.q.shape(), &[2, 2, 2]);
         assert_eq!(result.r.shape(), &[2, 2, 2]);
@@ -210,7 +213,7 @@ fn rank_revealing_qr_mixes_zero_and_nonzero_items_in_one_batch() {
     for mut host in rrqr_provider_backends() {
         {
             let result = input
-                .rank_revealing_qr(RankRevealingQrOptions::default().rtol(1.0e-12), &mut host)
+                .rank_revealing_qr_with(&RankRevealingQrOptions::default().rtol(1.0e-12), &mut host)
                 .unwrap();
             assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[2, 0, 1]);
             let q = result.q.as_slice::<f64>().unwrap();
@@ -235,7 +238,7 @@ fn rank_revealing_qr_reports_non_finite_input_first_on_every_route() {
     for mut host in rrqr_provider_backends() {
         {
             let error = input
-                .rank_revealing_qr(RankRevealingQrOptions::default(), &mut host)
+                .rank_revealing_qr_with(&RankRevealingQrOptions::default(), &mut host)
                 .unwrap_err();
             assert!(error.to_string().contains("non-finite input"), "{error}");
         };
@@ -259,15 +262,17 @@ fn typed_surface_exposes_associated_real_and_complex_outputs() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let (_u, singular_values, _vt): (TypedTensor<f64>, TypedTensor<f64>, TypedTensor<f64>) =
-            real.svd(&mut host).unwrap();
-        let (eigenvalues, _vectors): (TypedTensor<Complex64>, TypedTensor<Complex64>) =
-            real.eig(&mut host).unwrap();
-        let (_cu, complex_singular_values, _cvt): (
-            TypedTensor<Complex64>,
-            TypedTensor<f64>,
-            TypedTensor<Complex64>,
-        ) = complex.svd(&mut host).unwrap();
+        let Svd {
+            s: singular_values, ..
+        }: Svd<TypedTensor<f64>> = real.svd(&mut host).unwrap();
+        let Eig {
+            values: eigenvalues,
+            ..
+        }: Eig<TypedTensor<Complex64>> = real.eig(&mut host).unwrap();
+        let Svd {
+            s: complex_singular_values,
+            ..
+        }: Svd<TypedTensor<Complex64>, TypedTensor<f64>> = complex.svd(&mut host).unwrap();
         let real_values: TypedTensor<f64> = real.svdvals(&mut host).unwrap();
         let complex_values: TypedTensor<f64> = complex.svdvals(&mut host).unwrap();
 
@@ -287,7 +292,7 @@ fn typed_input_is_erased_as_a_borrowed_read() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let factor = read.cholesky_read(&mut host).unwrap();
+        let factor = read.cholesky(&mut host).unwrap();
         assert_eq!(factor.shape(), &[2, 2]);
     };
 }
@@ -303,7 +308,14 @@ fn dynamic_composites_cover_inverse_pseudoinverse_eigenvalues_and_norm() {
         let pinv = input.pinv(&mut host).unwrap();
         let eigvalsh = input.eigvalsh(&mut host).unwrap();
         let eigvals = input.eigvals(&mut host).unwrap();
-        let norm = input.norm(None, Some(&[0, 1]), true, &mut host).unwrap();
+        let norm = input
+            .norm_with(
+                &NormOptions::default()
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>()))
+                    .keep_dims(KeepDims::Yes),
+                &mut host,
+            )
+            .unwrap();
 
         assert!((det.as_slice::<f64>().unwrap()[0] - 8.0).abs() < 1.0e-12);
         assert_eq!(inv.as_slice::<f64>().unwrap(), &[0.5, 0.0, 0.0, 0.25]);
@@ -326,9 +338,13 @@ fn read_surface_accepts_a_strided_view_without_an_input_clone() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let (_u, singular_values, _vt) = read.svd_read(&mut host).unwrap();
+        let Svd {
+            u: _u,
+            s: singular_values,
+            vh: _vt,
+        } = read.svd(&mut host).unwrap();
         let values = TensorRead::from_view(f64::tensor_view(values_view))
-            .svdvals_read(&mut host)
+            .svdvals(&mut host)
             .unwrap();
         assert_eq!(singular_values.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
         assert_eq!(values.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
@@ -350,9 +366,16 @@ fn typed_complex_composites_return_real_outputs_where_required() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        let (_sign, logabsdet): (TypedTensor<Complex64>, TypedTensor<f64>) =
-            input.slogdet(&mut host).unwrap();
-        let norm: TypedTensor<f64> = input.norm(None, Some(&[0, 1]), false, &mut host).unwrap();
+        let Slogdet {
+            log_abs_det: logabsdet,
+            ..
+        }: Slogdet<TypedTensor<Complex64>, TypedTensor<f64>> = input.slogdet(&mut host).unwrap();
+        let norm: TypedTensor<f64> = input
+            .norm_with(
+                &NormOptions::default().axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
+            .unwrap();
 
         assert!((logabsdet.as_slice().unwrap()[0] - 8.0_f64.ln()).abs() < 1.0e-12);
         assert!((norm.as_slice().unwrap()[0] - 20.0_f64.sqrt()).abs() < 1.0e-12);
@@ -371,7 +394,11 @@ fn typed_solve_surfaces_accept_vector_and_matrix_rhs() {
         let vector_x = a.full_piv_lu_solve(&vector, &mut host).unwrap();
         let matrix_x = a.full_piv_lu_solve(&matrix, &mut host).unwrap();
         let triangular_x = a
-            .triangular_solve(&matrix, true, false, false, false, &mut host)
+            .triangular_solve_with(
+                &matrix,
+                &TriangularSolveOptions::default().uplo(Uplo::Upper),
+                &mut host,
+            )
             .unwrap();
 
         assert_eq!(vector_x.as_slice().unwrap(), &[2.0, 2.0]);
@@ -388,15 +415,35 @@ fn concrete_norm_distinguishes_empty_axes_and_rejects_invalid_axes() {
     assert_eq!(host.num_threads(), 1);
 
     {
-        let identity = input.norm(Some(2.0), Some(&[]), false, &mut host).unwrap();
+        let identity = input
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::P(2.0))
+                    .axes(Some([].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
+            .unwrap();
         let error = input
-            .norm(Some(2.0), Some(&[1]), false, &mut host)
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::P(2.0))
+                    .axes(Some([1].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
             .unwrap_err();
         let duplicate_nonempty = input
-            .norm(Some(2.0), Some(&[0, 0]), false, &mut host)
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::P(2.0))
+                    .axes(Some([0, 0].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
             .unwrap_err();
         let duplicate_empty = empty
-            .norm(None, Some(&[0, 0]), false, &mut host)
+            .norm_with(
+                &NormOptions::default().axes(Some([0, 0].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
             .unwrap_err();
 
         assert_eq!(identity.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
@@ -408,7 +455,7 @@ fn concrete_norm_distinguishes_empty_axes_and_rejects_invalid_axes() {
                     op: "norm",
                     source: tenferro_tensor::ValidationError::DuplicateAxis {
                         axis: 0,
-                        role: "dim"
+                        role: "axes"
                     }
                 }
             ));
@@ -424,33 +471,29 @@ fn read_surface_covers_factorizations_and_composites() {
 
     {
         TensorRead::from_tensor(&a)
-            .svd_with_options_read(SvdOptions::default(), &mut host)
+            .svd_with(&SvdOptions::default(), &mut host)
             .unwrap();
         TensorRead::from_tensor(&a)
-            .qr_with_options_read(QrOptions::default(), &mut host)
+            .qr_with(&QrOptions::default(), &mut host)
             .unwrap();
-        TensorRead::from_tensor(&a).lu_read(&mut host).unwrap();
-        TensorRead::from_tensor(&a)
-            .full_piv_lu_read(&mut host)
-            .unwrap();
+        TensorRead::from_tensor(&a).lu(&mut host).unwrap();
+        TensorRead::from_tensor(&a).full_piv_lu(&mut host).unwrap();
         let x = TensorRead::from_tensor(&a)
-            .full_piv_lu_solve_read(TensorRead::from_tensor(&b), &mut host)
+            .full_piv_lu_solve(&TensorRead::from_tensor(&b), &mut host)
             .unwrap();
         TensorRead::from_tensor(&a)
-            .solve_read(TensorRead::from_tensor(&b), &mut host)
+            .solve(&TensorRead::from_tensor(&b), &mut host)
             .unwrap();
         TensorRead::from_tensor(&a)
-            .eigh_with_options_read(EighOptions::default(), &mut host)
+            .eigh_with(&EighOptions::default(), &mut host)
             .unwrap();
-        TensorRead::from_tensor(&a).eig_read(&mut host).unwrap();
-        TensorRead::from_tensor(&a).slogdet_read(&mut host).unwrap();
-        TensorRead::from_tensor(&a).det_read(&mut host).unwrap();
-        TensorRead::from_tensor(&a).inv_read(&mut host).unwrap();
-        let svdvals = TensorRead::from_tensor(&a).svdvals_read(&mut host).unwrap();
-        let eigvalsh = TensorRead::from_tensor(&a)
-            .eigvalsh_read(&mut host)
-            .unwrap();
-        let eigvals = TensorRead::from_tensor(&a).eigvals_read(&mut host).unwrap();
+        TensorRead::from_tensor(&a).eig(&mut host).unwrap();
+        TensorRead::from_tensor(&a).slogdet(&mut host).unwrap();
+        TensorRead::from_tensor(&a).det(&mut host).unwrap();
+        TensorRead::from_tensor(&a).inv(&mut host).unwrap();
+        let svdvals = TensorRead::from_tensor(&a).svdvals(&mut host).unwrap();
+        let eigvalsh = TensorRead::from_tensor(&a).eigvalsh(&mut host).unwrap();
+        let eigvals = TensorRead::from_tensor(&a).eigvals(&mut host).unwrap();
         // Values-only reads must still produce the same eigenvalues as the
         // full decomposition surfaces (issue #1666). A = [[4, 1], [1, 3]] has
         // eigenvalues (7 ± √5) / 2.
@@ -462,12 +505,17 @@ fn read_surface_covers_factorizations_and_composites() {
         assert!((eigvalsh_values[1] - (7.0 + 5.0_f64.sqrt()) / 2.0).abs() < 1.0e-12);
         assert_eq!(eigvals.dtype(), tenferro_tensor::DType::C64);
         assert_eq!(eigvals.shape(), &[2]);
-        TensorRead::from_tensor(&a).pinv_read(&mut host).unwrap();
+        TensorRead::from_tensor(&a).pinv(&mut host).unwrap();
         TensorRead::from_tensor(&a)
-            .pinv_with_rtol_read(1.0e-12, &mut host)
+            .pinv_with(&PinvOptions::default().rtol(Some(1.0e-12)), &mut host)
             .unwrap();
         TensorRead::from_tensor(&a)
-            .norm_read(Some(2.0), Some(&[0, 1]), false, &mut host)
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::P(2.0))
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
             .unwrap();
 
         let actual = x.as_slice::<f64>().unwrap();
@@ -477,8 +525,8 @@ fn read_surface_covers_factorizations_and_composites() {
 }
 
 #[test]
-fn read_surface_solve_read_into_writes_the_caller_buffer_directly() {
-    // The concrete `solve_read_into` keeps the direct write path: the CPU
+fn read_surface_solve_into_writes_the_caller_buffer_directly() {
+    // The concrete `solve_into` keeps the direct write path: the CPU
     // exec session solves into the caller's buffer without an allocate-then-
     // copy round trip (issue #1680 Phase 3).
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
@@ -487,10 +535,10 @@ fn read_surface_solve_read_into_writes_the_caller_buffer_directly() {
 
     let mut owned = Tensor::from_vec_col_major([2, 1], vec![-9.0_f64; 2]).unwrap();
     {
-        TensorRead::from_tensor(&a).solve_read_into(
-            TensorRead::from_tensor(&b),
-            tenferro_tensor::TensorWrite::from_tensor(&mut owned),
+        TensorRead::from_tensor(&a).solve_into(
+            &TensorRead::from_tensor(&b),
             &mut host,
+            Dest::overwrite(tenferro_tensor::TensorWrite::from_tensor(&mut owned)),
         )
     }
     .unwrap();
@@ -503,10 +551,12 @@ fn read_surface_solve_read_into_writes_the_caller_buffer_directly() {
     let view =
         tenferro_tensor::TypedTensorViewMut::from_slice([2, 1], [1, 4], 1, &mut storage).unwrap();
     {
-        TensorRead::from_tensor(&a).solve_read_into(
-            TensorRead::from_tensor(&b),
-            tenferro_tensor::TensorWrite::from_view(tenferro_tensor::TensorViewMut::F64(view)),
+        TensorRead::from_tensor(&a).solve_into(
+            &TensorRead::from_tensor(&b),
             &mut host,
+            Dest::overwrite(tenferro_tensor::TensorWrite::from_view(
+                tenferro_tensor::TensorViewMut::F64(view),
+            )),
         )
     }
     .unwrap();
@@ -523,25 +573,29 @@ fn typed_surface_covers_all_receiver_adapters() {
     let mut host = tenferro_cpu::CpuEngine::serial();
 
     {
-        a.svd_with_options(SvdOptions::default(), &mut host)
-            .unwrap();
+        a.svd_with(&SvdOptions::default(), &mut host).unwrap();
         a.qr(&mut host).unwrap();
-        a.qr_with_options(QrOptions::default(), &mut host).unwrap();
+        a.qr_with(&QrOptions::default(), &mut host).unwrap();
         a.lu(&mut host).unwrap();
         a.full_piv_lu(&mut host).unwrap();
         a.solve(&b, &mut host).unwrap();
         a.cholesky(&mut host).unwrap();
         a.eigh(&mut host).unwrap();
-        a.eigh_with_options(EighOptions::default(), &mut host)
-            .unwrap();
+        a.eigh_with(&EighOptions::default(), &mut host).unwrap();
         a.det(&mut host).unwrap();
         a.inv(&mut host).unwrap();
         a.eigvalsh(&mut host).unwrap();
         a.eigvals(&mut host).unwrap();
         a.pinv(&mut host).unwrap();
-        a.pinv_with_rtol(1.0e-12, &mut host).unwrap();
+        a.pinv_with(&PinvOptions::default().rtol(Some(1.0e-12)), &mut host)
+            .unwrap();
         let norm = a
-            .norm(Some(f64::INFINITY), Some(&[0, 1]), false, &mut host)
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::Inf)
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
             .unwrap();
 
         assert_eq!(norm.as_slice().unwrap(), &[5.0]);
@@ -579,39 +633,80 @@ fn concrete_spectral_norm_preserves_signed_and_complex_input_across_surfaces() {
     assert_eq!(backend.num_threads(), 1);
 
     {
-        for order in [Some(2.0), Some(-2.0)] {
+        for order in [NormOrd::P(2.0), NormOrd::P(-2.0)] {
             for value in [
                 signed
-                    .norm(order, Some(&[0, 1]), false, &mut backend)
+                    .norm_with(
+                        &NormOptions::default()
+                            .ord(order)
+                            .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                        &mut backend,
+                    )
                     .unwrap(),
                 TensorRead::from_tensor(&signed)
-                    .norm_read(order, Some(&[0, 1]), false, &mut backend)
+                    .norm_with(
+                        &NormOptions::default()
+                            .ord(order)
+                            .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                        &mut backend,
+                    )
                     .unwrap(),
                 complex
-                    .norm(order, Some(&[0, 1]), false, &mut backend)
+                    .norm_with(
+                        &NormOptions::default()
+                            .ord(order)
+                            .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                        &mut backend,
+                    )
                     .unwrap(),
                 TensorRead::from_tensor(&complex)
-                    .norm_read(order, Some(&[0, 1]), false, &mut backend)
+                    .norm_with(
+                        &NormOptions::default()
+                            .ord(order)
+                            .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                        &mut backend,
+                    )
                     .unwrap(),
                 TensorRead::from_view(tenferro_tensor::TensorView::F64(
                     typed_signed.as_view().transpose_view([1, 0]).unwrap(),
                 ))
-                .norm_read(order, Some(&[1, 0]), true, &mut backend)
+                .norm_with(
+                    &NormOptions::default()
+                        .ord(order)
+                        .axes(Some([1, 0].into_iter().collect::<AxisVec>()))
+                        .keep_dims(KeepDims::Yes),
+                    &mut backend,
+                )
                 .unwrap(),
                 TensorRead::from_view(tenferro_tensor::TensorView::C64(
                     typed_complex.as_view().transpose_view([1, 0]).unwrap(),
                 ))
-                .norm_read(order, Some(&[0, 1]), false, &mut backend)
+                .norm_with(
+                    &NormOptions::default()
+                        .ord(order)
+                        .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                    &mut backend,
+                )
                 .unwrap(),
             ] {
                 assert!((value.as_slice::<f64>().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
             }
 
             let signed_value = typed_signed
-                .norm(order, Some(&[0, 1]), false, &mut backend)
+                .norm_with(
+                    &NormOptions::default()
+                        .ord(order)
+                        .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                    &mut backend,
+                )
                 .unwrap();
             let complex_value = typed_complex
-                .norm(order, Some(&[0, 1]), false, &mut backend)
+                .norm_with(
+                    &NormOptions::default()
+                        .ord(order)
+                        .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                    &mut backend,
+                )
                 .unwrap();
             assert!((signed_value.as_slice().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
             assert!((complex_value.as_slice().unwrap()[0] - 2.0_f64.sqrt()).abs() < 1.0e-12);
@@ -631,21 +726,44 @@ fn concrete_norm_covers_orders_axis_permutation_and_validation() {
 
     {
         for order in [
-            Some(0.0),
-            Some(1.0),
-            Some(-1.0),
-            Some(2.0),
-            Some(-2.0),
-            Some(f64::INFINITY),
-            Some(f64::NEG_INFINITY),
+            NormOrd::Zero,
+            NormOrd::P(1.0),
+            NormOrd::P(-1.0),
+            NormOrd::P(2.0),
+            NormOrd::P(-2.0),
+            NormOrd::Inf,
+            NormOrd::NegInf,
         ] {
-            matrix.norm(order, Some(&[0, 1]), false, &mut host).unwrap();
+            matrix
+                .norm_with(
+                    &NormOptions::default()
+                        .ord(order)
+                        .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                    &mut host,
+                )
+                .unwrap();
         }
-        tensor.norm(None, Some(&[2, 0]), true, &mut host).unwrap();
-        tensor.norm(Some(3.0), None, false, &mut host).unwrap();
+        tensor
+            .norm_with(
+                &NormOptions::default()
+                    .axes(Some([2, 0].into_iter().collect::<AxisVec>()))
+                    .keep_dims(KeepDims::Yes),
+                &mut host,
+            )
+            .unwrap();
+        tensor
+            .norm_with(&NormOptions::default().ord(NormOrd::P(3.0)), &mut host)
+            .unwrap();
 
-        assert!(tensor.norm(None, Some(&[0, 0]), false, &mut host).is_err());
-        assert!(tensor.norm(Some(0.0), None, false, &mut host).is_ok());
+        assert!(tensor
+            .norm_with(
+                &NormOptions::default().axes(Some([0, 0].into_iter().collect::<AxisVec>())),
+                &mut host
+            )
+            .is_err());
+        assert!(tensor
+            .norm_with(&NormOptions::default().ord(NormOrd::Zero), &mut host)
+            .is_ok());
     };
 }
 
@@ -685,7 +803,9 @@ fn complex_pinv_matches_the_moore_penrose_inverse() {
             );
         }
 
-        let with_rtol = input.pinv_with_rtol(1.0e-12, &mut host).unwrap();
+        let with_rtol = input
+            .pinv_with(&PinvOptions::default().rtol(Some(1.0e-12)), &mut host)
+            .unwrap();
         for (index, (actual, expected)) in with_rtol
             .as_slice::<Complex64>()
             .unwrap()
@@ -729,7 +849,7 @@ fn eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones() {
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 0.0, 2.0]).unwrap();
     let mut host = tenferro_cpu::CpuEngine::serial();
     {
-        let (values, vectors) = diagonalizable.eig(&mut host).unwrap();
+        let Eig { values, vectors } = diagonalizable.eig(&mut host).unwrap();
         assert_eq!(values.shape(), &[2]);
         assert_eq!(vectors.shape(), &[2, 2]);
         assert_unit_norm_eigenvector_columns(&vectors);
@@ -741,7 +861,7 @@ fn eig_enforces_unit_norm_eigenvector_columns_and_refuses_non_finite_ones() {
     // norm contract on the `Ok` branch here too.
     let defective = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 0.0, 1.0]).unwrap();
     match defective.eig(&mut host) {
-        Ok((_, vectors)) => assert_unit_norm_eigenvector_columns(&vectors),
+        Ok(Eig { vectors, .. }) => assert_unit_norm_eigenvector_columns(&vectors),
         Err(error) => assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure),
     };
 }
@@ -755,7 +875,7 @@ fn full_piv_lu_solve_rejects_rank_deficiency_on_every_surface() {
 
     assert!(a.full_piv_lu_solve(&b, &mut host).is_err());
     assert!(TensorRead::from_tensor(&a)
-        .full_piv_lu_solve_read(TensorRead::from_tensor(&b), &mut host)
+        .full_piv_lu_solve(&TensorRead::from_tensor(&b), &mut host)
         .is_err());
     let typed_a =
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0e-17]).unwrap();
@@ -786,7 +906,12 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
     for (label, data, expected) in real_cases {
         let vector = Tensor::from_vec_col_major(vec![data.len()], data).unwrap();
         let count = vector
-            .norm(Some(0.0), Some(&[0]), false, &mut host)
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::Zero)
+                    .axes(Some([0].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
             .unwrap();
         assert_eq!(count.as_slice::<f64>().unwrap(), &[expected], "{label}");
     }
@@ -826,7 +951,12 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
             TypedTensor::from_vec_col_major(vec![data.len()], data).unwrap(),
         );
         let count = vector
-            .norm(Some(0.0), Some(&[0]), false, &mut host)
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::Zero)
+                    .axes(Some([0].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
             .unwrap();
         assert_eq!(count.as_slice::<f64>().unwrap(), &[expected], "{label}");
     }
@@ -848,10 +978,20 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
     );
     for count in [
         matrix
-            .norm(Some(0.0), Some(&[0, 1]), false, &mut host)
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::Zero)
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
             .unwrap(),
         complex_matrix
-            .norm(Some(0.0), Some(&[0, 1]), false, &mut host)
+            .norm_with(
+                &NormOptions::default()
+                    .ord(NormOrd::Zero)
+                    .axes(Some([0, 1].into_iter().collect::<AxisVec>())),
+                &mut host,
+            )
             .unwrap(),
     ] {
         assert_eq!(count.as_slice::<f64>().unwrap(), &[2.0]);

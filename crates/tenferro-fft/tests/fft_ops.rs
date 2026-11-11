@@ -1,13 +1,14 @@
 use num_complex::{Complex32, Complex64};
 use std::error::Error as StdError;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use tenferro_fft::FftOptions;
 mod support;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
 #[cfg(feature = "autodiff")]
-use tenferro_fft::EagerSessionFftExt;
-use tenferro_fft::{FftNorm, TracedTensorFftExt};
+use tenferro_fft::EagerFftOps;
+use tenferro_fft::{FftNorm, TracedFftOps};
 use tenferro_runtime::{
     DType, Error as RuntimeError, ErrorPhase, ExecutionEngine, ExtensionCacheSelector,
     GraphCompiler, PrepareError, SymDim, Tensor, TracedTensor,
@@ -91,10 +92,10 @@ fn eager_fft_family_installs_and_executes_on_the_borrowed_session() {
         .with_eager_session(&mut engine, |session| {
             let input = session
                 .constant_from(Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0]).unwrap())?;
-            let output = session.fft(&input, None, -1, FftNorm::Backward)?;
-            let inverse = session.ifft(&output, None, -1, FftNorm::Backward)?;
-            let half = session.rfft(&input, None, -1, FftNorm::Backward)?;
-            let real_back = session.irfft(&half, Some(2), -1, FftNorm::Backward)?;
+            let output = session.fft(&input)?;
+            let inverse = session.ifft(&output)?;
+            let half = session.rfft(&input)?;
+            let real_back = session.irfft_with(&half, &FftOptions::default().n(Some(2)))?;
             Ok::<_, tenferro_ad::Error>((output, inverse, half, real_back))
         })
         .unwrap();
@@ -120,9 +121,7 @@ fn eager_fft_family_installs_and_executes_on_the_borrowed_session() {
         .constant_from(Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0]).unwrap())
         .unwrap();
     let error = ctx
-        .with_eager_session(&mut engine, |session| {
-            session.fft(&foreign, None, -1, FftNorm::Backward)
-        })
+        .with_eager_session(&mut engine, |session| session.fft(&foreign))
         .unwrap_err();
     assert!(matches!(error, RuntimeError::ContextMismatch { .. }));
 }
@@ -197,7 +196,7 @@ fn traced_tensor_fft_ext_exposes_fft() {
     let x = trace
         .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
         .unwrap();
-    let y = x.rfft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.rfft().unwrap();
 
     assert_eq!(y.rank(), 1);
 }
@@ -206,7 +205,7 @@ fn traced_tensor_fft_ext_exposes_fft() {
 fn registered_runtime_rejects_gpu_input_without_ingress() {
     let trace = tenferro_runtime::TraceContext::new();
     let x = trace.input_concrete_shape(DType::C64, &[2]).unwrap();
-    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.fft().unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::C64, &[2])])
@@ -318,7 +317,7 @@ fn graph_runs_keep_fft_plans_in_the_engine() {
             ],
         )
         .unwrap();
-    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.fft().unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
     let mut engine = CpuEngine::serial();
@@ -355,7 +354,7 @@ fn fft_c64_matches_numpy_convention() {
             ],
         )
         .unwrap();
-    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.fft().unwrap();
     let out = run(&y);
 
     assert_eq!(out.shape(), &[4]);
@@ -379,7 +378,7 @@ fn fft_with_longer_transform_uses_zero_padded_lanes() {
             vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
         )
         .unwrap();
-    let y = x.fft(Some(4), -1, FftNorm::Backward).unwrap();
+    let y = x.fft_with(&FftOptions::default().n(Some(4))).unwrap();
     let out = run(&y);
 
     assert_eq!(out.shape(), &[4]);
@@ -408,7 +407,7 @@ fn fft_c32_uses_host_runtime() {
             ],
         )
         .unwrap();
-    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.fft().unwrap();
     let out = run(&y);
 
     assert_c32_close(
@@ -436,7 +435,7 @@ fn ifft_c64_applies_backward_normalization() {
             ],
         )
         .unwrap();
-    let y = spectrum.ifft(None, -1, FftNorm::Backward).unwrap();
+    let y = spectrum.ifft().unwrap();
     let out = run(&y);
 
     assert_c64_close(
@@ -456,7 +455,7 @@ fn rfft_f64_returns_onesided_spectrum() {
     let x = trace
         .from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])
         .unwrap();
-    let y = x.rfft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.rfft().unwrap();
     let out = run(&y);
 
     assert_eq!(out.shape(), &[3]);
@@ -476,7 +475,7 @@ fn rfft_f32_returns_onesided_spectrum() {
     let x = trace
         .from_vec_col_major(vec![4], vec![1.0_f32, 2.0, 3.0, 4.0])
         .unwrap();
-    let y = x.rfft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.rfft().unwrap();
     let out = run(&y);
 
     assert_eq!(out.shape(), &[3]);
@@ -503,7 +502,9 @@ fn irfft_c64_reconstructs_real_signal() {
             ],
         )
         .unwrap();
-    let y = spectrum.irfft(Some(4), -1, FftNorm::Backward).unwrap();
+    let y = spectrum
+        .irfft_with(&FftOptions::default().n(Some(4)))
+        .unwrap();
     let out = run(&y);
 
     assert_eq!(out.shape(), &[4]);
@@ -523,7 +524,9 @@ fn irfft_c32_reconstructs_real_signal() {
             ],
         )
         .unwrap();
-    let y = spectrum.irfft(Some(4), -1, FftNorm::Backward).unwrap();
+    let y = spectrum
+        .irfft_with(&FftOptions::default().n(Some(4)))
+        .unwrap();
     let out = run(&y);
 
     assert_eq!(out.shape(), &[4]);
@@ -552,7 +555,9 @@ fn folded_normalization_matches_the_reference_for_ifft_irfft_and_ortho() {
         (FftNorm::Backward, [1.0, 2.0, 3.0, 4.0]),
         (FftNorm::Ortho, [2.0, 4.0, 6.0, 8.0]),
     ] {
-        let out = run(&spectrum.ifft(None, -1, norm).unwrap());
+        let out = run(&spectrum
+            .ifft_with(&FftOptions::default().norm(norm))
+            .unwrap());
         let actual = out.as_slice::<Complex64>().unwrap();
         for (value, expected) in actual.iter().zip(expected) {
             assert_eq!(value.re, expected, "ifft norm={norm:?}");
@@ -574,7 +579,9 @@ fn folded_normalization_matches_the_reference_for_ifft_irfft_and_ortho() {
         (FftNorm::Backward, [1.0, 2.0, 3.0, 4.0]),
         (FftNorm::Ortho, [2.0, 4.0, 6.0, 8.0]),
     ] {
-        let out = run(&onesided.irfft(Some(4), -1, norm).unwrap());
+        let out = run(&onesided
+            .irfft_with(&FftOptions::default().n(Some(4)).norm(norm))
+            .unwrap());
         let actual = out.as_slice::<f64>().unwrap();
         for (value, expected) in actual.iter().zip(expected) {
             assert_eq!(*value, expected, "irfft norm={norm:?}");
@@ -599,13 +606,18 @@ fn eager_fft_matches_traced_fft() {
     let traced = trace
         .from_tensor_concrete_shape(input.duplicate().unwrap())
         .unwrap()
-        .fft(Some(3), -1, FftNorm::Ortho)
+        .fft_with(&FftOptions::default().n(Some(3)).norm(FftNorm::Ortho))
         .unwrap();
     let input = eager(input);
     let mut engine = CpuEngine::serial();
     let eager = input
         .runtime()
-        .with_eager_session(&mut engine, |s| s.fft(&input, Some(3), -1, FftNorm::Ortho))
+        .with_eager_session(&mut engine, |s| {
+            s.fft_with(
+                &input,
+                &FftOptions::default().n(Some(3)).norm(FftNorm::Ortho),
+            )
+        })
         .unwrap();
 
     assert_c64_close(
@@ -635,13 +647,18 @@ fn eager_ifft_matches_traced_ifft() {
     let traced = trace
         .from_tensor_concrete_shape(input.duplicate().unwrap())
         .unwrap()
-        .ifft(None, 0, FftNorm::Forward)
+        .ifft_with(&FftOptions::default().axis(0).norm(FftNorm::Forward))
         .unwrap();
     let input = eager(input);
     let mut engine = CpuEngine::serial();
     let eager = input
         .runtime()
-        .with_eager_session(&mut engine, |s| s.ifft(&input, None, 0, FftNorm::Forward))
+        .with_eager_session(&mut engine, |s| {
+            s.ifft_with(
+                &input,
+                &FftOptions::default().axis(0).norm(FftNorm::Forward),
+            )
+        })
         .unwrap();
 
     assert_c64_close(
@@ -662,13 +679,13 @@ fn eager_rfft_matches_traced_rfft() {
     let traced = trace
         .from_tensor_concrete_shape(input.duplicate().unwrap())
         .unwrap()
-        .rfft(None, -1, FftNorm::Backward)
+        .rfft()
         .unwrap();
     let input = eager(input);
     let mut engine = CpuEngine::serial();
     let eager = input
         .runtime()
-        .with_eager_session(&mut engine, |s| s.rfft(&input, None, -1, FftNorm::Backward))
+        .with_eager_session(&mut engine, |s| s.rfft(&input))
         .unwrap();
 
     assert_c64_close(
@@ -697,14 +714,14 @@ fn eager_irfft_matches_traced_irfft() {
     let traced = trace
         .from_tensor_concrete_shape(input.duplicate().unwrap())
         .unwrap()
-        .irfft(Some(4), -1, FftNorm::Backward)
+        .irfft_with(&FftOptions::default().n(Some(4)))
         .unwrap();
     let input = eager(input);
     let mut engine = CpuEngine::serial();
     let eager = input
         .runtime()
         .with_eager_session(&mut engine, |s| {
-            s.irfft(&input, Some(4), -1, FftNorm::Backward)
+            s.irfft_with(&input, &FftOptions::default().n(Some(4)))
         })
         .unwrap();
 
@@ -750,9 +767,7 @@ fn eager_fft_reuses_c2c_vjp_rule() {
     .unwrap();
 
     let y = ctx
-        .with_eager_session(&mut engine, |session| {
-            session.fft(&x, None, -1, FftNorm::Backward)
-        })
+        .with_eager_session(&mut engine, |session| session.fft(&x))
         .unwrap();
     let dx = ctx.vjp(&mut engine, &y, &x, &cotangent).unwrap();
 
@@ -777,7 +792,7 @@ fn irfft_rejects_spectrum_shorter_than_expected_one_sided_length() {
         )
         .unwrap();
 
-    let err = match spectrum.irfft(Some(4), -1, FftNorm::Backward) {
+    let err = match spectrum.irfft_with(&FftOptions::default().n(Some(4))) {
         Ok(_) => panic!("expected irfft to reject a short one-sided spectrum"),
         Err(err) => err,
     };
@@ -803,7 +818,7 @@ fn irfft_rejects_spectrum_longer_than_expected_one_sided_length() {
         )
         .unwrap();
 
-    let err = match spectrum.irfft(Some(4), -1, FftNorm::Backward) {
+    let err = match spectrum.irfft_with(&FftOptions::default().n(Some(4))) {
         Ok(_) => panic!("expected irfft to reject a long one-sided spectrum"),
         Err(err) => err,
     };
@@ -818,7 +833,7 @@ fn irfft_rejects_spectrum_longer_than_expected_one_sided_length() {
 fn traced_fft_rejects_invalid_dtype_axis_and_length() {
     let trace = tenferro_runtime::TraceContext::new();
     let int_input = trace.from_vec_col_major(vec![2], vec![1_i64, 2]).unwrap();
-    let err = match int_input.fft(None, -1, FftNorm::Backward) {
+    let err = match int_input.fft() {
         Ok(_) => panic!("expected fft to reject integer input"),
         Err(err) => err,
     };
@@ -836,7 +851,7 @@ fn traced_fft_rejects_invalid_dtype_axis_and_length() {
     let x = trace
         .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
         .unwrap();
-    let err = match x.rfft(Some(0), -1, FftNorm::Backward) {
+    let err = match x.rfft_with(&FftOptions::default().n(Some(0))) {
         Ok(_) => panic!("expected rfft to reject zero transform length"),
         Err(err) => err,
     };
@@ -854,7 +869,7 @@ fn traced_fft_rejects_invalid_dtype_axis_and_length() {
             TypedTensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap(),
         ))
         .unwrap();
-    let err = match zero_axis.rfft(None, -1, FftNorm::Backward) {
+    let err = match zero_axis.rfft() {
         Ok(_) => panic!("expected rfft to reject zero-length input axis"),
         Err(err) => err,
     };
@@ -867,7 +882,7 @@ fn traced_fft_rejects_invalid_dtype_axis_and_length() {
         }
     ));
 
-    let err = match x.rfft(None, 3, FftNorm::Backward) {
+    let err = match x.rfft_with(&FftOptions::default().axis(3)) {
         Ok(_) => panic!("expected rfft to reject out-of-bounds axis"),
         Err(err) => err,
     };
@@ -908,7 +923,7 @@ fn fft_c64_jvp_applies_fft_to_tangent() {
         )
         .unwrap();
 
-    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.fft().unwrap();
     let dy = fft_ad_context().jvp(&y, &x, &dx).unwrap();
     let out = run(&dy);
 
@@ -944,14 +959,14 @@ fn fft_c64_jvp_matches_finite_diff() {
         .from_vec_col_major(vec![4], tangent_data.clone())
         .unwrap();
 
-    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.fft().unwrap();
     let dy = fft_ad_context().jvp(&y, &x, &dx).unwrap();
     let out = run(&dy);
 
     let expected = finite_diff_c64_directional(
         |xs| {
             let x = trace.from_vec_col_major(vec![4], xs.to_vec()).unwrap();
-            let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+            let y = x.fft().unwrap();
             run(&y).as_slice::<Complex64>().unwrap().to_vec()
         },
         &data,
@@ -988,7 +1003,7 @@ fn fft_c64_vjp_uses_inverse_transform_with_adjoint_normalization() {
         )
         .unwrap();
 
-    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.fft().unwrap();
     let dx = fft_ad_context().vjp(&y, &x, &cotangent).unwrap();
     let out = run(&dx);
 
@@ -1025,7 +1040,7 @@ fn fft_c64_vjp_longer_transform_slices_to_input_length() {
         )
         .unwrap();
 
-    let y = x.fft(Some(4), -1, FftNorm::Backward).unwrap();
+    let y = x.fft_with(&FftOptions::default().n(Some(4))).unwrap();
     let dx = fft_ad_context().vjp(&y, &x, &cotangent).unwrap();
     let out = run(&dx);
 
@@ -1058,7 +1073,7 @@ fn fft_c64_vjp_shorter_transform_pads_to_input_length() {
         )
         .unwrap();
 
-    let y = x.fft(Some(2), -1, FftNorm::Backward).unwrap();
+    let y = x.fft_with(&FftOptions::default().n(Some(2))).unwrap();
     let dx = fft_ad_context().vjp(&y, &x, &cotangent).unwrap();
     let out = run(&dx);
 
@@ -1101,7 +1116,7 @@ fn ifft_c64_vjp_uses_forward_transform_with_adjoint_normalization() {
         )
         .unwrap();
 
-    let y = x.ifft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.ifft().unwrap();
     let dx = fft_ad_context().vjp(&y, &x, &cotangent).unwrap();
     let out = run(&dx);
 
@@ -1134,7 +1149,7 @@ fn rfft_vjp_unsupported_error_names_rfft_and_vjp() {
         )
         .unwrap();
 
-    let y = x.rfft(None, -1, FftNorm::Backward).unwrap();
+    let y = x.rfft().unwrap();
     let err = match fft_ad_context().vjp_optional(&y, &x, &cotangent) {
         Ok(_) => panic!("rfft VJP should remain unsupported"),
         Err(err) => err,
@@ -1172,7 +1187,9 @@ fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
         )
         .unwrap();
 
-    let y = spectrum.irfft(Some(4), -1, FftNorm::Backward).unwrap();
+    let y = spectrum
+        .irfft_with(&FftOptions::default().n(Some(4)))
+        .unwrap();
     let err = match fft_ad_context().jvp_optional(&y, &spectrum, &tangent) {
         Ok(_) => panic!("irfft JVP should remain unsupported"),
         Err(err) => err,
@@ -1192,7 +1209,7 @@ fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
 fn irfft_length_one_spectrum_is_rejected_at_preparation() {
     let trace = tenferro_runtime::TraceContext::new();
     let symbolic = trace.input_symbolic_shape(DType::C64, 1).unwrap();
-    let output = symbolic.irfft(None, -1, FftNorm::Backward).unwrap();
+    let output = symbolic.irfft().unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output).unwrap();
     assert_eq!(program.input_count(), 1);
@@ -1231,7 +1248,7 @@ fn irfft_length_one_spectrum_is_rejected_at_preparation() {
 fn symbolic_irfft_with_a_positive_resolved_extent_still_prepares() {
     let trace = tenferro_runtime::TraceContext::new();
     let symbolic = trace.input_symbolic_shape(DType::C64, 1).unwrap();
-    let output = symbolic.irfft(None, -1, FftNorm::Backward).unwrap();
+    let output = symbolic.irfft().unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output).unwrap();
 
@@ -1273,7 +1290,7 @@ fn symbolic_irfft_with_a_positive_resolved_extent_still_prepares() {
 fn symbolic_irfft_over_an_empty_batch_prepares_and_runs() {
     let trace = tenferro_runtime::TraceContext::new();
     let symbolic = trace.input_symbolic_shape(DType::C64, 2).unwrap();
-    let output = symbolic.irfft(None, -1, FftNorm::Backward).unwrap();
+    let output = symbolic.irfft().unwrap();
     assert_eq!(
         output.sym_shape().map(<[_]>::len),
         Some(2),
@@ -1311,7 +1328,7 @@ fn symbolic_irfft_over_an_empty_batch_prepares_and_runs() {
 fn concrete_irfft_over_an_empty_batch_prepares_and_runs() {
     let trace = tenferro_runtime::TraceContext::new();
     let concrete = trace.input_concrete_shape(DType::C64, &[0, 3]).unwrap();
-    let output = concrete.irfft(None, -1, FftNorm::Backward).unwrap();
+    let output = concrete.irfft().unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&output).unwrap();
 
@@ -1383,13 +1400,13 @@ fn symbolic_and_concrete_irfft_agree_on_an_empty_batch() {
 
     let symbolic_trace = tenferro_runtime::TraceContext::new();
     let symbolic_input = symbolic_trace.input_symbolic_shape(DType::C64, 2).unwrap();
-    let symbolic_output = symbolic_input.irfft(None, -1, FftNorm::Backward).unwrap();
+    let symbolic_output = symbolic_input.irfft().unwrap();
 
     let concrete_trace = tenferro_runtime::TraceContext::new();
     let concrete_input = concrete_trace
         .input_concrete_shape(DType::C64, &[0, 3])
         .unwrap();
-    let concrete_output = concrete_input.irfft(None, -1, FftNorm::Backward).unwrap();
+    let concrete_output = concrete_input.irfft().unwrap();
 
     // The inference rule, read off the route that knows the extents at build time.
     assert_eq!(

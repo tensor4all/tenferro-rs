@@ -3,7 +3,7 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 use tenferro_ad::{AdContext, EagerRuntime, EagerTensor, Tensor};
-use tenferro_linalg::EagerTensorLinalgExt;
+use tenferro_linalg::EagerLinalgOps;
 
 fn context() -> Arc<EagerRuntime> {
     let ad = AdContext::builder()
@@ -12,6 +12,14 @@ fn context() -> Arc<EagerRuntime> {
         .build()
         .unwrap();
     EagerRuntime::with_ad_context(&ad).unwrap()
+}
+
+fn solve(
+    ctx: &Arc<EagerRuntime>,
+    a: &EagerTensor,
+    b: &EagerTensor,
+) -> Result<EagerTensor, tenferro_ad::Error> {
+    ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.solve(a, b))
 }
 
 fn values(tensor: &EagerTensor, complex: bool) -> Vec<Complex64> {
@@ -77,10 +85,13 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                 .detach(&mut tenferro_cpu::CpuEngine::serial())
                 .unwrap();
             let axes: Vec<_> = (0..shape.len()).collect();
-            let solution = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+            let solution = solve(&ctx, &a, &b).unwrap();
             let loss = ctx
                 .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-                    s.reduce_sum(&solution, Some(&axes))
+                    s.reduce_sum(
+                        &solution,
+                        Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+                    )
                 })
                 .unwrap();
             drop(solution); // LU/pivots and X must survive without user handles.
@@ -104,10 +115,13 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                         .collect(),
                 );
                 let b = input(bv.clone());
-                let solution = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+                let solution = solve(&ctx, &a, &b).unwrap();
                 let loss = ctx
                     .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-                        s.reduce_sum(&solution, Some(&axes))
+                        s.reduce_sum(
+                            &solution,
+                            Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+                        )
                     })
                     .unwrap();
                 (
@@ -139,7 +153,10 @@ fn solve_saved_lu_preserves_real_complex_batched_higher_derivatives() {
                 .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                     let conjugated = s.conj(&direction)?;
                     let product = s.mul(&ga, &conjugated)?;
-                    s.reduce_sum(&product, Some(&axes))
+                    s.reduce_sum(
+                        &product,
+                        Some(&axes.iter().map(|&a| a as isize).collect::<Vec<_>>()),
+                    )
                 })
                 .unwrap();
             close(
@@ -178,7 +195,7 @@ fn solve_handles_single_and_multiple_tracked_inputs_and_no_grad() {
         };
         let a = make(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0], track_a);
         let b = make(vec![2, 1], vec![4.0_f64, 9.0], track_b);
-        let solution = a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).unwrap();
+        let solution = solve(&ctx, &a, &b).unwrap();
         close(&values(&solution, false), &[2.0.into(), 3.0.into()], 1e-12);
         if track_a || track_b {
             let loss = ctx
@@ -205,10 +222,7 @@ fn solve_handles_single_and_multiple_tracked_inputs_and_no_grad() {
             }
         }
         let _guard = ctx.no_grad();
-        assert!(!a
-            .solve(&mut tenferro_cpu::CpuEngine::serial(), &b)
-            .unwrap()
-            .tracks_grad());
+        assert!(!solve(&ctx, &a, &b).unwrap().tracks_grad());
     }
 }
 
@@ -226,7 +240,7 @@ fn solve_validates_both_operands_before_factorization() {
     )
     .unwrap();
     assert!(matches!(
-        a.solve(&mut tenferro_cpu::CpuEngine::serial(), &bad_b),
+        solve(&ctx, &a, &bad_b),
         Err(tenferro_ad::Error::TensorRuntime(
             tenferro_tensor::Error::Validation { .. }
         ))
@@ -238,7 +252,7 @@ fn solve_validates_both_operands_before_factorization() {
     ] {
         let invalid = EagerTensor::from_tensor_in(invalid, Arc::clone(&ctx)).unwrap();
         assert!(matches!(
-            a.solve(&mut tenferro_cpu::CpuEngine::serial(), &invalid),
+            solve(&ctx, &a, &invalid),
             Err(tenferro_ad::Error::TensorRuntime(
                 tenferro_tensor::Error::Validation { .. }
             ))
@@ -249,19 +263,14 @@ fn solve_validates_both_operands_before_factorization() {
         Arc::clone(&ctx),
     )
     .unwrap();
-    assert_eq!(
-        a.solve(&mut tenferro_cpu::CpuEngine::serial(), &empty)
-            .unwrap()
-            .shape(),
-        &[2, 0]
-    );
+    assert_eq!(solve(&ctx, &a, &empty).unwrap().shape(), &[2, 0]);
     let b = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64; 2]).unwrap(),
         Arc::clone(&ctx),
     )
     .unwrap();
     assert!(
-        a.solve(&mut tenferro_cpu::CpuEngine::serial(), &b).is_err(),
+        solve(&ctx, &a, &b).is_err(),
         "singular valid-shape system must still fail"
     );
     let other = EagerTensor::from_tensor_in(
@@ -270,7 +279,7 @@ fn solve_validates_both_operands_before_factorization() {
     )
     .unwrap();
     assert!(matches!(
-        a.solve(&mut tenferro_cpu::CpuEngine::serial(), &other),
+        solve(&ctx, &a, &other),
         Err(tenferro_ad::Error::ContextMismatch { .. })
     ));
 }

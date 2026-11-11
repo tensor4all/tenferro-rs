@@ -13,43 +13,42 @@ use crate::traced::{
 };
 use crate::TracedTensor;
 
-fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
-    let normalized = if axis >= 0 {
-        axis as usize
-    } else {
-        rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
-            Error::validation(
-                op,
-                ErrorPhase::GraphBuild,
-                ValidationError::AxisOutOfBounds {
-                    axis: axis.unsigned_abs(),
-                    rank,
-                },
-            )
-        })?
-    };
-    if normalized >= rank {
-        return Err(Error::validation(
-            op,
-            ErrorPhase::GraphBuild,
-            ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
-                rank,
-            },
-        ));
-    }
-    Ok(normalized)
+/// Normalize one signed axis of a traced operation (#2552 §3.2) through the
+/// shared `tenferro_tensor::normalize_axis`, reported as a graph-build error.
+pub(crate) fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
+    tenferro_tensor::normalize_axis(axis, rank)
+        .map_err(|e| Error::validation(op, ErrorPhase::GraphBuild, e))
 }
 
-fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
+/// Normalize a signed axis list of a traced operation, keeping its order.
+/// Duplicates are left to the operation's own validation.
+/// An already normalized axis as the signed form of the public surface.
+fn signed(axis: usize) -> Result<isize> {
+    isize::try_from(axis).map_err(|_| {
+        Error::validation(
+            "slice_builder",
+            ErrorPhase::GraphBuild,
+            ValidationError::IntegerOverflow,
+        )
+    })
+}
+
+pub(crate) fn normalize_existing_axes(
+    op: &'static str,
+    axes: &[isize],
+    rank: usize,
+) -> Result<Vec<usize>> {
+    axes.iter()
+        .map(|&axis| normalize_existing_axis(op, axis, rank))
+        .collect()
+}
+
+pub(crate) fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
     let insert_rank = rank.checked_add(1).ok_or_else(|| {
         Error::validation(
             op,
             ErrorPhase::GraphBuild,
-            ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
-                rank,
-            },
+            ValidationError::AxisOutOfBounds { axis, rank },
         )
     })?;
     let normalized = if axis >= 0 {
@@ -62,7 +61,7 @@ fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<u
                     op,
                     ErrorPhase::GraphBuild,
                     ValidationError::AxisOutOfBounds {
-                        axis: axis.unsigned_abs(),
+                        axis,
                         rank: insert_rank,
                     },
                 )
@@ -73,7 +72,7 @@ fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<u
             op,
             ErrorPhase::GraphBuild,
             ValidationError::AxisOutOfBounds {
-                axis: axis.unsigned_abs(),
+                axis,
                 rank: insert_rank,
             },
         ));
@@ -169,14 +168,14 @@ fn validate_stack_shapes(op: &'static str, shapes: &[&[usize]]) -> Result<()> {
 }
 
 #[derive(Clone, Debug)]
-enum AxisSelection {
+enum AxisSelection<A = usize> {
     Slice {
-        axis: usize,
+        axis: A,
         range: Range<usize>,
         step: usize,
     },
     Take {
-        axis: usize,
+        axis: A,
         indices: Vec<usize>,
     },
 }
@@ -204,7 +203,10 @@ fn validate_axis_selection(
         return Err(Error::validation(
             op,
             ErrorPhase::GraphBuild,
-            ValidationError::AxisOutOfBounds { axis, rank },
+            ValidationError::AxisOutOfBounds {
+                axis: isize::try_from(axis).unwrap_or(isize::MAX),
+                rank,
+            },
         ));
     }
     if seen[axis] {
@@ -290,7 +292,7 @@ fn apply_slice_axis_config(
 #[derive(Clone, Debug)]
 pub struct TracedSliceBuilder<'a> {
     tensor: &'a TracedTensor,
-    selections: Vec<AxisSelection>,
+    selections: Vec<AxisSelection<isize>>,
 }
 
 impl<'a> TracedSliceBuilder<'a> {
@@ -314,7 +316,7 @@ impl<'a> TracedSliceBuilder<'a> {
     /// let y = x.slice_builder().axis(0, 1..3).apply().unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// ```
-    pub fn axis(mut self, axis: usize, range: Range<usize>) -> Self {
+    pub fn axis(mut self, axis: isize, range: Range<usize>) -> Self {
         self.selections.push(AxisSelection::Slice {
             axis,
             range,
@@ -336,7 +338,7 @@ impl<'a> TracedSliceBuilder<'a> {
     /// let y = x.slice_builder().axis_step(0, 0..5, 2).apply().unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![3]));
     /// ```
-    pub fn axis_step(mut self, axis: usize, range: Range<usize>, step: usize) -> Self {
+    pub fn axis_step(mut self, axis: isize, range: Range<usize>, step: usize) -> Self {
         self.selections
             .push(AxisSelection::Slice { axis, range, step });
         self
@@ -355,7 +357,7 @@ impl<'a> TracedSliceBuilder<'a> {
     /// let y = x.slice_builder().take_axis(0, &[2, 0]).apply().unwrap();
     /// assert_eq!(y.try_concrete_shape(), Some(vec![2]));
     /// ```
-    pub fn take_axis(mut self, axis: usize, indices: &[usize]) -> Self {
+    pub fn take_axis(mut self, axis: isize, indices: &[usize]) -> Self {
         self.selections.push(AxisSelection::Take {
             axis,
             indices: indices.to_vec(),
@@ -385,8 +387,25 @@ impl<'a> TracedSliceBuilder<'a> {
     /// that cannot be built.
     pub fn apply(self) -> Result<TracedTensor> {
         let shape = concrete_shape_for_axis_slice(self.tensor, "slice_builder")?;
+        let selections = self
+            .selections
+            .into_iter()
+            .map(|selection| {
+                Ok(match selection {
+                    AxisSelection::Slice { axis, range, step } => AxisSelection::Slice {
+                        axis: normalize_existing_axis("slice_builder", axis, shape.len())?,
+                        range,
+                        step,
+                    },
+                    AxisSelection::Take { axis, indices } => AxisSelection::Take {
+                        axis: normalize_existing_axis("slice_builder", axis, shape.len())?,
+                        indices,
+                    },
+                })
+            })
+            .collect::<Result<Vec<AxisSelection>>>()?;
         let mut seen = vec![false; shape.len()];
-        for selection in &self.selections {
+        for selection in &selections {
             let axis = match selection {
                 AxisSelection::Slice { axis, .. } | AxisSelection::Take { axis, .. } => *axis,
             };
@@ -394,12 +413,12 @@ impl<'a> TracedSliceBuilder<'a> {
         }
 
         let mut output = self.tensor.clone();
-        if let Some(config) = apply_slice_axis_config("slice_builder", &shape, &self.selections)? {
+        if let Some(config) = apply_slice_axis_config("slice_builder", &shape, &selections)? {
             output = output.slice(config)?;
         }
-        for selection in self.selections {
+        for selection in selections {
             if let AxisSelection::Take { axis, indices } = selection {
-                output = output.take_axis(axis, &indices)?;
+                output = output.take_axis(signed(axis)?, &indices)?;
             }
         }
         Ok(output)
@@ -426,7 +445,7 @@ impl TracedTensor {
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
     /// outside the concrete rank, or `InvalidArgument` when `range` is
     /// outside the selected axis extent.
-    pub fn slice_axis(&self, axis: usize, range: Range<usize>) -> Result<Self> {
+    pub fn slice_axis(&self, axis: isize, range: Range<usize>) -> Result<Self> {
         self.slice_builder().axis(axis, range).apply()
     }
 
@@ -466,17 +485,7 @@ impl TracedTensor {
     /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
     /// outside the concrete rank, or `InvalidArgument` when an index list
     /// cannot be applied to the selected axis.
-    pub fn take_axis(&self, axis: usize, indices: &[usize]) -> Result<Self> {
-        let axis = isize::try_from(axis).map_err(|_| {
-            Error::validation(
-                "take_axis",
-                ErrorPhase::GraphBuild,
-                ValidationError::InvalidArgument {
-                    argument: "axis",
-                    message: format!("axis {axis} cannot be represented as isize"),
-                },
-            )
-        })?;
+    pub fn take_axis(&self, axis: isize, indices: &[usize]) -> Result<Self> {
         self.index_select(axis, indices)
     }
 
@@ -649,7 +658,7 @@ impl TracedTensor {
     /// Returns [`Error::Validation`] with `InvalidArgument` for an empty input
     /// list, `RankMismatch`/`ShapeMismatch` for incompatible input shapes, or
     /// `AxisOutOfBounds` when `axis` is outside the input rank.
-    pub fn concatenate(tensors: &[&Self], axis: usize) -> Result<Self> {
+    pub fn concatenate(tensors: &[&Self], axis: isize) -> Result<Self> {
         let first = tensors.first().copied().ok_or_else(|| {
             Error::validation(
                 "concatenate",
@@ -660,16 +669,7 @@ impl TracedTensor {
                 },
             )
         })?;
-        if axis >= first.rank {
-            return Err(Error::validation(
-                "concatenate",
-                ErrorPhase::GraphBuild,
-                ValidationError::AxisOutOfBounds {
-                    axis,
-                    rank: first.rank,
-                },
-            ));
-        }
+        let axis = normalize_existing_axis("concatenate", axis, first.rank)?;
         for tensor in tensors.iter().copied().skip(1) {
             if tensor.rank != first.rank {
                 return Err(Error::validation(

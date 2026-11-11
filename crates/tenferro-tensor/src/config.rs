@@ -179,7 +179,7 @@ impl DotGeneralConfig {
                 return Err(Error::validation(
                     DOT_GENERAL_OP,
                     ValidationError::AxisOutOfBounds {
-                        axis: d,
+                        axis: isize::try_from(d).unwrap_or(isize::MAX),
                         rank: lhs_rank,
                     },
                 ));
@@ -190,7 +190,7 @@ impl DotGeneralConfig {
                 return Err(Error::validation(
                     DOT_GENERAL_OP,
                     ValidationError::AxisOutOfBounds {
-                        axis: d,
+                        axis: isize::try_from(d).unwrap_or(isize::MAX),
                         rank: rhs_rank,
                     },
                 ));
@@ -201,7 +201,7 @@ impl DotGeneralConfig {
                 return Err(Error::validation(
                     DOT_GENERAL_OP,
                     ValidationError::AxisOutOfBounds {
-                        axis: d,
+                        axis: isize::try_from(d).unwrap_or(isize::MAX),
                         rank: lhs_rank,
                     },
                 ));
@@ -212,7 +212,7 @@ impl DotGeneralConfig {
                 return Err(Error::validation(
                     DOT_GENERAL_OP,
                     ValidationError::AxisOutOfBounds {
-                        axis: d,
+                        axis: isize::try_from(d).unwrap_or(isize::MAX),
                         rank: rhs_rank,
                     },
                 ));

@@ -6,7 +6,7 @@
 //! zero and the result matches a serial engine.
 
 use tenferro_cpu::CpuEngine;
-use tenferro_linalg::{HouseholderQr, QrOptions, TensorLinalgExt};
+use tenferro_linalg::{HouseholderQr, LinalgOps, Qr, QrOptions};
 use tenferro_tensor::Tensor;
 
 fn matrix(shape: [usize; 2], data: &[f64]) -> Tensor {
@@ -69,10 +69,13 @@ fn tiny_qr_uses_the_tlinalg_lane_inline() {
     let a = matrix([2, 2], &[2.0, 1.0, 1.0, 3.0]);
 
     let mut serial = CpuEngine::serial();
-    let (serial_q, serial_r) = a.qr(&mut serial).expect("serial qr");
+    let Qr {
+        q: serial_q,
+        r: serial_r,
+    } = a.qr(&mut serial).expect("serial qr");
 
     let mut engine = pooled(4);
-    let (q, r) = a.qr(&mut engine).expect("pooled qr");
+    let Qr { q, r } = a.qr(&mut engine).expect("pooled qr");
 
     assert_close(&values(&q), &values(&serial_q), "tlinalg q");
     assert_close(&values(&r), &values(&serial_r), "tlinalg r");
@@ -118,15 +121,15 @@ fn linalg_families_match_serial_on_pooled_engines_at_one_two_and_four_threads() 
         let lu = a.lu(&mut engine).expect("pooled lu");
         let solve = a.solve(&b, &mut engine).expect("pooled solve");
 
-        assert_close(&values(&qr.0), &values(&serial_qr.0), "qr q");
-        assert_close(&values(&qr.1), &values(&serial_qr.1), "qr r");
-        assert_close(&values(&svd.0), &values(&serial_svd.0), "svd u");
-        assert_close(&values(&svd.1), &values(&serial_svd.1), "svd s");
-        assert_close(&values(&svd.2), &values(&serial_svd.2), "svd vt");
-        assert_close(&values(&lu.0), &values(&serial_lu.0), "lu p");
-        assert_close(&values(&lu.1), &values(&serial_lu.1), "lu l");
-        assert_close(&values(&lu.2), &values(&serial_lu.2), "lu u");
-        assert_close(&values(&lu.3), &values(&serial_lu.3), "lu q");
+        assert_close(&values(&qr.q), &values(&serial_qr.q), "qr q");
+        assert_close(&values(&qr.r), &values(&serial_qr.r), "qr r");
+        assert_close(&values(&svd.u), &values(&serial_svd.u), "svd u");
+        assert_close(&values(&svd.s), &values(&serial_svd.s), "svd s");
+        assert_close(&values(&svd.vh), &values(&serial_svd.vh), "svd vt");
+        assert_close(&values(&lu.p), &values(&serial_lu.p), "lu p");
+        assert_close(&values(&lu.l), &values(&serial_lu.l), "lu l");
+        assert_close(&values(&lu.u), &values(&serial_lu.u), "lu u");
+        assert_close(&values(&lu.parity), &values(&serial_lu.parity), "lu q");
         assert_close(&values(&solve), &values(&serial_solve), "solve");
     }
 }

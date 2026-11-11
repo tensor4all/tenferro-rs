@@ -1,9 +1,9 @@
 use tenferro_cpu::CpuEngine;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::{
-    CompiledGraph, DType, DotGeneralConfig, Error, ErrorPhase, ExecutionEngine, GatherConfig,
-    GraphCompiler, PadConfig, Prepared, Runtime, ScatterConfig, SliceConfig, Tensor,
-    TensorSessionOpsExt, TracedTensor,
+    CompiledGraph, CoreOps, DType, DotGeneralConfig, Error, ErrorPhase, ExecutionEngine,
+    GatherConfig, GraphCompiler, PadConfig, Prepared, Runtime, ScatterConfig, SliceConfig, Tensor,
+    TracedTensor,
 };
 use tenferro_tensor::{Error as TensorError, ShapeMismatch, TensorRead, ValidationError};
 

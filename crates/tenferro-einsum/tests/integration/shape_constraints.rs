@@ -1,4 +1,4 @@
-use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
+use tenferro_einsum::{EinsumOptimize, TracedEinsumOps};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
 use tenferro_runtime::{GraphCompiler, TraceContext};
@@ -8,39 +8,47 @@ use super::support;
 
 #[test]
 fn ordered_inputs_enforce_symbolic_contracted_dimension_equality() {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let lhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [
-                DimExpr::InputDim {
-                    input_idx: 0,
-                    axis: 0,
-                },
-                DimExpr::InputDim {
-                    input_idx: 0,
-                    axis: 1,
-                },
-            ],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [
+                        DimExpr::InputDim {
+                            input_idx: 0,
+                            axis: 0,
+                        },
+                        DimExpr::InputDim {
+                            input_idx: 0,
+                            axis: 1,
+                        },
+                    ],
+                ))
+                .unwrap(),
+        )
         .unwrap();
     let rhs = trace
-        .input(ProgramInputSpec::new(
-            DType::F64,
-            [
-                DimExpr::InputDim {
-                    input_idx: 1,
-                    axis: 0,
-                },
-                DimExpr::InputDim {
-                    input_idx: 1,
-                    axis: 1,
-                },
-            ],
-        ))
+        .derive_tensor(
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::F64,
+                    [
+                        DimExpr::InputDim {
+                            input_idx: 1,
+                            axis: 0,
+                        },
+                        DimExpr::InputDim {
+                            input_idx: 1,
+                            axis: 1,
+                        },
+                    ],
+                ))
+                .unwrap(),
+        )
         .unwrap();
-    let output = trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let output = trace.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
     let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     let bad_rhs = Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
@@ -53,18 +61,25 @@ fn explicit_nary_path_preserves_shape_constraints() {
     let spec = |rows, cols| {
         ProgramInputSpec::new(DType::F64, [DimExpr::Const(rows), DimExpr::Const(cols)])
     };
-    let mut trace = TraceContext::new();
-    let a = trace.input(spec(2, 3)).unwrap();
-    let b = trace.input(spec(3, 4)).unwrap();
-    let c = trace.input(spec(4, 5)).unwrap();
+    let trace = TraceContext::new();
+    let a = trace
+        .derive_tensor(trace.input(spec(2, 3)).unwrap())
+        .unwrap();
+    let b = trace
+        .derive_tensor(trace.input(spec(3, 4)).unwrap())
+        .unwrap();
+    let c = trace
+        .derive_tensor(trace.input(spec(4, 5)).unwrap())
+        .unwrap();
     let output = trace
         .einsum_with(
-            &[a, b, c],
+            &[&a, &b, &c],
             "ab,bc,cd->ad",
-            EinsumOptimize::Path(vec![(0, 1), (0, 1)]),
+            &tenferro_einsum::EinsumOptions::default()
+                .optimize(EinsumOptimize::Path(vec![(0, 1), (0, 1)])),
         )
         .unwrap();
-    let graph = trace.finish(&[output]).unwrap();
+    let graph = trace.finish(&[output.trace_value()]).unwrap();
 
     assert!(GraphCompiler::new().compile_traced_graph(&graph).is_ok());
 }

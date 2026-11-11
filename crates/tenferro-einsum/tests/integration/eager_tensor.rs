@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuEngine;
-use tenferro_einsum::EagerSessionEinsumExt;
+use tenferro_einsum::EagerEinsumOps;
 use tenferro_einsum::{EinsumAxis, EinsumNotation, EinsumSubscripts, TensorDotAxes};
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase, Tensor};
 use tenferro_tensor::ValidationError;
 
 // Test helpers: each call opens one eager session on the inputs' runtime and
 // runs the borrowed-session contraction inside it.
-fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> tenferro_einsum::Result<EagerTensor> {
+fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> tenferro_ad::Result<EagerTensor> {
     inputs[0]
         .runtime()
         .with_eager_session(&mut CpuEngine::serial(), |s| s.einsum(inputs, subscripts))
@@ -21,24 +21,20 @@ fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> tenferro_einsum::Result<
 fn einsum_notation(
     inputs: &[&EagerTensor],
     notation: &EinsumNotation,
-) -> tenferro_einsum::Result<EagerTensor> {
+) -> tenferro_ad::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(&mut CpuEngine::serial(), |s| {
-            s.einsum_notation(inputs, notation)
-        })
+        .with_eager_session(&mut CpuEngine::serial(), |s| s.einsum(inputs, notation))
 }
 
 #[allow(dead_code)]
 fn einsum_subscripts(
     inputs: &[&EagerTensor],
     subscripts: &EinsumSubscripts,
-) -> tenferro_einsum::Result<EagerTensor> {
+) -> tenferro_ad::Result<EagerTensor> {
     inputs[0]
         .runtime()
-        .with_eager_session(&mut CpuEngine::serial(), |s| {
-            s.einsum_subscripts(inputs, subscripts)
-        })
+        .with_eager_session(&mut CpuEngine::serial(), |s| s.einsum(inputs, subscripts))
 }
 
 #[allow(dead_code)]
@@ -46,7 +42,7 @@ fn tensordot(
     lhs: &EagerTensor,
     rhs: &EagerTensor,
     axes: TensorDotAxes<'_>,
-) -> tenferro_einsum::Result<EagerTensor> {
+) -> tenferro_ad::Result<EagerTensor> {
     lhs.runtime()
         .with_eager_session(&mut CpuEngine::serial(), |s| s.tensordot(lhs, rhs, axes))
 }
@@ -277,11 +273,11 @@ fn eager_tensor_tensordot_rejects_explicit_out_of_bounds_axis() {
 
     assert!(matches!(
         err,
-        tenferro_einsum::Error::Runtime(RuntimeError::Validation {
+        RuntimeError::Validation {
             phase: ErrorPhase::GraphBuild,
             source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
             ..
-        })
+        }
     ));
 }
 

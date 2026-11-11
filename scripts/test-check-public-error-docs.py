@@ -144,6 +144,17 @@ class PublicErrorDocsTests(unittest.TestCase):
         )
         self.assertEqual(findings, [])
 
+    def test_test_helpers_are_not_public_api(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "crates" / "demo" / "tests" / "helpers.rs"
+            helper.parent.mkdir(parents=True)
+            helper.write_text(
+                "pub fn helper() -> Result<(), E> { Ok(()) }\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(MODULE.audit(root, [helper]), [])
+
     def test_changed_audit_requires_base_object_in_shallow_checkout(self) -> None:
         with tempfile.TemporaryDirectory(prefix="tenferro-error-docs-git-") as directory:
             root = Path(directory)

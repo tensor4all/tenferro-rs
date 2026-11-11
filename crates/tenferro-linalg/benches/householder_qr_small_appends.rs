@@ -8,7 +8,7 @@ use num_complex::Complex64;
 use serde::Serialize;
 use tenferro_ad::{EagerRuntime, EagerSession, EagerTensor};
 use tenferro_cpu::{with_cpu_engine, CpuEngine};
-use tenferro_linalg::{EagerSessionLinalgExt, HouseholderQr, QrGauge, QrOptions, TensorLinalgExt};
+use tenferro_linalg::{EagerLinalgOps, HouseholderQr, LinalgOps, QrGauge, QrOptions};
 use tenferro_tensor::Tensor;
 
 const INITIAL_RANK: usize = 5;

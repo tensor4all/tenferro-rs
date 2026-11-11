@@ -1129,7 +1129,7 @@ pub(crate) fn svd<T: crate::LinalgScalar>(
     buffers: &mut BufferPool,
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<PublicSvd<T>> {
-    crate::svd_with_exec(exec, buffers, &input.clone().into_dynamic(), false)
+    T::svd_on_exec(exec, buffers, &input.clone().into_dynamic(), false)
 }
 
 #[cfg(feature = "native")]
@@ -1138,7 +1138,7 @@ pub(crate) fn svd_full<T: crate::LinalgScalar>(
     buffers: &mut BufferPool,
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<PublicSvd<T>> {
-    crate::svd_with_exec(exec, buffers, &input.clone().into_dynamic(), true)
+    T::svd_on_exec(exec, buffers, &input.clone().into_dynamic(), true)
 }
 
 #[cfg(feature = "native")]
@@ -1147,7 +1147,7 @@ pub(crate) fn svd_values<T: crate::LinalgScalar>(
     buffers: &mut BufferPool,
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    crate::svd_values_with_exec(exec, buffers, &input.clone().into_dynamic())
+    T::svd_values_on_exec(exec, buffers, &input.clone().into_dynamic())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1160,7 +1160,7 @@ pub(crate) fn qr<T: crate::LinalgScalar>(
     buffers: &mut BufferPool,
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)> {
-    crate::qr_with_exec(exec, buffers, &input.clone().into_dynamic())
+    T::qr_on_exec(exec, buffers, &input.clone().into_dynamic())
 }
 
 /// Column-pivoted QR with the host's rank decision.
@@ -1243,7 +1243,7 @@ pub(crate) fn eigh<T: crate::LinalgScalar>(
     buffers: &mut BufferPool,
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T::RealScalar>, TypedTensor<T>)> {
-    crate::eigh_with_exec(exec, buffers, &input.clone().into_dynamic())
+    T::eigh_on_exec(exec, buffers, &input.clone().into_dynamic())
 }
 
 #[cfg(feature = "native")]
@@ -1252,7 +1252,7 @@ pub(crate) fn eigh_values<T: crate::LinalgScalar>(
     buffers: &mut BufferPool,
     input: &HostView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::RealScalar>> {
-    crate::eigh_values_with_exec(exec, buffers, &input.clone().into_dynamic())
+    T::eigh_values_on_exec(exec, buffers, &input.clone().into_dynamic())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1396,7 +1396,8 @@ pub(crate) fn eig_values(
     input: &TensorView<'_, Host>,
 ) -> tenferro_tensor::Result<Tensor> {
     owned_dispatch!(input, "eig_values", |typed| {
-        crate::eig_values_with_exec(exec, buffers, &typed).map(Tensor::from_typed)
+        crate::tensor_ext::private::Sealed::eig_values_on_exec(exec, buffers, &typed)
+            .map(Tensor::from_typed)
     })
 }
 

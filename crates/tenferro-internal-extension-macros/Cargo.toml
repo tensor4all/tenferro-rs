@@ -26,3 +26,6 @@ proc-macro = true
 proc-macro2.workspace = true
 quote.workspace = true
 syn = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+trybuild.workspace = true

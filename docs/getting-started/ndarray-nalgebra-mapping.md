@@ -111,7 +111,7 @@ backends are pushed into method signatures. Compare with `ndarray`'s
 <!-- snippet-source: docs/tutorial-code/src/bin/tenferro_compute_skill.rs#concrete-operation -->
 ```rust
 use tenferro_cpu::CpuEngine;
-use tenferro_runtime::{TypedTensor, TypedTensorSessionOpsExt};
+use tenferro_runtime::{TypedTensor, CoreOps};
 
 let mut engine = CpuEngine::serial();
 // The leftmost dimension varies fastest: this is a 2 x 3 column-major tensor.

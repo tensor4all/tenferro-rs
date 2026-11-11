@@ -1,6 +1,4 @@
-use tenferro_einsum::TraceContextEinsumExt;
-use tenferro_ops::dim_expr::DimExpr;
-use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec};
+use tenferro_einsum::TracedEinsumOps;
 use tenferro_runtime::{DType, GraphCompiler, Tensor, TraceContext};
 use tenferro_xla::{XlaExecutor, TENFERRO_PJRT_PLUGIN_ENV};
 
@@ -16,27 +14,15 @@ fn assert_close(actual: &[f32], expected: &[f32]) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut trace = TraceContext::new();
+    let trace = TraceContext::new();
     let inputs = [[2, 3], [3, 4], [4, 2]]
-        .map(|shape| {
-            trace.input(ProgramInputSpec::new(
-                DType::F32,
-                DimExpr::from_concrete(&shape),
-            ))
-        })
+        .map(|shape| trace.input_concrete_shape(DType::F32, &shape))
         .into_iter()
         .collect::<Result<Vec<_>, _>>()?;
-    let mut y = trace.einsum(&inputs, "ij,jk,kl->il")?;
-    for op in [
-        CoreSemanticOp::Abs,
-        CoreSemanticOp::Sqrt,
-        CoreSemanticOp::Log1p,
-        CoreSemanticOp::Exp,
-    ] {
-        y = trace.add_op(op, &[y])?[0];
-    }
-    let graph = trace.finish(&[y])?;
-    let program = GraphCompiler::new().compile_traced_graph(&graph)?;
+    let refs = inputs.iter().collect::<Vec<_>>();
+    let y = trace.einsum(&refs, "ij,jk,kl->il")?;
+    let y = y.abs()?.sqrt()?.log1p()?.exp()?;
+    let program = GraphCompiler::new().compile(&y)?;
 
     let module = XlaExecutor::default().lower_compiled_to_stablehlo(&program)?;
     let stablehlo = module.as_str();

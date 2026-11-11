@@ -3,8 +3,7 @@ use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef};
 use tenferro_runtime::TraceContext;
 use tenferro_tensor::DType;
 
-use super::TraceContextEinsumExt;
-use crate::{EinsumOptimize, EINSUM_EXTENSION_FAMILY_ID};
+use crate::{EinsumOptimize, EinsumOptions, TracedEinsumOps, EINSUM_EXTENSION_FAMILY_ID};
 
 fn matrix(rows: usize, cols: usize) -> ProgramInputSpec {
     ProgramInputSpec::new(DType::F64, [DimExpr::Const(rows), DimExpr::Const(cols)])
@@ -12,13 +11,19 @@ fn matrix(rows: usize, cols: usize) -> ProgramInputSpec {
 
 #[test]
 fn trace_context_nary_einsum_records_one_ordered_semantic_extension() {
-    let mut trace = TraceContext::new();
-    let a = trace.input(matrix(2, 3)).unwrap();
-    let b = trace.input(matrix(3, 4)).unwrap();
-    let c = trace.input(matrix(4, 5)).unwrap();
+    let trace = TraceContext::new();
+    let a = trace
+        .derive_tensor(trace.input(matrix(2, 3)).unwrap())
+        .unwrap();
+    let b = trace
+        .derive_tensor(trace.input(matrix(3, 4)).unwrap())
+        .unwrap();
+    let c = trace
+        .derive_tensor(trace.input(matrix(4, 5)).unwrap())
+        .unwrap();
 
-    let out = trace.einsum(&[a, b, c], "ij,jk,kl->il").unwrap();
-    let graph = trace.finish(&[out]).unwrap();
+    let out = trace.einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
+    let graph = trace.finish(&[out.trace_value()]).unwrap();
     let operations: Vec<_> = graph.program().operations().collect();
 
     assert_eq!(operations.len(), 1);
@@ -31,19 +36,25 @@ fn trace_context_nary_einsum_records_one_ordered_semantic_extension() {
 
 #[test]
 fn trace_context_explicit_path_remains_semantic_until_compilation() {
-    let mut trace = TraceContext::new();
-    let a = trace.input(matrix(2, 3)).unwrap();
-    let b = trace.input(matrix(3, 4)).unwrap();
-    let c = trace.input(matrix(4, 5)).unwrap();
+    let trace = TraceContext::new();
+    let a = trace
+        .derive_tensor(trace.input(matrix(2, 3)).unwrap())
+        .unwrap();
+    let b = trace
+        .derive_tensor(trace.input(matrix(3, 4)).unwrap())
+        .unwrap();
+    let c = trace
+        .derive_tensor(trace.input(matrix(4, 5)).unwrap())
+        .unwrap();
 
     let out = trace
         .einsum_with(
-            &[a, b, c],
+            &[&a, &b, &c],
             "ij,jk,kl->il",
-            EinsumOptimize::Path(vec![(0, 1), (0, 1)]),
+            &EinsumOptions::default().optimize(EinsumOptimize::Path(vec![(0, 1), (0, 1)])),
         )
         .unwrap();
-    let graph = trace.finish(&[out]).unwrap();
+    let graph = trace.finish(&[out.trace_value()]).unwrap();
 
     assert!(matches!(
         graph.program().operations().next().unwrap().op(),

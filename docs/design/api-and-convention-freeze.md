@@ -1,5 +1,7 @@
 # API and Convention Freeze
 
+> Names in this record predate the 0.12 call grammar (#2552); see `docs/spec/generated/api-ops.md` for the current surface.
+
 ## Purpose
 
 This document records the clean-break release posture for tenferro-rs API and
@@ -116,10 +118,12 @@ Release APIs should follow these naming and shape rules.
   `tenferro_einsum`, `tenferro_linalg`, and `tenferro_fft`.
 - Standard operation families remain first-class crates, not modules under a
   broad facade.
-- Tensor operation names are public vocabulary. Owned compact tensor inputs use
-  unsuffixed operation names.
-- `_read` is reserved for APIs that explicitly accept borrowed read-oriented
-  inputs.
+- Tensor operation names are public vocabulary and follow the 0.12 call
+  grammar (#2552): `op`, `op_with`, and, where the registry declares it,
+  `op_into` with a `Dest`. The receiver type (`Tensor`, `TensorRead`,
+  `TypedTensor<T>`, `TypedTensorView<T>`), not a suffix, says whether an input
+  is owned, borrowed, typed, or a strided view; `_read` names only provider
+  hooks.
 - `_view` is reserved for metadata-only layout operations. Any operation that
   allocates, canonicalizes, executes kernels, transfers data, or otherwise
   materializes data must not use `_view`.
@@ -131,16 +135,15 @@ Release APIs should follow these naming and shape rules.
 - Unary single-output traced ops are methods on `TracedTensor`.
 - Binary single-output ops use operator overloads when the operator is natural;
   otherwise they use methods.
-- Multi-output linalg and decomposition ops are tensor extension-trait methods.
-- Einsum is owned by `tenferro-einsum` through crate-root extension traits:
-  concrete owned input slices/arrays use `TensorEinsumExt` and
-  `TypedTensorEinsumExt`, while borrowed inputs use `TensorReadEinsumExt` and
-  `TypedTensorReadEinsumExt`; repeated concrete executions use
-  `ConcreteEinsumPlan`; traced graph construction uses
-  `TraceContextEinsumExt`; autodiff eager einsum and `tensordot` run on a
-  borrowed `EagerSession` through `EagerSessionEinsumExt`. (The tensor-side
-  eager traits `EagerEinsumExt` and `EagerTensorEinsumExt`, which opened their
-  own session, were removed by #1946 F5.)
+- Multi-output linalg and decomposition ops are methods of the generated
+  family traits (`LinalgOps`, `TracedLinalgOps`, `EagerLinalgOps`) and return
+  named result structs (`Svd`, `Qr`, `Lu`, ...).
+- Einsum is owned by `tenferro-einsum` through the generated traits: concrete
+  input slices/arrays of any `AsView` use `EinsumOps` (and `TensordotOps`);
+  repeated concrete executions use `ConcreteEinsumPlan`; traced graph
+  construction uses `TracedEinsumOps` on `TraceContext` (and
+  `TracedTensordotOps` on `TracedTensor`); autodiff eager einsum and
+  `tensordot` run on a borrowed `EagerSession` through `EagerEinsumOps`.
 - Traced tensor methods do not use a `traced_` prefix.
 - User-facing backend features are named for concrete backend families, such as
   `cuda`. Public extension crates should not expose a vague `gpu` feature.
@@ -187,7 +190,7 @@ The first API consistency matrix should cover these surface pairs:
 | Surface pair | Detection question |
 | --- | --- |
 | typed tensor vs dynamic tensor | Do constructors, layout assumptions, accessors, and error behavior expose the same concept with compatible names and contracts? |
-| owned tensor ops vs borrowed/read ops | Are `_read` and unsuffixed names used only for their documented input ownership model? |
+| owned tensor ops vs borrowed/read ops | Do owned, borrowed, typed, and view receivers of one operation share one spelling and one documented layout contract? |
 | metadata views vs materializing ops | Are `_view` names limited to metadata-only behavior across core, runtime, docs, and examples? |
 | eager vs traced APIs | Do same-concept operations have intentional naming, dtype, shape, AD, and error differences? |
 | runtime extension APIs vs operation crates | Does each extension operation use the owning operation crate as the public import path and register runtime behavior explicitly? |
@@ -274,7 +277,8 @@ The release branch should converge on automated checks for:
 - release-freeze API convention findings via
   `python3 scripts/check-api-consistency.py --fail-on-findings`;
 - forbidden facade paths and internal crate names in user guides;
-- `_view`, `_read`, feature flag, and traced method naming conventions;
+- `_view`, operation-suffix (`_with` / `_into` only), feature flag, and traced
+  method naming conventions;
 - missing rustdoc examples on release APIs;
 - doctests and guide snippets that compile and run where hardware allows;
 - docs/spec/design link integrity and source-of-truth ownership;

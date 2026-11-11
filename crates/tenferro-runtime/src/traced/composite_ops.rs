@@ -90,10 +90,14 @@ impl CompositeOps for TracedComposite<'_> {
         value: &TracedTensor,
         axes: &[usize],
     ) -> Result<TracedTensor> {
+        // The composites hand over normalized axes; the public methods take
+        // signed axes, and a normalized axis round-trips unchanged.
+        let axes = signed_axes(axes)?;
+        let axes = Some(axes.as_slice());
         match op {
-            CompositeReduce::Sum => value.reduce_sum(Some(axes)),
-            CompositeReduce::Max => value.reduce_max(Some(axes)),
-            CompositeReduce::SumSquares => value.reduce_sum_squares(Some(axes)),
+            CompositeReduce::Sum => value.reduce_sum(axes),
+            CompositeReduce::Max => value.reduce_max(axes),
+            CompositeReduce::SumSquares => value.reduce_sum_squares(axes),
         }
     }
 
@@ -111,7 +115,7 @@ impl CompositeOps for TracedComposite<'_> {
     }
 
     fn concatenate(&mut self, values: &[&TracedTensor], axis: usize) -> Result<TracedTensor> {
-        TracedTensor::concatenate(values, axis)
+        TracedTensor::concatenate(values, signed_axis(axis)?)
     }
 
     fn pad(&mut self, value: &TracedTensor, low: &[usize], high: &[usize]) -> Result<TracedTensor> {
@@ -280,7 +284,17 @@ impl TracedTensor {
     /// invalid axes, [`Error::Validation`] with `InvalidArgument` when the
     /// input shape is symbolic, or [`Error::RuntimeStateSource`] when graph
     /// metadata registration fails.
-    pub fn reduce_mean(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
+    pub fn reduce_mean(&self, axes: Option<&[isize]>) -> Result<TracedTensor> {
+        let axes = axes
+            .map(|axes| {
+                crate::shape_packing::normalize_existing_axes(
+                    "TracedTensor::reduce_mean",
+                    axes,
+                    self.rank(),
+                )
+            })
+            .transpose()?;
+        let axes = axes.as_deref();
         composite::reduce_mean(&mut TracedComposite { ctx: &self.ctx }, self, axes)
     }
 
@@ -309,7 +323,12 @@ impl TracedTensor {
     /// [`Error::Validation`] with `InvalidArgument` when the input shape is
     /// symbolic, or [`Error::RuntimeStateSource`] when graph metadata
     /// registration fails.
-    pub fn softmax(&self, axis: usize) -> Result<TracedTensor> {
+    pub fn softmax(&self, axis: isize) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::softmax",
+            axis,
+            self.rank(),
+        )?;
         composite::softmax(&mut TracedComposite { ctx: &self.ctx }, self, axis)
     }
 
@@ -337,7 +356,12 @@ impl TracedTensor {
     /// [`Error::Validation`] with `InvalidArgument` when the input shape is
     /// symbolic, or [`Error::RuntimeStateSource`] when graph metadata
     /// registration fails.
-    pub fn log_softmax(&self, axis: usize) -> Result<TracedTensor> {
+    pub fn log_softmax(&self, axis: isize) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::log_softmax",
+            axis,
+            self.rank(),
+        )?;
         composite::log_softmax(&mut TracedComposite { ctx: &self.ctx }, self, axis)
     }
 
@@ -367,7 +391,12 @@ impl TracedTensor {
     /// for a mask that does not broadcast to the input, or `AxisOutOfBounds`;
     /// [`Error::Validation`] with `InvalidArgument` for symbolic shapes; or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
-    pub fn masked_softmax(&self, mask: &TracedTensor, axis: usize) -> Result<TracedTensor> {
+    pub fn masked_softmax(&self, mask: &TracedTensor, axis: isize) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::masked_softmax",
+            axis,
+            self.rank(),
+        )?;
         composite::masked_softmax(&mut TracedComposite { ctx: &self.ctx }, self, mask, axis)
     }
 
@@ -396,7 +425,12 @@ impl TracedTensor {
     /// for a mask that does not broadcast to the input, or `AxisOutOfBounds`;
     /// [`Error::Validation`] with `InvalidArgument` for symbolic shapes; or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
-    pub fn masked_log_softmax(&self, mask: &TracedTensor, axis: usize) -> Result<TracedTensor> {
+    pub fn masked_log_softmax(&self, mask: &TracedTensor, axis: isize) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::masked_log_softmax",
+            axis,
+            self.rank(),
+        )?;
         composite::masked_log_softmax(&mut TracedComposite { ctx: &self.ctx }, self, mask, axis)
     }
 
@@ -429,11 +463,16 @@ impl TracedTensor {
     /// registration fails.
     pub fn layer_norm(
         &self,
-        axis: usize,
+        axis: isize,
         weight: Option<&TracedTensor>,
         bias: Option<&TracedTensor>,
         eps: f64,
     ) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::layer_norm",
+            axis,
+            self.rank(),
+        )?;
         composite::layer_norm(
             &mut TracedComposite { ctx: &self.ctx },
             self,
@@ -471,11 +510,16 @@ impl TracedTensor {
     /// registration fails.
     pub fn rms_norm(
         &self,
-        axis: usize,
+        axis: isize,
         weight: Option<&TracedTensor>,
         bias: Option<&TracedTensor>,
         eps: f64,
     ) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::rms_norm",
+            axis,
+            self.rank(),
+        )?;
         composite::rms_norm(
             &mut TracedComposite { ctx: &self.ctx },
             self,
@@ -515,7 +559,22 @@ impl TracedTensor {
     /// when taking from a zero-length axis; [`Error::Validation`] with
     /// `InvalidArgument` for symbolic shapes; or
     /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
-    pub fn take_along_axis(&self, indices: &TracedTensor, axis: usize) -> Result<TracedTensor> {
+    pub fn take_along_axis(&self, indices: &TracedTensor, axis: isize) -> Result<TracedTensor> {
+        let axis = crate::shape_packing::normalize_existing_axis(
+            "TracedTensor::take_along_axis",
+            axis,
+            self.rank(),
+        )?;
         composite::take_along_axis(&mut TracedComposite { ctx: &self.ctx }, self, indices, axis)
     }
+}
+
+/// A normalized axis as the signed form of the public traced methods.
+fn signed_axis(axis: usize) -> Result<isize> {
+    isize::try_from(axis)
+        .map_err(|_| crate::Error::Internal(format!("normalized axis {axis} does not fit isize")))
+}
+
+fn signed_axes(axes: &[usize]) -> Result<Vec<isize>> {
+    axes.iter().map(|&axis| signed_axis(axis)).collect()
 }

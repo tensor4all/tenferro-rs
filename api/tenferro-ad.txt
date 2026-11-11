@@ -1,0 +1,722 @@
+pub mod tenferro_ad
+pub use tenferro_ad::CompareDir
+pub use tenferro_ad::ContextId
+pub use tenferro_ad::DType
+pub use tenferro_ad::DotGeneralConfig
+pub use tenferro_ad::Error
+pub use tenferro_ad::ErrorPhase
+pub use tenferro_ad::GatherConfig
+pub use tenferro_ad::PadConfig
+pub use tenferro_ad::Result
+pub use tenferro_ad::ScatterConfig
+pub use tenferro_ad::SliceConfig
+pub use tenferro_ad::Tensor
+pub mod tenferro_ad::error
+pub use tenferro_ad::error::ContextId
+pub use tenferro_ad::error::Error
+pub use tenferro_ad::error::ErrorPhase
+pub use tenferro_ad::error::Result
+pub mod tenferro_ad::extension
+pub use tenferro_ad::extension::ExtensionCacheKey
+pub use tenferro_ad::extension::ExtensionCacheLimits
+pub use tenferro_ad::extension::ExtensionCacheSelector
+pub use tenferro_ad::extension::ExtensionCacheStore
+pub use tenferro_ad::extension::ExtensionExecutionContext
+pub use tenferro_ad::extension::ExtensionFamilyId
+pub use tenferro_ad::extension::ExtensionOp
+pub use tenferro_ad::extension::apply
+pub fn tenferro_ad::extension::adopt_untracked_eager_value(alloc::sync::Arc<tenferro_ad::EagerRuntime>, tenferro_tensor::types::TensorValue) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::extension::apply_eager(&mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, alloc::sync::Arc<dyn tenferro_ops::ext_op::ExtensionOp>, &[&tenferro_ad::EagerTensor]) -> tenferro_runtime::error::Result<alloc::vec::Vec<tenferro_ad::EagerTensor>>
+pub mod tenferro_ad::prelude
+pub use tenferro_ad::prelude::Tensor
+pub use tenferro_ad::prelude::TracedTensor
+pub struct tenferro_ad::prelude::AdContext
+impl tenferro_ad::AdContext
+pub fn tenferro_ad::AdContext::ad_transform_cache_limits(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdTransformCacheLimits>
+pub fn tenferro_ad::AdContext::ad_transform_cache_stats(&self) -> tenferro_runtime::error::Result<tenferro_tensor::cache::CacheStats>
+pub fn tenferro_ad::AdContext::builder() -> tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContext::cache_stats(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdContextCacheStats>
+pub fn tenferro_ad::AdContext::clear_ad_transform_caches(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::AdContext::clear_caches(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::AdContext::grad(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::AdContext::grad_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::AdContext::jvp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::AdContext::jvp_many(&self, &tenferro_runtime::traced::TracedTensor, &[(&tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor)]) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::AdContext::jvp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::AdContext::jvp_program(&self, &tenferro_runtime::program::semantic::FrozenProgram, &[bool]) -> core::result::Result<tenferro_ad::semantic_transform::SemanticAdProgram, tenferro_ad::semantic_transform::SemanticAdTransformError>
+pub fn tenferro_ad::AdContext::semantic_extension_rules(&self) -> &tenferro_ad::semantic_extension::SemanticExtensionRuleSet
+pub fn tenferro_ad::AdContext::set_ad_transform_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::AdContext::vjp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::AdContext::vjp_many(&self, &tenferro_runtime::traced::TracedTensor, &[&tenferro_runtime::traced::TracedTensor], &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_ad::AdContext::vjp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::AdContext::vjp_program(&self, &tenferro_runtime::program::semantic::FrozenProgram, &[bool], &[bool]) -> core::result::Result<tenferro_ad::semantic_transform::SemanticAdProgram, tenferro_ad::semantic_transform::SemanticAdTransformError>
+impl core::clone::Clone for tenferro_ad::AdContext
+pub fn tenferro_ad::AdContext::clone(&self) -> tenferro_ad::AdContext
+impl core::fmt::Debug for tenferro_ad::AdContext
+pub fn tenferro_ad::AdContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::prelude::AdContextBuilder
+impl tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContextBuilder::build(self) -> core::result::Result<tenferro_ad::AdContext, core::convert::Infallible>
+pub fn tenferro_ad::AdContextBuilder::new() -> Self
+pub fn tenferro_ad::AdContextBuilder::with_semantic_extension_rules(self, tenferro_ad::semantic_extension::SemanticExtensionRuleSet) -> core::result::Result<Self, tenferro_ad::semantic_extension::SemanticExtensionRegistryError>
+impl core::clone::Clone for tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContextBuilder::clone(&self) -> tenferro_ad::AdContextBuilder
+impl core::default::Default for tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContextBuilder::default() -> tenferro_ad::AdContextBuilder
+impl core::fmt::Debug for tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContextBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::prelude::EagerNoGradGuard
+impl core::fmt::Debug for tenferro_ad::EagerNoGradGuard
+pub fn tenferro_ad::EagerNoGradGuard::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for tenferro_ad::EagerNoGradGuard
+pub fn tenferro_ad::EagerNoGradGuard::drop(&mut self)
+pub struct tenferro_ad::prelude::EagerRuntime
+impl tenferro_ad::EagerRuntime
+pub fn tenferro_ad::EagerRuntime::ad_transform_cache_limits(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdTransformCacheLimits>
+pub fn tenferro_ad::EagerRuntime::cache_stats(&self) -> tenferro_runtime::error::Result<tenferro_ad::EagerRuntimeCacheStats>
+pub fn tenferro_ad::EagerRuntime::capture_trace(&self) -> tenferro_ad::EagerTraceCaptureGuard
+pub fn tenferro_ad::EagerRuntime::clear_ad_transform_caches(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::clear_caches(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::clear_grads(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::clear_prepared_derivative_cache(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::constant_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::grad(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::grad_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
+pub fn tenferro_ad::EagerRuntime::id(&self) -> tenferro_runtime::error::ContextId
+pub fn tenferro_ad::EagerRuntime::install_extension_module(&self, alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>) -> tenferro_runtime::error::Result<tenferro_runtime::runtime::identity::RuntimeEpoch>
+pub fn tenferro_ad::EagerRuntime::jvp(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::jvp_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
+pub fn tenferro_ad::EagerRuntime::new() -> tenferro_runtime::error::Result<alloc::sync::Arc<Self>>
+pub fn tenferro_ad::EagerRuntime::no_grad(&self) -> tenferro_ad::EagerNoGradGuard
+pub fn tenferro_ad::EagerRuntime::prepared_derivative_cache_limits(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdTransformCacheLimits>
+pub fn tenferro_ad::EagerRuntime::set_ad_transform_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::set_prepared_derivative_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::variable_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::vjp(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::vjp_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
+pub fn tenferro_ad::EagerRuntime::with_ad_context(&tenferro_ad::AdContext) -> tenferro_runtime::error::Result<alloc::sync::Arc<Self>>
+pub fn tenferro_ad::EagerRuntime::with_eager_session<T, E: core::convert::From<tenferro_runtime::error::Error>>(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, impl core::ops::function::FnOnce(&mut tenferro_ad::EagerSession<'_>) -> core::result::Result<T, E>) -> core::result::Result<T, E>
+impl core::fmt::Debug for tenferro_ad::EagerRuntime
+pub fn tenferro_ad::EagerRuntime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::prelude::EagerTensor
+impl tenferro_ad::EagerTensor
+pub fn tenferro_ad::EagerTensor::backward(&self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
+pub fn tenferro_ad::EagerTensor::backward_with(&self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
+pub fn tenferro_ad::EagerTensor::clear_grad(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerTensor::ctx_id(&self) -> tenferro_runtime::error::ContextId
+pub fn tenferro_ad::EagerTensor::detach(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::detach_into(&self, &mut dyn tenferro_tensor::backend::Engine, &alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::dtype(&self) -> tenferro_tensor_core::DType
+pub fn tenferro_ad::EagerTensor::duplicate_value(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_ad::EagerTensor::from_tensor_in(tenferro_tensor::types::Tensor, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::from_vec_col_major_in<T: tenferro_tensor::types::TensorScalar>(impl tenferro_tensor_core::IntoShapeVec, alloc::vec::Vec<T>, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::grad(&self) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::GradientValue>>
+pub fn tenferro_ad::EagerTensor::into_value(self) -> core::result::Result<tenferro_tensor::types::Tensor, tenferro_ad::IntoValueError<Self>>
+pub fn tenferro_ad::EagerTensor::requires_grad_in(tenferro_tensor::types::Tensor, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::runtime(&self) -> &alloc::sync::Arc<tenferro_ad::EagerRuntime>
+pub fn tenferro_ad::EagerTensor::same_context(&self, &Self) -> bool
+pub fn tenferro_ad::EagerTensor::shape(&self) -> &[usize]
+pub fn tenferro_ad::EagerTensor::tensor_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+pub fn tenferro_ad::EagerTensor::to_tensor(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_ad::EagerTensor::tracks_grad(&self) -> bool
+pub fn tenferro_ad::EagerTensor::value(&self) -> tenferro_runtime::error::Result<tenferro_ad::ValueGuard<'_>>
+impl tenferro_ad::EagerTensor
+pub fn tenferro_ad::EagerTensor::slice_builder(&self) -> tenferro_ad::EagerSliceBuilder<'_>
+impl core::clone::Clone for tenferro_ad::EagerTensor
+pub fn tenferro_ad::EagerTensor::clone(&self) -> tenferro_ad::EagerTensor
+impl core::fmt::Debug for tenferro_ad::EagerTensor
+pub fn tenferro_ad::EagerTensor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub trait tenferro_ad::prelude::TracedTensorAdExt
+pub fn tenferro_ad::prelude::TracedTensorAdExt::checkpoint(&mut self, &mut tenferro_runtime::graph::compiler::GraphCompiler, &tenferro_runtime::runtime::snapshot::Runtime, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::grad(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::grad_many(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::grad_optional(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::jvp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::jvp_many(&self, &[(&tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor)]) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::jvp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::value_and_grad(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<(tenferro_runtime::traced::TracedTensor, alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>)>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::vjp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::vjp_many(&self, &[&tenferro_runtime::traced::TracedTensor], &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_ad::prelude::TracedTensorAdExt::vjp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+impl tenferro_ad::traced::TracedTensorAdExt for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::checkpoint(&mut self, &mut tenferro_runtime::graph::compiler::GraphCompiler, &tenferro_runtime::runtime::snapshot::Runtime, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_runtime::traced::TracedTensor::grad(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::grad_many(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_runtime::traced::TracedTensor::grad_optional(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::jvp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::jvp_many(&self, &[(&tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor)]) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::jvp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::value_and_grad(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<(tenferro_runtime::traced::TracedTensor, alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>)>
+pub fn tenferro_runtime::traced::TracedTensor::vjp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::vjp_many(&self, &[&tenferro_runtime::traced::TracedTensor], &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_runtime::traced::TracedTensor::vjp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub mod tenferro_ad::semantic_extension
+pub use tenferro_ad::semantic_extension::ResidualSpec
+pub enum tenferro_ad::semantic_extension::AdValue
+pub tenferro_ad::semantic_extension::AdValue::Absent
+pub tenferro_ad::semantic_extension::AdValue::Value(tenferro_runtime::program::value::ProgramValue)
+impl tenferro_ad::semantic_extension::AdValue
+pub const fn tenferro_ad::semantic_extension::AdValue::value(self) -> core::option::Option<tenferro_runtime::program::value::ProgramValue>
+impl core::clone::Clone for tenferro_ad::semantic_extension::AdValue
+pub fn tenferro_ad::semantic_extension::AdValue::clone(&self) -> tenferro_ad::semantic_extension::AdValue
+impl core::cmp::Eq for tenferro_ad::semantic_extension::AdValue
+impl core::cmp::PartialEq for tenferro_ad::semantic_extension::AdValue
+pub fn tenferro_ad::semantic_extension::AdValue::eq(&self, &tenferro_ad::semantic_extension::AdValue) -> bool
+impl core::fmt::Debug for tenferro_ad::semantic_extension::AdValue
+pub fn tenferro_ad::semantic_extension::AdValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_ad::semantic_extension::AdValue
+impl core::marker::StructuralPartialEq for tenferro_ad::semantic_extension::AdValue
+#[non_exhaustive] pub enum tenferro_ad::semantic_extension::PrimalValueKind
+pub tenferro_ad::semantic_extension::PrimalValueKind::Input
+pub tenferro_ad::semantic_extension::PrimalValueKind::Output
+impl core::clone::Clone for tenferro_ad::semantic_extension::PrimalValueKind
+pub fn tenferro_ad::semantic_extension::PrimalValueKind::clone(&self) -> tenferro_ad::semantic_extension::PrimalValueKind
+impl core::cmp::Eq for tenferro_ad::semantic_extension::PrimalValueKind
+impl core::cmp::PartialEq for tenferro_ad::semantic_extension::PrimalValueKind
+pub fn tenferro_ad::semantic_extension::PrimalValueKind::eq(&self, &tenferro_ad::semantic_extension::PrimalValueKind) -> bool
+impl core::fmt::Debug for tenferro_ad::semantic_extension::PrimalValueKind
+pub fn tenferro_ad::semantic_extension::PrimalValueKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_ad::semantic_extension::PrimalValueKind
+impl core::marker::StructuralPartialEq for tenferro_ad::semantic_extension::PrimalValueKind
+pub enum tenferro_ad::semantic_extension::SemanticAdError
+pub tenferro_ad::semantic_extension::SemanticAdError::Arity
+pub tenferro_ad::semantic_extension::SemanticAdError::Arity::actual: usize
+pub tenferro_ad::semantic_extension::SemanticAdError::Arity::expected: usize
+pub tenferro_ad::semantic_extension::SemanticAdError::Arity::field: &'static str
+pub tenferro_ad::semantic_extension::SemanticAdError::Build(tenferro_runtime::program::error::ProgramBuildError)
+pub tenferro_ad::semantic_extension::SemanticAdError::CoreOperation
+pub tenferro_ad::semantic_extension::SemanticAdError::EffectfulExtension
+pub tenferro_ad::semantic_extension::SemanticAdError::EffectfulExtension::family_id: &'static str
+pub tenferro_ad::semantic_extension::SemanticAdError::ForeignValue
+pub tenferro_ad::semantic_extension::SemanticAdError::ForeignValue::field: &'static str
+pub tenferro_ad::semantic_extension::SemanticAdError::ForeignValue::index: usize
+pub tenferro_ad::semantic_extension::SemanticAdError::Invariant
+pub tenferro_ad::semantic_extension::SemanticAdError::Invariant::family_id: &'static str
+pub tenferro_ad::semantic_extension::SemanticAdError::Invariant::message: alloc::string::String
+pub tenferro_ad::semantic_extension::SemanticAdError::Invariant::role: tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub tenferro_ad::semantic_extension::SemanticAdError::MissingRule
+pub tenferro_ad::semantic_extension::SemanticAdError::MissingRule::family_id: &'static str
+pub tenferro_ad::semantic_extension::SemanticAdError::MissingRule::role: tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub tenferro_ad::semantic_extension::SemanticAdError::PrimalIndexOutOfBounds
+pub tenferro_ad::semantic_extension::SemanticAdError::PrimalIndexOutOfBounds::family_id: &'static str
+pub tenferro_ad::semantic_extension::SemanticAdError::PrimalIndexOutOfBounds::index: usize
+pub tenferro_ad::semantic_extension::SemanticAdError::PrimalIndexOutOfBounds::kind: tenferro_ad::semantic_extension::PrimalValueKind
+pub tenferro_ad::semantic_extension::SemanticAdError::PrimalIndexOutOfBounds::len: usize
+pub tenferro_ad::semantic_extension::SemanticAdError::Rule
+pub tenferro_ad::semantic_extension::SemanticAdError::Rule::family_id: &'static str
+pub tenferro_ad::semantic_extension::SemanticAdError::Rule::role: tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub tenferro_ad::semantic_extension::SemanticAdError::Rule::source: alloc::boxed::Box<(dyn core::error::Error + core::marker::Send + core::marker::Sync + 'static)>
+pub tenferro_ad::semantic_extension::SemanticAdError::UndeclaredResidualValue
+pub tenferro_ad::semantic_extension::SemanticAdError::UndeclaredResidualValue::family_id: &'static str
+pub tenferro_ad::semantic_extension::SemanticAdError::UndeclaredResidualValue::index: usize
+pub tenferro_ad::semantic_extension::SemanticAdError::UndeclaredResidualValue::kind: tenferro_ad::semantic_extension::PrimalValueKind
+pub tenferro_ad::semantic_extension::SemanticAdError::Unsupported
+pub tenferro_ad::semantic_extension::SemanticAdError::Unsupported::family_id: &'static str
+pub tenferro_ad::semantic_extension::SemanticAdError::Unsupported::message: alloc::string::String
+pub tenferro_ad::semantic_extension::SemanticAdError::Unsupported::role: tenferro_ad::semantic_extension::SemanticAdRuleRole
+impl core::convert::From<tenferro_ad::semantic_extension::SemanticAdError> for tenferro_ad::semantic_transform::SemanticAdTransformError
+pub fn tenferro_ad::semantic_transform::SemanticAdTransformError::from(tenferro_ad::semantic_extension::SemanticAdError) -> Self
+impl core::convert::From<tenferro_runtime::program::error::ProgramBuildError> for tenferro_ad::semantic_extension::SemanticAdError
+pub fn tenferro_ad::semantic_extension::SemanticAdError::from(tenferro_runtime::program::error::ProgramBuildError) -> Self
+impl core::error::Error for tenferro_ad::semantic_extension::SemanticAdError
+pub fn tenferro_ad::semantic_extension::SemanticAdError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_ad::semantic_extension::SemanticAdError
+pub fn tenferro_ad::semantic_extension::SemanticAdError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ad::semantic_extension::SemanticAdError
+pub fn tenferro_ad::semantic_extension::SemanticAdError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub tenferro_ad::semantic_extension::SemanticAdRuleRole::LinearTranspose
+pub tenferro_ad::semantic_extension::SemanticAdRuleRole::Linearize
+pub tenferro_ad::semantic_extension::SemanticAdRuleRole::PrimalVjp
+impl core::clone::Clone for tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub fn tenferro_ad::semantic_extension::SemanticAdRuleRole::clone(&self) -> tenferro_ad::semantic_extension::SemanticAdRuleRole
+impl core::cmp::Eq for tenferro_ad::semantic_extension::SemanticAdRuleRole
+impl core::cmp::PartialEq for tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub fn tenferro_ad::semantic_extension::SemanticAdRuleRole::eq(&self, &tenferro_ad::semantic_extension::SemanticAdRuleRole) -> bool
+impl core::fmt::Debug for tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub fn tenferro_ad::semantic_extension::SemanticAdRuleRole::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub fn tenferro_ad::semantic_extension::SemanticAdRuleRole::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for tenferro_ad::semantic_extension::SemanticAdRuleRole
+impl core::marker::StructuralPartialEq for tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub enum tenferro_ad::semantic_extension::SemanticExtensionRegistryError
+pub tenferro_ad::semantic_extension::SemanticExtensionRegistryError::DuplicateRule
+pub tenferro_ad::semantic_extension::SemanticExtensionRegistryError::DuplicateRule::family_id: &'static str
+pub tenferro_ad::semantic_extension::SemanticExtensionRegistryError::DuplicateRule::role: tenferro_ad::semantic_extension::SemanticAdRuleRole
+pub tenferro_ad::semantic_extension::SemanticExtensionRegistryError::MalformedFamilyId
+pub tenferro_ad::semantic_extension::SemanticExtensionRegistryError::MalformedFamilyId::family_id: &'static str
+impl core::error::Error for tenferro_ad::semantic_extension::SemanticExtensionRegistryError
+impl core::fmt::Debug for tenferro_ad::semantic_extension::SemanticExtensionRegistryError
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRegistryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ad::semantic_extension::SemanticExtensionRegistryError
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRegistryError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::semantic_extension::SemanticExtensionRuleSet
+impl tenferro_ad::semantic_extension::SemanticExtensionRuleSet
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::linear_transpose_operation(&self, tenferro_runtime::program::op::SemanticOperationView<'_>, &[tenferro_runtime::program::value::ProgramValue], &[tenferro_runtime::program::value::ProgramValue], &[tenferro_ad::semantic_extension::AdValue], &[bool], &[tenferro_runtime::program::value::ProgramValue], &mut tenferro_runtime::program::builder::SemanticProgramBuilder) -> core::result::Result<alloc::boxed::Box<[tenferro_ad::semantic_extension::AdValue]>, tenferro_ad::semantic_extension::SemanticAdError>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::linearize_operation(&self, tenferro_runtime::program::op::SemanticOperationView<'_>, &[tenferro_runtime::program::value::ProgramValue], &[tenferro_runtime::program::value::ProgramValue], &[tenferro_ad::semantic_extension::AdValue], &[bool], &mut tenferro_runtime::program::builder::SemanticProgramBuilder) -> core::result::Result<tenferro_ad::semantic_extension::SemanticLinearizeResult, tenferro_ad::semantic_extension::SemanticAdError>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::lookup_linear_transpose(&self, &str) -> core::option::Option<alloc::sync::Arc<dyn tenferro_ad::semantic_extension::SemanticLinearTransposeRule>>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::lookup_linearize(&self, &str) -> core::option::Option<alloc::sync::Arc<dyn tenferro_ad::semantic_extension::SemanticLinearizeRule>>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::lookup_primal_vjp(&self, &str) -> core::option::Option<alloc::sync::Arc<dyn tenferro_ad::semantic_extension::SemanticPrimalVjpRule>>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::merge(&mut self, Self) -> core::result::Result<(), tenferro_ad::semantic_extension::SemanticExtensionRegistryError>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::new() -> Self
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::primal_vjp_operation(&self, tenferro_runtime::program::op::SemanticOperationView<'_>, &[tenferro_runtime::program::value::ProgramValue], &[tenferro_runtime::program::value::ProgramValue], &[tenferro_ad::semantic_extension::AdValue], &[bool], &mut tenferro_runtime::program::builder::SemanticProgramBuilder) -> core::result::Result<alloc::boxed::Box<[tenferro_ad::semantic_extension::AdValue]>, tenferro_ad::semantic_extension::SemanticAdError>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::register_linear_transpose(&mut self, alloc::sync::Arc<dyn tenferro_ad::semantic_extension::SemanticLinearTransposeRule>) -> core::result::Result<(), tenferro_ad::semantic_extension::SemanticExtensionRegistryError>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::register_linearize(&mut self, alloc::sync::Arc<dyn tenferro_ad::semantic_extension::SemanticLinearizeRule>) -> core::result::Result<(), tenferro_ad::semantic_extension::SemanticExtensionRegistryError>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::register_primal_vjp(&mut self, alloc::sync::Arc<dyn tenferro_ad::semantic_extension::SemanticPrimalVjpRule>) -> core::result::Result<(), tenferro_ad::semantic_extension::SemanticExtensionRegistryError>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::with_linear_transpose(self, alloc::sync::Arc<dyn tenferro_ad::semantic_extension::SemanticLinearTransposeRule>) -> core::result::Result<Self, tenferro_ad::semantic_extension::SemanticExtensionRegistryError>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::with_linearize(self, alloc::sync::Arc<dyn tenferro_ad::semantic_extension::SemanticLinearizeRule>) -> core::result::Result<Self, tenferro_ad::semantic_extension::SemanticExtensionRegistryError>
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::with_primal_vjp(self, alloc::sync::Arc<dyn tenferro_ad::semantic_extension::SemanticPrimalVjpRule>) -> core::result::Result<Self, tenferro_ad::semantic_extension::SemanticExtensionRegistryError>
+impl core::clone::Clone for tenferro_ad::semantic_extension::SemanticExtensionRuleSet
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::clone(&self) -> tenferro_ad::semantic_extension::SemanticExtensionRuleSet
+impl core::default::Default for tenferro_ad::semantic_extension::SemanticExtensionRuleSet
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::default() -> tenferro_ad::semantic_extension::SemanticExtensionRuleSet
+impl core::fmt::Debug for tenferro_ad::semantic_extension::SemanticExtensionRuleSet
+pub fn tenferro_ad::semantic_extension::SemanticExtensionRuleSet::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>
+impl<'a> tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::active_inputs(&self) -> &[bool]
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::cotangent_outputs(&self) -> &[tenferro_ad::semantic_extension::AdValue]
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::op(&self) -> &dyn tenferro_ops::ext_op::ExtensionOp
+pub const fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::primal_input_count(&self) -> usize
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::primal_input_meta(&self, usize) -> core::result::Result<&tenferro_runtime::program::metadata::ProgramValueMetadata, tenferro_ad::semantic_extension::SemanticAdError>
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::primal_input_value(&self, usize) -> core::result::Result<tenferro_runtime::program::value::ProgramValue, tenferro_ad::semantic_extension::SemanticAdError>
+pub const fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::primal_output_count(&self) -> usize
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::primal_output_meta(&self, usize) -> core::result::Result<&tenferro_runtime::program::metadata::ProgramValueMetadata, tenferro_ad::semantic_extension::SemanticAdError>
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::primal_output_value(&self, usize) -> core::result::Result<tenferro_runtime::program::value::ProgramValue, tenferro_ad::semantic_extension::SemanticAdError>
+pub const fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::provenance(&self) -> tenferro_runtime::program::metadata::SemanticProvenanceView<'a>
+pub const fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::residual_mask(&self) -> tenferro_ops::primitive_rules::ResidualSpec
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'a>::residuals(&self) -> &[tenferro_runtime::program::value::ProgramValue]
+pub struct tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>
+impl<'a> tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>
+pub const fn tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>::active_outputs(self) -> &'a [bool]
+pub const fn tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>::op(self) -> &'a dyn tenferro_ops::ext_op::ExtensionOp
+pub const fn tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>::primal_inputs(self) -> &'a [tenferro_runtime::program::value::ProgramValue]
+pub const fn tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>::primal_outputs(self) -> &'a [tenferro_runtime::program::value::ProgramValue]
+pub const fn tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>::provenance(self) -> tenferro_runtime::program::metadata::SemanticProvenanceView<'a>
+pub const fn tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>::tangent_inputs(self) -> &'a [tenferro_ad::semantic_extension::AdValue]
+impl<'a> core::clone::Clone for tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>
+pub fn tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>::clone(&self) -> tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>
+impl<'a> core::marker::Copy for tenferro_ad::semantic_extension::SemanticLinearizeRequest<'a>
+pub struct tenferro_ad::semantic_extension::SemanticLinearizeResult
+impl tenferro_ad::semantic_extension::SemanticLinearizeResult
+pub fn tenferro_ad::semantic_extension::SemanticLinearizeResult::new(impl core::iter::traits::collect::IntoIterator<Item = tenferro_ad::semantic_extension::AdValue>, impl core::iter::traits::collect::IntoIterator<Item = tenferro_runtime::program::value::ProgramValue>) -> Self
+pub fn tenferro_ad::semantic_extension::SemanticLinearizeResult::residuals(&self) -> &[tenferro_runtime::program::value::ProgramValue]
+pub fn tenferro_ad::semantic_extension::SemanticLinearizeResult::tangent_outputs(&self) -> &[tenferro_ad::semantic_extension::AdValue]
+impl core::clone::Clone for tenferro_ad::semantic_extension::SemanticLinearizeResult
+pub fn tenferro_ad::semantic_extension::SemanticLinearizeResult::clone(&self) -> tenferro_ad::semantic_extension::SemanticLinearizeResult
+impl core::cmp::Eq for tenferro_ad::semantic_extension::SemanticLinearizeResult
+impl core::cmp::PartialEq for tenferro_ad::semantic_extension::SemanticLinearizeResult
+pub fn tenferro_ad::semantic_extension::SemanticLinearizeResult::eq(&self, &tenferro_ad::semantic_extension::SemanticLinearizeResult) -> bool
+impl core::fmt::Debug for tenferro_ad::semantic_extension::SemanticLinearizeResult
+pub fn tenferro_ad::semantic_extension::SemanticLinearizeResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_ad::semantic_extension::SemanticLinearizeResult
+pub struct tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>
+impl<'a> tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::active_inputs(&self) -> &[bool]
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::cotangent_outputs(&self) -> &[tenferro_ad::semantic_extension::AdValue]
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::op(&self) -> &dyn tenferro_ops::ext_op::ExtensionOp
+pub const fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::primal_input_count(&self) -> usize
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::primal_input_meta(&self, usize) -> core::result::Result<&tenferro_runtime::program::metadata::ProgramValueMetadata, tenferro_ad::semantic_extension::SemanticAdError>
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::primal_input_value(&self, usize) -> core::result::Result<tenferro_runtime::program::value::ProgramValue, tenferro_ad::semantic_extension::SemanticAdError>
+pub const fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::primal_output_count(&self) -> usize
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::primal_output_meta(&self, usize) -> core::result::Result<&tenferro_runtime::program::metadata::ProgramValueMetadata, tenferro_ad::semantic_extension::SemanticAdError>
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::primal_output_value(&self, usize) -> core::result::Result<tenferro_runtime::program::value::ProgramValue, tenferro_ad::semantic_extension::SemanticAdError>
+pub const fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::provenance(&self) -> tenferro_runtime::program::metadata::SemanticProvenanceView<'a>
+pub const fn tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'a>::residual_mask(&self) -> tenferro_ops::primitive_rules::ResidualSpec
+pub trait tenferro_ad::semantic_extension::SemanticLinearTransposeRule: core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRule::family_id(&self) -> &'static str
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRule::linear_transpose(&self, tenferro_ad::semantic_extension::SemanticLinearTransposeRequest<'_>, &mut tenferro_runtime::program::builder::SemanticProgramBuilder) -> core::result::Result<alloc::boxed::Box<[tenferro_ad::semantic_extension::AdValue]>, tenferro_ad::semantic_extension::SemanticAdError>
+pub fn tenferro_ad::semantic_extension::SemanticLinearTransposeRule::residual_mask(&self) -> tenferro_ops::primitive_rules::ResidualSpec
+pub trait tenferro_ad::semantic_extension::SemanticLinearizeRule: core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static
+pub fn tenferro_ad::semantic_extension::SemanticLinearizeRule::family_id(&self) -> &'static str
+pub fn tenferro_ad::semantic_extension::SemanticLinearizeRule::linearize(&self, tenferro_ad::semantic_extension::SemanticLinearizeRequest<'_>, &mut tenferro_runtime::program::builder::SemanticProgramBuilder) -> core::result::Result<tenferro_ad::semantic_extension::SemanticLinearizeResult, tenferro_ad::semantic_extension::SemanticAdError>
+pub trait tenferro_ad::semantic_extension::SemanticPrimalVjpRule: core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRule::family_id(&self) -> &'static str
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRule::primal_vjp(&self, tenferro_ad::semantic_extension::SemanticPrimalVjpRequest<'_>, &mut tenferro_runtime::program::builder::SemanticProgramBuilder) -> core::result::Result<alloc::boxed::Box<[tenferro_ad::semantic_extension::AdValue]>, tenferro_ad::semantic_extension::SemanticAdError>
+pub fn tenferro_ad::semantic_extension::SemanticPrimalVjpRule::residual_mask(&self) -> tenferro_ops::primitive_rules::ResidualSpec
+pub mod tenferro_ad::semantic_transform
+pub enum tenferro_ad::semantic_transform::SemanticAdTransformError
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::ActivityArity
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::ActivityArity::actual: usize
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::ActivityArity::expected: usize
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::ActivityArity::field: &'static str
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::ActivityArity::role: tenferro_ad::semantic_transform::SemanticTransformRole
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::Build(tenferro_runtime::program::error::ProgramBuildError)
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::Cache(tenferro_runtime::error::Error)
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::Extension(tenferro_ad::semantic_extension::SemanticAdError)
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::Finish(tenferro_runtime::program::error::ProgramFinishError)
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::Query(tenferro_runtime::program::error::ProgramQueryError)
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::UnsupportedCore
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::UnsupportedCore::op: alloc::string::String
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::UnsupportedCore::role: tenferro_ad::semantic_transform::SemanticTransformRole
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::UnsupportedMetadata
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::UnsupportedMetadata::message: alloc::string::String
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::UnsupportedMetadata::role: tenferro_ad::semantic_transform::SemanticTransformRole
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::UnsupportedOperationVariant
+pub tenferro_ad::semantic_transform::SemanticAdTransformError::UnsupportedOperationVariant::role: tenferro_ad::semantic_transform::SemanticTransformRole
+impl core::convert::From<tenferro_ad::semantic_extension::SemanticAdError> for tenferro_ad::semantic_transform::SemanticAdTransformError
+pub fn tenferro_ad::semantic_transform::SemanticAdTransformError::from(tenferro_ad::semantic_extension::SemanticAdError) -> Self
+impl core::convert::From<tenferro_runtime::program::error::ProgramBuildError> for tenferro_ad::semantic_transform::SemanticAdTransformError
+pub fn tenferro_ad::semantic_transform::SemanticAdTransformError::from(tenferro_runtime::program::error::ProgramBuildError) -> Self
+impl core::convert::From<tenferro_runtime::program::error::ProgramFinishError> for tenferro_ad::semantic_transform::SemanticAdTransformError
+pub fn tenferro_ad::semantic_transform::SemanticAdTransformError::from(tenferro_runtime::program::error::ProgramFinishError) -> Self
+impl core::convert::From<tenferro_runtime::program::error::ProgramQueryError> for tenferro_ad::semantic_transform::SemanticAdTransformError
+pub fn tenferro_ad::semantic_transform::SemanticAdTransformError::from(tenferro_runtime::program::error::ProgramQueryError) -> Self
+impl core::error::Error for tenferro_ad::semantic_transform::SemanticAdTransformError
+pub fn tenferro_ad::semantic_transform::SemanticAdTransformError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Debug for tenferro_ad::semantic_transform::SemanticAdTransformError
+pub fn tenferro_ad::semantic_transform::SemanticAdTransformError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_ad::semantic_transform::SemanticAdTransformError
+pub fn tenferro_ad::semantic_transform::SemanticAdTransformError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum tenferro_ad::semantic_transform::SemanticTransformRole
+pub tenferro_ad::semantic_transform::SemanticTransformRole::Jvp
+pub tenferro_ad::semantic_transform::SemanticTransformRole::Vjp
+impl core::clone::Clone for tenferro_ad::semantic_transform::SemanticTransformRole
+pub fn tenferro_ad::semantic_transform::SemanticTransformRole::clone(&self) -> tenferro_ad::semantic_transform::SemanticTransformRole
+impl core::cmp::Eq for tenferro_ad::semantic_transform::SemanticTransformRole
+impl core::cmp::PartialEq for tenferro_ad::semantic_transform::SemanticTransformRole
+pub fn tenferro_ad::semantic_transform::SemanticTransformRole::eq(&self, &tenferro_ad::semantic_transform::SemanticTransformRole) -> bool
+impl core::fmt::Debug for tenferro_ad::semantic_transform::SemanticTransformRole
+pub fn tenferro_ad::semantic_transform::SemanticTransformRole::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_ad::semantic_transform::SemanticTransformRole
+impl core::marker::StructuralPartialEq for tenferro_ad::semantic_transform::SemanticTransformRole
+pub struct tenferro_ad::semantic_transform::SemanticAdProgram
+impl tenferro_ad::semantic_transform::SemanticAdProgram
+pub fn tenferro_ad::semantic_transform::SemanticAdProgram::derivative_input_indices(&self) -> &[core::option::Option<usize>]
+pub fn tenferro_ad::semantic_transform::SemanticAdProgram::derivative_output_indices(&self) -> &[core::option::Option<usize>]
+pub const fn tenferro_ad::semantic_transform::SemanticAdProgram::frozen(&self) -> &tenferro_runtime::program::semantic::FrozenProgram
+pub fn tenferro_ad::semantic_transform::SemanticAdProgram::into_frozen(self) -> tenferro_runtime::program::semantic::FrozenProgram
+impl core::clone::Clone for tenferro_ad::semantic_transform::SemanticAdProgram
+pub fn tenferro_ad::semantic_transform::SemanticAdProgram::clone(&self) -> tenferro_ad::semantic_transform::SemanticAdProgram
+impl core::fmt::Debug for tenferro_ad::semantic_transform::SemanticAdProgram
+pub fn tenferro_ad::semantic_transform::SemanticAdProgram::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn tenferro_ad::semantic_transform::semantic_jvp(&tenferro_runtime::program::semantic::FrozenProgram, &[bool], &tenferro_ad::semantic_extension::SemanticExtensionRuleSet) -> core::result::Result<tenferro_ad::semantic_transform::SemanticAdProgram, tenferro_ad::semantic_transform::SemanticAdTransformError>
+pub fn tenferro_ad::semantic_transform::semantic_vjp(&tenferro_runtime::program::semantic::FrozenProgram, &[bool], &[bool], &tenferro_ad::semantic_extension::SemanticExtensionRuleSet) -> core::result::Result<tenferro_ad::semantic_transform::SemanticAdProgram, tenferro_ad::semantic_transform::SemanticAdTransformError>
+pub mod tenferro_ad::traced
+pub trait tenferro_ad::traced::TracedTensorAdExt
+pub fn tenferro_ad::traced::TracedTensorAdExt::checkpoint(&mut self, &mut tenferro_runtime::graph::compiler::GraphCompiler, &tenferro_runtime::runtime::snapshot::Runtime, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::traced::TracedTensorAdExt::grad(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::traced::TracedTensorAdExt::grad_many(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_ad::traced::TracedTensorAdExt::grad_optional(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::traced::TracedTensorAdExt::jvp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::traced::TracedTensorAdExt::jvp_many(&self, &[(&tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor)]) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::traced::TracedTensorAdExt::jvp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::traced::TracedTensorAdExt::value_and_grad(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<(tenferro_runtime::traced::TracedTensor, alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>)>
+pub fn tenferro_ad::traced::TracedTensorAdExt::vjp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::traced::TracedTensorAdExt::vjp_many(&self, &[&tenferro_runtime::traced::TracedTensor], &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_ad::traced::TracedTensorAdExt::vjp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+impl tenferro_ad::traced::TracedTensorAdExt for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::checkpoint(&mut self, &mut tenferro_runtime::graph::compiler::GraphCompiler, &tenferro_runtime::runtime::snapshot::Runtime, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_runtime::traced::TracedTensor::grad(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::grad_many(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_runtime::traced::TracedTensor::grad_optional(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::jvp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::jvp_many(&self, &[(&tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor)]) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::jvp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::value_and_grad(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<(tenferro_runtime::traced::TracedTensor, alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>)>
+pub fn tenferro_runtime::traced::TracedTensor::vjp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::vjp_many(&self, &[&tenferro_runtime::traced::TracedTensor], &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_runtime::traced::TracedTensor::vjp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub enum tenferro_ad::IntoValueError<H>
+pub tenferro_ad::IntoValueError::Extract
+pub tenferro_ad::IntoValueError::Extract::error: tenferro_tensor::storage::group::GroupError
+pub tenferro_ad::IntoValueError::Extract::value: H
+pub tenferro_ad::IntoValueError::NotUnique(H)
+impl<H: core::fmt::Debug + core::marker::Send + core::marker::Sync + 'static> core::error::Error for tenferro_ad::IntoValueError<H>
+impl<H: core::fmt::Debug> core::fmt::Debug for tenferro_ad::IntoValueError<H>
+pub fn tenferro_ad::IntoValueError<H>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<H> core::fmt::Display for tenferro_ad::IntoValueError<H>
+pub fn tenferro_ad::IntoValueError<H>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::AdContext
+impl tenferro_ad::AdContext
+pub fn tenferro_ad::AdContext::ad_transform_cache_limits(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdTransformCacheLimits>
+pub fn tenferro_ad::AdContext::ad_transform_cache_stats(&self) -> tenferro_runtime::error::Result<tenferro_tensor::cache::CacheStats>
+pub fn tenferro_ad::AdContext::builder() -> tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContext::cache_stats(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdContextCacheStats>
+pub fn tenferro_ad::AdContext::clear_ad_transform_caches(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::AdContext::clear_caches(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::AdContext::grad(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::AdContext::grad_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::AdContext::jvp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::AdContext::jvp_many(&self, &tenferro_runtime::traced::TracedTensor, &[(&tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor)]) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::AdContext::jvp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::AdContext::jvp_program(&self, &tenferro_runtime::program::semantic::FrozenProgram, &[bool]) -> core::result::Result<tenferro_ad::semantic_transform::SemanticAdProgram, tenferro_ad::semantic_transform::SemanticAdTransformError>
+pub fn tenferro_ad::AdContext::semantic_extension_rules(&self) -> &tenferro_ad::semantic_extension::SemanticExtensionRuleSet
+pub fn tenferro_ad::AdContext::set_ad_transform_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::AdContext::vjp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::AdContext::vjp_many(&self, &tenferro_runtime::traced::TracedTensor, &[&tenferro_runtime::traced::TracedTensor], &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_ad::AdContext::vjp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::AdContext::vjp_program(&self, &tenferro_runtime::program::semantic::FrozenProgram, &[bool], &[bool]) -> core::result::Result<tenferro_ad::semantic_transform::SemanticAdProgram, tenferro_ad::semantic_transform::SemanticAdTransformError>
+impl core::clone::Clone for tenferro_ad::AdContext
+pub fn tenferro_ad::AdContext::clone(&self) -> tenferro_ad::AdContext
+impl core::fmt::Debug for tenferro_ad::AdContext
+pub fn tenferro_ad::AdContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::AdContextBuilder
+impl tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContextBuilder::build(self) -> core::result::Result<tenferro_ad::AdContext, core::convert::Infallible>
+pub fn tenferro_ad::AdContextBuilder::new() -> Self
+pub fn tenferro_ad::AdContextBuilder::with_semantic_extension_rules(self, tenferro_ad::semantic_extension::SemanticExtensionRuleSet) -> core::result::Result<Self, tenferro_ad::semantic_extension::SemanticExtensionRegistryError>
+impl core::clone::Clone for tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContextBuilder::clone(&self) -> tenferro_ad::AdContextBuilder
+impl core::default::Default for tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContextBuilder::default() -> tenferro_ad::AdContextBuilder
+impl core::fmt::Debug for tenferro_ad::AdContextBuilder
+pub fn tenferro_ad::AdContextBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::AdContextCacheStats
+pub tenferro_ad::AdContextCacheStats::ad_transforms: tenferro_tensor::cache::CacheStats
+impl core::clone::Clone for tenferro_ad::AdContextCacheStats
+pub fn tenferro_ad::AdContextCacheStats::clone(&self) -> tenferro_ad::AdContextCacheStats
+impl core::cmp::Eq for tenferro_ad::AdContextCacheStats
+impl core::cmp::PartialEq for tenferro_ad::AdContextCacheStats
+pub fn tenferro_ad::AdContextCacheStats::eq(&self, &tenferro_ad::AdContextCacheStats) -> bool
+impl core::default::Default for tenferro_ad::AdContextCacheStats
+pub fn tenferro_ad::AdContextCacheStats::default() -> tenferro_ad::AdContextCacheStats
+impl core::fmt::Debug for tenferro_ad::AdContextCacheStats
+pub fn tenferro_ad::AdContextCacheStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_ad::AdContextCacheStats
+impl core::marker::StructuralPartialEq for tenferro_ad::AdContextCacheStats
+pub struct tenferro_ad::AdTransformCacheLimits
+impl tenferro_ad::AdTransformCacheLimits
+pub fn tenferro_ad::AdTransformCacheLimits::max_entries(self) -> core::num::nonzero::NonZeroUsize
+pub fn tenferro_ad::AdTransformCacheLimits::max_retained_bytes(self) -> core::option::Option<core::num::nonzero::NonZeroUsize>
+pub fn tenferro_ad::AdTransformCacheLimits::new(core::num::nonzero::NonZeroUsize) -> Self
+pub fn tenferro_ad::AdTransformCacheLimits::with_max_retained_bytes(self, core::num::nonzero::NonZeroUsize) -> Self
+impl core::clone::Clone for tenferro_ad::AdTransformCacheLimits
+pub fn tenferro_ad::AdTransformCacheLimits::clone(&self) -> tenferro_ad::AdTransformCacheLimits
+impl core::cmp::Eq for tenferro_ad::AdTransformCacheLimits
+impl core::cmp::PartialEq for tenferro_ad::AdTransformCacheLimits
+pub fn tenferro_ad::AdTransformCacheLimits::eq(&self, &tenferro_ad::AdTransformCacheLimits) -> bool
+impl core::default::Default for tenferro_ad::AdTransformCacheLimits
+pub fn tenferro_ad::AdTransformCacheLimits::default() -> Self
+impl core::fmt::Debug for tenferro_ad::AdTransformCacheLimits
+pub fn tenferro_ad::AdTransformCacheLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_ad::AdTransformCacheLimits
+impl core::marker::StructuralPartialEq for tenferro_ad::AdTransformCacheLimits
+pub struct tenferro_ad::EagerNoGradGuard
+impl core::fmt::Debug for tenferro_ad::EagerNoGradGuard
+pub fn tenferro_ad::EagerNoGradGuard::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for tenferro_ad::EagerNoGradGuard
+pub fn tenferro_ad::EagerNoGradGuard::drop(&mut self)
+pub struct tenferro_ad::EagerRuntime
+impl tenferro_ad::EagerRuntime
+pub fn tenferro_ad::EagerRuntime::ad_transform_cache_limits(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdTransformCacheLimits>
+pub fn tenferro_ad::EagerRuntime::cache_stats(&self) -> tenferro_runtime::error::Result<tenferro_ad::EagerRuntimeCacheStats>
+pub fn tenferro_ad::EagerRuntime::capture_trace(&self) -> tenferro_ad::EagerTraceCaptureGuard
+pub fn tenferro_ad::EagerRuntime::clear_ad_transform_caches(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::clear_caches(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::clear_grads(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::clear_prepared_derivative_cache(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::constant_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::grad(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::grad_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
+pub fn tenferro_ad::EagerRuntime::id(&self) -> tenferro_runtime::error::ContextId
+pub fn tenferro_ad::EagerRuntime::install_extension_module(&self, alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>) -> tenferro_runtime::error::Result<tenferro_runtime::runtime::identity::RuntimeEpoch>
+pub fn tenferro_ad::EagerRuntime::jvp(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::jvp_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
+pub fn tenferro_ad::EagerRuntime::new() -> tenferro_runtime::error::Result<alloc::sync::Arc<Self>>
+pub fn tenferro_ad::EagerRuntime::no_grad(&self) -> tenferro_ad::EagerNoGradGuard
+pub fn tenferro_ad::EagerRuntime::prepared_derivative_cache_limits(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdTransformCacheLimits>
+pub fn tenferro_ad::EagerRuntime::set_ad_transform_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::set_prepared_derivative_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerRuntime::variable_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::vjp(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerRuntime::vjp_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
+pub fn tenferro_ad::EagerRuntime::with_ad_context(&tenferro_ad::AdContext) -> tenferro_runtime::error::Result<alloc::sync::Arc<Self>>
+pub fn tenferro_ad::EagerRuntime::with_eager_session<T, E: core::convert::From<tenferro_runtime::error::Error>>(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, impl core::ops::function::FnOnce(&mut tenferro_ad::EagerSession<'_>) -> core::result::Result<T, E>) -> core::result::Result<T, E>
+impl core::fmt::Debug for tenferro_ad::EagerRuntime
+pub fn tenferro_ad::EagerRuntime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::EagerRuntimeCacheStats
+pub tenferro_ad::EagerRuntimeCacheStats::ad_transforms: tenferro_tensor::cache::CacheStats
+pub tenferro_ad::EagerRuntimeCacheStats::prepared_derivatives: tenferro_tensor::cache::CacheStats
+impl core::clone::Clone for tenferro_ad::EagerRuntimeCacheStats
+pub fn tenferro_ad::EagerRuntimeCacheStats::clone(&self) -> tenferro_ad::EagerRuntimeCacheStats
+impl core::cmp::Eq for tenferro_ad::EagerRuntimeCacheStats
+impl core::cmp::PartialEq for tenferro_ad::EagerRuntimeCacheStats
+pub fn tenferro_ad::EagerRuntimeCacheStats::eq(&self, &tenferro_ad::EagerRuntimeCacheStats) -> bool
+impl core::default::Default for tenferro_ad::EagerRuntimeCacheStats
+pub fn tenferro_ad::EagerRuntimeCacheStats::default() -> tenferro_ad::EagerRuntimeCacheStats
+impl core::fmt::Debug for tenferro_ad::EagerRuntimeCacheStats
+pub fn tenferro_ad::EagerRuntimeCacheStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_ad::EagerRuntimeCacheStats
+impl core::marker::StructuralPartialEq for tenferro_ad::EagerRuntimeCacheStats
+pub struct tenferro_ad::EagerSession<'a>
+impl tenferro_ad::EagerSession<'_>
+pub fn tenferro_ad::EagerSession<'_>::abs(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::add(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::apply_standard_op(&mut self, tenferro_ops::std_tensor_op::StdTensorOp, &[&tenferro_ad::EagerTensor]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::backend_session(&mut self) -> &mut dyn tenferro_tensor::backend::Engine
+pub fn tenferro_ad::EagerSession<'_>::broadcast_in_dim(&mut self, &tenferro_ad::EagerTensor, &[usize], &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::cast(&mut self, &tenferro_ad::EagerTensor, tenferro_tensor_core::DType) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::clamp(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::compare(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::CompareDir) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::concatenate(&mut self, &[&tenferro_ad::EagerTensor], isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::conj(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::constant_from(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::constant_from_host(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::convert(&mut self, &tenferro_ad::EagerTensor, tenferro_tensor_core::DType) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::cos(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::div(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::dot_general(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::DotGeneralConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::dot_general_with(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::DotGeneralConfig, &tenferro_tensor::dest::DotGeneralOptions) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::duplicate_value(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_ad::EagerSession<'_>::dynamic_slice(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::embed_diag(&mut self, &tenferro_ad::EagerTensor, isize, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::engine(&mut self) -> &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine
+pub fn tenferro_ad::EagerSession<'_>::erf(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::exp(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::expm1(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::extract_diag(&mut self, &tenferro_ad::EagerTensor, isize, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::gather(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::GatherConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::log(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::log1p(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::matmul(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::maximum(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::minimum(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::mul(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::neg(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::pad(&mut self, &tenferro_ad::EagerTensor, tenferro_tensor::config::PadConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::pow(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_max(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_min(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_prod(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_sum(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reduce_sum_squares(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::rem(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reshape(&mut self, &tenferro_ad::EagerTensor, impl tenferro_tensor_core::IntoShapeVec) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::reverse(&mut self, &tenferro_ad::EagerTensor, &[isize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::rsqrt(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::scale_complex(&mut self, &tenferro_ad::EagerTensor, num_complex::Complex64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::scale_real(&mut self, &tenferro_ad::EagerTensor, f64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::scatter(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::ScatterConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::select(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::sign(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::sin(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::slice(&mut self, &tenferro_ad::EagerTensor, tenferro_tensor::config::SliceConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::sqrt(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::sub(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::tanh(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::transpose(&mut self, &tenferro_ad::EagerTensor, &[isize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::tril(&mut self, &tenferro_ad::EagerTensor, i64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::triu(&mut self, &tenferro_ad::EagerTensor, i64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::variable_from(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::where_select(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::with_extension_caches<R>(&mut self, impl core::ops::function::FnOnce(&mut tenferro_runtime::extension_cache::ExtensionCacheStore) -> R) -> tenferro_runtime::error::Result<R>
+impl tenferro_ad::EagerSession<'_>
+pub fn tenferro_ad::EagerSession<'_>::index_select(&mut self, &tenferro_ad::EagerTensor, isize, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::slice_axis(&mut self, &tenferro_ad::EagerTensor, isize, core::ops::range::Range<usize>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::stack(&mut self, &[&tenferro_ad::EagerTensor], isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::take_axis(&mut self, &tenferro_ad::EagerTensor, isize, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::take_block(&mut self, &tenferro_ad::EagerTensor, &[usize], &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::take_cols(&mut self, &tenferro_ad::EagerTensor, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::take_rows(&mut self, &tenferro_ad::EagerTensor, &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+impl<'a> tenferro_ad::EagerSession<'a>
+pub fn tenferro_ad::EagerSession<'a>::gelu(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::gelu_tanh(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::layer_norm(&mut self, &tenferro_ad::EagerTensor, isize, core::option::Option<&tenferro_ad::EagerTensor>, core::option::Option<&tenferro_ad::EagerTensor>, f64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::log_softmax(&mut self, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::masked_log_softmax(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::masked_softmax(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::reduce_mean(&mut self, &tenferro_ad::EagerTensor, core::option::Option<&[isize]>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::rms_norm(&mut self, &tenferro_ad::EagerTensor, isize, core::option::Option<&tenferro_ad::EagerTensor>, core::option::Option<&tenferro_ad::EagerTensor>, f64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::sigmoid(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::silu(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::softmax(&mut self, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::softplus(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'a>::take_along_axis(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+impl core::fmt::Debug for tenferro_ad::EagerSession<'_>
+pub fn tenferro_ad::EagerSession<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::EagerSliceBuilder<'a>
+impl<'a> tenferro_ad::EagerSliceBuilder<'a>
+pub fn tenferro_ad::EagerSliceBuilder<'a>::apply(self, &mut tenferro_ad::EagerSession<'_>) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSliceBuilder<'a>::axis(self, isize, core::ops::range::Range<usize>) -> Self
+pub fn tenferro_ad::EagerSliceBuilder<'a>::axis_step(self, isize, core::ops::range::Range<usize>, usize) -> Self
+pub fn tenferro_ad::EagerSliceBuilder<'a>::take_axis(self, isize, &[usize]) -> Self
+impl<'a> core::clone::Clone for tenferro_ad::EagerSliceBuilder<'a>
+pub fn tenferro_ad::EagerSliceBuilder<'a>::clone(&self) -> tenferro_ad::EagerSliceBuilder<'a>
+impl<'a> core::fmt::Debug for tenferro_ad::EagerSliceBuilder<'a>
+pub fn tenferro_ad::EagerSliceBuilder<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::EagerTensor
+impl tenferro_ad::EagerTensor
+pub fn tenferro_ad::EagerTensor::backward(&self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
+pub fn tenferro_ad::EagerTensor::backward_with(&self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
+pub fn tenferro_ad::EagerTensor::clear_grad(&self) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::EagerTensor::ctx_id(&self) -> tenferro_runtime::error::ContextId
+pub fn tenferro_ad::EagerTensor::detach(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::detach_into(&self, &mut dyn tenferro_tensor::backend::Engine, &alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::dtype(&self) -> tenferro_tensor_core::DType
+pub fn tenferro_ad::EagerTensor::duplicate_value(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_ad::EagerTensor::from_tensor_in(tenferro_tensor::types::Tensor, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::from_vec_col_major_in<T: tenferro_tensor::types::TensorScalar>(impl tenferro_tensor_core::IntoShapeVec, alloc::vec::Vec<T>, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::grad(&self) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::GradientValue>>
+pub fn tenferro_ad::EagerTensor::into_value(self) -> core::result::Result<tenferro_tensor::types::Tensor, tenferro_ad::IntoValueError<Self>>
+pub fn tenferro_ad::EagerTensor::requires_grad_in(tenferro_tensor::types::Tensor, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
+pub fn tenferro_ad::EagerTensor::runtime(&self) -> &alloc::sync::Arc<tenferro_ad::EagerRuntime>
+pub fn tenferro_ad::EagerTensor::same_context(&self, &Self) -> bool
+pub fn tenferro_ad::EagerTensor::shape(&self) -> &[usize]
+pub fn tenferro_ad::EagerTensor::tensor_read(&self) -> tenferro_tensor::types::TensorRead<'_>
+pub fn tenferro_ad::EagerTensor::to_tensor(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_ad::EagerTensor::tracks_grad(&self) -> bool
+pub fn tenferro_ad::EagerTensor::value(&self) -> tenferro_runtime::error::Result<tenferro_ad::ValueGuard<'_>>
+impl tenferro_ad::EagerTensor
+pub fn tenferro_ad::EagerTensor::slice_builder(&self) -> tenferro_ad::EagerSliceBuilder<'_>
+impl core::clone::Clone for tenferro_ad::EagerTensor
+pub fn tenferro_ad::EagerTensor::clone(&self) -> tenferro_ad::EagerTensor
+impl core::fmt::Debug for tenferro_ad::EagerTensor
+pub fn tenferro_ad::EagerTensor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::EagerTraceCaptureGuard
+impl core::fmt::Debug for tenferro_ad::EagerTraceCaptureGuard
+pub fn tenferro_ad::EagerTraceCaptureGuard::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for tenferro_ad::EagerTraceCaptureGuard
+pub fn tenferro_ad::EagerTraceCaptureGuard::drop(&mut self)
+pub struct tenferro_ad::GradientValue
+impl tenferro_ad::GradientValue
+pub fn tenferro_ad::GradientValue::as_slice<T: tenferro_tensor::types::TensorScalar>(&self) -> tenferro_tensor::error::Result<&[T]>
+pub fn tenferro_ad::GradientValue::dtype(&self) -> tenferro_tensor_core::DType
+pub fn tenferro_ad::GradientValue::shape(&self) -> &[usize]
+pub fn tenferro_ad::GradientValue::tensor_read(&self) -> tenferro_runtime::error::Result<tenferro_tensor::types::TensorRead<'_>>
+pub fn tenferro_ad::GradientValue::to_tensor(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_ad::GradientValue::value(&self) -> tenferro_runtime::error::Result<tenferro_ad::ValueGuard<'_>>
+impl core::clone::Clone for tenferro_ad::GradientValue
+pub fn tenferro_ad::GradientValue::clone(&self) -> tenferro_ad::GradientValue
+impl core::fmt::Debug for tenferro_ad::GradientValue
+pub fn tenferro_ad::GradientValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::Gradients
+impl tenferro_ad::Gradients
+pub fn tenferro_ad::Gradients::grad(&self, &computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>) -> core::option::Option<tenferro_tensor::types::TensorView<'_>>
+pub fn tenferro_ad::Gradients::is_empty(&self) -> bool
+pub fn tenferro_ad::Gradients::len(&self) -> usize
+pub fn tenferro_ad::Gradients::take_grad(&mut self, &computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>) -> tenferro_tensor::error::Result<core::option::Option<tenferro_tensor::types::Tensor>>
+impl core::fmt::Debug for tenferro_ad::Gradients
+pub fn tenferro_ad::Gradients::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_ad::ValueGuard<'a>
+impl<'a> tenferro_ad::ValueGuard<'a>
+pub fn tenferro_ad::ValueGuard<'a>::as_slice<T: tenferro_tensor::types::TensorScalar>(&self) -> tenferro_tensor::error::Result<&'a [T]>
+pub fn tenferro_ad::ValueGuard<'a>::as_tensor_view(&self) -> &tenferro_tensor::types::TensorView<'_>
+pub fn tenferro_ad::ValueGuard<'a>::dtype(&self) -> tenferro_tensor_core::DType
+pub fn tenferro_ad::ValueGuard<'a>::shape(&self) -> &[usize]
+impl<'a> core::fmt::Debug for tenferro_ad::ValueGuard<'a>
+pub fn tenferro_ad::ValueGuard<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub trait tenferro_ad::TracedTensorAdExt
+pub fn tenferro_ad::TracedTensorAdExt::checkpoint(&mut self, &mut tenferro_runtime::graph::compiler::GraphCompiler, &tenferro_runtime::runtime::snapshot::Runtime, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_ad::TracedTensorAdExt::grad(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::TracedTensorAdExt::grad_many(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_ad::TracedTensorAdExt::grad_optional(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::TracedTensorAdExt::jvp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::TracedTensorAdExt::jvp_many(&self, &[(&tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor)]) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::TracedTensorAdExt::jvp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_ad::TracedTensorAdExt::value_and_grad(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<(tenferro_runtime::traced::TracedTensor, alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>)>
+pub fn tenferro_ad::TracedTensorAdExt::vjp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_ad::TracedTensorAdExt::vjp_many(&self, &[&tenferro_runtime::traced::TracedTensor], &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_ad::TracedTensorAdExt::vjp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+impl tenferro_ad::traced::TracedTensorAdExt for tenferro_runtime::traced::TracedTensor
+pub fn tenferro_runtime::traced::TracedTensor::checkpoint(&mut self, &mut tenferro_runtime::graph::compiler::GraphCompiler, &tenferro_runtime::runtime::snapshot::Runtime, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<()>
+pub fn tenferro_runtime::traced::TracedTensor::grad(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::grad_many(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_runtime::traced::TracedTensor::grad_optional(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::jvp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::jvp_many(&self, &[(&tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor)]) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::jvp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>
+pub fn tenferro_runtime::traced::TracedTensor::value_and_grad(&self, &[&tenferro_runtime::traced::TracedTensor]) -> tenferro_runtime::error::Result<(tenferro_runtime::traced::TracedTensor, alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>)>
+pub fn tenferro_runtime::traced::TracedTensor::vjp(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
+pub fn tenferro_runtime::traced::TracedTensor::vjp_many(&self, &[&tenferro_runtime::traced::TracedTensor], &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<alloc::vec::Vec<core::option::Option<tenferro_runtime::traced::TracedTensor>>>
+pub fn tenferro_runtime::traced::TracedTensor::vjp_optional(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_runtime::traced::TracedTensor>>

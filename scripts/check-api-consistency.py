@@ -264,16 +264,6 @@ def check_public_items(root: pathlib.Path, items: list[PublicItem]) -> list[Find
                     "Traced tensor function and method names should not use a `traced_` prefix.",
                 )
             )
-        if item.kind == "fn" and item.name.endswith("_read"):
-            if "TensorRead" not in item.signature and "Read" not in item.signature:
-                findings.append(
-                    Finding(
-                        "read_suffix_without_read_input",
-                        location,
-                        item.signature,
-                        "`_read` is reserved for APIs that explicitly accept read-style inputs.",
-                    )
-                )
         if item.kind == "fn" and PER_DTYPE_CTOR_RE.match(item.name):
             findings.append(
                 Finding(

@@ -124,8 +124,13 @@ Audit hints:
   that it stages. Do not work around a materializing hook at the call site with
   `to_contiguous_read` or an owned-input API: fix the hook (#2214). A read hook
   with no stride-consuming kernel keeps the materializing behaviour as an
-  explicit, documented boundary and must not back a user-facing form that
-  silently stages.
+  explicit, documented boundary and must not back a user-facing operation
+  whose registry `layout` entry (`docs/spec/generated/api-ops.md`) does not
+  document the staging. Under R3 of `docs/design/api-consolidation-policy.md`
+  an operation may adapt an input layout (a gather of the same placement and
+  dtype) only where that `layout` entry says so; it never changes placement or
+  dtype. `*_read` here names the backend hook (exception E10), not a public
+  operation spelling.
 - Regression evidence for a read hook must separate the operation's required
   output storage from operand staging. Allocation counts alone do not separate
   them: a warm buffer pool can serve the staging buffer without touching the
