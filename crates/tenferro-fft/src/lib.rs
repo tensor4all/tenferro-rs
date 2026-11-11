@@ -300,7 +300,9 @@ impl FftExecutor {
     ///
     /// # Errors
     ///
-    /// As [`FftOps::ifft`].
+    /// As [`FftOps::ifft`]: `Validation` for an invalid `axis`/`n`,
+    /// `Unsupported` for an unsupported dtype or an engine without an FFT
+    /// capability, or the backend's typed error.
     ///
     /// # Examples
     ///
@@ -338,7 +340,9 @@ impl FftExecutor {
     ///
     /// # Errors
     ///
-    /// As [`FftOps::rfft`].
+    /// As [`FftOps::rfft`]: `Validation` for an invalid `axis`/`n` or a
+    /// non-real input, `Unsupported` for an unsupported dtype or an engine
+    /// without an FFT capability, or the backend's typed error.
     ///
     /// # Examples
     ///
@@ -372,7 +376,9 @@ impl FftExecutor {
     ///
     /// # Errors
     ///
-    /// As [`FftOps::irfft`].
+    /// As [`FftOps::irfft`]: `Validation` for an invalid `axis`/`n` or a
+    /// complex input, `Unsupported` for an unsupported dtype or an engine
+    /// without an FFT capability, or the backend's typed error.
     ///
     /// # Examples
     ///
@@ -410,7 +416,9 @@ impl FftExecutor {
     ///
     /// # Errors
     ///
-    /// As [`FftOps::fftn`].
+    /// As [`FftOps::fftn`]: `Validation` for an invalid `axes`/`shape`/`n`,
+    /// `Unsupported` for an unsupported dtype or an engine without an N-d FFT
+    /// capability, or the backend's typed error.
     ///
     /// # Examples
     ///
@@ -445,7 +453,9 @@ impl FftExecutor {
     ///
     /// # Errors
     ///
-    /// As [`FftOps::ifftn`].
+    /// As [`FftOps::ifftn`]: `Validation` for an invalid `axes`/`shape`/`n`,
+    /// `Unsupported` for an unsupported dtype or an engine without an N-d FFT
+    /// capability, or the backend's typed error.
     ///
     /// # Examples
     ///
@@ -480,7 +490,9 @@ impl FftExecutor {
     ///
     /// # Errors
     ///
-    /// As [`FftOps::rfftn`].
+    /// As [`FftOps::rfftn`]: `Validation` for an invalid `axes`/`shape`/`n` or a
+    /// non-real input, `Unsupported` for an unsupported dtype or an engine
+    /// without an N-d FFT capability, or the backend's typed error.
     ///
     /// # Examples
     ///
@@ -514,7 +526,9 @@ impl FftExecutor {
     ///
     /// # Errors
     ///
-    /// As [`FftOps::irfftn`].
+    /// As [`FftOps::irfftn`]: `Validation` for an invalid `axes`/`shape`/`n` or a
+    /// complex input, `Unsupported` for an unsupported dtype or an engine
+    /// without an N-d FFT capability, or the backend's typed error.
     ///
     /// # Examples
     ///

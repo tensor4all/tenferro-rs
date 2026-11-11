@@ -220,6 +220,12 @@ def audit_file(path: Path, changed_lines: set[int] | None = None) -> list[Findin
     return findings
 
 
+def is_test_source(path: Path) -> bool:
+    """Test sources expose helpers to their own harness, not the crate API."""
+
+    return "tests" in path.parts or path.name == "tests.rs" or path.name.endswith("_test.rs")
+
+
 def audit(
     root: Path,
     paths: list[Path] | None = None,
@@ -227,7 +233,7 @@ def audit(
 ) -> list[Finding]:
     findings: list[Finding] = []
     for path in paths if paths is not None else rust_files(root):
-        if not path.is_file():
+        if not path.is_file() or is_test_source(path):
             continue
         lines = changed_lines.get(path) if changed_lines is not None else None
         findings.extend(audit_file(path, lines))

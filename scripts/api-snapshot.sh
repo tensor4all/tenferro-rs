@@ -78,7 +78,7 @@ for combo in "${COMBOS[@]}"; do
         file="$out_dir/$crate+$suffix.txt"
     fi
     echo "api-snapshot: $crate ($suffix)" >&2
-    cargo "+$toolchain" public-api "${args[@]}" >"$file"
+    RUSTUP_TOOLCHAIN="$toolchain" cargo public-api "${args[@]}" >"$file"
 done
 
 if [ "$mode" = --check ]; then
