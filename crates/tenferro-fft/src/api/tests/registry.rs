@@ -5,7 +5,7 @@ use num_complex::Complex64;
 use tenferro_cpu::{BufferPool, CpuEngine};
 use tenferro_tensor::{
     AsView, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorScalar, TypedTensor,
-    TypedTensorView, ValidationKind,
+    TypedTensorView,
 };
 
 use super::cases;
@@ -248,7 +248,7 @@ mod in_place {
                 assert!(
                     matches!(
                         source.kind(),
-                        ErrorKind::Validation(ValidationKind::InvalidArgument)
+                        ErrorKind::Validation(tenferro_tensor::ValidationKind::InvalidArgument)
                     ),
                     "{source}"
                 );
