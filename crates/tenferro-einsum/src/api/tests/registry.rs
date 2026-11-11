@@ -34,6 +34,28 @@ fn bits(t: &Tensor) -> R<Vec<u64>> {
     Ok(out)
 }
 
+/// Equal values, shape and dtype; `+0.0` and `-0.0` compare equal. The
+/// allocating and `_into` routes agree on values, but on some hosts (notably
+/// x86_64) they may differ in the sign of an exactly cancelled zero.
+fn same_values(a: &Tensor, b: &Tensor) -> R<bool> {
+    if a.shape() != b.shape() || a.dtype() != b.dtype() {
+        return Ok(false);
+    }
+    Ok(match a.dtype() {
+        DType::F64 => a
+            .as_slice::<f64>()?
+            .iter()
+            .zip(b.as_slice::<f64>()?)
+            .all(|(x, y)| x == y),
+        DType::C64 => a
+            .as_slice::<Complex64>()?
+            .iter()
+            .zip(b.as_slice::<Complex64>()?)
+            .all(|(x, y)| x.re == y.re && x.im == y.im),
+        other => return Err(format!("dtype {other:?}").into()),
+    })
+}
+
 /// Integer-valued data, so every summation order is exact and layouts can be
 /// compared bit for bit.
 fn ints(shape: &[usize], seed: i64) -> R<Tensor> {
@@ -404,10 +426,22 @@ fn conjugation_mask_conjugates_the_selected_operands_on_every_layer() -> R<()> {
             want,
             "concrete {spec}"
         );
-        // `_into`: the selected operands are conjugated first, as above (#2580)
-        let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(0.0, 0.0); 4])?;
+        // `_into`: the selected operands are conjugated first (#2580). The same
+        // route on explicitly conjugated inputs is the bit-exact reference.
+        let zero = || Tensor::from_vec_col_major(vec![2, 2], vec![Complex64::new(0.0, 0.0); 4]);
+        let (mut out, mut want_into) = (zero()?, zero()?);
         inputs.einsum_into(spec, &o, &mut e, Dest::overwrite(&mut out))?;
-        assert_eq!(bits(&out)?, want, "concrete into {spec}");
+        explicit.einsum_into(
+            spec,
+            &EinsumOptions::default(),
+            &mut e,
+            Dest::overwrite(&mut want_into),
+        )?;
+        assert_eq!(bits(&out)?, bits(&want_into)?, "concrete into {spec}");
+        assert!(
+            same_values(&out, &explicit.einsum(spec, &mut e)?)?,
+            "concrete into values {spec}"
+        );
         // the plan
         let plan = ConcreteEinsumPlan::prepare(&inputs, spec, &o)?;
         assert_eq!(bits(&plan.execute(&inputs, &mut e)?)?, want, "plan {spec}");
@@ -543,12 +577,14 @@ fn api_docs_are_current() {
 }
 
 /// #2580: `einsum_into` with a conjugation mask gives the same bits as the
-/// owned entrance and as the explicitly conjugated inputs, for every
-/// destination mode. Exactly cancelling imaginary parts are where the former
-/// two-operand route (mask as contraction operand flags, evaluated as
-/// `conj(a b)`) wrote `-0.0` where the owned entrance writes `+0.0`.
+/// same `_into` route on the explicitly conjugated inputs, for every
+/// destination mode, and the same values as the owned entrance (only the sign
+/// of an exact zero may differ between the allocating and `_into` routes).
+/// Exactly cancelling imaginary parts are where the former two-operand route
+/// (mask as contraction operand flags, evaluated as `conj(a b)`) wrote `-0.0`
+/// where the explicitly conjugated inputs write `+0.0`.
 #[test]
-fn conjugation_mask_into_matches_owned_bit_for_bit_in_every_mode() -> R<()> {
+fn conjugation_mask_into_matches_explicit_conjugation_bit_for_bit_in_every_mode() -> R<()> {
     let mut e = CpuEngine::serial();
     let conj = |t: &Tensor, e: &mut CpuEngine| -> R<Tensor> {
         Ok(tenferro_tensor::TensorElementwise::conj_read(
@@ -583,12 +619,18 @@ fn conjugation_mask_into_matches_owned_bit_for_bit_in_every_mode() -> R<()> {
                         .conj(ConjMask::new((0..inputs.len()).map(|i| mask[i])));
                     let plain = EinsumOptions::default();
                     let at = format!("{spec} m{m} k{k} n{n} seed {seed} {mask:?}");
-                    let owned = bits(&inputs.einsum_with(spec, &o, &mut e)?)?;
-                    assert_eq!(owned, bits(&explicit.einsum(spec, &mut e)?)?, "owned {at}");
+                    let owned = inputs.einsum_with(spec, &o, &mut e)?;
+                    assert!(
+                        same_values(&owned, &explicit.einsum(spec, &mut e)?)?,
+                        "owned {at}"
+                    );
                     let fill = |v| Tensor::from_vec_col_major(vec![m, cols], vec![v; m * cols]);
-                    let mut out = fill(Complex64::new(0.0, 0.0))?;
+                    let zero = Complex64::new(0.0, 0.0);
+                    let (mut out, mut want) = (fill(zero)?, fill(zero)?);
                     inputs.einsum_into(spec, &o, &mut e, Dest::overwrite(&mut out))?;
-                    assert_eq!(bits(&out)?, owned, "overwrite {at}");
+                    explicit.einsum_into(spec, &plain, &mut e, Dest::overwrite(&mut want))?;
+                    assert_eq!(bits(&out)?, bits(&want)?, "overwrite {at}");
+                    assert!(same_values(&out, &owned)?, "overwrite values {at}");
                     // accumulating modes: the same mode on the explicit inputs
                     let (mut got, mut want) = (fill(neg_zero)?, fill(neg_zero)?);
                     inputs.einsum_into(spec, &o, &mut e, Dest::accumulate(&mut got))?;

@@ -220,7 +220,10 @@ pub(crate) fn plan_reads(
 ///
 /// The selected operands are conjugated first, exactly as [`plan_reads`] and
 /// the owned entrance do, so `einsum` and `einsum_into` with the same options
-/// give bit-identical values. The conjugation never travels as contraction
+/// give equal values. Only the sign of an exact zero may differ between the
+/// allocating and `_into` routes: on some hosts (notably x86_64) the fresh
+/// route and the initialized beta-0 route round an exactly cancelled
+/// imaginary part to `+0.0` and `-0.0` respectively. The conjugation never travels as contraction
 /// operand flags: the flagged kernel evaluates `conj(a) conj(b)` as
 /// `conj(a b)`, which turns an exactly cancelled zero into `-0.0` where the
 /// owned entrance yields `+0.0` (#2580). Overwrite then writes the read
@@ -243,16 +246,10 @@ pub(crate) fn plan_into_reads<R: Repr>(
     let conj = conjugate(reads, mask, exec)?;
     let reads = substituted(reads, &conj);
     if dest.mode() == DestMode::Overwrite {
-        // Evaluate the read route on the conjugated reads, exactly as
-        // `plan_reads` and the owned entrance (`einsum_erased`) do, then copy
-        // the result. `run_reads_into` is a different kernel on some hosts
-        // (notably x86_64): it rounds an exactly cancelled imaginary zero to
-        // `-0.0` where `run_reads` yields `+0.0`. Computing the value first
-        // keeps `einsum` and `einsum_into` bit-identical; the copy is the
-        // price of that contract for the masked overwrite case only.
         let out = R::erase_write(dest.into_target());
-        let result = plan.run_reads(&reads[..], exec).map_err(tensor_err)?;
-        return exec.copy_read_into(TensorRead::from_tensor(&result), out);
+        return plan
+            .run_reads_into(&reads[..], exec, out)
+            .map_err(tensor_err);
     }
     let dtype = reads.first().map(TensorRead::dtype).ok_or_else(|| {
         tensor_err(Error::invalid_argument(
