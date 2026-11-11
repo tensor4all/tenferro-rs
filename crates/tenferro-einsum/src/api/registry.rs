@@ -201,19 +201,6 @@ assert_eq!(c.value()?.as_slice::<f64>()?, &[3.0; 8]);
     }
 
     exceptions {
-        E03 {
-            symbols: [
-                "tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache",
-                "tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats"
-            ];
-            scope: "cache maintenance of a prepared concrete einsum plan";
-            category: "cache owner | inherent method";
-            owner_module: "tenferro_einsum::concrete";
-            reason: "the plan owns its CPU numerical descriptor cache; clearing and inspecting it is not a tensor operation and has no options, inputs or destination";
-            verification: "doctests of both methods; the plan's execute/execute_into follow the grammar (inputs, exec, dest)";
-            exit_condition: "retained while ConcreteEinsumPlan owns a CPU cache";
-            status: retained;
-        }
         E07 {
             symbols: [
                 "tenferro_einsum::TraceContextEinsumExt::einsum",
@@ -230,24 +217,6 @@ assert_eq!(c.value()?.as_slice::<f64>()?, &[3.0; 8]);
             verification: "retired: a temporary old-vs-new test recorded the same values before removal (#2552 S4)";
             exit_condition: "met: the trait was removed in #2552 S4";
             status: retired;
-        }
-        E09 {
-            symbols: [
-                "tenferro_einsum::Error",
-                "tenferro_einsum::PlanningError",
-                "tenferro_einsum::parse_einsum_notation",
-                "tenferro_einsum::parse_einsum_subscripts",
-                "tenferro_einsum::ContractionTree::optimize",
-                "tenferro_einsum::ContractionTree::optimize_with_options",
-                "tenferro_einsum::ContractionTree::from_pairs"
-            ];
-            scope: "the einsum parser and contraction planner";
-            category: "domain error | free function";
-            owner_module: "tenferro_einsum::{error, subscripts, planning}";
-            reason: "parsing and planning are einsum-domain operations whose errors are einsum-domain; the grammar's operations wrap them (concrete: tenferro_tensor::Error::Extension, traced/eager: tenferro_runtime::Error::Extension) with the einsum error as source";
-            verification: "error-cause tests reach tenferro_einsum::Error::InvalidSubscripts through source() on all three layers";
-            exit_condition: "retained";
-            status: retained;
         }
     }
 }

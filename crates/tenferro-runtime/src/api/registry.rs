@@ -1512,11 +1512,11 @@ assert_eq!(y.shape(), &[2, 2]);
                 "tenferro_einsum::ConcreteEinsumPlan::clear_cpu_cache",
                 "tenferro_einsum::ConcreteEinsumPlan::cpu_cache_stats"
             ];
-            scope: "plan-cache owner methods of the concrete einsum plan";
+            scope: "plan-cache owner methods of the concrete einsum plan (clearing and inspecting the cache)";
             category: "cache owner | inherent method";
             owner_module: "tenferro_einsum::concrete";
-            reason: "a cache owner exposes its cache; these are not tensor operations";
-            verification: "the einsum registry tests and the cache tests of tenferro-einsum";
+            reason: "the plan owns its CPU numerical descriptor cache; a cache owner exposes its cache, and clearing or inspecting it is not a tensor operation and has no options, inputs or destination";
+            verification: "the einsum registry tests, the cache tests and the doctests of both methods; the plan's execute/execute_into follow the grammar (inputs, exec, dest)";
             exit_condition: "kept while ConcreteEinsumPlan owns a CPU cache";
             status: retained;
         }
@@ -1541,7 +1541,6 @@ assert_eq!(y.shape(), &[2, 2]);
             symbols: [
                 "tenferro_tensor::Tensor::shape",
                 "tenferro_tensor::Tensor::dtype",
-                "tenferro_tensor::Tensor::into_dynamic",
                 "tenferro_tensor::TypedTensor::as_view",
                 "tenferro_tensor::TypedTensorView::transpose_view",
                 "tenferro_tensor::TypedTensorView::slice_view",
@@ -1578,14 +1577,17 @@ assert_eq!(y.shape(), &[2, 2]);
                 "tenferro_einsum::PlanningError",
                 "tenferro_einsum::parse_einsum_subscripts",
                 "tenferro_einsum::parse_einsum_notation",
+                "tenferro_einsum::ContractionTree::optimize",
+                "tenferro_einsum::ContractionTree::optimize_with_options",
+                "tenferro_einsum::ContractionTree::from_pairs",
                 "tenferro_linalg::Error",
-                "tenferro_ad::EagerFftInPlaceError"
+                "tenferro_fft::EagerFftInPlaceError"
             ];
-            scope: "domain errors of parsers and planners, and failures that return ownership";
+            scope: "domain errors of parsers and planners (einsum parser and contraction planner), and failures that return ownership";
             category: "error | domain";
             owner_module: "the owning family crates";
-            reason: "parsers and planners report domain errors; the operations wrap them as the `source()` of the layer error";
-            verification: "the error-cause tests of each family";
+            reason: "parsers and planners report einsum-domain errors; the grammar's operations wrap them (concrete: tenferro_tensor::Error::Extension, traced/eager: tenferro_runtime::Error::Extension) as the `source()` of the layer error";
+            verification: "the error-cause tests of each family; the einsum error-cause tests reach tenferro_einsum::Error::InvalidSubscripts through source() on all three layers";
             exit_condition: "kept";
             status: retained;
         }
@@ -1594,7 +1596,7 @@ assert_eq!(y.shape(), &[2, 2]);
                 "tenferro_tensor::Engine",
                 "tenferro_tensor::TensorDot",
                 "tenferro_tensor::TensorDot::dot_general_read_into_accum",
-                "tenferro_tensor::TensorElementwise::axpby_read_into_accum",
+                "tenferro_tensor::Engine::axpby_read_into_accum",
                 "tenferro_linalg::LinalgBackend",
                 "tenferro_fft::FftBackend"
             ];

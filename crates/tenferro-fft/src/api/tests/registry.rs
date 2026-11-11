@@ -5,7 +5,7 @@ use num_complex::Complex64;
 use tenferro_cpu::{BufferPool, CpuEngine};
 use tenferro_tensor::{
     AsView, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorScalar, TypedTensor,
-    TypedTensorView,
+    TypedTensorView, ValidationKind,
 };
 
 use super::cases;
@@ -246,7 +246,10 @@ mod in_place {
         match outcome {
             Err(EagerFftInPlaceError::Rejected { input, source }) => {
                 assert!(
-                    matches!(source.kind(), ErrorKind::Validation(_)),
+                    matches!(
+                        source.kind(),
+                        ErrorKind::Validation(ValidationKind::InvalidArgument)
+                    ),
                     "{source}"
                 );
                 assert!(source.to_string().contains("ifft_in_place"), "{source}");
