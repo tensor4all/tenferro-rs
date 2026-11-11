@@ -243,12 +243,16 @@ pub(crate) fn plan_into_reads<R: Repr>(
     let conj = conjugate(reads, mask, exec)?;
     let reads = substituted(reads, &conj);
     if dest.mode() == DestMode::Overwrite {
-        // The read route on the conjugated reads, as `plan_reads` and the owned
-        // entrance (`einsum_erased`) take.
+        // Evaluate the read route on the conjugated reads, exactly as
+        // `plan_reads` and the owned entrance (`einsum_erased`) do, then copy
+        // the result. `run_reads_into` is a different kernel on some hosts
+        // (notably x86_64): it rounds an exactly cancelled imaginary zero to
+        // `-0.0` where `run_reads` yields `+0.0`. Computing the value first
+        // keeps `einsum` and `einsum_into` bit-identical; the copy is the
+        // price of that contract for the masked overwrite case only.
         let out = R::erase_write(dest.into_target());
-        return plan
-            .run_reads_into(&reads[..], exec, out)
-            .map_err(tensor_err);
+        let result = plan.run_reads(&reads[..], exec).map_err(tensor_err)?;
+        return exec.copy_read_into(TensorRead::from_tensor(&result), out);
     }
     let dtype = reads.first().map(TensorRead::dtype).ok_or_else(|| {
         tensor_err(Error::invalid_argument(
