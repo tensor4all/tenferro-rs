@@ -8,6 +8,8 @@ mod deterministic_path;
 mod eager_tensor;
 #[path = "integration/error_public.rs"]
 mod error_public;
+#[path = "integration/many_operand_vjp.rs"]
+mod many_operand_vjp;
 #[path = "integration/prepared_plan_replay.rs"]
 mod prepared_plan_replay;
 #[path = "integration/public_surface_contract.rs"]
