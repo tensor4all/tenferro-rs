@@ -8,6 +8,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`CpuEngine`'s engine-wide cache controls cover its extension cache store**
+  (#2587). `runtime_cache_stats` adds the store's entries and retained bytes to
+  `entries` and `retained_bytes`; `hits`, `misses` and `evictions` stay the plan
+  cache's, and the store reports its own through `ExtensionCacheStore::stats`.
+  `clear_runtime_caches` also clears the store. `ExecutionEngine::take_extension_caches`
+  on `CpuEngine` and `CudaEngine` now moves the store out instead of building an
+  empty placeholder store, so a take/restore round trip no longer allocates.
+
 - **CUDA softplus is one fused launch** (#2530). `CudaEngine` now implements
   `Engine::fused_activation_read` for `softplus` on `F32`/`F64`, so concrete
   `Tensor::softplus` / `TypedTensor::softplus` and untracked eager softplus no
