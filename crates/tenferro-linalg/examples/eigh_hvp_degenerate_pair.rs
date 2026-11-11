@@ -1,4 +1,5 @@
-//! Reproducer for tensor4all/tenferro-rs#2563.
+//! Reproducer for tensor4all/tenferro-rs#2563, adapted from the reporter's
+//! reproducer in that issue.
 //!
 //! `T(s) = sum_a t(kappa_a(K(s)))` for `K(s) = [[lam + d/2, s], [s, lam - d/2]]`
 //! and `t(k) = -softplus(-beta (k - mu)) / beta`. `T` is smooth in `s` even at
@@ -38,7 +39,7 @@ fn run(t: &TracedTensor) -> Result<f64, BoxError> {
     Ok(out.remove(0).into_tensor(&mut engine)?.as_slice::<f64>()?[0])
 }
 
-/// `t(k) = -softplus(-beta (k - mu)) / beta`, so `f = t'`.
+/// `f(y) = t''(mu + y)` for `t(k) = -softplus(-beta (k - mu)) / beta`.
 fn f(y: f64) -> f64 {
     let s = 1.0 / ((BETA * y).exp() + 1.0);
     -BETA * s * (1.0 - s)
