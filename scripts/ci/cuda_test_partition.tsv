@@ -1013,6 +1013,7 @@ gpu	tenferro-gpu	cuda::dispatch::reduce_tests::a_destination_that_the_plan_would
 gpu	tenferro-gpu	cuda::dispatch::reduce_tests::a_short_axis_reduces_directly
 gpu	tenferro-gpu	cuda::dispatch::reduce_tests::the_split_policy_runs_both_passes
 gpu	tenferro-gpu	cuda::dispatch::reduce_tests::unit_and_plane_reductions_match_the_host
+gpu	tenferro-gpu	cuda::dispatch::tests::a_destination_is_passed_as_the_storage_it_holds
 gpu	tenferro-gpu	cuda::dispatch::tests::binary_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::clamp_and_convert_match_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::compare_and_select_match_the_host_reference
@@ -1047,6 +1048,10 @@ gpu	tenferro-gpu	cuda::structural::tests::scale_tensor_write_refuses_a_host_owne
 gpu	tenferro-gpu	cuda::structural::tests::scale_tensor_write_refuses_a_host_view_whatever_the_factor
 gpu	tenferro-gpu	cuda::structural::tests::scatter_read_refuses_a_bad_update_axis_before_allocating_or_staging
 gpu	tenferro-gpu	cuda::structural::tests::triangular_reads_mask_borrowed_regions
+gpu	tenferro-gpu	cuda::structural::tests::an_elementwise_launch_covers_every_length
+gpu	tenferro-gpu	cuda::structural::tests::an_elementwise_launch_does_not_zero_its_destination
+gpu	tenferro-gpu	cuda::structural::tests::an_elementwise_result_holds_no_stale_bytes
+gpu	tenferro-gpu	cuda::structural::tests::the_zero_fill_counter_tracks_a_zeroed_allocation
 host	tenferro-gpu	cuda::structural::tests::the_element_count_checks_both_extremes
 host	tenferro-gpu	cuda::structural::tests::a_batched_pair_swap_plans_one_grid_axis_per_batch
 host	tenferro-gpu	cuda::structural::tests::the_tiled_geometry_addresses_every_element_the_view_names
