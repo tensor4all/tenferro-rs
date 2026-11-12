@@ -239,7 +239,10 @@ mod in_place {
     fn a_length_change_is_rejected_and_returns_the_input_unchanged() -> TestResult<()> {
         let runtime = EagerRuntime::new()?;
         let x = runtime.constant_from(complex()?)?;
-        let before = tensor_bits(&x.to_tensor(&mut CpuEngine::serial())?)?;
+        let before = tensor_bits(
+            &x.runtime()
+                .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&x))?,
+        )?;
         let outcome = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
             Ok::<_, tenferro_ad::Error>(s.ifft_in_place(x, &FftOptions::default().n(Some(8))))
         })?;
@@ -254,7 +257,12 @@ mod in_place {
                 );
                 assert!(source.to_string().contains("ifft_in_place"), "{source}");
                 assert_eq!(
-                    tensor_bits(&input.to_tensor(&mut CpuEngine::serial())?)?,
+                    tensor_bits(
+                        &input
+                            .runtime()
+                            .with_eager_session(&mut CpuEngine::serial(), |s| s
+                                .duplicate_value(&input))?
+                    )?,
                     before
                 );
             }
@@ -302,7 +310,10 @@ mod in_place {
         let mut e = CpuEngine::serial();
         let (a, b) = (EagerRuntime::new()?, EagerRuntime::new()?);
         let x = b.constant_from(complex()?)?;
-        let before = tensor_bits(&x.to_tensor(&mut e)?)?;
+        let before = tensor_bits(
+            &x.runtime()
+                .with_eager_session(&mut e, |s| s.duplicate_value(&x))?,
+        )?;
         let outcome = a.with_eager_session(&mut e, |s| {
             let out_of_place = s.fft(&x).map(|_| ()).expect_err("foreign tensor");
             let rejected = s
@@ -322,7 +333,14 @@ mod in_place {
                     "{source}"
                 );
                 assert!(input.same_context(&b.constant_from(complex()?)?));
-                assert_eq!(tensor_bits(&input.to_tensor(&mut e)?)?, before);
+                assert_eq!(
+                    tensor_bits(
+                        &input
+                            .runtime()
+                            .with_eager_session(&mut e, |s| s.duplicate_value(&input))?
+                    )?,
+                    before
+                );
             }
             other => panic!("expected Rejected, got {other:?}"),
         }
@@ -341,7 +359,13 @@ mod in_place {
                 s.fft_in_place(x, &FftOptions::default().axis(0).norm(FftNorm::Ortho))?,
             )
         })?;
-        assert_eq!(tensor_bits(&y.to_tensor(&mut e)?)?, tensor_bits(&want)?);
+        assert_eq!(
+            tensor_bits(
+                &y.runtime()
+                    .with_eager_session(&mut e, |s| s.duplicate_value(&y))?
+            )?,
+            tensor_bits(&want)?
+        );
         assert!(API_EXCEPTIONS.iter().any(|x| x.id == "E01"));
         Ok(())
     }

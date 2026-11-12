@@ -236,11 +236,13 @@ fi
 
 # The committed public-API snapshots must conform to the api_ops! registries
 # (#2602); CI repeats this on the freshly compiled surface.
-if [[ "${change_class}" == "code" ]]; then
+# The committed snapshots in api/ are the checker's input; a checkout without
+# them (such as the gate's own test fixture) has nothing to check.
+if [[ "${change_class}" == "code" && -d api ]]; then
   run run_python scripts/check-api-registry-conformance.py
   run run_python scripts/test-check-api-registry-conformance.py
 else
-  log "api registry conformance: skipped for ${change_class} changes"
+  log "api registry conformance: skipped (${change_class} change or no api/ snapshots)"
 fi
 
 # Execution engine entry mechanisms are audited on every code change: the

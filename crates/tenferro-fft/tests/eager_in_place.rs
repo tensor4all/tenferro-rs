@@ -238,7 +238,8 @@ fn consuming_fft_rejects_noncompact_layout_before_ownership_extraction() {
         other => panic!("noncompact ownership extraction must fail: {other:?}"),
     };
     assert_eq!(
-        view.to_tensor(&mut engine)
+        view.runtime()
+            .with_eager_session(&mut engine, |s| s.duplicate_value(&view))
             .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),

@@ -622,7 +622,8 @@ fn eager_fft_matches_traced_fft() {
 
     assert_c64_close(
         eager
-            .to_tensor(&mut engine)
+            .runtime()
+            .with_eager_session(&mut engine, |s| s.duplicate_value(&eager))
             .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),
@@ -663,7 +664,8 @@ fn eager_ifft_matches_traced_ifft() {
 
     assert_c64_close(
         eager
-            .to_tensor(&mut engine)
+            .runtime()
+            .with_eager_session(&mut engine, |s| s.duplicate_value(&eager))
             .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),
@@ -690,7 +692,8 @@ fn eager_rfft_matches_traced_rfft() {
 
     assert_c64_close(
         eager
-            .to_tensor(&mut engine)
+            .runtime()
+            .with_eager_session(&mut engine, |s| s.duplicate_value(&eager))
             .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),

@@ -4,7 +4,7 @@ use num_complex::Complex64;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuEngine;
 use tenferro_fft::EagerFftOps;
 use tenferro_fft::FftOptions;
