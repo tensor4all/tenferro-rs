@@ -116,6 +116,12 @@ layer, generated from a per-family registry. The operation list, options,
   returns the `threadteam::DispatchCosts` the engine's tokens use, so a caller
   can decide with `num_threads` and threadteam's `width_for_by` / `pays_at`
   whether an operation would fork before it takes a token with `exec`.
+- **`CpuEngine::with_guard`, a guarded serial scope without a token** (#2591).
+  It is `with_exec` at width one minus the placement token: the same refusal
+  of a broken engine, the same unwind handling (a panic marks the engine
+  broken) and the same workspace retention bound, but it reserves no worker.
+  The body gets a `SerialCtx` with the engine's workspace and batch policy,
+  which is not a provider bundle and cannot fork.
 
 ### Changed
 

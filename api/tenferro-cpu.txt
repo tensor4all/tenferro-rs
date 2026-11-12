@@ -54,6 +54,7 @@ pub fn tenferro_cpu::CpuEngine::shared_allocation_domain(&self) -> core::option:
 pub fn tenferro_cpu::CpuEngine::with_allocation_domain(self, alloc::sync::Arc<dyn tenferro_tensor::types::SharedTensorAllocationDomain>) -> Self
 pub fn tenferro_cpu::CpuEngine::with_batch_policy(self, tcontract_exec::batch::BatchPolicy) -> Self
 pub fn tenferro_cpu::CpuEngine::with_exec<R>(&mut self, impl core::ops::function::FnOnce(&mut tcontract_exec::exec::Exec<'_>) -> R) -> tenferro_tensor::error::Result<R>
+pub fn tenferro_cpu::CpuEngine::with_guard<R>(&mut self, impl core::ops::function::FnOnce(tenferro_cpu::SerialCtx<'_>) -> R) -> tenferro_tensor::error::Result<R>
 pub fn tenferro_cpu::CpuEngine::with_plan_cache(self, tenferro_cpu::CpuPlanCache) -> Self
 pub fn tenferro_cpu::CpuEngine::with_runtime_engine_id(self, tenferro_runtime::runtime::identity::EngineId) -> Self
 impl tenferro_cpu::CpuEngine
@@ -189,6 +190,12 @@ impl core::fmt::Debug for tenferro_cpu::IndexedPlanCacheLimits
 pub fn tenferro_cpu::IndexedPlanCacheLimits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for tenferro_cpu::IndexedPlanCacheLimits
 impl core::marker::StructuralPartialEq for tenferro_cpu::IndexedPlanCacheLimits
+pub struct tenferro_cpu::SerialCtx<'a>
+impl<'a> tenferro_cpu::SerialCtx<'a>
+pub fn tenferro_cpu::SerialCtx<'a>::batch_policy(&self) -> tcontract_exec::batch::BatchPolicy
+pub fn tenferro_cpu::SerialCtx<'a>::workspace(&self) -> &'a dyn tcontract_exec::workspace::WorkspaceProvider
+impl core::fmt::Debug for tenferro_cpu::SerialCtx<'_>
+pub fn tenferro_cpu::SerialCtx<'_>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const fn tenferro_cpu::cpu_capabilities() -> &'static [tenferro_tensor::capability::OperationCapability]
 pub fn tenferro_cpu::runtime_engine_id() -> core::result::Result<tenferro_runtime::runtime::identity::EngineId, tenferro_runtime::runtime::error::RuntimeConfigError>
 pub fn tenferro_cpu::runtime_engine_registration(&tenferro_cpu::CpuEngine) -> core::result::Result<tenferro_runtime::runtime::engine_registration::EngineRegistration, tenferro_runtime::runtime::error::RuntimeConfigError>

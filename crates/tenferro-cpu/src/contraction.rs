@@ -338,7 +338,7 @@ impl ExecutionResources {
     pub(crate) fn dispatch_costs(&self) -> &threadteam::DispatchCosts {
         &self.costs
     }
-    fn workspace(&self) -> &ArenaProvider {
+    pub(crate) fn workspace(&self) -> &ArenaProvider {
         &self.workspace
     }
     /// Whether the engine holds a reserved team.

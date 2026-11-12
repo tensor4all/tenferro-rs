@@ -179,7 +179,7 @@ pub use buffer_pool::{BufferPool, BufferPoolStats};
 pub use capability::cpu_capabilities;
 #[doc(hidden)]
 pub use dot_runtime::{validate_cpu_host_read, validate_cpu_host_write};
-pub use engine::{CpuEngine, CpuEngineError};
+pub use engine::{CpuEngine, CpuEngineError, SerialCtx};
 #[doc(hidden)]
 pub use gemm::GemmAnalysisCache;
 pub use indexed_plan_cache::IndexedPlanCacheLimits;
