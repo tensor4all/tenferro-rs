@@ -941,8 +941,9 @@ layout handling, errors, omissions and exceptions.
     exception. Every eager operation that needs an engine is an `EagerSession`
     method, including AD (`s.grad`, `s.vjp`, `s.jvp`, `s.backward(&loss)`),
     value extraction (`s.duplicate_value`, `s.detach`) and engine-backed leaf
-    construction; no `EagerTensor`, `EagerRuntime` or eager extension method
-    takes an engine (#2602, exceptions E11–E13).
+    construction; apart from the entry `EagerRuntime::with_eager_session`, no
+    `EagerTensor`, `EagerRuntime` or eager extension method takes an engine
+    (#2602, exceptions E11–E13).
     `scripts/check-api-registry-conformance.py` enforces this on the compiled
     surface.
 - **Options.** Every semantic choice lives in one `XxxOptions` per operation

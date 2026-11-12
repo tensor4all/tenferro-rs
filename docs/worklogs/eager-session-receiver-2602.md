@@ -49,7 +49,16 @@ evidence: [api-consolidation-policy.md](../design/api-consolidation-policy.md).
 - Runtime contracts (foreign operands and seeds, check-before-seed, inactive
   inputs, higher order, accumulation, seeded backward, cross-runtime copy, leaf
   paths) are pinned by `tenferro-ad` `eager_session_ad_contract`; compile
-  contracts by the `eager_backend_capability_contract` trybuild cases.
+  contracts by the `eager_backend_capability_contract` trybuild cases, which
+  the nextest workspace lanes skip, so the `api-surface` job runs them with
+  plain `cargo test`.
+- An independent review found checker bypasses (an excepted name with an
+  engine argument, engines as generic bounds or concrete types, copy aliases
+  outside the name vocabulary). E11–E13 now list exact signatures, engine
+  detection reads the whole rendered line, and copies are recognized by shape;
+  each bypass is a self-test case. A renamed re-export is still checked under
+  the type's own name, and a blanket `impl<T> Trait for T` is not attributed to
+  the eager receivers.
 - The CUDA call sites were migrated and compile with the CUDA feature set, but
   were not executed on this host (no GPU); the device-resident leaf path is
   exercised by the existing CUDA tests.

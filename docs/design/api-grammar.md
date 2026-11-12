@@ -43,8 +43,8 @@ needs an engine, not only the forward operations of the registries:
 The engine enters once, through `EagerRuntime::with_eager_session(&mut engine,
 |s| ..)`, and the session checks every eager operand and seed against its
 runtime (`ContextMismatch`) before anything is materialized or a gradient slot
-is written. No `EagerTensor`, `EagerRuntime` or eager extension method takes an
-engine.
+is written. Apart from that entry, no `EagerTensor`, `EagerRuntime` or eager
+extension method takes an engine.
 
 Operations that need no engine stay on the handle or the runtime: `x.grad()`
 (slot lookup), `x.clear_grad()`, `x.into_value()` (consuming extraction without a
@@ -70,6 +70,11 @@ compiled signature (`signature eager: "..."`).
 `scripts/check-api-registry-conformance.py` checks the compiled surface of the
 default and CUDA profiles against them: a declared signature must exist, an
 eager AD/value/leaf/accessor name on an eager receiver must be declared, and an
-engine argument on an eager item must be an exception. CI runs it on the surface
-compiled from the PR head inside the required `CI gate (PR workspace tests)`, so
-regenerating `api/` does not make an undeclared spelling pass.
+engine type on an eager item (parameter, generic bound, `where` clause or
+concrete engine) must be a declared or exact-signature exception. The
+exceptions of this scope list exact signatures, so an excepted name cannot come
+back with an engine argument. CI runs the check, together with the trybuild
+compile contracts, inside a job the required `CI gate (PR workspace tests)`
+depends on: on the surface compiled from the PR's merge commit when Rust code
+changed, and on the committed `api/` otherwise. Regenerating `api/` does not
+make an undeclared spelling pass.

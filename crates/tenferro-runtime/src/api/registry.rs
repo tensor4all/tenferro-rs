@@ -1726,10 +1726,10 @@ assert_eq!(y.shape(), &[2, 2]);
         }
         E11 {
             symbols: [
-                "tenferro_ad::EagerSession::grad_optional",
-                "tenferro_ad::EagerSession::vjp_optional",
-                "tenferro_ad::EagerSession::jvp_optional",
-                "tenferro_ad::EagerSession::backward_with"
+                "pub fn tenferro_ad::EagerSession<'_>::grad_optional(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>",
+                "pub fn tenferro_ad::EagerSession<'_>::vjp_optional(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>",
+                "pub fn tenferro_ad::EagerSession<'_>::jvp_optional(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>",
+                "pub fn tenferro_ad::EagerSession<'_>::backward_with(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>"
             ];
             scope: "the inactive-input result form of the eager functional transforms, and the seeded form of eager backward";
             category: "eager AD | result form, seed operand";
@@ -1741,12 +1741,12 @@ assert_eq!(y.shape(), &[2, 2]);
         }
         E12 {
             symbols: [
-                "tenferro_ad::EagerRuntime::constant_from",
-                "tenferro_ad::EagerRuntime::variable_from",
-                "tenferro_ad::EagerTensor::grad",
-                "tenferro_ad::EagerTensor::into_value",
-                "tenferro_ad::Gradients::grad",
-                "tenferro_ad::GradientValue::to_tensor"
+                "pub fn tenferro_ad::EagerRuntime::constant_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>",
+                "pub fn tenferro_ad::EagerRuntime::variable_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>",
+                "pub fn tenferro_ad::EagerTensor::grad(&self) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::GradientValue>>",
+                "pub fn tenferro_ad::EagerTensor::into_value(self) -> core::result::Result<tenferro_tensor::types::Tensor, tenferro_ad::IntoValueError<Self>>",
+                "pub fn tenferro_ad::Gradients::grad(&self, &computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>) -> core::option::Option<tenferro_tensor::types::TensorView<'_>>",
+                "pub fn tenferro_ad::GradientValue::to_tensor(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>"
             ];
             scope: "engine-free eager leaf import, gradient-slot lookup, consuming value extraction, and the stored-gradient copy";
             category: "eager value | engine-free, concrete record";
@@ -1758,9 +1758,9 @@ assert_eq!(y.shape(), &[2, 2]);
         }
         E13 {
             symbols: [
-                "tenferro_ad::EagerRuntime::with_eager_session",
-                "tenferro_ad::EagerSession::engine",
-                "tenferro_ad::extension::apply_eager"
+                "pub fn tenferro_ad::EagerRuntime::with_eager_session<T, E: core::convert::From<tenferro_runtime::error::Error>>(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, impl core::ops::function::FnOnce(&mut tenferro_ad::EagerSession<'_>) -> core::result::Result<T, E>) -> core::result::Result<T, E>",
+                "pub fn tenferro_ad::EagerSession<'_>::engine(&mut self) -> &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine",
+                "pub fn tenferro_ad::extension::apply_eager(&mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, alloc::sync::Arc<dyn tenferro_ops::ext_op::ExtensionOp>, &[&tenferro_ad::EagerTensor]) -> tenferro_runtime::error::Result<alloc::vec::Vec<tenferro_ad::EagerTensor>>"
             ];
             scope: "the eager session boundary, its one engine accessor, and the extension-authoring entry";
             category: "eager boundary | lifecycle, accessor, bridge";

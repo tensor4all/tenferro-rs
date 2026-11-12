@@ -45,6 +45,19 @@ REINTRODUCED = {
     "engine-free tensor leaf alias": f"pub fn tenferro_ad::EagerTensor::from_tensor_in({T}, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> {R}<Self>",
     "engine argument on a session method": f"{SESSION}exp_on(&mut self, &{ET}, {ENGINE}) -> {R}<{ET}>",
     "engine-taking free function over eager tensors": f"pub fn tenferro_ad::eager::run_eager({EXEC}, &[&{ET}]) -> {R}<{ET}>",
+    # Shapes from the independent review: an excepted name with an engine
+    # argument, a changed accessor type, generic/where/concrete engines, other
+    # engine traits, copy aliases outside the vocabulary, `pub unsafe fn`.
+    "engine argument under an excepted name": f"pub fn tenferro_ad::EagerRuntime::variable_from(&alloc::sync::Arc<Self>, {EXEC}, {T}) -> {R}<{ET}>",
+    "engine argument on an _optional form": f"{SESSION}grad_optional(&mut self, {EXEC}, &{ET}, &{ET}) -> {R}<core::option::Option<{ET}>>",
+    "accessor returning the other engine type": f"{SESSION}engine(&mut self) -> {ENGINE}",
+    "engine as a generic bound": f"pub fn tenferro_ad::EagerTensor::reduce<E: tenferro_runtime::runtime::engine::ExecutionEngine + ?Sized>(&self, &mut E) -> {R}<{ET}>",
+    "engine in a where clause": f"pub fn tenferro_ad::EagerTensor::reduce<E>(&self, &mut E) -> {R}<{ET}> where E: tenferro_runtime::runtime::engine::ExecutionEngine",
+    "concrete engine type": f"pub fn tenferro_ad::EagerTensor::sum_on(&self, &mut tenferro_cpu::CpuEngine) -> {R}<{ET}>",
+    "other engine trait": f"pub fn tenferro_ad::EagerTensor::sum_on(&self, &mut dyn tenferro_runtime::ExtensionEngine) -> {R}<{ET}>",
+    "copy alias outside the vocabulary": f"{SESSION}copy(&mut self, &{ET}) -> {R}<{T}>",
+    "copy alias named clone_value": f"{SESSION}clone_value(&mut self, &{ET}) -> {R}<{T}>",
+    "unsafe copy alias": f"pub unsafe fn tenferro_ad::EagerTensor::to_tensor(&self, {ENGINE}) -> {R}<{T}>",
 }
 
 
@@ -93,6 +106,17 @@ def test_extension_trait_method_on_the_session_is_in_scope() -> None:
     assert any("undeclared eager entry point" in e for e in errors), errors
 
 
+def test_trait_impl_with_where_clause_is_attributed() -> None:
+    trait = "tenferro_ad::SomeExt"
+    errors = errors_after(
+        add=[
+            f"impl<T> {trait} for tenferro_ad::EagerTensor where T: core::marker::Send",
+            f"pub fn {trait}::to_tensor(&self, {ENGINE}) -> {R}<{T}>",
+        ]
+    )
+    assert any("undeclared eager entry point" in e for e in errors), errors
+
+
 def test_missing_declared_signature_fails() -> None:
     errors = errors_after(remove=[GRAD_SIG])
     assert any("missing declared signature of `grad`" in e for e in errors), errors
@@ -102,13 +126,13 @@ def test_changed_declared_signature_fails() -> None:
     changed = BACKWARD_SIG.replace("(&mut self, ", f"(&mut self, {EXEC}, ")
     errors = errors_after(add=[changed], remove=[BACKWARD_SIG], file="tenferro-ad+native-cuda.txt")
     assert any("missing declared signature of `backward`" in e for e in errors), errors
-    assert any("takes an engine" in e for e in errors), errors
+    assert any("names an engine" in e for e in errors), errors
 
 
 def test_stale_exception_symbol_fails() -> None:
     line = f"pub fn tenferro_ad::GradientValue::to_tensor(&self, {ENGINE}) -> {R}<{T}>"
     errors = errors_after(remove=[line])
-    assert any("E12 lists `tenferro_ad::GradientValue::to_tensor`" in e for e in errors), errors
+    assert any("exception E12 lists a signature that is not public" in e for e in errors), errors
 
 
 def main() -> int:

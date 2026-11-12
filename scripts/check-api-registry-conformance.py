@@ -7,7 +7,9 @@ fails after the snapshots are regenerated. It reads:
 
 - the `api_ops!` registries (`crates/*/src/api/registry.rs`): every op row with
   a `signature <layer>: "..."` line declares a canonical compiled signature,
-  and every exception row lists its permitted symbols;
+  and every exception row lists its permitted symbols. An exception symbol
+  written as a full `pub fn ...` line permits exactly that signature; a bare
+  path permits the name with any signature but never an engine argument;
 - a directory of public-API snapshots (`api/*.txt`, or the freshly generated
   directory of `scripts/api-snapshot.sh --check`).
 
@@ -21,12 +23,20 @@ Rules, over every snapshot profile in the directory (default and CUDA):
    eager AD, value-extraction, leaf-construction or engine-accessor vocabulary
    is either a declared signature or an exception symbol. A second spelling of a
    declared operation (a duplicate alias) or an undeclared receiver fails here;
-3. engine receiver: a public function that takes an engine (`dyn Engine`,
-   `dyn ExecutionEngine`, or an `impl` of either) and names an eager type is an
-   exception symbol. Eager operations take the engine once, through
-   `EagerRuntime::with_eager_session`; no other eager receiver takes one;
-4. no stale exception: every `tenferro_ad::` exception symbol exists in the
-   default profile.
+   A method of an eager receiver that takes an `&EagerTensor` and returns an
+   owned `Tensor` is a value copy and must be declared whatever its name, so a
+   copy alias cannot hide behind a new name;
+3. engine argument: a public function whose rendered line mentions an engine
+   type anywhere (a `dyn`/`impl` engine trait, a generic bound or `where`
+   clause, or a concrete engine such as `CpuEngine`) and names an eager type
+   must be a declared signature or an exact-signature exception. Eager
+   operations take the engine once, through `EagerRuntime::with_eager_session`;
+4. no stale exception: every `tenferro_ad` exception signature (or path)
+   exists in every `tenferro-ad` profile.
+
+Known limit: rustdoc JSON renders items under the type's own name, so a renamed
+re-export (`pub use EagerSession as Session`) is checked under `EagerSession`;
+a blanket `impl<T> Trait for T` is not attributed to the eager receivers.
 
 Usage:
     python3 scripts/check-api-registry-conformance.py [--surface-dir api]
@@ -55,21 +65,31 @@ SCOPED_NAME = re.compile(
     r")\w*$|session"
 )
 
-ENGINE_PARAM = re.compile(
-    r"dyn [\w:]*\b(?:Engine|ExecutionEngine)\b|impl [\w:]*\b(?:Engine|ExecutionEngine)\b"
-)
+# Any engine type: the `Engine`/`ExecutionEngine`/`*Engine` traits and the
+# concrete engines (`CpuEngine`, `CudaEngine`, ...), in parameters, generic
+# bounds, `where` clauses or return types.
+ENGINE_TYPE = re.compile(r"\b\w*Engine\b")
+COPY_SHAPE = re.compile(r"&tenferro_ad::EagerTensor\b.*\)\s*->\s*.*\btenferro_tensor::types::Tensor>?\s*$")
 EAGER_TYPE = re.compile(r"\b(?:Eager\w+|GradientValue|Gradients)\b")
 
 OP_RE = re.compile(r"^\s{4}op (\w+) \{$")
 SIGNATURE_RE = re.compile(r'^\s+signature (\w+): "(.*)";$')
 EXCEPTION_RE = re.compile(r"^\s{8}(E\d+) \{$")
-SYMBOL_RE = re.compile(r'^\s+"([\w:]+)",?$')
+SYMBOL_RE = re.compile(r'^\s+"(.+)",?$')
+FN_PREFIX = re.compile(r"^pub (?:(?:const|unsafe|async|extern \"[^\"]*\") )*fn ")
 
 
 @dataclass
 class Registry:
     signatures: dict[str, tuple[str, str]] = field(default_factory=dict)  # line -> (op, file)
-    exceptions: dict[str, str] = field(default_factory=dict)  # symbol -> id
+    exceptions: dict[str, str] = field(default_factory=dict)  # bare path -> id
+    exception_lines: dict[str, str] = field(default_factory=dict)  # exact `pub fn` line -> id
+
+    def add_exception(self, symbol: str, ex: str) -> None:
+        if symbol.startswith("pub "):
+            self.exception_lines[symbol] = ex
+        else:
+            self.exceptions[symbol] = ex
 
 
 def parse_registries(root: pathlib.Path) -> Registry:
@@ -90,9 +110,8 @@ def parse_registries(root: pathlib.Path) -> Registry:
                 continue
             if exception and line.strip().startswith("symbols: ["):
                 in_symbols = True
-                inline = re.findall(r'"([\w:]+)"', line)
-                for symbol in inline:
-                    reg.exceptions[symbol] = exception
+                for symbol in re.findall(r'"([^"]+)"', line):
+                    reg.add_exception(symbol, exception)
                 if line.rstrip().endswith("];"):
                     in_symbols = False
                 continue
@@ -100,7 +119,7 @@ def parse_registries(root: pathlib.Path) -> Registry:
                 if line.strip().startswith("];"):
                     in_symbols = False
                 elif m := SYMBOL_RE.match(line):
-                    reg.exceptions[m.group(1)] = exception
+                    reg.add_exception(m.group(1), exception)
     return reg
 
 
@@ -143,10 +162,16 @@ class Item:
         return strip_generics(self.path[-2]) if len(self.path) >= 2 else ""
 
 
+def normalize(line: str) -> str:
+    """`pub const/unsafe fn` lines compare as `pub fn` lines."""
+    return FN_PREFIX.sub("pub fn ", line, count=1)
+
+
 def parse_fn(line: str) -> Item | None:
-    if not line.startswith("pub fn "):
+    m = FN_PREFIX.match(line)
+    if not m:
         return None
-    rest = line[len("pub fn ") :]
+    rest = line[m.end() :]
     # The path ends at the first `(` outside angle brackets.
     depth = 0
     for i, c in enumerate(rest):
@@ -178,11 +203,12 @@ def trait_impls(lines: list[str]) -> dict[str, set[str]]:
     """Trait name -> implementing eager receivers, from `impl X for Y` lines."""
     impls: dict[str, set[str]] = {}
     for line in lines:
-        m = re.match(r"^impl(?:<[^>]*>)? ([\w:<>' ,]+?) for ([\w:<>' ,&]+)$", line)
+        line = re.sub(r" where .*$", "", line)
+        m = re.match(r"^(?:unsafe )?impl(?:<.*?>)? (.+?) for (.+)$", line)
         if not m:
             continue
-        trait = strip_generics(split_path(m.group(1))[-1])
-        target = strip_generics(split_path(m.group(2).lstrip("&"))[-1])
+        trait = strip_generics(split_path(m.group(1).strip())[-1])
+        target = strip_generics(split_path(m.group(2).strip().lstrip("&"))[-1])
         if target in EAGER_RECEIVERS:
             impls.setdefault(trait, set()).add(target)
     return impls
@@ -209,7 +235,6 @@ def check(surface: pathlib.Path, root: pathlib.Path) -> list[str]:
     files = sorted(p for p in surface.glob("*.txt") if p.name != "allowlist.txt")
     if not files:
         return [f"{surface}: no snapshot files"]
-    default_ad = surface / "tenferro-ad.txt"
 
     for path in files:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -222,45 +247,51 @@ def check(surface: pathlib.Path, root: pathlib.Path) -> list[str]:
             if sig.startswith(f"pub fn {crate}::") and sig not in line_set:
                 errors.append(f"{path.name}: missing declared signature of `{op}` ({where}):\n    {sig}")
 
-        for line in lines:
-            item = parse_fn(line)
+        for raw in lines:
+            item = parse_fn(raw)
             if item is None:
                 continue
+            line = normalize(raw)
             recv = receivers(item, impls)
             candidates = symbol_candidates(item, recv)
-            excepted = any(c in reg.exceptions for c in candidates)
-            # 2. declared receiver and spelling
-            if recv and SCOPED_NAME.search(item.name):
-                if line not in reg.signatures and not excepted:
-                    same_name = [s for s, (op, _) in reg.signatures.items() if op == item.name]
-                    hint = (
-                        f"; the registry declares `{item.name}` as\n    {same_name[0]}"
-                        if same_name
-                        else "; declare it in an api_ops! registry (signature or exception) or remove it"
-                    )
-                    errors.append(
-                        f"{path.name}: undeclared eager entry point {sorted(candidates)[0]}{hint}\n    found: {line}"
-                    )
-            # 3. engine argument outside the session boundary
-            if ENGINE_PARAM.search(item.params) and (recv or EAGER_TYPE.search(line)):
-                if not excepted:
-                    errors.append(
-                        f"{path.name}: eager entry point takes an engine outside EagerRuntime::with_eager_session; "
-                        f"make it an EagerSession method:\n    {line}"
-                    )
+            declared = line in reg.signatures or line in reg.exception_lines
+            name_excepted = any(c in reg.exceptions for c in candidates)
+            names_engine = bool(ENGINE_TYPE.search(line))
+            # 2. declared receiver, spelling and copy shape
+            scoped = recv and (SCOPED_NAME.search(item.name) or COPY_SHAPE.search(line))
+            if scoped and not declared and not name_excepted:
+                same_name = [sig for sig, (op, _) in reg.signatures.items() if op == item.name]
+                hint = (
+                    f"; the registry declares `{item.name}` as\n    {same_name[0]}"
+                    if same_name
+                    else "; declare it in an api_ops! registry (signature or exception) or remove it"
+                )
+                errors.append(
+                    f"{path.name}: undeclared eager entry point {sorted(candidates)[0]}{hint}\n    found: {line}"
+                )
+            # 3. engine type on an eager item: only exact declared signatures
+            if names_engine and (recv or EAGER_TYPE.search(line)) and not declared:
+                errors.append(
+                    f"{path.name}: eager entry point names an engine outside the declared session boundary; "
+                    f"make it an EagerSession method or declare its exact signature:\n    {line}"
+                )
 
-    # 4. stale exceptions
-    if default_ad.exists():
-        names: set[str] = set()
-        lines = default_ad.read_text(encoding="utf-8").splitlines()
+    # 4. stale exceptions, in every tenferro-ad profile
+    for profile in sorted(surface.glob("tenferro-ad*.txt")):
+        lines = profile.read_text(encoding="utf-8").splitlines()
+        line_set = {normalize(line) for line in lines}
         impls = trait_impls(lines)
+        names: set[str] = set()
         for line in lines:
             item = parse_fn(line)
             if item:
                 names |= symbol_candidates(item, receivers(item, impls))
         for symbol, ex in sorted(reg.exceptions.items()):
             if symbol.startswith("tenferro_ad::") and symbol not in names:
-                errors.append(f"{default_ad.name}: exception {ex} lists `{symbol}`, which is not a public function")
+                errors.append(f"{profile.name}: exception {ex} lists `{symbol}`, which is not a public function")
+        for sig, ex in sorted(reg.exception_lines.items()):
+            if sig.startswith("pub fn tenferro_ad::") and sig not in line_set:
+                errors.append(f"{profile.name}: exception {ex} lists a signature that is not public:\n    {sig}")
     return errors
 
 
