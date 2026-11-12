@@ -58,14 +58,15 @@ the runtime target and program preparation of `ExecutionEngine`, and
 `ExecutionEngine: Engine`, so the lent engine also runs every concrete tensor
 operation. There is one accessor; `backend_session()` is removed.
 
-**Exceptions** are registry rows of the core registry: E11 (`_optional` result
+**Exceptions** are rows of the `eager_ad` registry
+(`crates/tenferro-ad/src/api/registry.rs`): E11 (`_optional` result
 forms and the seeded `backward_with`, whose seed is an operand rather than
 options), E12 (engine-free values and the stored-gradient copy
 `GradientValue::to_tensor(exec)`, which carries no eager-runtime identity and
 follows the concrete grammar) and E13 (the session boundary, the `engine()`
 accessor and the extension-authoring `apply_eager`).
 
-**Enforcement.** The eager rows of the core `api_ops!` registry declare their
+**Enforcement.** The rows of the `eager_ad` `api_ops!` registry declare their
 compiled signature (`signature eager: "..."`).
 `scripts/check-api-registry-conformance.py` checks the compiled surface of the
 default and CUDA profiles against them: a declared signature must exist, an

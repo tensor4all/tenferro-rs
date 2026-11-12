@@ -67,6 +67,7 @@
 //! assert!(matches!(tensor_error.kind(), tenferro_tensor::ErrorKind::Validation(_)));
 //! ```
 
+mod api;
 mod context;
 mod eager;
 mod eager_backend;

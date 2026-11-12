@@ -33,7 +33,9 @@ evidence: [api-consolidation-policy.md](../design/api-consolidation-policy.md).
   eager-runtime identity, so it follows the concrete grammar (E12).
   `extension::apply_eager(exec, ..)` stays as the extension-authoring entry
   (E13) until that facade is revised.
-- Enforcement reads the registry: eager rows of the core `api_ops!` registry
+- Enforcement reads the registry: the rows of the `eager_ad` `api_ops!`
+  registry in `tenferro-ad` (not the core registry, which `tenferro-runtime`
+  owns and which must not name AD types)
   declare their compiled signature (`signature eager:`), and
   `scripts/check-api-registry-conformance.py` checks the compiled default and
   CUDA surfaces against the signatures and exception symbols. It runs on the
