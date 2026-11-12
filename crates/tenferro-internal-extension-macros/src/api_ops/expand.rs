@@ -335,6 +335,11 @@ pub(crate) fn expand(reg: &Registry) -> syn::Result<TokenStream> {
         let layout = op.layout.value();
         let errors = op.errors.iter().map(error_text);
         let omissions = op.omissions.iter().map(LitStr::value);
+        let signatures = op.signatures.iter().map(|(l, s)| {
+            let l = l.to_string();
+            let s = s.value();
+            quote!((#l, #s))
+        });
         quote! {
             ApiOpDescriptor {
                 family: #family,
@@ -348,6 +353,7 @@ pub(crate) fn expand(reg: &Registry) -> syn::Result<TokenStream> {
                 layout: #layout,
                 errors: &[#(#errors),*],
                 omissions: &[#(#omissions),*],
+                signatures: &[#(#signatures),*],
             }
         }
     });
@@ -399,6 +405,7 @@ pub(crate) fn expand(reg: &Registry) -> syn::Result<TokenStream> {
             pub layout: &'static str,
             pub errors: &'static [&'static str],
             pub omissions: &'static [&'static str],
+            pub signatures: &'static [(&'static str, &'static str)],
         }
 
         /// Descriptor of one registry exception.

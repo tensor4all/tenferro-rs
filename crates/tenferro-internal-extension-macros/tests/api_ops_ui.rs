@@ -12,4 +12,5 @@ fn api_ops_diagnostics() {
     tests.compile_fail("tests/ui/api_ops_undeclared_layer.rs");
     tests.compile_fail("tests/ui/api_ops_bad_into_mode.rs");
     tests.compile_fail("tests/ui/api_ops_missing_example.rs");
+    tests.compile_fail("tests/ui/api_ops_signature_unlisted_layer.rs");
 }

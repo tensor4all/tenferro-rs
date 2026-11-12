@@ -308,6 +308,7 @@ fn parse_op(input: ParseStream<'_>) -> syn::Result<Op> {
     let mut generics = None;
     let mut associated = false;
     let mut examples: Vec<(Ident, LitStr)> = Vec::new();
+    let mut signatures: Vec<(Ident, LitStr)> = Vec::new();
 
     while !input.is_empty() {
         let key: Ident = input.parse()?;
@@ -320,6 +321,20 @@ fn parse_op(input: ParseStream<'_>) -> syn::Result<Op> {
                 ));
             }
             associated = true;
+            end_key(input)?;
+            continue;
+        }
+        if k == "signature" {
+            let layer: Ident = input.parse()?;
+            input.parse::<Token![:]>()?;
+            let text: LitStr = input.parse()?;
+            if signatures.iter().any(|(l, _)| *l == layer) {
+                return Err(syn::Error::new_spanned(
+                    &layer,
+                    format!("duplicate `signature {layer}` in `op {name}`"),
+                ));
+            }
+            signatures.push((layer, text));
             end_key(input)?;
             continue;
         }
@@ -388,6 +403,7 @@ fn parse_op(input: ParseStream<'_>) -> syn::Result<Op> {
         errors: need(errors, &name, "errors")?,
         omissions: need(omissions, &name, "omissions")?,
         examples,
+        signatures,
         name,
     })
 }

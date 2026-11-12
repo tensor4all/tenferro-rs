@@ -1,0 +1,5 @@
+error: op `o` has a signature for layer `eager`, which the op does not list in `layers`
+  --> tests/ui/api_ops_signature_unlisted_layer.rs:17:19
+   |
+17 |         signature eager: "pub fn f::S::o(&mut self)";
+   |                   ^^^^^
