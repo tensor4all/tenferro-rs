@@ -6,7 +6,7 @@ use tenferro_cpu::CpuEngine;
 fn bits(t: &EagerTensor) -> (Vec<usize>, Vec<u64>) {
     let v = t
         .runtime()
-        .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&t))
+        .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(t))
         .unwrap();
     (
         v.shape().to_vec(),

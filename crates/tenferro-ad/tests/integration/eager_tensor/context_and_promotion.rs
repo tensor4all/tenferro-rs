@@ -357,7 +357,7 @@ where
         tensor
             .runtime()
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
-                .duplicate_value(&tensor))
+                .duplicate_value(tensor))
             .unwrap()
             .as_slice::<T>()
             .unwrap(),

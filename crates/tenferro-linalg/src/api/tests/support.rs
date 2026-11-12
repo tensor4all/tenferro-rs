@@ -123,7 +123,7 @@ impl Bits for tenferro_ad::EagerTensor {
         Ok(vec![tensor_bits(
             &self
                 .runtime()
-                .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&self))?,
+                .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(self))?,
         )?])
     }
 }

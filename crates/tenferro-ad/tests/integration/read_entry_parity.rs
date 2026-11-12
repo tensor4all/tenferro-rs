@@ -65,7 +65,7 @@ fn assert_read_parity(
     let eager = eager
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-            s.duplicate_value(&eager)
+            s.duplicate_value(eager)
         })
         .expect("materialize the eager output");
     for (flavour, read) in [("compact", compact), ("strided", strided)] {

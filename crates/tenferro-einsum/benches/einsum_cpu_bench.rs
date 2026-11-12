@@ -59,7 +59,7 @@ fn eager(ctx: &Arc<EagerRuntime>, tensor: Tensor) -> EagerTensor {
 fn consume_f64(tensor: &EagerTensor, engine: &mut CpuEngine) {
     let materialized = tensor
         .runtime()
-        .with_eager_session(engine, |s| s.duplicate_value(&tensor))
+        .with_eager_session(engine, |s| s.duplicate_value(tensor))
         .unwrap();
     let data = &materialized;
     black_box(data.shape());
@@ -69,7 +69,7 @@ fn consume_f64(tensor: &EagerTensor, engine: &mut CpuEngine) {
 fn consume_c64(tensor: &EagerTensor, engine: &mut CpuEngine) {
     let materialized = tensor
         .runtime()
-        .with_eager_session(engine, |s| s.duplicate_value(&tensor))
+        .with_eager_session(engine, |s| s.duplicate_value(tensor))
         .unwrap();
     let data = &materialized;
     black_box(data.shape());

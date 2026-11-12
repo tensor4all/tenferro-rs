@@ -5215,9 +5215,7 @@ impl EagerTensor {
             .map(|(key, tensor)| {
                 Ok((
                     ValueKey::Input(key.clone()),
-                    tensor
-                        .runtime()
-                        .with_eager_session(&mut *engine, |s| s.duplicate_value(&tensor))?,
+                    tensor.duplicate_value_in_session(&mut *engine)?,
                 ))
             })
             .collect::<Result<HashMap<_, _>>>()?;

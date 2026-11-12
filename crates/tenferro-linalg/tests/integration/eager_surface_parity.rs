@@ -87,7 +87,7 @@ fn f64_values(tensor: &EagerTensor) -> Vec<f64> {
     tensor
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-            s.duplicate_value(&tensor)
+            s.duplicate_value(tensor)
         })
         .unwrap()
         .as_slice::<f64>()

@@ -47,7 +47,7 @@ where
     let actual = tensor
         .runtime()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-            s.duplicate_value(&tensor)
+            s.duplicate_value(tensor)
         })
         .unwrap();
     assert_eq!(actual.as_slice::<T>().unwrap(), expected);

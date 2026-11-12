@@ -34,7 +34,7 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
             let actual = actual
                 .runtime()
                 .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-                    s.duplicate_value(&actual)
+                    s.duplicate_value(actual)
                 })
                 .unwrap();
             assert_eq!(actual.shape(), expected.shape());
