@@ -144,7 +144,13 @@ pub(crate) fn infer_output_dtype_at(
             dtype_input(op, input_dtypes, 2, phase)?,
         ),
         StdTensorOp::Clamp => promote_dtypes(input_dtypes.iter().copied()),
-        // Binary / ternary / N-ary ops — promote input dtypes.
+        // `Concatenate` is N-ary: fold over every input, not just the first two.
+        // The leading lookup keeps the missing-input error for an empty list.
+        StdTensorOp::Concatenate { .. } => {
+            dtype_input(op, input_dtypes, 0, phase)?;
+            promote_dtypes(input_dtypes.iter().copied())
+        }
+        // Binary / ternary ops — promote input dtypes.
         StdTensorOp::Add
         | StdTensorOp::Sub
         | StdTensorOp::Mul
@@ -152,8 +158,7 @@ pub(crate) fn infer_output_dtype_at(
         | StdTensorOp::Rem
         | StdTensorOp::Maximum
         | StdTensorOp::Minimum
-        | StdTensorOp::DotGeneral { .. }
-        | StdTensorOp::Concatenate { .. } => promote_dtype(
+        | StdTensorOp::DotGeneral { .. } => promote_dtype(
             dtype_input(op, input_dtypes, 0, phase)?,
             dtype_input(op, input_dtypes, 1, phase)?,
         ),

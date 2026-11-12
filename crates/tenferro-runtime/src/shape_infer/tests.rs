@@ -511,6 +511,31 @@ fn concatenate_rejects_input_free_compound_non_axis_mismatch() {
 }
 
 #[test]
+fn concatenate_dtype_folds_over_every_input() {
+    // #2599: the dtype arm read input 1, so a one-input `Concatenate` failed
+    // to compile even though a single input is valid.
+    let single = StdTensorOp::Concatenate {
+        axis: 0,
+        input_count: 1,
+    };
+    assert_eq!(
+        infer_output_dtype(&single, &[DType::F32]).unwrap(),
+        DType::F32
+    );
+    assert!(infer_output_dtype(&single, &[]).is_err());
+
+    // With three inputs the result must see the third, not only the first two.
+    let three = StdTensorOp::Concatenate {
+        axis: 0,
+        input_count: 3,
+    };
+    assert_eq!(
+        infer_output_dtype(&three, &[DType::F32, DType::F32, DType::F64]).unwrap(),
+        DType::F64
+    );
+}
+
+#[test]
 fn gather_rejects_duplicate_offset_and_collapsed_slice_dims() {
     let operand = DimExpr::from_concrete(&[4, 5]);
     let indices = DimExpr::from_concrete(&[2, 2]);

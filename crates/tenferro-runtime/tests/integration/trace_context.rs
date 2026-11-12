@@ -1,7 +1,7 @@
 use tenferro_cpu::CpuEngine;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{CoreSemanticOp, ProgramBuildError, ProgramInputSpec};
-use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
+use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext, TracedTensor};
 use tenferro_tensor::{DType, Tensor, TensorRead};
 
 fn cpu_runtime(engine: &CpuEngine) -> Runtime {
@@ -140,4 +140,39 @@ fn duplicate_finish_outputs_execute_in_order_as_independent_results() {
         outputs[2].as_slice::<f64>().unwrap().as_ptr(),
         "repeated owned outputs are independent copies"
     );
+}
+
+#[test]
+fn single_input_stack_and_concatenate_compile() {
+    // #2599: the dtype of a one-input `Concatenate` was read from input 1,
+    // so these graphs failed at compile even though one input is valid.
+    let trace = TraceContext::new();
+    let vector = trace
+        .from_vec_col_major(vec![3], vec![2.0_f64, 3.0, 4.0])
+        .unwrap();
+
+    let stacked = TracedTensor::stack(&[&vector], 0).unwrap();
+    let concatenated = TracedTensor::concatenate(&[&vector], 0).unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let stacked = compiler
+        .compile(&stacked)
+        .expect("a single-input stack must compile");
+    let concatenated = compiler
+        .compile(&concatenated)
+        .expect("a single-input concatenate must compile");
+
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
+    for program in [&stacked, &concatenated] {
+        let prepared = runtime
+            .prepare(program, &[], &[engine.target()])
+            .expect("preparation must accept the compiled program");
+        let mut outputs = runtime
+            .run(&mut [&mut engine], &prepared, &[])
+            .expect("the single-input graph must run");
+        assert_eq!(outputs.len(), 1);
+        let out = outputs.remove(0).into_tensor(&mut engine).unwrap();
+        assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 3.0, 4.0]);
+    }
 }

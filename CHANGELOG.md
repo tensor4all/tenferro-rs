@@ -161,6 +161,13 @@ layer, generated from a per-family registry. The operation list, options,
 
 ### Fixed
 
+- **A one-input `stack` / `concatenate` compiles.** The output dtype of
+`StdTensorOp::Concatenate` was read from inputs 0 and 1 even though the op takes
+any number of inputs, so `TracedTensor::stack(&[&x], axis)` and
+`TracedTensor::concatenate(&[&x], axis)` failed in shape inference with
+`missing input dtype at index 1`, and with three or more inputs the dtypes past
+the second were ignored. The dtype now folds over every input. #2599
+
 - **`EinsumOptimize::False` contracts left to right again.** The plan resolved
 the `(0, 1)`-repeated JAX path through a resolver that appends a result to the
 end of the operand list instead of keeping it at the front, so from four
