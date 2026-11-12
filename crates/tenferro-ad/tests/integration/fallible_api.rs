@@ -1,6 +1,6 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
+use tenferro_ad::{EagerRuntime, TracedTensorAdExt};
 use tenferro_runtime::{DType, ErrorPhase, TraceContext};
 use tenferro_tensor::{Error as TensorError, Tensor};
 
@@ -208,16 +208,12 @@ fn traced_jvp_vjp_return_errors_for_symbolic_seed_tensors() {
 #[test]
 fn eager_binary_methods_return_shape_errors() {
     let ctx = EagerRuntime::new().unwrap();
-    let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let y = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(),
-        ctx,
-    )
-    .unwrap();
+    let x = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
+        .unwrap();
+    let y = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap())
+        .unwrap();
 
     let err = x
         .runtime()

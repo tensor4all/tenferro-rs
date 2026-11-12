@@ -124,7 +124,9 @@ fn test_gpu_eager_backward_smoke() {
         .with_eager_session(&mut upload_backend, |session| session.mul(&x, &x))
         .unwrap();
 
-    y.backward_with(&mut upload_backend, &seed).unwrap();
+    y.runtime()
+        .with_eager_session(&mut upload_backend, |s| s.backward_with(&y, &seed))
+        .unwrap();
     let grad = x.grad().unwrap().unwrap();
     let grad_tensor = grad.to_tensor(&mut upload_backend).unwrap();
     let grad_host = on_engine(&mut upload_backend, |session| {
@@ -162,7 +164,10 @@ fn test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient() {
     let sum = ctx
         .with_eager_session(&mut backend, |session| session.reduce_sum(&x, Some(&[0])))
         .unwrap();
-    let result = sum.to_tensor(&mut backend).unwrap();
+    let result = sum
+        .runtime()
+        .with_eager_session(&mut backend, |s| s.duplicate_value(&sum))
+        .unwrap();
     assert_device_backed(&result);
     let host = on_engine(&mut backend, |session| {
         session.download_to_host(TensorRead::from_tensor(&result))
@@ -171,7 +176,9 @@ fn test_gpu_borrowed_reduce_sum_preserves_residency_and_gradient() {
     .unwrap();
     assert_f64_tensor_close(&host, &f64_tensor(vec![2], vec![3.0, 7.0]), 1e-10, 1e-10);
 
-    sum.backward_with(&mut backend, &seed).unwrap();
+    sum.runtime()
+        .with_eager_session(&mut backend, |s| s.backward_with(&sum, &seed))
+        .unwrap();
     let grad = x.grad().unwrap().unwrap().to_tensor(&mut backend).unwrap();
     assert_device_backed(&grad);
     let host = on_engine(&mut backend, |session| {
@@ -219,9 +226,18 @@ fn test_gpu_borrowed_concat_gather_and_index_select_stay_resident() {
             Ok::<_, tenferro_ad::Error>((joined, selected, indexed))
         })
         .unwrap();
-    let joined = joined.to_tensor(&mut backend).unwrap();
-    let selected = selected.to_tensor(&mut backend).unwrap();
-    let indexed = indexed.to_tensor(&mut backend).unwrap();
+    let joined = joined
+        .runtime()
+        .with_eager_session(&mut backend, |s| s.duplicate_value(&joined))
+        .unwrap();
+    let selected = selected
+        .runtime()
+        .with_eager_session(&mut backend, |s| s.duplicate_value(&selected))
+        .unwrap();
+    let indexed = indexed
+        .runtime()
+        .with_eager_session(&mut backend, |s| s.duplicate_value(&indexed))
+        .unwrap();
     assert_device_backed(&joined);
     assert_device_backed(&selected);
     assert_device_backed(&indexed);
@@ -318,16 +334,26 @@ fn test_gpu_matmul_vjp() {
             )
         })
         .unwrap();
-    let gpu_grad_a = ctx
-        .vjp(&mut upload_backend, &y_gpu, &a_gpu, &cotangent_gpu)
-        .unwrap()
-        .to_tensor(&mut upload_backend)
-        .unwrap();
-    let gpu_grad_b = ctx
-        .vjp(&mut upload_backend, &y_gpu, &b_gpu, &cotangent_gpu)
-        .unwrap()
-        .to_tensor(&mut upload_backend)
-        .unwrap();
+    let gpu_grad_a = ({
+        let t = &ctx
+            .with_eager_session(&mut upload_backend, |s| {
+                s.vjp(&y_gpu, &a_gpu, &cotangent_gpu)
+            })
+            .unwrap();
+        t.runtime()
+            .with_eager_session(&mut upload_backend, |s| s.duplicate_value(t))
+    })
+    .unwrap();
+    let gpu_grad_b = ({
+        let t = &ctx
+            .with_eager_session(&mut upload_backend, |s| {
+                s.vjp(&y_gpu, &b_gpu, &cotangent_gpu)
+            })
+            .unwrap();
+        t.runtime()
+            .with_eager_session(&mut upload_backend, |s| s.duplicate_value(t))
+    })
+    .unwrap();
     assert_device_backed(&gpu_grad_a);
     assert_device_backed(&gpu_grad_b);
     let gpu_grad_a = on_engine(&mut upload_backend, |session| {
@@ -497,7 +523,10 @@ fn test_gpu_scale_real_and_scale_complex_match_cpu() {
         let scaled = ctx
             .with_eager_session(&mut engine, |session| apply(session, &x))
             .unwrap();
-        let value = scaled.to_tensor(&mut engine).unwrap();
+        let value = scaled
+            .runtime()
+            .with_eager_session(&mut engine, |s| s.duplicate_value(&scaled))
+            .unwrap();
         on_engine(&mut engine, |session| {
             session.download_to_host(TensorRead::from_tensor(&value))
         })
@@ -583,7 +612,10 @@ fn assert_real_like_close(actual: &Tensor, expected: &Tensor, what: &str) {
 /// reviewed exclusion.
 /// Download an eager value on the engine that owns it.
 fn download_eager(backend: &mut CudaEngine, value: &EagerTensor) -> Tensor {
-    let owned = value.to_tensor(backend).unwrap();
+    let owned = value
+        .runtime()
+        .with_eager_session(backend, |s| s.duplicate_value(&value))
+        .unwrap();
     assert_device_backed(&owned);
     on_engine(backend, |session| {
         session.download_to_host(TensorRead::from_tensor(&owned))
@@ -626,7 +658,10 @@ fn test_gpu_eager_structural_reads_agree_on_a_strided_device_view() {
     );
     assert_eq!(view.shape(), &[3, 4, 2]);
 
-    let compact_gpu = view.to_tensor(&mut backend).unwrap();
+    let compact_gpu = view
+        .runtime()
+        .with_eager_session(&mut backend, |s| s.duplicate_value(&view))
+        .unwrap();
     assert_device_backed(&compact_gpu);
     let compact = ctx
         .with_eager_session(&mut backend, |s| s.constant_from(compact_gpu))

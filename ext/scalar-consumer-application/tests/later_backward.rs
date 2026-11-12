@@ -173,7 +173,12 @@ fn a_retained_value_survives_an_eager_session_it_was_computed_in() {
         .expect("eager tensor");
     drop(runtime);
     assert_eq!(
-        payload(&leaf.to_tensor(&mut engine).expect("round trip")),
+        payload(
+            &leaf
+                .runtime()
+                .with_eager_session(&mut engine, |s| s.duplicate_value(&leaf))
+                .expect("round trip")
+        ),
         vec![Df64::from_f64(7.0)]
     );
 }

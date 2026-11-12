@@ -26,7 +26,7 @@ fn run(output: &TracedTensor) -> Tensor {
 
 #[cfg(feature = "autodiff")]
 fn eager(input: Tensor) -> EagerTensor {
-    EagerTensor::from_tensor_in(input, EagerRuntime::new().unwrap()).unwrap()
+    (EagerRuntime::new().unwrap()).constant_from(input).unwrap()
 }
 
 fn assert_c64_close(actual: &[Complex64], expected: &[Complex64]) {
@@ -737,39 +737,41 @@ fn eager_fft_reuses_c2c_vjp_rule() {
     let ad = fft_ad_context();
     let mut engine = CpuEngine::serial();
     let ctx = EagerRuntime::with_ad_context(&ad).unwrap();
-    let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(
-            vec![4],
-            vec![
-                Complex64::new(1.0, 0.0),
-                Complex64::new(2.0, 0.0),
-                Complex64::new(3.0, 0.0),
-                Complex64::new(4.0, 0.0),
-            ],
+    let x = ctx
+        .variable_from(
+            Tensor::from_vec_col_major(
+                vec![4],
+                vec![
+                    Complex64::new(1.0, 0.0),
+                    Complex64::new(2.0, 0.0),
+                    Complex64::new(3.0, 0.0),
+                    Complex64::new(4.0, 0.0),
+                ],
+            )
+            .unwrap(),
         )
-        .unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let cotangent = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(
-            vec![4],
-            vec![
-                Complex64::new(1.0, 1.0),
-                Complex64::new(2.0, -1.0),
-                Complex64::new(-1.0, 0.5),
-                Complex64::new(0.25, -2.0),
-            ],
+        .unwrap();
+    let cotangent = ctx
+        .constant_from(
+            Tensor::from_vec_col_major(
+                vec![4],
+                vec![
+                    Complex64::new(1.0, 1.0),
+                    Complex64::new(2.0, -1.0),
+                    Complex64::new(-1.0, 0.5),
+                    Complex64::new(0.25, -2.0),
+                ],
+            )
+            .unwrap(),
         )
-        .unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+        .unwrap();
 
     let y = ctx
         .with_eager_session(&mut engine, |session| session.fft(&x))
         .unwrap();
-    let dx = ctx.vjp(&mut engine, &y, &x, &cotangent).unwrap();
+    let dx = ctx
+        .with_eager_session(&mut engine, |s| s.vjp(&y, &x, &cotangent))
+        .unwrap();
 
     assert_c64_close(
         dx.value().unwrap().as_slice::<Complex64>().unwrap(),

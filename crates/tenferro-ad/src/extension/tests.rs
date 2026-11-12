@@ -289,11 +289,8 @@ impl ExtensionModule for BridgeModule {
 }
 
 fn input(ctx: &Arc<EagerRuntime>) -> EagerTensor {
-    EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
-        Arc::clone(ctx),
-    )
-    .unwrap()
+    ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap())
+        .unwrap()
 }
 
 fn execute_probe(
@@ -349,7 +346,10 @@ fn eager_extension_native_context_path_executes_through_erased_backend() {
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].shape(), &[1]);
     let value = outputs[0]
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.duplicate_value(&outputs[0])
+        })
         .unwrap();
     assert_eq!(value.as_slice::<f64>().unwrap(), &[1.0]);
 }
@@ -549,13 +549,13 @@ fn consuming_preparation_checks_recording_and_installs_without_taking_ownership(
     assert!(ctx.runtime().epoch().unwrap() > before);
     // Preparation only checks eligibility; the caller still owns a usable value.
     assert!(value
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .duplicate_value(&value))
         .is_ok());
-    let tracked = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major([1], vec![1.0_f64]).unwrap(),
-        Arc::clone(&ctx),
-    )
-    .unwrap();
+    let tracked = ctx
+        .variable_from(Tensor::from_vec_col_major([1], vec![1.0_f64]).unwrap())
+        .unwrap();
     let epoch = ctx.runtime().epoch().unwrap();
     assert!(
         super::prepare_eager_in_place_input(&mut engine, &tracked, family, |_| {
@@ -565,7 +565,9 @@ fn consuming_preparation_checks_recording_and_installs_without_taking_ownership(
     );
     assert_eq!(ctx.runtime().epoch().unwrap(), epoch);
     assert!(tracked
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .duplicate_value(&tracked))
         .is_ok());
 }
 

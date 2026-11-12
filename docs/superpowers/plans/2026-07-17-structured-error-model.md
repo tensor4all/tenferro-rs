@@ -716,15 +716,9 @@ Extend `crates/tenferro-ad/tests/fallible_api.rs` so `eager_binary_methods_retur
 #[test]
 fn eager_and_traced_shape_mismatch_share_validation_kind() {
     let ctx = EagerRuntime::new();
-    let eager_lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap(),
-        ctx.clone(),
-    )
+    let eager_lhs = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap())
     .unwrap();
-    let eager_rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap(),
-        ctx,
-    )
+    let eager_rhs = ctx.constant_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap())
     .unwrap();
     let eager_err = eager_lhs.add(&eager_rhs).unwrap_err();
 

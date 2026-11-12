@@ -60,8 +60,10 @@ not when changing tenferro itself.
 - **Explicit execution owner.** Every operation takes the engine the caller
   holds, as `&mut dyn Engine`: `let mut engine = CpuEngine::serial();` then
   `a.matmul(&b, &mut engine)?`. An eager session borrows the same value
-  (`ctx.with_eager_session(&mut engine, |s| ...)`), and `grad` / `vjp` / `jvp` /
-  `backward` / `to_tensor` take `&mut engine` too. There is no entry call and no
+  (`ctx.with_eager_session(&mut engine, |s| ...)`), and every eager operation
+  that needs the engine is a session method: `s.grad`, `s.vjp`, `s.jvp`,
+  `s.backward(&loss)`, `s.detach(&x)`, `s.duplicate_value(&x)`. No eager tensor
+  or runtime method takes an engine. There is no entry call and no
   reentry error: the borrow is the exclusion contract. Construct the engine and
   runtime once and reuse them — per-call construction discards the pool, the
   plan cache and the buffer pool.

@@ -42,13 +42,13 @@ fn runtime_bound_eager_session_reuses_entry_and_rejects_foreign_tensors() -> Res
     assert!((y.3.value()?.as_slice::<f64>()?[0] - (-2.0_f64).exp()).abs() < 1e-12);
     assert_eq!(y.4.value()?.as_slice::<f64>()?, &[2.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &y.0, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.grad(&y.0, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[-1.0]
     );
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &y.2, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.grad(&y.2, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[1.0]
@@ -84,7 +84,11 @@ fn runtime_bound_unary_family_preserves_values_and_ad() -> Result<(), Error> {
         (scalar(&values.5)?, 2.0_f64.exp_m1()),
         (scalar(&values.6)?, 2.0_f64.ln_1p()),
         (
-            scalar(&ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &values.7, &x)?)?,
+            scalar(
+                &ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.grad(&values.7, &x)
+                })?,
+            )?,
             2.0_f64.cos() + 0.5,
         ),
     ] {
@@ -116,7 +120,8 @@ fn runtime_bound_diagonals_preserve_values_ad_and_runtime_identity() -> Result<(
     assert_eq!(diagonal.value()?.as_slice::<f64>()?, &[1.0, 4.0]);
     assert_eq!(restored.value()?.as_slice::<f64>()?, &[1.0, 0.0, 0.0, 4.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &total, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&total, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[1.0, 0.0, 0.0, 1.0]
@@ -170,7 +175,8 @@ fn runtime_bound_gather_and_concatenate_preserve_ad_and_identity() -> Result<(),
         &[30.0, 10.0, 30.0, 10.0]
     );
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &total, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&total, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[2.0, 0.0, 2.0]
@@ -200,7 +206,8 @@ fn runtime_bound_scaling_preserves_errors_and_gradient() -> Result<(), Error> {
         session.reduce_sum(&scaled, None)
     })?;
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &total, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&total, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[2.5, 2.5]
@@ -237,7 +244,8 @@ fn runtime_bound_matmul_preserves_values_ad_and_validation() -> Result<(), Error
         })?;
     assert_eq!(product.value()?.as_slice::<f64>()?, &[23.0, 34.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &total, &lhs)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&total, &lhs))?
             .value()?
             .as_slice::<f64>()?,
         &[5.0, 5.0, 6.0, 6.0]
@@ -271,19 +279,22 @@ fn runtime_bound_reductions_preserve_values_ad_and_axis_errors() -> Result<(), E
     assert_eq!(maximum.value()?.as_slice::<f64>()?, &[5.0]);
     assert_eq!(minimum.value()?.as_slice::<f64>()?, &[2.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &product, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&product, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[15.0, 10.0, 6.0]
     );
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &maximum, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&maximum, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[0.0, 0.0, 1.0]
     );
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &minimum, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&minimum, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[1.0, 0.0, 0.0]
@@ -314,7 +325,7 @@ fn runtime_bound_triangles_preserve_values_gradients_and_runtime_identity() -> R
     assert_eq!(lower.value()?.as_slice::<f64>()?, &[1.0, 2.0, 0.0, 4.0]);
     assert_eq!(upper.value()?.as_slice::<f64>()?, &[1.0, 0.0, 3.0, 4.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &sum, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.grad(&sum, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[1.0, 1.0, 0.0, 1.0]
@@ -345,7 +356,7 @@ fn runtime_bound_padding_and_reverse_preserve_gradients() -> Result<(), Error> {
         &[0.0, 2.0, 0.0, 1.0, 0.0]
     );
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &sum, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.grad(&sum, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[1.0, 1.0]
@@ -376,7 +387,7 @@ fn runtime_bound_dynamic_slice_preserves_ad_and_rejects_foreign_indices() -> Res
         })?;
     assert_eq!(selected.value()?.as_slice::<f64>()?, &[2.0, 3.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &sum, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.grad(&sum, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[0.0, 1.0, 1.0, 0.0]
@@ -412,7 +423,8 @@ fn runtime_bound_scatter_preserves_values_ad_and_foreign_checks() -> Result<(), 
         })?;
     assert_eq!(result.value()?.as_slice::<f64>()?, &[0.0, 5.0, 0.0, 7.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &sum, &updates)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&sum, &updates))?
             .value()?
             .as_slice::<f64>()?,
         &[1.0, 1.0]
@@ -536,7 +548,8 @@ fn runtime_bound_eager_dot_general_preserves_ad_and_validates_dimensions() -> Re
         &[23.0, 34.0, 31.0, 46.0]
     );
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &lhs)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&loss, &lhs))?
             .value()?
             .as_slice::<f64>()?,
         &[12.0, 12.0, 14.0, 14.0]
@@ -549,10 +562,7 @@ fn runtime_bound_eager_binary_ops_preserve_broadcast_and_vjp() -> Result<(), Err
     let ctx = EagerRuntime::new()?;
     let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     let scalar = ctx.variable_from(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?)?;
-    let seed = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0])?,
-        ctx.clone(),
-    )?;
+    let seed = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0])?)?;
 
     let (sum, difference, product, loss) =
         ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
@@ -568,13 +578,15 @@ fn runtime_bound_eager_binary_ops_preserve_broadcast_and_vjp() -> Result<(), Err
         })?;
     assert_eq!(loss.value()?.as_slice::<f64>()?, &[9.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&loss, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[3.0, 3.0]
     );
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &scalar)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&loss, &scalar))?
             .value()?
             .as_slice::<f64>()?,
         &[3.0]
@@ -583,26 +595,24 @@ fn runtime_bound_eager_binary_ops_preserve_broadcast_and_vjp() -> Result<(), Err
     assert_eq!(difference.value()?.as_slice::<f64>()?, &[-2.0, -1.0]);
     assert_eq!(product.value()?.as_slice::<f64>()?, &[3.0, 6.0]);
     assert_eq!(
-        ctx.vjp(&mut tenferro_cpu::CpuEngine::serial(), &sum, &x, &seed)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .vjp(&sum, &x, &seed))?
             .value()?
             .as_slice::<f64>()?,
         &[1.0, 1.0]
     );
     assert_eq!(
-        ctx.vjp(&mut tenferro_cpu::CpuEngine::serial(), &sum, &scalar, &seed)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .vjp(&sum, &scalar, &seed))?
             .value()?
             .as_slice::<f64>()?,
         &[2.0]
     );
     assert_eq!(
-        ctx.vjp(
-            &mut tenferro_cpu::CpuEngine::serial(),
-            &product,
-            &scalar,
-            &seed
-        )?
-        .value()?
-        .as_slice::<f64>()?,
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .vjp(&product, &scalar, &seed))?
+            .value()?
+            .as_slice::<f64>()?,
         &[3.0]
     );
     Ok(())
@@ -635,13 +645,15 @@ fn runtime_bound_binary_family_preserves_broadcast_ad_and_context() -> Result<()
     assert_eq!(maximum.value()?.as_slice::<f64>()?, &[6.0, 8.0]);
     assert_eq!(minimum.value()?.as_slice::<f64>()?, &[2.0, 2.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&loss, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[0.5, 0.5]
     );
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &scalar)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&loss, &scalar))?
             .value()?
             .as_slice::<f64>()?,
         &[-3.5]
@@ -671,13 +683,15 @@ fn runtime_bound_eager_select_and_clamp_preserve_broadcast_ad() -> Result<(), Er
     assert_eq!(selected.value()?.as_slice::<f64>()?, &[0.0, 0.5, 5.0]);
     assert_eq!(clamped.value()?.as_slice::<f64>()?, &[-1.0, 0.5, 4.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &selected_loss, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&selected_loss, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[0.0, 1.0, 1.0]
     );
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &clamped_loss, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&clamped_loss, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[0.0, 1.0, 0.0]
@@ -734,7 +748,8 @@ fn runtime_bound_eager_transpose_and_slice_preserve_ad_and_ownership() -> Result
     assert_eq!(sliced.shape(), &[2, 1]);
     assert_eq!(copy.as_slice::<f64>()?, &[1.0, 3.0]);
     assert_eq!(
-        ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x)?
+        ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+            .grad(&loss, &x))?
             .value()?
             .as_slice::<f64>()?,
         &[1.0, 0.0, 1.0, 0.0]
@@ -774,7 +789,9 @@ fn runtime_bound_captured_views_materialize_untracked_inputs_in_session() -> Res
     }
     assert_eq!(
         broadcast
-            .duplicate_value(&mut tenferro_cpu::CpuEngine::serial())?
+            .runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+                .duplicate_value(&broadcast))?
             .as_slice::<f64>()?,
         &[2.0, 4.0, 2.0, 4.0]
     );
@@ -827,7 +844,7 @@ fn host_leaf_construction_needs_no_engine() -> Result<(), Error> {
 
     let native = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])
         .map_err(Error::from)?;
-    let leaf = EagerTensor::from_tensor_in(native, Arc::clone(&ctx))?;
+    let leaf = ctx.constant_from(native)?;
     assert_eq!(
         leaf.value()?.as_slice::<f64>().map_err(Error::from)?,
         &[1.0, 2.0, 3.0, 4.0],
@@ -989,21 +1006,17 @@ fn a_guard_started_inside_the_callback_stays_local_to_it() -> Result<(), Error> 
 #[test]
 fn calling_thread_capture_trace_governs_a_session_callback() -> Result<(), Error> {
     let ctx = EagerRuntime::new()?;
-    let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
-        ctx.clone(),
-    )?;
+    let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     let y = {
         let _capture = ctx.capture_trace();
         ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))?
     };
-    let seed = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0])?,
-        ctx.clone(),
-    )?;
+    let seed = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0])?)?;
     // Differentiating with respect to the untracked leaf needs the semantic
     // trace that only the outer capture guard makes the callback record.
-    let dx = ctx.vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &x, &seed)?;
+    let dx = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+        s.vjp(&y, &x, &seed)
+    })?;
     assert_eq!(dx.value()?.as_slice::<f64>()?, &[2.0, 4.0]);
     Ok(())
 }

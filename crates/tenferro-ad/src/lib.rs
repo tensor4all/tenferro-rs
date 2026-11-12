@@ -6,7 +6,7 @@
 //! execution lives in `tenferro-cpu`.
 //!
 //! Use [`EagerRuntime`] and [`EagerTensor`] for PyTorch-style immediate
-//! execution where tracked variables accumulate gradients after `backward()`.
+//! execution where tracked variables accumulate gradients after `EagerSession::backward`.
 //! Use [`TracedTensorAdExt`] or [`AdContext`] for JAX-style graph transforms
 //! such as `grad`, `vjp`, and `jvp` on [`tenferro_runtime::TracedTensor`]
 //! values. `AdContext` is the explicit place to add extension AD rule sets for

@@ -247,7 +247,7 @@ let y = ctx.with_eager_session(&mut engine, |s| {
     s.reduce_sum(&squared, Some(&[0]))
 })?;
 
-y.backward(&mut engine).unwrap();
+ctx.with_eager_session(&mut engine, |s| s.backward(&y)).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 Ok(())
 }
@@ -333,7 +333,7 @@ let mut engine = CpuEngine::serial();
 let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![0.0_f64, 1.0, 2.0]).unwrap()).unwrap();
 let y = ctx.with_eager_session(&mut engine, |session| session.exp(&x))?;
 
-let y_tensor = y.to_tensor(&mut engine).unwrap();
+let y_tensor = ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&y)).unwrap();
 let data = y_tensor.as_slice::<f64>().unwrap();
 
 assert!((data[0] - 1.0).abs() < 1e-12);
@@ -380,7 +380,7 @@ let v = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0,
 let repeated = ctx.with_eager_session(&mut engine, |s| s.broadcast_in_dim(&v, &[3, 2], &[0]))?;
 
 assert_eq!(repeated.shape(), &[3, 2]);
-assert_eq!(repeated.to_tensor(&mut engine).unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
+assert_eq!(ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&repeated)).unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 1.0, 2.0, 3.0]);
 Ok(())
 }
 ```

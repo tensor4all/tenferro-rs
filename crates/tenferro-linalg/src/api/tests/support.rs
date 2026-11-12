@@ -121,7 +121,9 @@ impl Bits for Tensor {
 impl Bits for tenferro_ad::EagerTensor {
     fn bits(&self) -> TestResult<Vec<Vec<u64>>> {
         Ok(vec![tensor_bits(
-            &self.to_tensor(&mut CpuEngine::serial())?,
+            &self
+                .runtime()
+                .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&self))?,
         )?])
     }
 }

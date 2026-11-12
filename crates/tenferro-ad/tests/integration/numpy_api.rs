@@ -2,7 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use num_complex::Complex64;
-use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_ad::EagerRuntime;
 use tenferro_ops::{ext_op::ExtensionOp, std_tensor_op::StdTensorOp, SymDim};
 use tenferro_runtime::{
     CompareDir, CoreOps, DType, Error as RuntimeError, ErrorPhase, GraphCompiler, Tensor,
@@ -224,16 +224,14 @@ fn traced_compare_returns_bool_and_where_select_accepts_bool_condition() {
 #[test]
 fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
     let ctx = EagerRuntime::new().unwrap();
-    let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap(),
-        ctx,
-    )
-    .unwrap();
+    let lhs = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0]).unwrap())
+        .unwrap();
+    let rhs = ctx
+        .constant_from(
+            Tensor::from_vec_col_major(vec![1, 4], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap(),
+        )
+        .unwrap();
 
     let out = lhs
         .runtime()
@@ -244,7 +242,9 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
-        out.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        out.runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+                .duplicate_value(&out))
             .unwrap()
             .into_vec_col_major::<f64>()
             .unwrap()
@@ -256,16 +256,12 @@ fn eager_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 #[test]
 fn eager_session_methods_cover_core_elementwise_surface() {
     let ctx = EagerRuntime::new().unwrap();
-    let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let y = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let x = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap())
+        .unwrap();
+    let y = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap())
+        .unwrap();
     ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
         let cond = session.compare(&x, &y, CompareDir::Gt)?;
         let _ = session.sub(&x, &y)?;
@@ -297,11 +293,9 @@ fn eager_session_methods_cover_core_elementwise_surface() {
 #[test]
 fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     let ctx = EagerRuntime::new().unwrap();
-    let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let x = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
+        .unwrap();
 
     let converted = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
@@ -311,7 +305,9 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     assert_eq!(converted.dtype(), DType::C64);
     assert_eq!(
         converted
-            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+            .runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+                .duplicate_value(&converted))
             .unwrap()
             .as_slice::<Complex64>()
             .unwrap(),
@@ -359,16 +355,16 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
         }
     ));
 
-    let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let a = ctx
+        .constant_from(
+            Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+        )
+        .unwrap();
+    let b = ctx
+        .constant_from(
+            Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),
+        )
+        .unwrap();
     let product = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             session.matmul(&a, &b)
@@ -381,11 +377,9 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     );
 
     let other_ctx = EagerRuntime::new().unwrap();
-    let other = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-        other_ctx,
-    )
-    .unwrap();
+    let other = other_ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
+        .unwrap();
     let err = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             s.add(&x, &other)
@@ -397,16 +391,12 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
 #[test]
 fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
     let ctx = EagerRuntime::new().unwrap();
-    let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let y = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let x = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 4.0]).unwrap())
+        .unwrap();
+    let y = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 8.0]).unwrap())
+        .unwrap();
 
     let (cond, selected) = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
@@ -423,7 +413,9 @@ fn eager_compare_returns_bool_and_where_select_accepts_bool_condition() {
     );
     assert_eq!(
         selected
-            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+            .runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s
+                .duplicate_value(&selected))
             .unwrap()
             .into_vec_col_major::<f64>()
             .unwrap()

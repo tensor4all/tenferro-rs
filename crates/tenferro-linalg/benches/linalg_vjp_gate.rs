@@ -62,11 +62,11 @@ fn tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 }
 
 fn eager(ctx: &Arc<EagerRuntime>, shape: Vec<usize>, data: Vec<f64>) -> EagerTensor {
-    EagerTensor::from_tensor_in(tensor(shape, data), Arc::clone(ctx)).unwrap()
+    ctx.constant_from(tensor(shape, data)).unwrap()
 }
 
 fn variable(ctx: &Arc<EagerRuntime>, shape: Vec<usize>, data: Vec<f64>) -> EagerTensor {
-    EagerTensor::requires_grad_in(tensor(shape, data), Arc::clone(ctx)).unwrap()
+    ctx.variable_from(tensor(shape, data)).unwrap()
 }
 
 fn dense_matrix(n: usize, seed: u64) -> Vec<f64> {

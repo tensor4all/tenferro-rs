@@ -100,7 +100,7 @@ error type with `From<tenferro_ad::Error>`, including your own application
 error.
 A callback that ends in `Ok(..)` after `?`-chains may need the error type named,
 for example `Ok::<_, tenferro_ad::Error>(value)`, and a tensor-level error from
-`session.backend_session()` (an alias of `session.engine()`) converts with
+`session.engine()` converts with
 `.map_err(tenferro_ad::Error::from)`.
 
 Operation-family crates add eager traits on the same session. For example,
@@ -174,8 +174,8 @@ There are two ways to run eager code, and both take the engine you hold:
 
 | Entry | Use for |
 |---|---|
-| `EagerRuntime::with_eager_session(&mut engine, \|s\| ...)` | The canonical entry: eager operations on `s`, plus AD-free `Tensor` operations through `s.engine()` / `s.backend_session()`. |
-| `EagerRuntime::grad` / `vjp` / `jvp` / `backward*` with `&mut engine` | Functional transforms and reverse-mode backprop on already-built values. |
+| `EagerRuntime::with_eager_session(&mut engine, \|s\| ...)` | The only entry: eager operations on `s`, including AD (`s.backward`, `s.grad`, `s.vjp`, `s.jvp`) and value extraction (`s.duplicate_value`, `s.detach`), plus AD-free `Tensor` operations through `s.engine()`. |
+| `EagerRuntime::{constant_from, variable_from}` | Engine-free import of an owned host tensor as a leaf. A device-resident or view input needs the session constructors `s.constant_from`, `s.constant_from_host`, `s.variable_from`. |
 
 The callback returns one `Result`; see `with_eager_session` above. Do all work
 for one region inside one callback: the engine is borrowed for the callback, so
@@ -190,14 +190,11 @@ use tenferro_runtime::{Tensor, CoreOps};
 
 let runtime = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
-let x = EagerTensor::from_tensor_in(
-    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?,
-    runtime.clone(),
-)?;
+let x = runtime.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?)?;
 
 // Canonical entry: eager ops on a borrowed `EagerSession`.
 let y = runtime.with_eager_session(&mut engine, |s| s.mul(&x, &x))?;
-let values = y.to_tensor(&mut engine)?;
+let values = runtime.with_eager_session(&mut engine, |s| s.duplicate_value(&y))?;
 
 // AD-free work in the same session: the eager session lends its engine.
 let total = runtime.with_eager_session(&mut engine, |s| {
@@ -365,15 +362,18 @@ row-major order.
 Eager tensors always compute the forward value immediately. Tracked eager
 tensors support two AD styles:
 
-- `backward()` and `backward_with(seed)` are stateful reverse-mode APIs. They
-  return the cotangent map and accumulate reachable tracked leaves into
-  `grad()` slots.
-- `EagerRuntime::grad`, `EagerRuntime::vjp`, and `EagerRuntime::jvp` are
-  functional APIs. They return ordinary eager tensors and do not mutate
-  `grad()` slots, so their results can feed later eager transforms.
+- `s.backward(&loss)` and `s.backward_with(&loss, &seed)` are stateful
+  reverse-mode APIs. They return the cotangent map and accumulate reachable
+  tracked leaves into `grad()` slots.
+- `s.grad`, `s.vjp` and `s.jvp` (and their `_optional` forms, which return
+  `None` for an inactive input) are functional APIs. They return ordinary eager
+  tensors and do not mutate `grad()` slots, so their results can feed later
+  eager transforms.
 
-Repeated `backward()` calls add to the existing gradients, and you clear them
-explicitly when you want a fresh pass.
+All of them are `EagerSession` methods: they reject an operand or seed from
+another eager runtime with `ContextMismatch` before anything is materialized or
+written. Repeated `s.backward(..)` calls add to the existing gradients, and you
+clear them explicitly when you want a fresh pass.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/core_tensor_snippets.rs#eager_operations_8 -->
 ```rust
@@ -383,22 +383,22 @@ use tenferro_cpu::CpuEngine;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
-let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
-let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
+let y = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap()).unwrap();
 
 // Each forward pass borrows the engine for its own eager session.
 let loss = ctx.with_eager_session(&mut engine, |s| {
     let product = s.mul(&x, &y)?;
     s.reduce_sum(&product, Some(&[0]))
 })?;
-loss.backward(&mut engine)?;
+ctx.with_eager_session(&mut engine, |s| s.backward(&loss))?;
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
 let loss = ctx.with_eager_session(&mut engine, |s| {
     let product = s.mul(&x, &y)?;
     s.reduce_sum(&product, Some(&[0]))
 })?;
-loss.backward(&mut engine)?;
+ctx.with_eager_session(&mut engine, |s| s.backward(&loss))?;
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[6.0, 8.0]);
 
 x.clear_grad().unwrap();
@@ -408,7 +408,7 @@ let loss = ctx.with_eager_session(&mut engine, |s| {
     let product = s.mul(&x, &y)?;
     s.reduce_sum(&product, Some(&[0]))
 })?;
-loss.backward(&mut engine)?;
+ctx.with_eager_session(&mut engine, |s| s.backward(&loss))?;
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
 ctx.clear_grads().unwrap();
@@ -430,17 +430,11 @@ use tenferro_cpu::CpuEngine;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
-let x = EagerTensor::requires_grad_in(
-    Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-    ctx.clone(),
-).unwrap();
-let seed = EagerTensor::from_tensor_in(
-    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-    ctx,
-).unwrap();
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap()).unwrap();
+let seed = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
 
-let y = x.runtime().with_eager_session(&mut engine, |s| s.mul(&x, &x))?;
-y.backward_with(&mut engine, &seed).unwrap();
+let y = ctx.with_eager_session(&mut engine, |s| s.mul(&x, &x))?;
+ctx.with_eager_session(&mut engine, |s| s.backward_with(&y, &seed)).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
 Ok(())
 }
@@ -457,25 +451,16 @@ use tenferro_cpu::CpuEngine;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
-let x = EagerTensor::requires_grad_in(
-    Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-    ctx.clone(),
-).unwrap();
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap()).unwrap();
 let y = ctx.with_eager_session(&mut engine, |s| s.mul(&x, &x))?;
-let seed = EagerTensor::from_tensor_in(
-    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
-    ctx.clone(),
-).unwrap();
-let tangent = EagerTensor::from_tensor_in(
-    Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
-    ctx.clone(),
-).unwrap();
+let seed = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap()).unwrap();
+let tangent = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap()).unwrap();
 
-let vjp = ctx.vjp(&mut engine, &y, &x, &seed).unwrap();
-let jvp = ctx.jvp(&mut engine, &y, &x, &tangent).unwrap();
-let vjp_tensor = vjp.to_tensor(&mut engine).unwrap();
+let vjp = ctx.with_eager_session(&mut engine, |s| s.vjp(&y, &x, &seed)).unwrap();
+let jvp = ctx.with_eager_session(&mut engine, |s| s.jvp(&y, &x, &tangent)).unwrap();
+let vjp_tensor = ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&vjp)).unwrap();
 assert_eq!(vjp_tensor.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-let jvp_tensor = jvp.to_tensor(&mut engine).unwrap();
+let jvp_tensor = ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&jvp)).unwrap();
 assert_eq!(jvp_tensor.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 assert!(x.grad().unwrap().is_none());
 Ok(())
@@ -494,25 +479,19 @@ use tenferro_cpu::CpuEngine;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
-let x = EagerTensor::requires_grad_in(
-    Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
-    ctx.clone(),
-).unwrap();
-let tangent = EagerTensor::from_tensor_in(
-    Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
-    ctx.clone(),
-).unwrap();
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap()).unwrap();
+let tangent = ctx.constant_from(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap()).unwrap();
 
 let loss = ctx.with_eager_session(&mut engine, |s| {
     let square = s.mul(&x, &x)?;
     s.mul(&square, &x)
 })?;
-let grad = ctx.grad(&mut engine, &loss, &x).unwrap();
-let hvp = ctx.jvp(&mut engine, &grad, &x, &tangent).unwrap();
+let grad = ctx.with_eager_session(&mut engine, |s| s.grad(&loss, &x)).unwrap();
+let hvp = ctx.with_eager_session(&mut engine, |s| s.jvp(&grad, &x, &tangent)).unwrap();
 
-let grad_tensor = grad.to_tensor(&mut engine).unwrap();
+let grad_tensor = ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&grad)).unwrap();
 assert_eq!(grad_tensor.as_slice::<f64>().unwrap(), &[27.0]);
-let hvp_tensor = hvp.to_tensor(&mut engine).unwrap();
+let hvp_tensor = ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&hvp)).unwrap();
 assert_eq!(hvp_tensor.as_slice::<f64>().unwrap(), &[18.0]);
 Ok(())
 }
@@ -530,10 +509,7 @@ use tenferro_cpu::CpuEngine;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
-let x = EagerTensor::requires_grad_in(
-    Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
-    ctx.clone(),
-).unwrap();
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap()).unwrap();
 let y = ctx.with_eager_session(&mut engine, |s| {
     let _guard = ctx.no_grad();
     s.mul(&x, &x)
@@ -554,27 +530,21 @@ use tenferro_cpu::CpuEngine;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 let ctx = EagerRuntime::new()?;
 let mut engine = CpuEngine::serial();
-let a = EagerTensor::requires_grad_in(
-    Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-    ctx.clone(),
-).unwrap();
-let x = EagerTensor::requires_grad_in(
-    Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).unwrap(),
-    ctx.clone(),
-).unwrap();
+let a = ctx.variable_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap()).unwrap();
+let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2, 1], vec![5.0_f64, 6.0]).unwrap()).unwrap();
 
 let y = ctx.with_eager_session(&mut engine, |session| session.matmul(&a, &x))?;
-let y_tensor = y.to_tensor(&mut engine).unwrap();
+let y_tensor = ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&y)).unwrap();
 assert_eq!(y_tensor.as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
 let loss = ctx.with_eager_session(&mut engine, |s| {
     let squared = s.mul(&y, &y)?;
     s.reduce_sum(&squared, Some(&[0, 1]))
 })?;
-let loss_tensor = loss.to_tensor(&mut engine).unwrap();
+let loss_tensor = ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&loss)).unwrap();
 assert_eq!(loss_tensor.as_slice::<f64>().unwrap(), &[1685.0]);
 
-loss.backward(&mut engine).unwrap();
+ctx.with_eager_session(&mut engine, |s| s.backward(&loss)).unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[182.0, 410.0]);
 Ok(())
 }

@@ -10,27 +10,21 @@ use tenferro_tensor::AxisVec;
 use tenferro_tensor::Error as TensorError;
 
 fn eager(data: Vec<f64>, shape: Vec<usize>) -> EagerTensor {
-    EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(shape, data).unwrap(),
-        EagerRuntime::new().unwrap(),
-    )
-    .unwrap()
+    (EagerRuntime::new().unwrap())
+        .constant_from(Tensor::from_vec_col_major(shape, data).unwrap())
+        .unwrap()
 }
 
 fn eager_complex(data: Vec<Complex64>, shape: Vec<usize>) -> EagerTensor {
-    EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(shape, data).unwrap(),
-        EagerRuntime::new().unwrap(),
-    )
-    .unwrap()
+    (EagerRuntime::new().unwrap())
+        .constant_from(Tensor::from_vec_col_major(shape, data).unwrap())
+        .unwrap()
 }
 
 fn eager_i32(data: Vec<i32>, shape: Vec<usize>) -> EagerTensor {
-    EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(shape, data).unwrap(),
-        EagerRuntime::new().unwrap(),
-    )
-    .unwrap()
+    (EagerRuntime::new().unwrap())
+        .constant_from(Tensor::from_vec_col_major(shape, data).unwrap())
+        .unwrap()
 }
 
 fn traced_i32(trace: &TraceContext, data: Vec<i32>, shape: Vec<usize>) -> TracedTensor {
@@ -91,7 +85,10 @@ fn assert_lstsq_wide_error_contract(
 
 fn f64_values(tensor: &EagerTensor) -> Vec<f64> {
     tensor
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.duplicate_value(&tensor)
+        })
         .unwrap()
         .as_slice::<f64>()
         .unwrap()
@@ -164,7 +161,10 @@ fn eager_composites_match_diagonal_matrix_values() {
     assert_eq!(f64_values(&inv), vec![0.5, 0.0, 0.0, 0.25]);
     assert_eq!(f64_values(&eigvalsh), vec![2.0, 4.0]);
     let mut eigvals = eigvals
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.duplicate_value(&eigvals)
+        })
         .unwrap()
         .as_slice::<Complex64>()
         .unwrap()
@@ -281,19 +281,23 @@ fn eager_composite_records_existing_primitives_for_backward() {
         .build()
         .unwrap();
     let runtime = EagerRuntime::with_ad_context(&ad).unwrap();
-    let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
-        runtime,
-    )
-    .unwrap();
-
-    a.runtime()
-        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
-            session.det(&a)
-        })
-        .unwrap()
-        .backward(&mut tenferro_cpu::CpuEngine::serial())
+    let a = runtime
+        .variable_from(
+            Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
+        )
         .unwrap();
+
+    ({
+        let t = a
+            .runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+                session.det(&a)
+            })
+            .unwrap();
+        t.runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.backward(&t))
+    })
+    .unwrap();
 
     let grad = a.grad().unwrap().unwrap();
     let actual = grad.as_slice::<f64>().unwrap();
@@ -408,11 +412,9 @@ fn eager_in<T: tenferro_tensor::TensorScalar>(
     data: Vec<T>,
     shape: Vec<usize>,
 ) -> EagerTensor {
-    EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(shape, data).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap()
+    runtime
+        .constant_from(Tensor::from_vec_col_major(shape, data).unwrap())
+        .unwrap()
 }
 
 // #2583: the eager surface used to return `Ok([inf, -inf])` here.

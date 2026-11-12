@@ -938,7 +938,13 @@ layout handling, errors, omissions and exceptions.
     value/trace handle, never an implicit per-operation engine entry: no
     tensor-, slice- or typed-owned eager operation opens a session, engine or
     hidden pool. Consuming in-place FFT (exception E01) is the only receiver
-    exception.
+    exception. Every eager operation that needs an engine is an `EagerSession`
+    method, including AD (`s.grad`, `s.vjp`, `s.jvp`, `s.backward(&loss)`),
+    value extraction (`s.duplicate_value`, `s.detach`) and engine-backed leaf
+    construction; no `EagerTensor`, `EagerRuntime` or eager extension method
+    takes an engine (#2602, exceptions E11–E13).
+    `scripts/check-api-registry-conformance.py` enforces this on the compiled
+    surface.
 - **Options.** Every semantic choice lives in one `XxxOptions` per operation
   (`#[non_exhaustive]`, `Default`, one setter per field named like the field,
   `Copy` where possible). Options never carry the executor, the destination or

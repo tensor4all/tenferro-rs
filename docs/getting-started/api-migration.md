@@ -226,8 +226,8 @@ Propagate the result instead of relying on an infallible constructor:
 
 | Older assumption | Current spelling |
 | --- | --- |
-| `EagerTensor::from_tensor_in(tensor, ctx)` returns a value | `EagerTensor::from_tensor_in(tensor, ctx)?` |
-| `EagerTensor::requires_grad_in(tensor, ctx)` returns a value | `EagerTensor::requires_grad_in(tensor, ctx)?` |
+| `ctx.constant_from(tensor)` returns a value | `ctx.constant_from(tensor)?` |
+| `ctx.variable_from(tensor)` returns a value | `ctx.variable_from(tensor)?` |
 | `TracedTensor::input_concrete_shape(dtype, shape)` is infallible | `TracedTensor::input_concrete_shape(dtype, shape)?` |
 | `TypedTensor::from_vec_col_major(shape, data)` is infallible | `TypedTensor::from_vec_col_major(shape, data)?` |
 | `TypedTensor::zeros(shape)` is infallible | `TypedTensor::zeros(shape)?` |
@@ -248,13 +248,38 @@ identity/no-axis behavior is what the program needs.
 | --- | --- |
 | `ctx.with_eager_session(\|s\| s.neg(&x))??` (nested `Result`) | `ctx.with_eager_session(&mut engine, \|s\| s.neg(&x))?`: the callback returns `Result<T, E>` with `E: From<tenferro_ad::Error>`, and an unregistered engine error arrives as `E::from(..)`. Annotate `Ok::<_, tenferro_ad::Error>(..)` when the error type is not otherwise inferred; map tensor-level errors with `.map_err(tenferro_ad::Error::from)`. |
 | `ctx.with_eager_session(\|s\| ...)` without an engine | `ctx.with_eager_session(&mut engine, \|s\| ...)`: `EagerRuntime` stores no engine, so the caller passes one. |
-| `loss.backward()`, `y.backward_with(&seed)`, `ctx.grad(&loss, &x)`, `ctx.vjp(&y, &x, &seed)`, `ctx.jvp(&y, &x, &tangent)`, `value.to_tensor()` | Each takes the engine first: `backward(&mut engine)`, `backward_with(&mut engine, &seed)`, `grad(&mut engine, &loss, &x)`, `vjp(&mut engine, ...)`, `jvp(&mut engine, ...)`, `to_tensor(&mut engine)`. |
+| `loss.backward()`, `y.backward_with(&seed)`, `ctx.grad(&loss, &x)`, `ctx.vjp(&y, &x, &seed)`, `ctx.jvp(&y, &x, &tangent)`, `value.to_tensor()` | Session methods since #2602; see the next table. |
 | `reduce_sum_squares(&x, &[0])` (eager), `x.reduce_sum_squares(&[0])` (traced) | `Some(&[0])`; `None` now reduces every axis, as for `reduce_sum`. |
 | `x.reduce_sum(&[1], session)` on `Tensor` / `TypedTensor` | `x.reduce_sum(Some(&[1]), session)`. |
 | `session.gather(&x, &idx, &cfg)` and other core ops only on the session | Also `x.gather(&idx, cfg, session)` via `TensorSessionOpsExt` (see the session-surface notes in the guides). |
 | `Tensor::from_vec_col_major` with row-major data | `Tensor::from_vec_row_major(shape, data)` reorders once into column-major storage. |
 | `compile_with_input_specs` with a placeholder the output does not use | Rejected at compile time (`InvalidArgument` naming the binding); drop that binding. |
 | `?` on `EagerFftInPlaceError` in a `tenferro_ad::Result` function | Works: `From<EagerFftInPlaceError> for tenferro_ad::Error` drops a rejected input. |
+
+## Eager AD, value and leaf entry points on the session (#2602)
+
+Every eager operation that needs an engine is an `EagerSession` method, so the
+engine is passed once, to `with_eager_session`, and every operand and seed is
+checked against the session's runtime before anything is materialized or a
+gradient slot is written.
+
+| Removed spelling | Current spelling |
+| --- | --- |
+| `loss.backward(&mut engine)` | `ctx.with_eager_session(&mut engine, \|s\| s.backward(&loss))` |
+| `y.backward_with(&mut engine, &seed)` | `s.backward_with(&y, &seed)` |
+| `ctx.grad(&mut engine, &loss, &x)`, `grad_optional` | `s.grad(&loss, &x)`, `s.grad_optional(&loss, &x)` |
+| `ctx.vjp(&mut engine, &y, &x, &seed)`, `vjp_optional` | `s.vjp(&y, &x, &seed)`, `s.vjp_optional(..)` |
+| `ctx.jvp(&mut engine, &y, &x, &tangent)`, `jvp_optional` | `s.jvp(&y, &x, &tangent)`, `s.jvp_optional(..)` |
+| `x.detach(&mut engine)` | `s.detach(&x)` |
+| `x.to_tensor(&mut engine)`, `x.duplicate_value(&mut engine)` | `s.duplicate_value(&x)` (one owned-copy spelling); `x.into_value()` still consumes the handle without copying |
+| `x.detach_into(&mut engine, &ctx_b)` | `let t = ctx_a.with_eager_session(&mut engine, \|s\| s.duplicate_value(&x))?;` then `ctx_b.with_eager_session(&mut engine, \|s\| s.constant_from(t))?` |
+| `EagerTensor::from_tensor_in(t, ctx)`, `EagerTensor::requires_grad_in(t, ctx)` | `ctx.constant_from(t)`, `ctx.variable_from(t)` (engine-free, owned host tensors) or `s.constant_from(t)` / `s.constant_from_host(t)` / `s.variable_from(t)` (any input the engine can read) |
+| `EagerTensor::from_vec_col_major_in(shape, data, ctx)` | `ctx.constant_from(Tensor::from_vec_col_major(shape, data)?)` |
+| `s.backend_session()` | `s.engine()` (`&mut dyn ExecutionEngine`, which is also an `Engine`) |
+
+`GradientValue::to_tensor(&mut engine)` is unchanged: a stored gradient carries
+no eager-runtime identity and follows the concrete grammar (`recv.op(exec)`).
+
 
 ## Finding the current method
 

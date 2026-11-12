@@ -21,7 +21,7 @@ use tenferro_tensor::{DType, TensorValue};
 /// use tenferro_cpu::CpuEngine;
 /// use tenferro_fft::{EagerFftInPlaceError, EagerFftOps, FftOptions};
 /// let runtime = EagerRuntime::new()?;
-/// let input = EagerTensor::from_tensor_in(Tensor::from_vec_col_major([1], vec![1.0_f64])?, runtime.clone())?;
+/// let input = runtime.constant_from(Tensor::from_vec_col_major([1], vec![1.0_f64])?)?;
 /// let outcome = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
 ///     Ok::<_, tenferro_ad::Error>(s.fft_in_place(input, &FftOptions::default()))
 /// })?;
@@ -62,7 +62,7 @@ pub enum EagerFftInPlaceError {
 /// }
 ///
 /// let runtime = EagerRuntime::new()?;
-/// let real = EagerTensor::from_tensor_in(Tensor::from_vec_col_major([1], vec![1.0_f64])?, runtime.clone())?;
+/// let real = runtime.constant_from(Tensor::from_vec_col_major([1], vec![1.0_f64])?)?;
 /// let error = runtime
 ///     .with_eager_session(&mut CpuEngine::serial(), |s| transform(s, real))
 ///     .unwrap_err();

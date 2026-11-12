@@ -16,11 +16,9 @@ fn fixture() -> Fixture {
     let data = (0..LEN)
         .map(|index| (index as f64 + 1.0) / LEN as f64)
         .collect::<Vec<_>>();
-    let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![LEN], data).unwrap(),
-        Arc::clone(&ctx),
-    )
-    .unwrap();
+    let x = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![LEN], data).unwrap())
+        .unwrap();
     let loss = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let x2 = s.mul(&x, &x)?;
@@ -35,7 +33,10 @@ fn run_backward(fixture: &Fixture) {
     fixture.ctx.clear_grads().unwrap();
     fixture
         .loss
-        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.backward(&fixture.loss)
+        })
         .unwrap();
     let grad = fixture.x.grad().unwrap().unwrap();
     black_box(grad.as_slice::<f64>().unwrap()[0]);

@@ -50,7 +50,10 @@ fn assert_close(actual: &[f64], expected: &[f64], rtol: f64, atol: f64, what: &s
 
 fn eager_value(tensor: &EagerTensor) -> Tensor {
     tensor
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.duplicate_value(&tensor)
+        })
         .unwrap()
 }
 
@@ -283,14 +286,17 @@ fn activation_first_and_second_derivatives_at_zero_and_extremes() {
         let second: Vec<f64> = points.iter().map(|&x| act_ref(act, x).2).collect();
 
         // Eager reverse mode.
-        let x = EagerTensor::requires_grad_in(t64(&[n], points.to_vec()), ctx()).unwrap();
+        let x = ctx().variable_from(t64(&[n], points.to_vec())).unwrap();
         let loss = ctx()
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                 let y = eager_act(s, act, &x)?;
                 s.reduce_sum(&y, None)
             })
             .unwrap();
-        loss.backward(&mut tenferro_cpu::CpuEngine::serial())
+        loss.runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                s.backward(&loss)
+            })
             .unwrap();
         let grad = x
             .grad()
@@ -388,14 +394,17 @@ fn erf_gradient_and_second_derivative_match_closed_forms() {
         .map(|&x| -2.0 * x * c * (-x * x).exp())
         .collect();
 
-    let x = EagerTensor::requires_grad_in(t64(&[n], points.to_vec()), ctx()).unwrap();
+    let x = ctx().variable_from(t64(&[n], points.to_vec())).unwrap();
     let loss = ctx()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let y = s.erf(&x)?;
             s.reduce_sum(&y, None)
         })
         .unwrap();
-    loss.backward(&mut tenferro_cpu::CpuEngine::serial())
+    loss.runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.backward(&loss)
+        })
         .unwrap();
     let grad = x
         .grad()
@@ -451,18 +460,19 @@ fn erf_gradient_and_second_derivative_match_closed_forms() {
 
 #[test]
 fn erf_f32_gradient_uses_the_f32_scale() {
-    let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![0.0_f32, 1.0]).unwrap(),
-        ctx(),
-    )
-    .unwrap();
+    let x = ctx()
+        .variable_from(Tensor::from_vec_col_major(vec![2], vec![0.0_f32, 1.0]).unwrap())
+        .unwrap();
     let loss = ctx()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let y = s.erf(&x)?;
             s.reduce_sum(&y, None)
         })
         .unwrap();
-    loss.backward(&mut tenferro_cpu::CpuEngine::serial())
+    loss.runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.backward(&loss)
+        })
         .unwrap();
     let grad = x
         .grad()
@@ -584,14 +594,19 @@ fn reduce_mean_values_identity_and_empty_policy() {
 
 #[test]
 fn reduce_mean_gradient_is_one_over_count() {
-    let x = EagerTensor::requires_grad_in(t64(&[2, 2], vec![1.0, 2.0, 3.0, 4.0]), ctx()).unwrap();
+    let x = ctx()
+        .variable_from(t64(&[2, 2], vec![1.0, 2.0, 3.0, 4.0]))
+        .unwrap();
     let loss = ctx()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let m = s.reduce_mean(&x, Some(&[0]))?;
             s.reduce_sum(&m, None)
         })
         .unwrap();
-    loss.backward(&mut tenferro_cpu::CpuEngine::serial())
+    loss.runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.backward(&loss)
+        })
         .unwrap();
     let grad = x
         .grad()
@@ -798,7 +813,7 @@ fn all_masked_slice_is_zero_or_neg_inf_with_a_finite_zero_gradient() {
     check_softmax_surfaces(&trace, [3, 2], x.clone(), mask.clone(), 0);
 
     for log in [false, true] {
-        let xe = EagerTensor::requires_grad_in(t64(&[3, 2], x.clone()), ctx()).unwrap();
+        let xe = ctx().variable_from(t64(&[3, 2], x.clone())).unwrap();
         let y = ctx()
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                 let m = s.constant_from(Tensor::from_vec_col_major(vec![3, 2], mask.clone())?)?;
@@ -814,11 +829,18 @@ fn all_masked_slice_is_zero_or_neg_inf_with_a_finite_zero_gradient() {
         assert_eq!(&values[3..], &[fill; 3], "all-masked column (log={log})");
 
         let ones = ctx().constant_from(t64(&[3, 2], vec![1.0; 6])).unwrap();
-        let grad = ctx()
-            .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &xe, &ones)
-            .unwrap()
-            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-            .unwrap();
+        let grad = ({
+            let t = ctx()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.vjp(&y, &xe, &ones)
+                })
+                .unwrap();
+            t.runtime()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.duplicate_value(&t)
+                })
+        })
+        .unwrap();
         let grad = data64(&grad);
         assert!(
             grad.iter().all(|g| g.is_finite()),
@@ -882,7 +904,7 @@ fn unmasked_all_neg_inf_slice_follows_the_all_masked_policy() {
         vec![f64::NEG_INFINITY, f64::NEG_INFINITY, ln_half, ln_half]
     );
 
-    let xe = EagerTensor::requires_grad_in(x.duplicate().unwrap(), ctx()).unwrap();
+    let xe = ctx().variable_from(x.duplicate().unwrap()).unwrap();
     let y = ctx()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             s.softmax(&xe, 0)
@@ -890,11 +912,18 @@ fn unmasked_all_neg_inf_slice_follows_the_all_masked_policy() {
         .unwrap();
     let ones = ctx().constant_from(t64(&[2, 2], vec![1.0; 4])).unwrap();
     let grad = data64(
-        &ctx()
-            .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &xe, &ones)
-            .unwrap()
-            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-            .unwrap(),
+        &({
+            let t = ctx()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.vjp(&y, &xe, &ones)
+                })
+                .unwrap();
+            t.runtime()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.duplicate_value(&t)
+                })
+        })
+        .unwrap(),
     );
     assert!(grad.iter().all(|g| g.is_finite()), "{grad:?}");
     assert_eq!(&grad[..2], &[0.0, 0.0]);
@@ -960,7 +989,7 @@ fn softmax_gradient_matches_the_closed_form() {
     let s = softmax_ref([4, 1], &x, None, 0, false);
     let dot: f64 = s.iter().zip(&w).map(|(a, b)| a * b).sum();
     let expected: Vec<f64> = s.iter().zip(&w).map(|(sj, wj)| sj * (wj - dot)).collect();
-    let xe = EagerTensor::requires_grad_in(t64(&[4], x.clone()), ctx()).unwrap();
+    let xe = ctx().variable_from(t64(&[4], x.clone())).unwrap();
     let y = ctx()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             s.softmax(&xe, 0)
@@ -968,11 +997,18 @@ fn softmax_gradient_matches_the_closed_form() {
         .unwrap();
     let ct = ctx().constant_from(t64(&[4], w.clone())).unwrap();
     let grad = data64(
-        &ctx()
-            .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &xe, &ct)
-            .unwrap()
-            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-            .unwrap(),
+        &({
+            let t = ctx()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.vjp(&y, &xe, &ct)
+                })
+                .unwrap();
+            t.runtime()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.duplicate_value(&t)
+                })
+        })
+        .unwrap(),
     );
     assert_close(&grad, &expected, 1e-14, 1e-16, "softmax vjp");
 
@@ -985,11 +1021,18 @@ fn softmax_gradient_matches_the_closed_form() {
         })
         .unwrap();
     let grad = data64(
-        &ctx()
-            .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &xe, &ct)
-            .unwrap()
-            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-            .unwrap(),
+        &({
+            let t = ctx()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.vjp(&y, &xe, &ct)
+                })
+                .unwrap();
+            t.runtime()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.duplicate_value(&t)
+                })
+        })
+        .unwrap(),
     );
     assert_close(&grad, &expected, 1e-14, 1e-16, "log_softmax vjp");
 }
@@ -1209,8 +1252,8 @@ fn norm_gradients_match_finite_differences_including_a_zero_variance_slice() {
         };
         let expected = finite_difference(loss_ref, &x);
 
-        let xe = EagerTensor::requires_grad_in(t64(&[3, 2], x.clone()), ctx()).unwrap();
-        let ge = EagerTensor::requires_grad_in(t64(&[3], gamma.clone()), ctx()).unwrap();
+        let xe = ctx().variable_from(t64(&[3, 2], x.clone())).unwrap();
+        let ge = ctx().variable_from(t64(&[3], gamma.clone())).unwrap();
         let y = ctx()
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                 let b = s.constant_from(t64(&[3], beta.clone()))?;
@@ -1228,11 +1271,18 @@ fn norm_gradients_match_finite_differences_including_a_zero_variance_slice() {
         }
         let ct = ctx().constant_from(t64(&[3, 2], w.clone())).unwrap();
         let grad = data64(
-            &ctx()
-                .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &xe, &ct)
-                .unwrap()
-                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-                .unwrap(),
+            &({
+                let t = ctx()
+                    .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                        s.vjp(&y, &xe, &ct)
+                    })
+                    .unwrap();
+                t.runtime()
+                    .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                        s.duplicate_value(&t)
+                    })
+            })
+            .unwrap(),
         );
         assert!(grad.iter().all(|g| g.is_finite()), "{grad:?}");
         assert_close(
@@ -1244,11 +1294,18 @@ fn norm_gradients_match_finite_differences_including_a_zero_variance_slice() {
         );
 
         let ggamma = data64(
-            &ctx()
-                .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &ge, &ct)
-                .unwrap()
-                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-                .unwrap(),
+            &({
+                let t = ctx()
+                    .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                        s.vjp(&y, &ge, &ct)
+                    })
+                    .unwrap();
+                t.runtime()
+                    .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                        s.duplicate_value(&t)
+                    })
+            })
+            .unwrap(),
         );
         let gamma_fd = finite_difference(
             |gs: &[f64]| {
@@ -1429,7 +1486,7 @@ fn take_along_axis_gradient_scatters_back_to_the_operand() {
     };
     let expected = finite_difference(loss_ref, &x);
 
-    let xe = EagerTensor::requires_grad_in(t64(&shape, x.clone()), ctx()).unwrap();
+    let xe = ctx().variable_from(t64(&shape, x.clone())).unwrap();
     let y = ctx()
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let i =
@@ -1439,11 +1496,18 @@ fn take_along_axis_gradient_scatters_back_to_the_operand() {
         .unwrap();
     let ct = ctx().constant_from(t64(&[2, 2, 2], w.clone())).unwrap();
     let grad = data64(
-        &ctx()
-            .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &xe, &ct)
-            .unwrap()
-            .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-            .unwrap(),
+        &({
+            let t = ctx()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.vjp(&y, &xe, &ct)
+                })
+                .unwrap();
+            t.runtime()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.duplicate_value(&t)
+                })
+        })
+        .unwrap(),
     );
     assert_close(&grad, &expected, 1e-8, 1e-8, "take_along_axis grad");
 }

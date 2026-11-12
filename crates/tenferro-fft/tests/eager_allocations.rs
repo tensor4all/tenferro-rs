@@ -97,11 +97,11 @@ fn ordinary_eager_drop_and_consuming_fft_reuse_without_input_sized_allocations()
     let mut engine = CpuEngine::serial();
     assert_eq!(engine.num_threads(), 1);
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([64, 64], vec![Complex64::new(1., 0.); LEN]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let input = runtime
+        .constant_from(
+            Tensor::from_vec_col_major([64, 64], vec![Complex64::new(1., 0.); LEN]).unwrap(),
+        )
+        .unwrap();
     let transform = |engine: &mut CpuEngine| {
         runtime
             .with_eager_session(engine, |s| {
@@ -197,11 +197,9 @@ fn whole_tensor_axis_fft_lane_comes_from_the_buffer_pool() {
     let mut engine = CpuEngine::serial();
     assert_eq!(engine.num_threads(), 1);
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([LEN], vec![1.0f64; LEN]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let input = runtime
+        .constant_from(Tensor::from_vec_col_major([LEN], vec![1.0f64; LEN]).unwrap())
+        .unwrap();
     let transform = |engine: &mut CpuEngine| {
         runtime
             .with_eager_session(engine, |s| {

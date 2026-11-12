@@ -326,14 +326,14 @@ fn api_docs_are_current() {
 #[test]
 fn eager_session_solve_honours_no_grad() -> TestResult<()> {
     use crate::EagerLinalgOps;
-    use tenferro_ad::{AdContext, EagerRuntime, EagerTensor};
+    use tenferro_ad::{AdContext, EagerRuntime};
 
     let ad = AdContext::builder()
         .with_semantic_extension_rules(crate::semantic_ad_rules()?)?
         .build()?;
     let ctx = EagerRuntime::with_ad_context(&ad)?;
-    let a = EagerTensor::requires_grad_in(raw::<f64>(sq::<f64>())?, ctx.clone())?;
-    let b = EagerTensor::requires_grad_in(raw::<f64>(rhs::<f64>())?, ctx.clone())?;
+    let a = ctx.variable_from(raw::<f64>(sq::<f64>())?)?;
+    let b = ctx.variable_from(raw::<f64>(rhs::<f64>())?)?;
     for guarded in [false, true] {
         let x = ctx.with_eager_session(&mut CpuEngine::serial(), |s| {
             let _g = guarded.then(|| ctx.no_grad());

@@ -294,13 +294,13 @@ let (outer, diag) = ctx.with_eager_session(&mut engine, |s| {
 })?;
 
 assert_eq!(outer.shape(), &[2, 3]);
-let outer_tensor = outer.to_tensor(&mut engine)?;
+let outer_tensor = ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&outer))?;
 assert_eq!(
     outer_tensor.as_slice::<f64>()?,
     &[3.0, 6.0, 4.0, 8.0, 5.0, 10.0],
 );
 assert_eq!(diag.shape(), &[3, 3]);
-let diag_tensor = diag.to_tensor(&mut engine)?;
+let diag_tensor = ctx.with_eager_session(&mut engine, |s| s.duplicate_value(&diag))?;
 assert_eq!(
     diag_tensor.as_slice::<f64>()?,
     &[3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0],

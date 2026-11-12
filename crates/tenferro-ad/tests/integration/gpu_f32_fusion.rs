@@ -36,14 +36,17 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let c = ctx
         .with_eager_session(&mut upload_backend, |s| s.constant_from(c_device))
         .unwrap();
-    let result = ctx
-        .with_eager_session(&mut upload_backend, |s| {
-            let sum = s.add(&a, &b)?;
-            s.mul(&sum, &c)
-        })
-        .unwrap()
-        .to_tensor(&mut upload_backend)
-        .unwrap();
+    let result = ({
+        let t = &ctx
+            .with_eager_session(&mut upload_backend, |s| {
+                let sum = s.add(&a, &b)?;
+                s.mul(&sum, &c)
+            })
+            .unwrap();
+        t.runtime()
+            .with_eager_session(&mut upload_backend, |s| s.duplicate_value(t))
+    })
+    .unwrap();
 
     let result = upload_backend
         .download_to_host(TensorRead::from_tensor(&result))

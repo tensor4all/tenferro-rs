@@ -57,12 +57,12 @@ impl InPlaceViaSession for EagerTensor {
 }
 
 fn input(runtime: &std::sync::Arc<EagerRuntime>) -> EagerTensor {
-    EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.), Complex64::new(2., 0.)])
-            .unwrap(),
-        runtime.clone(),
-    )
-    .unwrap()
+    runtime
+        .constant_from(
+            Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.), Complex64::new(2., 0.)])
+                .unwrap(),
+        )
+        .unwrap()
 }
 fn rejected(result: Result<EagerTensor, EagerFftInPlaceError>) -> EagerTensor {
     match result {
@@ -91,7 +91,7 @@ fn consuming_fft_preserves_allocation_and_matches_borrowed_fft_on_every_axis() {
                         .collect(),
                 )
                 .unwrap();
-                let x = EagerTensor::from_tensor_in(source, runtime.clone()).unwrap();
+                let x = runtime.constant_from(source).unwrap();
                 let expected = runtime
                     .with_eager_session(&mut engine, |s| {
                         s.fft_with(&x, &FftOptions::default().axis(axis).norm(norm))
@@ -131,15 +131,15 @@ fn consuming_fft_respects_compact_slice_extent_and_offset() {
     for start in [0, 1] {
         let mut engine = CpuEngine::serial();
         let runtime = EagerRuntime::new().unwrap();
-        let source = EagerTensor::from_tensor_in(
-            Tensor::from_vec_col_major(
-                [4],
-                (1..=4).map(|x| Complex64::new(x as f64, 0.)).collect(),
+        let source = runtime
+            .constant_from(
+                Tensor::from_vec_col_major(
+                    [4],
+                    (1..=4).map(|x| Complex64::new(x as f64, 0.)).collect(),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-            runtime.clone(),
-        )
-        .unwrap();
+            .unwrap();
         let slice = runtime
             .with_eager_session(&mut engine, |session| {
                 session.slice(
@@ -216,15 +216,15 @@ fn consuming_fft_respects_compact_slice_extent_and_offset() {
 fn consuming_fft_rejects_noncompact_layout_before_ownership_extraction() {
     let mut engine = CpuEngine::serial();
     let runtime = EagerRuntime::new().unwrap();
-    let source = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(
-            [2, 3],
-            (1..=6).map(|x| Complex64::new(x as f64, 0.)).collect(),
+    let source = runtime
+        .constant_from(
+            Tensor::from_vec_col_major(
+                [2, 3],
+                (1..=6).map(|x| Complex64::new(x as f64, 0.)).collect(),
+            )
+            .unwrap(),
         )
-        .unwrap(),
-        runtime,
-    )
-    .unwrap();
+        .unwrap();
     let view = source
         .runtime()
         .with_eager_session(&mut engine, |s| s.transpose(&source, &[1, 0]))
@@ -289,11 +289,9 @@ fn consuming_fft_preserves_values_needed_by_later_backward() {
             s.fft_with(&input, &FftOptions::default().axis(0))
         })
         .unwrap();
-    let variable = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let variable = runtime
+        .variable_from(Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2]).unwrap())
+        .unwrap();
     let product = runtime
         .with_eager_session(&mut engine, |s| s.mul(&variable, &coefficient))
         .unwrap();
@@ -312,12 +310,13 @@ fn consuming_fft_preserves_values_needed_by_later_backward() {
         }
         Err(error) => panic!("unexpected execution failure: {error}"),
     }
-    let seed = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2]).unwrap(),
-        runtime,
-    )
-    .unwrap();
-    product.backward_with(&mut engine, &seed).unwrap();
+    let seed = runtime
+        .constant_from(Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2]).unwrap())
+        .unwrap();
+    product
+        .runtime()
+        .with_eager_session(&mut engine, |s| s.backward_with(&product, &seed))
+        .unwrap();
     assert_eq!(
         variable
             .grad()
@@ -333,12 +332,12 @@ fn consuming_fft_preserves_values_needed_by_later_backward() {
 fn consuming_fft_c32_and_rejected_alias_remain_usable() {
     let mut engine = CpuEngine::serial();
     let runtime = EagerRuntime::new().unwrap();
-    let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([2], vec![Complex32::new(1., 0.), Complex32::new(2., 0.)])
-            .unwrap(),
-        runtime,
-    )
-    .unwrap();
+    let x = runtime
+        .constant_from(
+            Tensor::from_vec_col_major([2], vec![Complex32::new(1., 0.), Complex32::new(2., 0.)])
+                .unwrap(),
+        )
+        .unwrap();
     let alias = x.clone();
     let x = rejected(x.fft_in_place(&mut engine, 0, FftNorm::Backward));
     assert_eq!(
@@ -373,18 +372,14 @@ fn consuming_fft_rejects_invalid_axis_dtype_tracking_and_capture_before_mutation
         &[Complex64::new(1., 0.), Complex64::new(2., 0.)]
     );
     x.fft_in_place(&mut engine, 0, FftNorm::Backward).unwrap();
-    let real = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([1], vec![1.0_f64]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let real = runtime
+        .constant_from(Tensor::from_vec_col_major([1], vec![1.0_f64]).unwrap())
+        .unwrap();
     let real = rejected(real.fft_in_place(&mut engine, 0, FftNorm::Backward));
     assert_eq!(real.value().unwrap().as_slice::<f64>().unwrap(), &[1.]);
-    let tracked = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major([1], vec![Complex64::new(2., 0.)]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let tracked = runtime
+        .variable_from(Tensor::from_vec_col_major([1], vec![Complex64::new(2., 0.)]).unwrap())
+        .unwrap();
     let _no_grad = runtime.no_grad();
     let tracked = rejected(tracked.ifft_in_place(&mut engine, 0, FftNorm::Backward));
     assert!(tracked.tracks_grad());
@@ -399,11 +394,9 @@ fn consuming_fft_rejects_invalid_axis_dtype_tracking_and_capture_before_mutation
 fn in_place_errors_convert_into_the_eager_error_type() {
     let mut engine = CpuEngine::serial();
     let runtime = EagerRuntime::new().unwrap();
-    let real = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([1], vec![1.0_f64]).unwrap(),
-        runtime,
-    )
-    .unwrap();
+    let real = runtime
+        .constant_from(Tensor::from_vec_col_major([1], vec![1.0_f64]).unwrap())
+        .unwrap();
     let rejected = real
         .fft_in_place(&mut engine, 0, FftNorm::Backward)
         .unwrap_err();

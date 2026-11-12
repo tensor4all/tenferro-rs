@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::{EagerRuntime, EagerTensor, Tensor};
+use crate::{EagerRuntime, Tensor};
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef};
 
 fn assert_no_live_transcendental(ctx: &EagerRuntime) {
@@ -33,11 +33,9 @@ fn exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivati
     for tanh in [false, true] {
         let ctx = EagerRuntime::new().unwrap();
         for values in [vec![0.3_f64, -0.4], vec![0.7_f64, -0.2]] {
-            let x = EagerTensor::requires_grad_in(
-                Tensor::from_vec_col_major(vec![2], values.clone()).unwrap(),
-                Arc::clone(&ctx),
-            )
-            .unwrap();
+            let x = ctx
+                .variable_from(Tensor::from_vec_col_major(vec![2], values.clone()).unwrap())
+                .unwrap();
             let y = ctx
                 .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
                     if tanh {
@@ -59,7 +57,9 @@ fn exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivati
             drop(y);
             assert!(weak.upgrade().is_some());
             let first = ctx
-                .grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x)
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.grad(&loss, &x)
+                })
                 .unwrap();
             let expected = values
                 .iter()
@@ -90,7 +90,9 @@ fn exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivati
                 })
                 .unwrap();
             let second = ctx
-                .grad(&mut tenferro_cpu::CpuEngine::serial(), &first_sum, &x)
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.grad(&first_sum, &x)
+                })
                 .unwrap();
             for (actual, &x) in second
                 .value()
@@ -124,11 +126,9 @@ fn exp_tanh_reuse_saved_outputs_with_dropped_handles_and_correct_higher_derivati
 fn cached_execution_rebinds_residuals_for_each_forward() {
     let ctx = EagerRuntime::new().unwrap();
     for (iteration, value) in [0.2_f64, 0.8].into_iter().enumerate() {
-        let x = EagerTensor::requires_grad_in(
-            Tensor::from_vec_col_major(vec![1], vec![value]).unwrap(),
-            Arc::clone(&ctx),
-        )
-        .unwrap();
+        let x = ctx
+            .variable_from(Tensor::from_vec_col_major(vec![1], vec![value]).unwrap())
+            .unwrap();
         let loss = ctx
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
                 let y = session.exp(&x)?;
@@ -136,7 +136,9 @@ fn cached_execution_rebinds_residuals_for_each_forward() {
             })
             .unwrap();
         let gradient = ctx
-            .grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x)
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                s.grad(&loss, &x)
+            })
             .unwrap();
         assert!(
             (gradient.value().unwrap().as_slice::<f64>().unwrap()[0] - value.exp()).abs() < 1e-12
@@ -151,11 +153,9 @@ fn cached_execution_rebinds_residuals_for_each_forward() {
 #[test]
 fn intermediate_inputs_are_retained_without_retaining_all_outputs() {
     let ctx = EagerRuntime::new().unwrap();
-    let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-        Arc::clone(&ctx),
-    )
-    .unwrap();
+    let x = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap())
+        .unwrap();
     let square = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))
         .unwrap();
@@ -174,7 +174,9 @@ fn intermediate_inputs_are_retained_without_retaining_all_outputs() {
     drop(square);
     drop(fourth);
     let gradient = ctx
-        .grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x)
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.grad(&loss, &x)
+        })
         .unwrap();
     assert_eq!(
         gradient.value().unwrap().as_slice::<f64>().unwrap(),

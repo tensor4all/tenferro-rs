@@ -8,7 +8,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let loss = session.reduce_sum(&squared, Some(&[0]))?;
         Ok::<_, tenferro_ad::Error>((x, loss))
     })?;
-    loss.backward(&mut tenferro_cpu::CpuEngine::serial())?;
+    loss.runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.backward(&loss)
+        })?;
 
     assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 

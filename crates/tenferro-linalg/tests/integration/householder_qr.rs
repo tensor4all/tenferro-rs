@@ -368,15 +368,15 @@ fn householder_qr_two_appends_produce_all_input_gradients() {
 #[cfg(feature = "autodiff")]
 #[test]
 fn eager_compact_qr_executes_on_cpu() {
-    use tenferro_ad::{EagerRuntime, EagerTensor};
+    use tenferro_ad::EagerRuntime;
     use tenferro_linalg::EagerLinalgOps;
 
     let runtime = EagerRuntime::new().unwrap();
-    let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let a = runtime
+        .constant_from(
+            Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 0.0, 1.0, 0.0, 1.0, 1.0]).unwrap(),
+        )
+        .unwrap();
     let (r, q) = runtime
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let state = session.householder_qr(&a)?;
@@ -402,21 +402,15 @@ fn eager_borrowed_compact_qr_append_import_and_ad() {
         .build()
         .unwrap();
     let runtime = EagerRuntime::with_ad_context(&ad).unwrap();
-    let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major([3, 1], vec![1.0_f64, 0.0, 1.0]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
-    let b = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major([3, 1], vec![0.0_f64, 1.0, 0.0]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
-    let foreign = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([3, 1], vec![0.0_f64, 1.0, 0.0]).unwrap(),
-        EagerRuntime::new().unwrap(),
-    )
-    .unwrap();
+    let a = runtime
+        .variable_from(Tensor::from_vec_col_major([3, 1], vec![1.0_f64, 0.0, 1.0]).unwrap())
+        .unwrap();
+    let b = runtime
+        .variable_from(Tensor::from_vec_col_major([3, 1], vec![0.0_f64, 1.0, 0.0]).unwrap())
+        .unwrap();
+    let foreign = (EagerRuntime::new().unwrap())
+        .constant_from(Tensor::from_vec_col_major([3, 1], vec![0.0_f64, 1.0, 0.0]).unwrap())
+        .unwrap();
     let (q, r, imported_r, loss) = runtime
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
             let state = session.householder_qr(&a)?;
@@ -437,7 +431,9 @@ fn eager_borrowed_compact_qr_append_import_and_ad() {
     assert_eq!(r.shape(), &[2, 2]);
     assert_eq!(imported_r.shape(), &[2, 2]);
     let gradient = runtime
-        .grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &b)
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.grad(&loss, &b)
+        })
         .unwrap();
     let grad = gradient.value().unwrap();
     assert!(grad

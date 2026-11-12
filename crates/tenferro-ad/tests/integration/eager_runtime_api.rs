@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_ad::EagerRuntime;
 use tenferro_runtime::Tensor;
 
 #[test]
@@ -13,11 +13,9 @@ fn eager_runtime_constructors_return_typed_results() {
 #[test]
 fn eager_runtime_replaces_eager_context_public_name() {
     let runtime = EagerRuntime::new().unwrap();
-    let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let x = runtime
+        .variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
+        .unwrap();
     let loss = runtime
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let squared = s.mul(&x, &x)?;
@@ -25,7 +23,10 @@ fn eager_runtime_replaces_eager_context_public_name() {
         })
         .unwrap();
 
-    loss.backward(&mut tenferro_cpu::CpuEngine::serial())
+    loss.runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.backward(&loss)
+        })
         .unwrap();
 
     assert_eq!(

@@ -1,7 +1,6 @@
 use std::env;
 use std::fs;
 use std::hint::black_box;
-use std::sync::Arc;
 use std::time::Instant;
 
 use num_complex::Complex64;
@@ -427,10 +426,10 @@ fn run_eager(
     blocks: Vec<Tensor>,
 ) -> Result<(Vec<f64>, Tensor, Tensor), String> {
     let runtime = EagerRuntime::new().map_err(to_string)?;
-    let initial = EagerTensor::from_tensor_in(initial, Arc::clone(&runtime)).map_err(to_string)?;
+    let initial = runtime.constant_from(initial).map_err(to_string)?;
     let blocks = blocks
         .into_iter()
-        .map(|block| EagerTensor::from_tensor_in(block, Arc::clone(&runtime)).map_err(to_string))
+        .map(|block| runtime.constant_from(block).map_err(to_string))
         .collect::<Result<Vec<_>, _>>()?;
     let initial_state = runtime
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
@@ -475,9 +474,15 @@ fn run_eager(
         .map_err(to_string)?;
     Ok((
         timings,
-        q.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        q.runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                s.duplicate_value(&q)
+            })
             .map_err(to_string)?,
-        r.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        r.runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                s.duplicate_value(&r)
+            })
             .map_err(to_string)?,
     ))
 }

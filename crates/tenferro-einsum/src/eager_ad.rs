@@ -646,7 +646,7 @@ fn backend_broadcast_multiply_untracked(
     }
 
     let runtime = lhs.runtime();
-    let value = session.backend_session().execute_broadcast_multiply_value(
+    let value = session.engine().execute_broadcast_multiply_value(
         lhs.tensor_read(),
         lhs_shape,
         lhs_dims,

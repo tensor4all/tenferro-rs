@@ -48,8 +48,8 @@ fn tensor(shape: Vec<usize>, seed: usize) -> Tensor {
 
 fn fixture(ctx: &Arc<EagerRuntime>, left_bond: usize, right_bond: usize, seed: usize) -> Fixture {
     let shape = vec![left_bond, PHYSICAL_DIM, right_bond];
-    let x = EagerTensor::requires_grad_in(tensor(shape.clone(), seed), Arc::clone(ctx)).unwrap();
-    let weight = EagerTensor::from_tensor_in(tensor(shape, seed + 1000), Arc::clone(ctx)).unwrap();
+    let x = ctx.variable_from(tensor(shape.clone(), seed)).unwrap();
+    let weight = ctx.constant_from(tensor(shape, seed + 1000)).unwrap();
     let loss = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             let weighted = s.mul(&x, &weight)?;
@@ -72,7 +72,10 @@ fn run_backward(fixture: &Fixture) {
     fixture.ctx.clear_grads().unwrap();
     fixture
         .loss
-        .backward(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.backward(&fixture.loss)
+        })
         .unwrap();
     let grad = fixture.x.grad().unwrap().unwrap();
     black_box(grad.shape());

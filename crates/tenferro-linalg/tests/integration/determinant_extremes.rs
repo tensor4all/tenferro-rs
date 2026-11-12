@@ -17,10 +17,10 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
     let result = super::support::run_program(&runtime, &mut backend, &program, &[&input]).unwrap();
     #[cfg(feature = "autodiff")]
     {
-        use tenferro_ad::{EagerRuntime, EagerTensor};
+        use tenferro_ad::EagerRuntime;
         use tenferro_linalg::{EagerLinalgOps, Slogdet};
         let runtime = EagerRuntime::new().unwrap();
-        let eager = EagerTensor::from_tensor_in(input, runtime.clone()).unwrap();
+        let eager = runtime.constant_from(input).unwrap();
         let (det, sign, log) = runtime
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
                 let Slogdet {
@@ -32,7 +32,10 @@ fn evaluate(a: &TracedTensor, input: Tensor) -> Vec<Tensor> {
             .unwrap();
         for (actual, expected) in [det, sign, log].iter().zip(&result) {
             let actual = actual
-                .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                .runtime()
+                .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                    s.duplicate_value(&actual)
+                })
                 .unwrap();
             assert_eq!(actual.shape(), expected.shape());
             if let Ok(values) = actual.as_slice::<f64>() {

@@ -95,7 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let loss =
         runtime.with_eager_session(&mut engine, |s| s.reduce_sum(&product, Some(&[0, 1])))?;
-    let grad_a = runtime.grad(&mut engine, &loss, &a)?;
+    let grad_a = runtime.with_eager_session(&mut engine, |s| s.grad(&loss, &a))?;
     let grad_value = grad_a.value()?;
 
     assert_eq!(grad_value.shape(), &[2, 3]);

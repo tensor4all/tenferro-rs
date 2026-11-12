@@ -28,7 +28,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(loss.shape().is_empty());
     assert_close(loss.value()?.as_slice::<f64>().unwrap(), &[14.0]);
 
-    loss.backward(&mut engine)?;
+    // Backward is a session operation too: the session that ran the forward
+    // pass (or any later session of the same runtime) runs the reverse pass.
+    runtime.with_eager_session(&mut engine, |s| s.backward(&loss))?;
 
     let grad = x
         .grad()?
