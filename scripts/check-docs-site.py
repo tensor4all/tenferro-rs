@@ -216,7 +216,7 @@ def check_eager_functional_ad_docs(root: pathlib.Path) -> list[str]:
         ),
         (
             root / "docs" / "index.md",
-            "`EagerRuntime` functional `grad`, `vjp`, and `jvp`",
+            "`EagerSession` functional `grad`, `vjp`, and `jvp`",
         ),
         (
             root / "docs" / "getting-started" / "index.md",
@@ -228,7 +228,7 @@ def check_eager_functional_ad_docs(root: pathlib.Path) -> list[str]:
         ),
         (
             root / "docs" / "getting-started" / "pytorch-jax-mapping.md",
-            "`EagerRuntime` functional `grad`/`vjp`/`jvp`",
+            "functional `s.grad`/`s.vjp`/`s.jvp`",
         ),
         (
             root / "docs" / "tutorials" / "index.md",
@@ -236,7 +236,7 @@ def check_eager_functional_ad_docs(root: pathlib.Path) -> list[str]:
         ),
         (
             root / "docs" / "spec" / "operation-categories.md",
-            "stateful `backward()` plus functional `grad`/`vjp`/`jvp`",
+            "stateful `s.backward(&loss)` plus functional `s.grad`/`s.vjp`/`s.jvp`",
         ),
         (
             root / "docs" / "guides" / "eager-operations.md",

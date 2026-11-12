@@ -562,6 +562,6 @@ Ok(())
 | Exploratory computation | Direct/eager execution |
 | Immediate forward execution through one runtime | `EagerTensor` |
 | Need reverse-mode gradients with gradient slots | tracked `EagerTensor` variables + `backward()` / `backward_with(seed)` |
-| Need functional eager `grad` / `vjp` / `jvp` / HVP composition | `EagerRuntime` functional APIs |
+| Need functional eager `grad` / `vjp` / `jvp` / HVP composition | `EagerSession` functional APIs |
 | Need compiled `grad` / `vjp` / `jvp` / HVP composition | Lazy traced (`TracedTensor` + `GraphCompiler` + `Runtime`) |
 | CUDA execution for supported operations | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `Runtime`) with explicit upload/download |

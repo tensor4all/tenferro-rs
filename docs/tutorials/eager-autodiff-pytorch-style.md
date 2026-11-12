@@ -57,5 +57,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 <!-- end-snippet-source -->
 
-For the broader eager API, including `EagerRuntime` functional `grad`, `vjp`,
+For the broader eager API, including `EagerSession` functional `grad`, `vjp`,
 and `jvp`, see the [eager operations guide](../guides/eager-operations.md).

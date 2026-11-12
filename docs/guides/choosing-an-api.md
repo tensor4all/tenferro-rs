@@ -55,7 +55,7 @@ host data, including a custom scalar type, is `TypedTensor<T, R, Host>`.
 `EagerRuntime`, so each operation computes a concrete result immediately.
 Untracked eager tensors are forward-only. Tracked eager tensors additionally
 record reverse-mode state for `backward()` on scalar losses and can feed
-`EagerRuntime` functional `grad`, `vjp`, and `jvp` transforms.
+`EagerSession` functional `grad`, `vjp`, and `jvp` transforms.
 
 `TracedTensor` is a graph-building handle. It is the graph and compilation API,
 not the default concrete tensor type.
@@ -104,7 +104,7 @@ operations.
 | FFT | `x.fft(exec)` / `x.fft_with(&opts, exec)` via `FftOps` (owned, borrowed, and typed inputs) | `session.fft(&x)` via `EagerFftOps` with `autodiff` (`session.fft_in_place(x, &opts)` for consuming in-place FFT) | `x.fft()` via `TracedFftOps` plus `extension_module` |
 | Tensordot sugar | `a.tensordot(&b, axes, exec)` via `TensordotOps`, or `matmul` / `dot_general` directly | `session.tensordot(&a, &b, axes)` via `EagerEinsumOps` | `a.tensordot(&b, axes)` via `TracedTensordotOps` |
 | Linear algebra | `LinalgOps` methods with a caller-held `&mut dyn Engine` last | `EagerLinalgOps` methods on the session with `autodiff` | `TracedLinalgOps` methods |
-| Automatic differentiation | Not applicable | `backward()` plus `EagerRuntime` functional `grad`, `vjp`, `jvp`, HVP via composition | `grad`, `vjp`, `jvp`, HVP via composition |
+| Automatic differentiation | Not applicable | `backward()` plus `EagerSession` functional `grad`, `vjp`, `jvp`, HVP via composition | `grad`, `vjp`, `jvp`, HVP via composition |
 | External operations | Extension-defined concrete hooks | Extension-defined eager hooks and optional AD rules | Extension-defined graph hooks and optional AD rules |
 
 Use CPU or CUDA with these paths according to backend coverage. CUDA tensors
