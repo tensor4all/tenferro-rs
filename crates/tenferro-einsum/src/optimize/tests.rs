@@ -19,6 +19,55 @@ fn false_strategy_builds_left_to_right_tree() {
     assert_eq!(tree.step_pair(1), Some((2, 3)));
 }
 
+/// Four operands is the smallest count at which the two orderings differ (the old one contracts
+/// `(0, 1)`, `(2, 3)`, `(4, 5)`, the fold `(0, 1)`, `(2, 4)`, `(3, 5)`); five is the smallest count
+/// at which that difference becomes an outer product on this chain. The three-operand test above
+/// cannot tell them apart.
+#[test]
+fn false_strategy_folds_five_operands_left_to_right() {
+    let subs = Subscripts::parse("ij,jk,kl,lm,m->i").unwrap();
+    let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..], &[2, 2][..], &[2][..]];
+    let spec = plan_spec_from_optimize(EinsumOptimize::False, &subs).unwrap();
+    let tree = resolve_plan_spec(&spec, &subs, &shapes).unwrap();
+    let pairs: Vec<(usize, usize)> = (0..tree.step_count())
+        .map(|step| tree.step_pair(step).unwrap())
+        .collect();
+
+    // The running result (ids 5, 6, 7) meets the next input every step.
+    assert_eq!(pairs, vec![(0, 1), (2, 5), (3, 6), (4, 7)]);
+}
+
+/// On a chain, the documented order contracts two operands that share at least one label at every
+/// step; the order this replaces reached a step where they share none, which is what turns the
+/// order into an outer product.
+#[test]
+fn false_strategy_never_contracts_operands_with_disjoint_labels() {
+    for notation in [
+        "ij,jk,kl->il",
+        "ij,jk,kl,lm,m->i",
+        "ij,jk,kl,lm,mn,no,o->i",
+        "ab,bc,cd,de,ef,fg,gh,hi->ai",
+    ] {
+        let subs = Subscripts::parse(notation).unwrap();
+        let shapes: Vec<Vec<usize>> = subs
+            .inputs
+            .iter()
+            .map(|labels| vec![2; labels.len()])
+            .collect();
+        let refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
+        let spec = plan_spec_from_optimize(EinsumOptimize::False, &subs).unwrap();
+        let tree = resolve_plan_spec(&spec, &subs, &refs).unwrap();
+
+        for step in 0..tree.step_count() {
+            let (lhs, rhs, _) = tree.step_subscripts(step).unwrap();
+            assert!(
+                lhs.iter().any(|label| rhs.contains(label)),
+                "{notation} step {step} contracts disjoint labels: {lhs:?} x {rhs:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn plan_spec_from_false_preserves_left_to_right_policy() {
     let subs = Subscripts::parse("ij,jk,kl->il").unwrap();

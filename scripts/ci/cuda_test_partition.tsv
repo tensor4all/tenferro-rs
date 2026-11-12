@@ -658,6 +658,8 @@ host	tenferro-einsum	optimize::tests::concrete_tree_strategy_converts_to_fixed_p
 host	tenferro-einsum	optimize::tests::concrete_tree_strategy_rejects_different_current_arity
 host	tenferro-einsum	optimize::tests::concrete_tree_strategy_revalidates_current_shapes
 host	tenferro-einsum	optimize::tests::false_strategy_builds_left_to_right_tree
+host	tenferro-einsum	optimize::tests::false_strategy_folds_five_operands_left_to_right
+host	tenferro-einsum	optimize::tests::false_strategy_never_contracts_operands_with_disjoint_labels
 host	tenferro-einsum	optimize::tests::identical_plan_specs_have_equal_hashes
 host	tenferro-einsum	optimize::tests::jax_path_to_v1_pairs_matches_shrinking_list_semantics
 host	tenferro-einsum	optimize::tests::plan_spec_from_auto_rejects_nan_options
