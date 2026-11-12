@@ -11,6 +11,11 @@
 # API_SNAPSHOT_TOOLCHAIN only to try a newer nightly, then re-pin both. The feature
 # combinations are fixed below and documented in api/README.md; change both
 # together. A snapshot is review evidence, not a proof of behaviour.
+#
+# Both modes then run scripts/check-api-registry-conformance.py on the surface
+# just compiled (#2602): the snapshot diff shows that a signature changed, the
+# conformance check decides whether the registry allows it, so an undeclared
+# eager entry point still fails after `--write`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -81,8 +86,11 @@ for combo in "${COMBOS[@]}"; do
     RUSTUP_TOOLCHAIN="$toolchain" cargo public-api "${args[@]}" >"$file"
 done
 
+conformance_status=0
+python3 scripts/check-api-registry-conformance.py --surface-dir "$out_dir" || conformance_status=1
+
 if [ "$mode" = --check ]; then
-    status=0
+    status=$conformance_status
     for file in "$out_dir"/*.txt; do
         name=$(basename "$file")
         if [ ! -f "api/$name" ]; then
@@ -110,4 +118,9 @@ if [ "$mode" = --check ]; then
         exit 1
     fi
     echo "api-snapshot: ok" >&2
+fi
+
+if [ "$mode" = --write ] && [ "$conformance_status" -ne 0 ]; then
+    echo "api-snapshot: snapshots written, but the surface does not conform to the api_ops! registries" >&2
+    exit 1
 fi

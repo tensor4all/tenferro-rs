@@ -234,6 +234,15 @@ else
   log "docs snippets: skipped"
 fi
 
+# The committed public-API snapshots must conform to the api_ops! registries
+# (#2602); CI repeats this on the freshly compiled surface.
+if [[ "${change_class}" == "code" ]]; then
+  run run_python scripts/check-api-registry-conformance.py
+  run run_python scripts/test-check-api-registry-conformance.py
+else
+  log "api registry conformance: skipped for ${change_class} changes"
+fi
+
 # Execution engine entry mechanisms are audited on every code change: the
 # inherited baseline is frozen in scripts/engine-entry-allowlist.json and any new
 # engine surface or raw scope (including a renamed trait import) fails the check.

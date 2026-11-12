@@ -35,6 +35,8 @@ mod eager_device_placement_contract;
 mod eager_fixed_pivot_cross;
 #[path = "integration/eager_runtime_api.rs"]
 mod eager_runtime_api;
+#[path = "integration/eager_session_ad_contract.rs"]
+mod eager_session_ad_contract;
 #[path = "integration/eager_tensor.rs"]
 mod eager_tensor;
 #[path = "integration/engine_eval.rs"]
