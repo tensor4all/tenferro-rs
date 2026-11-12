@@ -1,12 +1,10 @@
 error[E0308]: mismatched types
  --> tests/ui/storage/fail/typed_tensor_current_owner_swap.rs
   |
-  |     std::mem::swap(tensor.buffer(), &mut replacement);
-  |     -------------- ^^^^^^^^^^^^^^^ types differ in mutability
-  |     |
-  |     arguments to this function are incorrect
+  |     let buffer: &mut StorageBuffer<i32> = tensor.buffer();
+  |                 -----------------------   ^^^^^^^^^^^^^^^ types differ in mutability
+  |                 |
+  |                 expected due to this
   |
   = note: expected mutable reference `&mut StorageBuffer<i32>`
                      found reference `&StorageBuffer<i32>`
-note: function defined here
- --> $RUST/core/src/mem/mod.rs
