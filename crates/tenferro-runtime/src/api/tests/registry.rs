@@ -291,10 +291,7 @@ fn metadata_queries_and_views_do_not_copy() -> TR<()> {
 #[test]
 fn exception_table_lists_concrete_symbols() {
     let ids: Vec<&str> = API_EXCEPTIONS.iter().map(|e| e.id).collect();
-    assert_eq!(
-        ids,
-        ["E03", "E04", "E05", "E06", "E09", "E10", "E11", "E12", "E13"]
-    );
+    assert_eq!(ids, ["E03", "E04", "E05", "E06", "E09", "E10"]);
     let allowlist = include_str!("../../../../../api/allowlist.txt");
     let e06 = API_EXCEPTIONS
         .iter()
