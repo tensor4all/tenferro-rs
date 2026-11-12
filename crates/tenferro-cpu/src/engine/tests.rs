@@ -491,3 +491,80 @@ fn dispatch_costs_price_every_width_as_the_engines_token_does() {
         }
     }
 }
+
+#[test]
+fn with_guard_has_the_entry_and_unwind_contract_of_with_exec() {
+    for (mut engine, panicking_entry) in [
+        (CpuEngine::new(pool(2)), "with_guard"),
+        (CpuEngine::new(pool(2)), "with_exec"),
+        (CpuEngine::serial(), "with_guard"),
+    ] {
+        let policy = crate::CpuBatchPolicy::new(crate::CpuBatchStrategy::Outer);
+        engine.set_batch_policy(policy);
+        let caller = std::thread::current().id();
+        let (seen, same_thread) = engine
+            .with_guard(|ctx| (ctx.batch_policy(), std::thread::current().id() == caller))
+            .expect("healthy engine");
+        assert_eq!(seen, policy);
+        assert!(same_thread);
+
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if panicking_entry == "with_guard" {
+                let _ = engine.with_guard(|_| panic!("break the engine"));
+            } else {
+                let _ = engine.with_exec(|_| panic!("break the engine"));
+            }
+        }));
+        assert!(unwind.is_err());
+        assert!(engine.is_broken(), "{panicking_entry}");
+        let guard = engine
+            .with_guard(|_| ())
+            .expect_err("broken engine refuses");
+        let exec = engine.with_exec(|_| ()).expect_err("broken engine refuses");
+        assert_eq!(engine_error(&guard), Some(CpuEngineError::Broken));
+        assert_eq!(engine_error(&exec), Some(CpuEngineError::Broken));
+    }
+}
+
+#[cfg(feature = "ledger")]
+#[test]
+fn with_guard_mints_no_token_where_with_exec_mints_one() {
+    let mut engine = CpuEngine::new(pool(3));
+    assert!(engine.has_team());
+    engine.with_guard(|_| ()).expect("healthy engine");
+    assert!(engine.take_ledger_roots().is_empty());
+    engine.with_exec(|_| ()).expect("healthy engine");
+    assert_eq!(engine.take_ledger_roots().len(), 1);
+}
+
+#[test]
+fn with_guard_bounds_the_workspace_it_lends_on_return_and_unwind() {
+    fn grow(ctx: &SerialCtx<'_>) {
+        let req = cpueinsum::WorkspaceReq {
+            a_bytes: 4096,
+            ..Default::default()
+        };
+        ctx.workspace().with_worker(&req, &mut |_, _, _| {});
+    }
+    for (limit, retained) in [(0, 0), (usize::MAX, 4096)] {
+        let mut engine = CpuEngine::serial();
+        engine.set_buffer_pool_limit_bytes(limit);
+        let before = engine.runtime_cache_stats().retained_bytes;
+        engine.with_guard(|ctx| grow(&ctx)).expect("healthy engine");
+        let after = engine.runtime_cache_stats().retained_bytes;
+        assert_eq!(after - before, retained, "return, limit {limit}");
+
+        let mut engine = CpuEngine::serial();
+        engine.set_buffer_pool_limit_bytes(limit);
+        let before = engine.runtime_cache_stats().retained_bytes;
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = engine.with_guard(|ctx| {
+                grow(&ctx);
+                panic!("break the engine")
+            });
+        }));
+        assert!(unwind.is_err());
+        let after = engine.runtime_cache_stats().retained_bytes;
+        assert_eq!(after - before, retained, "unwind, limit {limit}");
+    }
+}

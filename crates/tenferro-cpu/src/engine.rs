@@ -41,6 +41,73 @@ pub enum CpuEngineError {
     Broken,
 }
 
+/// The serial context [`CpuEngine::with_guard`] lends: the engine's workspace
+/// and batch policy, without a placement token.
+///
+/// It is not a provider bundle and cannot fork. A caller that hands serial work
+/// to a provider builds a budget-one bundle from it with
+/// `cpueinsum::Exec::serial_with_workspace`, which takes no token from the
+/// engine's pool.
+///
+/// # Examples
+///
+/// ```
+/// let mut engine = tenferro_cpu::CpuEngine::serial();
+/// let budget = engine.with_guard(|ctx| {
+///     cpueinsum::Exec::serial_with_workspace(ctx.workspace())
+///         .with_batch_policy(ctx.batch_policy())
+///         .budget()
+/// })?;
+/// assert_eq!(budget, 1);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+pub struct SerialCtx<'a> {
+    workspace: &'a cpueinsum::ArenaProvider,
+    policy: crate::CpuBatchPolicy,
+}
+
+impl std::fmt::Debug for SerialCtx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SerialCtx")
+            .field("policy", &self.policy)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> SerialCtx<'a> {
+    /// The engine's scratch provider, the one its tokens' bundles use.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// let has_workspace = engine.with_guard(|ctx| {
+    ///     cpueinsum::Exec::serial_with_workspace(ctx.workspace())
+    ///         .workspace()
+    ///         .is_some()
+    /// })?;
+    /// assert!(has_workspace);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn workspace(&self) -> &'a dyn cpueinsum::WorkspaceProvider {
+        self.workspace
+    }
+
+    /// The engine's batch policy (see [`CpuEngine::batch_policy`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// let policy = engine.with_guard(|ctx| ctx.batch_policy())?;
+    /// assert_eq!(policy, engine.batch_policy());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn batch_policy(&self) -> crate::CpuBatchPolicy {
+        self.policy
+    }
+}
+
 /// A caller-held CPU execution engine.
 ///
 /// The engine owns one [`threadteam::Pool`] (or none for [`CpuEngine::serial`], and
@@ -512,10 +579,87 @@ impl CpuEngine {
         })
     }
 
-    /// The one guarded entry behind the closure-scoped entries: refuse a broken
-    /// engine, lend the bundle, the buffer pool and the N-ary scratch, mark the
-    /// engine broken if `op` unwinds, and with `bound_retention` release
-    /// workspace retained above the buffer limit afterwards.
+    /// Run `op` on the calling thread with the engine's guarantees, but without
+    /// taking a placement token: the guarded entry of [`CpuEngine::with_exec`]
+    /// at width one.
+    ///
+    /// `op` receives a [`SerialCtx`] with the engine's workspace and batch
+    /// policy. It is not a provider bundle: it carries no token, so nothing in
+    /// it can fork, and getting it reserves none of the pool's workers. Apart
+    /// from the token, the call is the same engine operation as
+    /// [`CpuEngine::with_exec`]: a broken engine is refused, a panic inside `op`
+    /// marks the engine broken (buffers `op` had taken from the buffer pool are
+    /// not returned to it, since a broken engine runs nothing again), and
+    /// contraction scratch retained above [`CpuEngine::buffer_pool_limit_bytes`]
+    /// is released when `op` returns or unwinds.
+    ///
+    /// The context is borrowed for the call only, and the engine stays mutably
+    /// borrowed while `op` runs, so neither can be stored or re-entered from
+    /// inside `op`; the compiler rejects both:
+    ///
+    /// ```compile_fail,E0501
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// let engine_ref = &mut engine;
+    /// engine_ref.with_guard(|_| engine_ref.with_guard(|ctx| ctx.batch_policy()))?;
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// ```compile_fail,E0521
+    /// let mut engine = tenferro_cpu::CpuEngine::serial();
+    /// let mut kept = None;
+    /// engine.with_guard(|ctx| kept = Some(ctx))?;
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] with a [`CpuEngineError::Broken`]
+    /// source, without calling `op`, when an earlier operation panicked.
+    ///
+    /// # Panics
+    ///
+    /// Resumes a panic raised by `op` after marking the engine broken.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBatchPolicy, CpuBatchStrategy, CpuEngine};
+    ///
+    /// let mut engine = CpuEngine::new(tenferro_cpu::Pool::builder().threads(2).build()?)
+    ///     .with_batch_policy(CpuBatchPolicy::new(CpuBatchStrategy::Outer));
+    /// let strategy = engine.with_guard(|ctx| ctx.batch_policy().strategy)?;
+    /// assert_eq!(strategy, CpuBatchStrategy::Outer);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// A panic inside `op` breaks the engine, and a broken engine refuses later
+    /// calls with an error:
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuEngine, CpuEngineError};
+    ///
+    /// let mut engine = CpuEngine::serial();
+    /// let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    ///     engine.with_guard(|_| panic!("a failing serial phase"))
+    /// }));
+    /// assert!(unwind.is_err());
+    /// assert!(engine.is_broken());
+    ///
+    /// let refused = engine.with_guard(|_| ()).unwrap_err();
+    /// let source = std::error::Error::source(&refused).and_then(|s| s.downcast_ref());
+    /// assert_eq!(source, Some(&CpuEngineError::Broken));
+    /// ```
+    pub fn with_guard<R>(&mut self, op: impl FnOnce(SerialCtx<'_>) -> R) -> crate::Result<R> {
+        self.guarded("CpuEngine::with_guard", true, |resources, policy, _| {
+            Ok(op(SerialCtx {
+                workspace: resources.workspace(),
+                policy,
+            }))
+        })
+    }
+
+    /// The token-minting entry behind the closure-scoped entries: [`Self::guarded`]
+    /// with the bundle and the N-ary scratch lent to `op`.
     fn enter<R>(
         &mut self,
         name: &'static str,
@@ -526,15 +670,30 @@ impl CpuEngine {
             &crate::ContractionWorkspaces,
         ) -> crate::Result<R>,
     ) -> crate::Result<R> {
+        self.guarded(name, bound_retention, |resources, policy, buffers| {
+            let mut exec = resources.exec(policy);
+            op(&mut exec, buffers, &resources.nary)
+        })
+    }
+
+    /// The one guarded entry: refuse a broken engine, lend the resources, the
+    /// batch policy and the buffer pool, mark the engine broken if `op`
+    /// unwinds, and with `bound_retention` release workspace retained above the
+    /// buffer limit afterwards.
+    fn guarded<R>(
+        &mut self,
+        name: &'static str,
+        bound_retention: bool,
+        op: impl FnOnce(&ExecutionResources, crate::CpuBatchPolicy, &mut BufferPool) -> crate::Result<R>,
+    ) -> crate::Result<R> {
         self.check_entry(name)?;
         let _retention = bound_retention.then(|| {
             self.resources
                 .retention_guard(self.buffers.max_retained_capacity_bytes())
         });
-        let mut exec = self.resources.exec(self.batch_policy);
-        let nary = &self.resources.nary;
+        let (resources, policy) = (&self.resources, self.batch_policy);
         guard_unwind(&mut self.buffers, &mut self.broken, |buffers| {
-            op(&mut exec, buffers, nary)
+            op(resources, policy, buffers)
         })
     }
 
