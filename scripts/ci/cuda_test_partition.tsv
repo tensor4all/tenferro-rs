@@ -1,6 +1,9 @@
 # Audited CUDA-feature inventory: lane	binary-id	test-name
 # Audit additions and helper chains; never classify by test-name substrings.
 # The cuda-next path's suites (#2208): every case opens a device except the shape arithmetic.
+host	tenferro-ad	api::tests::api_docs_are_current
+host	tenferro-ad	api::tests::eager_ad_rows_declare_their_session_signature
+host	tenferro-ad	api::tests::exception_table_lists_exact_signatures
 host	tenferro-ad	eager::tests::a_panicking_extension_callback_restores_the_lent_cache_and_breaks_the_engine
 host	tenferro-ad	eager::tests::availability::backward_rejects_absent_derivative_before_accumulating_any_target
 host	tenferro-ad	eager::tests::availability::backward_rejects_empty_gradients_but_storage_allows_empty_groups
@@ -242,6 +245,16 @@ host	tenferro-ad::integration	eager_fixed_pivot_cross::take_block_backward_accum
 host	tenferro-ad::integration	eager_runtime_api::eager_runtime_constructors_return_typed_results
 host	tenferro-ad::integration	eager_runtime_api::eager_runtime_grad_accumulation_keeps_slot_locked_through_update
 host	tenferro-ad::integration	eager_runtime_api::eager_runtime_replaces_eager_context_public_name
+host	tenferro-ad::integration	eager_session_ad_contract::backward_accumulates_until_cleared
+host	tenferro-ad::integration	eager_session_ad_contract::cross_runtime_copy_replaces_detach_into
+host	tenferro-ad::integration	eager_session_ad_contract::engine_free_and_session_leaf_constructors_agree_on_host_tensors
+host	tenferro-ad::integration	eager_session_ad_contract::every_entry_point_rejects_a_foreign_operand_before_writing_gradients
+host	tenferro-ad::integration	eager_session_ad_contract::functional_gradients_compose_to_higher_order
+host	tenferro-ad::integration	eager_session_ad_contract::inactive_inputs_are_none_for_optional_forms_and_errors_otherwise
+host	tenferro-ad::integration	eager_session_ad_contract::runtime_membership_is_checked_before_the_scalar_seed_is_built
+host	tenferro-ad::integration	eager_session_ad_contract::seeded_backward_scales_by_the_seed_and_rejects_a_bad_seed_without_writing
+host	tenferro-ad::integration	eager_session_ad_contract::the_session_lends_one_engine_for_concrete_work
+host	tenferro-ad::integration	eager_session_ad_contract::value_extraction_borrows_copies_or_consumes
 host	tenferro-ad::integration	eager_tensor::context_and_promotion::clamp_promotes_all_three_operands_to_common_dtype
 host	tenferro-ad::integration	eager_tensor::context_and_promotion::constant_from_can_cross_context
 host	tenferro-ad::integration	eager_tensor::context_and_promotion::constant_from_creates_untracked_leaf
@@ -249,8 +262,8 @@ host	tenferro-ad::integration	eager_tensor::context_and_promotion::context_id_is
 host	tenferro-ad::integration	eager_tensor::context_and_promotion::cross_context_add_rejected
 host	tenferro-ad::integration	eager_tensor::context_and_promotion::cross_context_mul_rejected
 host	tenferro-ad::integration	eager_tensor::context_and_promotion::cross_context_tracked_tensors_rejected
-host	tenferro-ad::integration	eager_tensor::context_and_promotion::detach_into_different_context
-host	tenferro-ad::integration	eager_tensor::context_and_promotion::detach_into_still_accessible_in_original_context
+host	tenferro-ad::integration	eager_tensor::context_and_promotion::cross_runtime_detach_imports_an_untracked_leaf
+host	tenferro-ad::integration	eager_tensor::context_and_promotion::cross_runtime_detach_keeps_the_source_differentiable
 host	tenferro-ad::integration	eager_tensor::context_and_promotion::mixed_add_semantic_jvp_vjp_promotes_f64_c64_and_f32_c32_in_both_orders
 host	tenferro-ad::integration	eager_tensor::context_and_promotion::mixed_concatenate_semantic_replay_promotes_inputs
 host	tenferro-ad::integration	eager_tensor::context_and_promotion::promote_f32_add_f64_eager
