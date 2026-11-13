@@ -311,13 +311,8 @@ fn is_dot_canonical(config: &DotGeneralConfig, lhs_rank: usize, rhs_rank: usize)
     let rhs_free_count = usize::from(rhs_has_free);
     let rhs_expected_batch: Vec<usize> =
         ((rhs_free_count + 1)..(rhs_free_count + 1 + nb)).collect();
-    if config.rhs_contracting_dims.as_slice() != [0]
-        || config.rhs_batch_dims.as_slice() != rhs_expected_batch.as_slice()
-    {
-        return false;
-    }
-
-    true
+    config.rhs_contracting_dims.as_slice() == [0]
+        && config.rhs_batch_dims.as_slice() == rhs_expected_batch.as_slice()
 }
 
 fn free_axes_of(rank: usize, contracting: &[usize], batch: &[usize]) -> Vec<usize> {
