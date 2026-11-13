@@ -29,6 +29,25 @@ fn dot_general_config_rejects_invalid_count_and_explicit_axes() {
 }
 
 #[test]
+fn dot_general_config_rejects_isize_min_axis_without_overflow() {
+    // #2605: `rank + axis` used to overflow in overflow-checked builds before
+    // the bounds check ran. The error must carry the caller's original signed
+    // axis, matching every other out-of-range axis.
+    let err = dot_general_config(
+        TensorDotAxes::Axes {
+            lhs: &[isize::MIN],
+            rhs: &[0],
+        },
+        2,
+        2,
+    )
+    .unwrap_err();
+    let message = err.to_string();
+    assert!(message.contains("out of bounds"), "{message}");
+    assert!(message.contains(&isize::MIN.to_string()), "{message}");
+}
+
+#[test]
 fn validate_traced_contract_dims_allows_symbolic_and_rejects_concrete_mismatch() {
     let trace = tenferro_runtime::TraceContext::new();
     let lhs = trace

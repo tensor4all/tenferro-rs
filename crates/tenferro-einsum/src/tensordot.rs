@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use tenferro_runtime::error::{Error, ErrorPhase, Result};
 use tenferro_runtime::{DotGeneralConfig, TracedTensor};
-use tenferro_tensor::{ShapeMismatch, ValidationError};
+use tenferro_tensor::{normalize_axis, ShapeMismatch, ValidationError};
 
 /// Axis specification for [`TensordotOps::tensordot`](crate::TensordotOps::tensordot)
 /// contraction sugar.
@@ -148,7 +148,8 @@ fn normalize_axes(axes: &[isize], rank: usize, operand: &'static str) -> Result<
     let mut normalized = Vec::with_capacity(axes.len());
     let mut seen = HashSet::with_capacity(axes.len());
     for &axis in axes {
-        let normalized_axis = normalize_axis(axis, rank, operand)?;
+        let normalized_axis = normalize_axis(axis, rank)
+            .map_err(|error| Error::validation("tensordot", ErrorPhase::GraphBuild, error))?;
         if !seen.insert(normalized_axis) {
             return Err(Error::validation(
                 "tensordot",
@@ -162,31 +163,6 @@ fn normalize_axes(axes: &[isize], rank: usize, operand: &'static str) -> Result<
         normalized.push(normalized_axis);
     }
     Ok(normalized)
-}
-
-fn normalize_axis(axis: isize, rank: usize, _operand: &'static str) -> Result<usize> {
-    let rank_isize = isize::try_from(rank).map_err(|_| {
-        Error::validation(
-            "tensordot",
-            ErrorPhase::GraphBuild,
-            ValidationError::IntegerOverflow,
-        )
-    })?;
-    let normalized = if axis < 0 { rank_isize + axis } else { axis };
-    if normalized < 0 || normalized >= rank_isize {
-        return Err(Error::validation(
-            "tensordot",
-            ErrorPhase::GraphBuild,
-            ValidationError::AxisOutOfBounds { axis, rank },
-        ));
-    }
-    usize::try_from(normalized).map_err(|_| {
-        Error::validation(
-            "tensordot",
-            ErrorPhase::GraphBuild,
-            ValidationError::IntegerOverflow,
-        )
-    })
 }
 
 fn contracted_dims_error(
