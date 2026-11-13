@@ -246,7 +246,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("python3 scripts/ci/run_profile.py", text)
         self.assertNotIn("grep -qE", text)
         self.assertIn(". -> ../target-${{ matrix.cfg.backend }}", text)
-        self.assertIn('libfaer-*.rlib', text)
+        # The faer backend also verifies faer artifacts, in both Cargo layouts:
+        # ci/deps (before Cargo 1.100) and ci/build/<package>/<hash>/out.
+        self.assertIn('crates="${crates} faer"', text)
+        self.assertIn('-path "${profile_dir}/deps/*"', text)
+        self.assertIn('-path "${profile_dir}/build/*/*/out/*"', text)
         self.assertIn("strided_view strided_traits strided_perm", text)
 
     def test_ci_config_installs_a_pinned_actionlint(self) -> None:

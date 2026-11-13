@@ -47,6 +47,17 @@ def target_root() -> Path:
     return path if path.is_absolute() else ROOT / path
 
 
+def emitted_assemblies(profile_root: Path, stem: str) -> list[Path]:
+    """Assembly files of `stem`, newest first.
+
+    Cargo before 1.100 writes them to `<profile>/deps/`; Cargo 1.100's build-dir
+    layout writes them to `<profile>/build/<package>/<hash>/out/`.
+    """
+    found = list((profile_root / "deps").glob(f"{stem}-*.s"))
+    found += (profile_root / "build").glob(f"*/*/out/{stem}-*.s")
+    return sorted(found, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
 def run(*args: str) -> str:
     return subprocess.run(
         args, cwd=ROOT, check=True, text=True, capture_output=True
@@ -165,11 +176,7 @@ def main() -> int:
         return 1
 
     profile_dir = "debug" if args.profile == "dev" else args.profile
-    assemblies = sorted(
-        (target_root() / profile_dir / "deps").glob(f"{test_target}-*.s"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
+    assemblies = emitted_assemblies(target_root() / profile_dir, test_target)
     if not assemblies:
         record["observations"].append("cargo emitted no assembly file")
         write_report(args.report, record)
@@ -305,11 +312,7 @@ def compare_with(
         return comparison
 
     profile_dir = "debug" if args.profile == "dev" else args.profile
-    assemblies = sorted(
-        (target_root() / profile_dir / "deps").glob(f"{args.against_target}-*.s"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
+    assemblies = emitted_assemblies(target_root() / profile_dir, args.against_target)
     if not assemblies:
         failures.append("the comparison target emitted no assembly file")
         comparison["status"] = "inconclusive"

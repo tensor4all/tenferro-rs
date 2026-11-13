@@ -14,6 +14,7 @@
   "_comment_storage_ownership_baseline": "P8-P13 storage ownership keeps provider/root mapping, allocation-group retirement, and backend-resident dtype branches behind explicit hardware/provider contracts. The storage API, runtime, AD, CUDA, WebGPU, and structured Metal-skip evidence cover those behaviors; these thresholds record the current workspace llvm-cov baseline and are raised only with meaningful branch coverage, never padding tests.",
   "_comment_batch_policy_scope": "crates/tenferro-cpu/src/batch_policy.rs is the scoped CpuBatchPolicy override (#2142). Every region of with_batch_policy runs in the precedence/error/unwind/non-CPU tests (crates/tenferro-cpu/src/backend/tests/batch_policy.rs) and the forced-lane linalg/einsum tests, but llvm-cov also attributes zero-count instantiations from a second tenferro-cpu build (feature unification) and from generic instantiations in test binaries that never call it, which caps the merged line figure at the measured baseline. Raise it only with meaningful coverage.",
   "_comment_2552_api_grammar_baseline": "S0-S7 of #2552 replaced the per-layer linalg/einsum/fft extension traits with one registry-driven grammar. The files listed in `files` below carry the generated forwarding methods, option builders, trace/eager error shaping and the feature-gated borrowed-engine/typed-tensor adapters. Their behavior contract is the registry doctest examples plus the eager/traced parity and oracle tests; llvm-cov counts neither doctests nor compile-time proc-macro execution, so the remaining lines are generated boilerplate and feature arms the workspace profile does not reach. These thresholds record the measured post-grammar baseline. Raise them with behavioral tests, not line padding.",
+  "_comment_rust_1_100_line_attribution": "Rust 1.100 attributes the error-propagation line of a call chain (`.map_err(..)`, `.ok_or_else(..)`, a trailing `?`, `.collect::<Result<_>>()?`) and some defensive closures to the never-taken error region instead of the executed call. With identical source and tests, workspace llvm-cov on 1.99.1 passes 263/263 files and on 1.100.0 fails 12 (every newly uncovered line is such an error-path adapter; no executed code lost coverage). The thresholds of those 12 files record their Rust 1.100 baseline, rounded down; raise them only with meaningful coverage, not line-padding.",
   "default": 80,
   "exclude": [
     "crates/tenferro-gpu/src/kernels/diagonal.rs",
@@ -29,7 +30,7 @@
     "docs/tutorial-code/src/bin/xla_pjrt_execution.rs"
   ],
   "files": {
-    "crates/tenferro-cpu/src/borrowed_engine.rs": 24,
+    "crates/tenferro-cpu/src/borrowed_engine.rs": 23,
     "crates/tenferro-einsum/src/api/options.rs": 68,
     "crates/tenferro-einsum/src/api/traced.rs": 75,
     "crates/tenferro-internal-extension-macros/src/api_ops.rs": 57,
@@ -42,7 +43,7 @@
     "crates/tenferro-xla/src/pjrt/execute.rs": 8,
     "crates/tenferro-xla/src/pjrt/plugin.rs": 27,
     "crates/tenferro-einsum/src/cache.rs": 60,
-    "crates/tenferro-einsum/src/eager.rs": 79,
+    "crates/tenferro-einsum/src/eager.rs": 78,
     "crates/tenferro-einsum/src/eager_ad.rs": 71,
     "crates/tenferro-einsum/src/extension.rs": 60,
     "crates/tenferro-einsum/src/lib.rs": 65,
@@ -87,7 +88,7 @@
     "crates/tenferro-runtime/src/program/import.rs": 28,
     "crates/tenferro-runtime/src/program/semantic.rs": 57,
     "crates/tenferro-runtime/src/runtime/cache_owner.rs": 77,
-    "crates/tenferro-runtime/src/checkpoint.rs": 75,
+    "crates/tenferro-runtime/src/checkpoint.rs": 73,
     "crates/tenferro-runtime/src/runtime/capability.rs": 70,
     "crates/tenferro-runtime/src/runtime/error.rs": 68,
     "crates/tenferro-runtime/src/runtime/execution.rs": 42,
@@ -102,7 +103,7 @@
     "crates/tenferro-ad/src/context.rs": 61,
     "crates/tenferro-ad/src/extension.rs": 56,
     "crates/tenferro-ad/src/semantic_compat.rs": 79,
-    "crates/tenferro-ad/src/semantic_transform/core_dynamic.rs": 79,
+    "crates/tenferro-ad/src/semantic_transform/core_dynamic.rs": 78,
     "crates/tenferro-ad/src/semantic_transform/core_indexing.rs": 73,
     "crates/tenferro-ad/src/semantic_transform/core_structural.rs": 68,
     "crates/tenferro-ad/src/traced.rs": 69,
@@ -113,6 +114,14 @@
     "kdv_pinn/src/network.rs": 67,
     "kdv_pinn/src/pde.rs": 79,
     "kdv_pinn/src/plot.rs": 13,
-    "crates/tenferro-cpu/src/batch_policy.rs": 71
+    "crates/tenferro-cpu/src/batch_policy.rs": 71,
+    "crates/tenferro-cpu/src/blas1.rs": 79,
+    "crates/tenferro-einsum/src/tensordot.rs": 79,
+    "crates/tenferro-fft/src/cpu/lanes.rs": 78,
+    "crates/tenferro-internal-cpu-kernels/src/lib.rs": 79,
+    "crates/tenferro-tensor-core/src/scalar_set.rs": 75,
+    "crates/tenferro-tensor/src/types/accessors.rs": 70,
+    "ext/bf16-proof/src/einsum.rs": 78,
+    "ext/df64-proof/src/extension.rs": 79
   }
 }
