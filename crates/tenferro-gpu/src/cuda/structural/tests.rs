@@ -8,6 +8,132 @@ use tenferro_tensor::{
     TypedTensorViewMut,
 };
 
+/// The counter the absence test reads is live: the zeroing allocator does move it.
+///
+/// Without this, "the counter did not move" could just mean the counter is dead, and the
+/// absence-of-fill assertion would pass on the unfixed build too.
+#[test]
+fn the_zero_fill_counter_tracks_a_zeroed_allocation() {
+    let Some(engine) = engine() else { return };
+    let before = engine.runtime().stats().retirement.zero_fills;
+    drop(super::alloc_tensor(engine.runtime(), tenferro_tensor::DType::F64, &[4]).expect("alloc"));
+    assert!(
+        engine.runtime().stats().retirement.zero_fills > before,
+        "the zeroing allocator has to be visible in the counter"
+    );
+}
+
+/// One elementwise launch must overwrite its whole destination, so it must not zero-fill it.
+///
+/// The counter is the runtime's own (`Stats.retirement.zero_fills`), so this fails on a build that
+/// allocates the destination with `alloc_zeroed` and passes once the launch declares it
+/// uninitialised (#2529). `add` is the plain arithmetic entry: it takes no status word, so the only
+/// zero fill this call could produce is the destination's.
+#[test]
+fn an_elementwise_launch_does_not_zero_its_destination() {
+    use tenferro_runtime::CoreOps;
+    let Some(mut engine) = engine() else { return };
+    let a = device(
+        &engine,
+        vec![8],
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+    );
+    let b = device(
+        &engine,
+        vec![8],
+        vec![8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0],
+    );
+    // Prepare the translation unit first: that is not the launch under test.
+    drop(a.add(&b, &mut engine).expect("warm-up add"));
+    let before = engine.runtime().stats().retirement.zero_fills;
+    let sum = a.add(&b, &mut engine).expect("add");
+    assert_eq!(read(&engine, &sum), vec![9.0; 8]);
+    assert_eq!(
+        engine.runtime().stats().retirement.zero_fills,
+        before,
+        "the destination of an elementwise launch is fully overwritten, so zeroing it is a wasted pass"
+    );
+}
+
+/// A destination that reuses pooled storage keeps no byte of its previous contents.
+///
+/// The operands are uploaded first and only then is a same-sized buffer filled with a signalling
+/// NaN and dropped, so the very next allocation of that size — the `neg` destination — is the
+/// freed block. A kernel that wrote fewer than `len` elements would leave the pattern in the
+/// result, which the zero fill used to mask. The later calls assert the same exact values; their
+/// destinations may come from fresh pool memory, so they test the write on their own and not the
+/// reuse.
+#[test]
+fn an_elementwise_result_holds_no_stale_bytes() {
+    use tenferro_runtime::CoreOps;
+    let Some(mut engine) = engine() else { return };
+    let len = 1 << 18;
+    let values: Vec<f64> = (0..len).map(|index| index as f64 * 0.5 - 7.0).collect();
+    let a = device(&engine, vec![len], values.clone());
+    let b = device(&engine, vec![len], values.clone());
+    let lower = device(&engine, vec![len], vec![-1.0; len]);
+    let upper = device(&engine, vec![len], vec![1.0; len]);
+    // A signalling NaN: nothing these operations produce can equal it. Dropped last, so the next
+    // same-sized allocation takes its block.
+    let poison = f64::from_bits(0x7ff0_0000_dead_beef);
+    drop(device(&engine, vec![len], vec![poison; len]));
+    let negated = a.neg(&mut engine).expect("neg");
+    assert_eq!(
+        read(&engine, &negated),
+        values.iter().map(|v| -v).collect::<Vec<_>>()
+    );
+    let summed = a.add(&b, &mut engine).expect("add");
+    assert_eq!(
+        read(&engine, &summed),
+        values.iter().map(|v| 2.0 * v).collect::<Vec<_>>()
+    );
+    let clamped = a.clamp(&lower, &upper, &mut engine).expect("clamp");
+    assert_eq!(
+        read(&engine, &clamped),
+        values
+            .iter()
+            .map(|v| v.clamp(-1.0, 1.0))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// The destination is fully written at every length the grid arithmetic can get wrong.
+#[test]
+fn an_elementwise_launch_covers_every_length() {
+    use tenferro_runtime::CoreOps;
+    let Some(mut engine) = engine() else { return };
+    for len in [0usize, 1, 7, 1_000_003] {
+        let values: Vec<f64> = (0..len).map(|index| index as f64 * 0.25 - 3.0).collect();
+        let a = device(&engine, vec![len], values.clone());
+        let b = device(&engine, vec![len], values.clone());
+        let negated = a.neg(&mut engine).expect("neg");
+        assert_eq!(
+            read(&engine, &negated),
+            values.iter().map(|v| -v).collect::<Vec<_>>(),
+            "neg at len {len}"
+        );
+        let summed = a.add(&b, &mut engine).expect("add");
+        assert_eq!(
+            read(&engine, &summed),
+            values.iter().map(|v| 2.0 * v).collect::<Vec<_>>(),
+            "add at len {len}"
+        );
+        // The comparison writes one Bool byte per pair, the only `DType::Bool` destination here.
+        let compared = a
+            .compare(&b, tenferro_tensor::CompareDir::Le, &mut engine)
+            .expect("compare");
+        let observed = download_tensor(engine.runtime(), &compared).expect("download");
+        assert!(
+            observed
+                .as_slice::<bool>()
+                .expect("bool payload")
+                .iter()
+                .all(|same| *same),
+            "compare at len {len}"
+        );
+    }
+}
+
 #[test]
 fn the_element_count_checks_both_extremes() {
     assert_eq!(element_count(&[]).expect("scalar"), 1);

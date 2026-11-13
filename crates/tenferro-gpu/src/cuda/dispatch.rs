@@ -37,6 +37,30 @@ pub(crate) enum IndexPointer<'a> {
     },
 }
 
+/// Where a launch writes its destination.
+///
+/// Every entry that takes a `Dest` writes each of its `len` destination elements exactly once, so a
+/// destination the caller has not initialised needs no zero fill first. Passing `Init` for such a
+/// launch costs one `cuMemsetD8Async` over the whole buffer plus the device pass that the launch
+/// overwrites in the next step.
+#[derive(Clone, Copy)]
+pub(crate) enum Dest<'a> {
+    /// Storage whose contents are initialised: a caller-owned output, or an in-place operand.
+    Init(&'a t4a_cuda_runtime::Buffer),
+    /// Storage the launch fully overwrites, converted with `UninitBuffer::assume_init` after it.
+    Uninit(&'a t4a_cuda_runtime::UninitBuffer),
+}
+
+impl<'a> Dest<'a> {
+    /// The ABI argument this destination is passed as.
+    fn arg(self) -> Arg<'a> {
+        match self {
+            Dest::Init(buffer) => Arg::DevicePtr(buffer),
+            Dest::Uninit(buffer) => Arg::DevicePtrUninit(buffer),
+        }
+    }
+}
+
 /// One runtime's dispatcher over a prepared module set.
 pub(crate) struct Dispatcher {
     modules: KernelModules,
@@ -292,7 +316,7 @@ impl Dispatcher {
         entry: Entry,
         dtype: DType,
         len: i64,
-        out: &t4a_cuda_runtime::Buffer,
+        out: Dest<'_>,
         lhs: &t4a_cuda_runtime::Buffer,
         rhs: &t4a_cuda_runtime::Buffer,
     ) -> crate::Result<()> {
@@ -301,7 +325,7 @@ impl Dispatcher {
             entry,
             plan,
             &[
-                Arg::DevicePtr(out),
+                out.arg(),
                 Arg::DevicePtr(lhs),
                 Arg::DevicePtr(rhs),
                 Arg::U32(dtype.tag() as u32),
@@ -322,7 +346,7 @@ impl Dispatcher {
         &mut self,
         dtype: DType,
         len: i64,
-        out: &t4a_cuda_runtime::Buffer,
+        out: Dest<'_>,
         input: &t4a_cuda_runtime::Buffer,
         lower: &t4a_cuda_runtime::Buffer,
         upper: &t4a_cuda_runtime::Buffer,
@@ -332,7 +356,7 @@ impl Dispatcher {
             Entry::Clamp,
             plan,
             &[
-                Arg::DevicePtr(out),
+                out.arg(),
                 Arg::DevicePtr(input),
                 Arg::DevicePtr(lower),
                 Arg::DevicePtr(upper),
@@ -355,7 +379,7 @@ impl Dispatcher {
         dst: DType,
         src: DType,
         len: i64,
-        out: &t4a_cuda_runtime::Buffer,
+        out: Dest<'_>,
         input: &t4a_cuda_runtime::Buffer,
     ) -> crate::Result<()> {
         let plan = plan_unary(op, dst, src, len).map_err(plan_error)?;
@@ -363,7 +387,7 @@ impl Dispatcher {
             Entry::Unary,
             plan,
             &[
-                Arg::DevicePtr(out),
+                out.arg(),
                 Arg::DevicePtr(input),
                 Arg::U32(dst.tag() as u32),
                 Arg::U32(src.tag() as u32),
@@ -389,7 +413,7 @@ impl Dispatcher {
         dtype: DType,
         side: ScalarSide,
         len: i64,
-        out: &t4a_cuda_runtime::Buffer,
+        out: Dest<'_>,
         lhs: &t4a_cuda_runtime::Buffer,
         rhs: &t4a_cuda_runtime::Buffer,
         status: &t4a_cuda_runtime::Buffer,
@@ -399,7 +423,7 @@ impl Dispatcher {
             Entry::Binary,
             plan,
             &[
-                Arg::DevicePtr(out),
+                out.arg(),
                 Arg::DevicePtr(lhs),
                 Arg::DevicePtr(rhs),
                 Arg::U32(dtype.tag() as u32),
@@ -423,7 +447,7 @@ impl Dispatcher {
         op: t4a_cuda_kernels::CompareOp,
         dtype: DType,
         len: i64,
-        out: &t4a_cuda_runtime::Buffer,
+        out: Dest<'_>,
         lhs: &t4a_cuda_runtime::Buffer,
         rhs: &t4a_cuda_runtime::Buffer,
     ) -> crate::Result<()> {
@@ -432,7 +456,7 @@ impl Dispatcher {
             Entry::Compare,
             plan,
             &[
-                Arg::DevicePtr(out),
+                out.arg(),
                 Arg::DevicePtr(lhs),
                 Arg::DevicePtr(rhs),
                 Arg::U32(dtype.tag() as u32),
@@ -453,7 +477,7 @@ impl Dispatcher {
         &mut self,
         dtype: DType,
         len: i64,
-        out: &t4a_cuda_runtime::Buffer,
+        out: Dest<'_>,
         predicate: &t4a_cuda_runtime::Buffer,
         on_true: &t4a_cuda_runtime::Buffer,
         on_false: &t4a_cuda_runtime::Buffer,
@@ -463,7 +487,7 @@ impl Dispatcher {
             Entry::Select,
             plan,
             &[
-                Arg::DevicePtr(out),
+                out.arg(),
                 Arg::DevicePtr(predicate),
                 Arg::DevicePtr(on_true),
                 Arg::DevicePtr(on_false),
@@ -486,7 +510,7 @@ impl Dispatcher {
         &mut self,
         dtype: DType,
         len: i64,
-        out: &t4a_cuda_runtime::Buffer,
+        out: Dest<'_>,
         input: &t4a_cuda_runtime::Buffer,
         lower: &t4a_cuda_runtime::Buffer,
         upper: &t4a_cuda_runtime::Buffer,
@@ -496,7 +520,7 @@ impl Dispatcher {
             Entry::Clamp,
             plan,
             &[
-                Arg::DevicePtr(out),
+                out.arg(),
                 Arg::DevicePtr(input),
                 Arg::DevicePtr(lower),
                 Arg::DevicePtr(upper),

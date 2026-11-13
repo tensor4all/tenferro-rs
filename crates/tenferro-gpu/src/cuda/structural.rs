@@ -3783,12 +3783,14 @@ impl CudaEngine {
         let kernel = kernel_dtype(dtype, name)?;
         let shape = left.shape().to_vec();
         let len = count_i64(&shape, name)?;
-        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
+        // each of the `len` destination elements once (#2529).
+        let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
         // Only a floating division has its own entry: an integer division is the checked one (its
         // status word reports a division by zero) and a complex one needs the robust complex entry,
         // which also means the buffers hold two components per element.
         if matches!(op, Elementwise::Div) && !matches!(dtype, DType::F32 | DType::F64) {
-            return self.division(&left, &right, output, kernel, dtype, len, name);
+            return self.division(&left, &right, output, kernel, dtype, &shape, len, name);
         }
         let entry = match op {
             Elementwise::Add => Entry::Add,
@@ -3802,13 +3804,15 @@ impl CudaEngine {
                 entry,
                 kernel,
                 len,
-                self.allocation_of::<T>(&output, name)?,
+                super::dispatch::Dest::Uninit(&output),
                 self.allocation_of::<T>(&left, name)?,
                 self.allocation_of::<T>(&right, name)?,
             )
         })?;
         self.prove_launch(name)?;
-        Ok(output)
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), dtype, &shape, output)
     }
 
     /// Division whose dtype has no plain `/` entry: integers use the checked one and observe its
@@ -3818,9 +3822,10 @@ impl CudaEngine {
         &mut self,
         left: &Tensor,
         right: &Tensor,
-        output: Tensor,
+        output: t4a_cuda_runtime::UninitBuffer,
         kernel: t4a_cuda_kernels::DType,
         dtype: DType,
+        shape: &[usize],
         len: i64,
         name: &'static str,
     ) -> crate::Result<Tensor> {
@@ -3845,7 +3850,7 @@ impl CudaEngine {
                 kernel,
                 t4a_cuda_kernels::ScalarSide::Both,
                 len,
-                self.allocation_of::<T>(&output, name)?,
+                super::dispatch::Dest::Uninit(&output),
                 self.allocation_of::<T>(left, name)?,
                 self.allocation_of::<T>(right, name)?,
                 &status,
@@ -3864,7 +3869,9 @@ impl CudaEngine {
                 ));
             }
         }
-        Ok(output)
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), dtype, shape, output)
     }
 
     /// One unary elementwise operation over a device tensor.
@@ -3886,10 +3893,12 @@ impl CudaEngine {
         let out_kernel = kernel_dtype(out_dtype, name)?;
         let shape = source.shape().to_vec();
         let len = count_i64(&shape, name)?;
-        let output = alloc_tensor(self.runtime(), out_dtype, &shape)?;
+        // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
+        // each of the `len` destination elements once (#2529).
+        let output = alloc_uninit_tensor_bytes(self.runtime(), out_dtype, &shape)?;
         let mut dispatcher = self.dispatcher(&[Entry::Unary])?;
         with_scalar!(out_dtype, |T| {
-            let out = self.allocation_of::<T>(&output, name)?;
+            let out = super::dispatch::Dest::Uninit(&output);
             with_scalar!(dtype, |S| {
                 dispatcher.unary(
                     op,
@@ -3902,7 +3911,9 @@ impl CudaEngine {
             })
         })?;
         self.prove_launch(name)?;
-        Ok(output)
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), out_dtype, &shape, output)
     }
 
     /// One binary selection (`maximum`/`minimum`) over two device tensors.
@@ -3925,7 +3936,9 @@ impl CudaEngine {
         let kernel = kernel_dtype(dtype, name)?;
         let shape = left.shape().to_vec();
         let len = count_i64(&shape, name)?;
-        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
+        // each of the `len` destination elements once (#2529).
+        let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         // The entry always takes a status word for its checked-integer route; a
@@ -3939,14 +3952,16 @@ impl CudaEngine {
                 kernel,
                 t4a_cuda_kernels::ScalarSide::Both,
                 len,
-                self.allocation_of::<T>(&output, name)?,
+                super::dispatch::Dest::Uninit(&output),
                 self.allocation_of::<T>(&left, name)?,
                 self.allocation_of::<T>(&right, name)?,
                 &status,
             )
         })?;
         self.prove_launch(name)?;
-        Ok(output)
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), dtype, &shape, output)
     }
 }
 
@@ -3983,7 +3998,9 @@ impl CudaEngine {
         };
         let shape = left.shape().to_vec();
         let len = count_i64(&shape, name)?;
-        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
+        // each of the `len` destination elements once (#2529).
+        let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         let status = runtime
@@ -3995,7 +4012,7 @@ impl CudaEngine {
                 kernel,
                 t4a_cuda_kernels::ScalarSide::Both,
                 len,
-                self.allocation_of::<T>(&output, name)?,
+                super::dispatch::Dest::Uninit(&output),
                 self.allocation_of::<T>(&left, name)?,
                 self.allocation_of::<T>(&right, name)?,
                 &status,
@@ -4012,7 +4029,9 @@ impl CudaEngine {
                 "the checked remainder reported a division by zero",
             ));
         }
-        Ok(output)
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), dtype, &shape, output)
     }
 }
 
@@ -4090,20 +4109,24 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         let kernel = kernel_dtype(dtype, name)?;
         let shape = source.shape().to_vec();
         let len = count_i64(&shape, name)?;
-        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
+        // each of the `len` destination elements once (#2529).
+        let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
         let mut dispatcher = self.dispatcher(&[Entry::Clamp])?;
         with_scalar!(dtype, |T| {
             dispatcher.clamp_buffers(
                 kernel,
                 len,
-                self.allocation_of::<T>(&output, name)?,
+                super::dispatch::Dest::Uninit(&output),
                 self.allocation_of::<T>(&source, name)?,
                 self.allocation_of::<T>(&low, name)?,
                 self.allocation_of::<T>(&high, name)?,
             )
         })?;
         self.prove_launch(name)?;
-        Ok(output)
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), dtype, &shape, output)
     }
 
     fn compare_read(
@@ -4133,9 +4156,11 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         let shape = left.shape().to_vec();
         let len = count_i64(&shape, name)?;
         // The comparison writes one Bool byte per element pair.
-        let output = alloc_tensor(self.runtime(), DType::Bool, &shape)?;
+        // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
+        // each of the `len` destination elements once (#2529).
+        let output = alloc_uninit_tensor_bytes(self.runtime(), DType::Bool, &shape)?;
         let mut dispatcher = self.dispatcher(&[Entry::Compare])?;
-        let out = self.allocation_of::<bool>(&output, name)?;
+        let out = super::dispatch::Dest::Uninit(&output);
         with_scalar!(dtype, |T| {
             dispatcher.compare(
                 op,
@@ -4147,7 +4172,9 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
             )
         })?;
         self.prove_launch(name)?;
-        Ok(output)
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), DType::Bool, &shape, output)
     }
 
     fn select_read(
@@ -4182,21 +4209,25 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         let kernel = kernel_dtype(dtype, name)?;
         let shape = when_true.shape().to_vec();
         let len = count_i64(&shape, name)?;
-        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
+        // each of the `len` destination elements once (#2529).
+        let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
         let mut dispatcher = self.dispatcher(&[Entry::Select])?;
         let predicate_buffer = self.allocation_of::<bool>(&predicate, name)?;
         with_scalar!(dtype, |T| {
             dispatcher.select(
                 kernel,
                 len,
-                self.allocation_of::<T>(&output, name)?,
+                super::dispatch::Dest::Uninit(&output),
                 predicate_buffer,
                 self.allocation_of::<T>(&when_true, name)?,
                 self.allocation_of::<T>(&when_false, name)?,
             )
         })?;
         self.prove_launch(name)?;
-        Ok(output)
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), dtype, &shape, output)
     }
 
     fn elementwise_read_into(
@@ -4331,7 +4362,7 @@ impl CudaEngine {
                         kernel,
                         kernel,
                         len,
-                        self.allocation_of::<T>(destination, name)?,
+                        super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
                         self.allocation_of::<T>(&sources[0], name)?,
                     )
                 })?;
@@ -4344,7 +4375,7 @@ impl CudaEngine {
                         kernel,
                         kernel,
                         len,
-                        self.allocation_of::<T>(destination, name)?,
+                        super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
                         self.allocation_of::<T>(&sources[0], name)?,
                     )
                 })?;
@@ -4362,7 +4393,7 @@ impl CudaEngine {
                         entry,
                         kernel,
                         len,
-                        self.allocation_of::<T>(destination, name)?,
+                        super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
                         self.allocation_of::<T>(&sources[0], name)?,
                         self.allocation_of::<T>(&sources[1], name)?,
                     )
@@ -4425,7 +4456,7 @@ impl CudaEngine {
                 kernel,
                 t4a_cuda_kernels::ScalarSide::Right,
                 len,
-                self.allocation_of::<T>(tensor, op)?,
+                super::dispatch::Dest::Init(self.allocation_of::<T>(tensor, op)?),
                 self.allocation_of::<T>(tensor, op)?,
                 self.allocation_of::<T>(&scalar, op)?,
                 &status,
@@ -6484,7 +6515,9 @@ impl CudaEngine {
             }
         };
         let len = count_i64(&shape, name)?;
-        let output = alloc_tensor(self.runtime(), dtype, &shape)?;
+        // INVARIANT: uninitialised on purpose, not a missing zero fill: `t4a_cuda_binary` writes
+        // each of the `len` destination elements once (#2529).
+        let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         let status = runtime
@@ -6496,7 +6529,7 @@ impl CudaEngine {
                 kernel,
                 side,
                 len,
-                self.allocation_of::<T>(&output, name)?,
+                super::dispatch::Dest::Uninit(&output),
                 self.allocation_of::<T>(&left, name)?,
                 self.allocation_of::<T>(&right, name)?,
                 &status,
@@ -6507,7 +6540,9 @@ impl CudaEngine {
             // The floating entry never touches the status word; reading it back would wait
             // for nothing this route needs.
             self.prove_launch(name)?;
-            return Ok(output);
+            // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+            let output = unsafe { output.assume_init() };
+            return tensor_from_buffer(self.runtime(), dtype, &shape, output);
         }
         // The flagged route is the checked integer one; reading the flag waits for it.
         let flag = self
@@ -6520,7 +6555,9 @@ impl CudaEngine {
                 "an integer power with a negative exponent has no integer result",
             ));
         }
-        Ok(output)
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), dtype, &shape, output)
     }
 }
 
