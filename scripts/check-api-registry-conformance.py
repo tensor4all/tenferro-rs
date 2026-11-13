@@ -69,7 +69,7 @@ SCOPED_NAME = re.compile(
 # concrete engines (`CpuEngine`, `CudaEngine`, ...), in parameters, generic
 # bounds, `where` clauses or return types.
 ENGINE_TYPE = re.compile(r"\b\w*Engine\b")
-COPY_SHAPE = re.compile(r"&tenferro_ad::EagerTensor\b.*\)\s*->\s*.*\btenferro_tensor::types::Tensor>?\s*$")
+COPY_SHAPE = re.compile(r"&tenferro_ad::EagerTensor\b.*\)\s*->.*\btenferro_tensor::types::Tensor\b")
 EAGER_TYPE = re.compile(r"\b(?:Eager\w+|GradientValue|Gradients)\b")
 
 OP_RE = re.compile(r"^\s{4}op (\w+) \{$")

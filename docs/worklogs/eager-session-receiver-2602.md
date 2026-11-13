@@ -45,7 +45,7 @@ evidence: [api-consolidation-policy.md](../design/api-consolidation-policy.md).
 
 ## Verification conclusions and constraints
 
-- The checker rejects the `origin/main` surface (124 findings) and passes the
+- The checker rejects the `origin/main` surface (130 findings) and passes the
   migrated one; its self-test reintroduces each removed shape into a copy of the
   regenerated snapshots (default and CUDA profile) and requires a failure.
 - Runtime contracts (foreign operands and seeds, check-before-seed, inactive

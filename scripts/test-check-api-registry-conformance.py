@@ -58,6 +58,7 @@ REINTRODUCED = {
     "copy alias outside the vocabulary": f"{SESSION}copy(&mut self, &{ET}) -> {R}<{T}>",
     "copy alias named clone_value": f"{SESSION}clone_value(&mut self, &{ET}) -> {R}<{T}>",
     "unsafe copy alias": f"pub unsafe fn tenferro_ad::EagerTensor::to_tensor(&self, {ENGINE}) -> {R}<{T}>",
+    "copy alias with a non-runtime error type": f"{SESSION}snapshot(&mut self, &{ET}) -> core::result::Result<{T}, tenferro_ad::OtherError>",
 }
 
 
