@@ -114,25 +114,31 @@ jobs:
         if: matrix.cfg.profile != '' && steps.rust_cache.outputs.cache-hit == 'true'
         run: |
           set -euo pipefail
-          deps="${CARGO_TARGET_DIR}/ci/deps"
-          test -d "${deps}"
-          for crate in strided_view strided_traits strided_perm strided_basic strided_fused strided_kernel; do
-            find "${deps}" -maxdepth 1 -type f \
-              \( -name "lib${crate}-*.rlib" -o -name "lib${crate}-*.rmeta" \) \
-              -print -quit | grep -q . || {
-                echo "restored cache is missing ${crate} artifacts in ${deps}" >&2
-                exit 1
-              }
-          done
+          # Cargo before 1.100 keeps dependency artifacts in ci/deps; Cargo
+          # 1.100's build-dir layout keeps them in ci/build/<package>/<hash>/out.
+          profile_dir="${CARGO_TARGET_DIR}/ci"
+          test -d "${profile_dir}"
+          has_artifact() {
+            local dirs=()
+            [ -d "${profile_dir}/deps" ] && dirs+=("${profile_dir}/deps")
+            [ -d "${profile_dir}/build" ] && dirs+=("${profile_dir}/build")
+            [ "${#dirs[@]}" -gt 0 ] || return 1
+            find "${dirs[@]}" \
+              \( -path "${profile_dir}/deps/*" -o -path "${profile_dir}/build/*/*/out/*" \) \
+              -type f \( -name "lib$1-*.rlib" -o -name "lib$1-*.rmeta" \) \
+              -print -quit | grep -q .
+          }
+          crates="strided_view strided_traits strided_perm strided_basic strided_fused strided_kernel"
           if [ "${{ matrix.cfg.backend }}" = cpu-faer ]; then
-            find "${deps}" -maxdepth 1 -type f \
-              \( -name 'libfaer-*.rlib' -o -name 'libfaer-*.rmeta' \) \
-              -print -quit | grep -q . || {
-                echo "restored cache is missing faer artifacts in ${deps}" >&2
-                exit 1
-              }
+            crates="${crates} faer"
           fi
-          echo "Verified restored Cargo dependency artifacts under ${deps}."
+          for crate in ${crates}; do
+            has_artifact "${crate}" || {
+              echo "restored cache is missing ${crate} artifacts under ${profile_dir}/{deps,build}" >&2
+              exit 1
+            }
+          done
+          echo "Verified restored Cargo dependency artifacts under ${profile_dir}."
       - name: Install BLAS/LAPACK runtime libraries
         if: matrix.cfg.backend == 'cpu-blas'
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev liblapack-dev
