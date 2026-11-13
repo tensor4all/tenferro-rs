@@ -9,12 +9,13 @@
 //! references through the elementwise, comparison, conversion, gather and scatter
 //! entries (issue #2208 U2).
 
-use super::{Dispatcher, IndexPointer};
+use super::{Dest, Dispatcher, IndexPointer};
 use crate::cuda::{gpu_available, CudaDeviceId, CudaEngine, CudaRuntime};
 use t4a_cuda_kernels::{
     plan_gather, BinaryOp, CompareOp, DType, Entry, GatherPlan, Layout, ScalarSide, ScatterPlan,
     UnaryOp,
 };
+use t4a_cuda_runtime::Arg;
 
 fn runtime() -> Option<CudaRuntime> {
     if !gpu_available() {
@@ -45,6 +46,18 @@ fn values(len: usize) -> Vec<f64> {
 }
 
 #[test]
+fn a_destination_is_passed_as_the_storage_it_holds() {
+    let Some(runtime) = runtime() else { return };
+    let init = runtime.upload_bytes(&[0u8; 8]).expect("init");
+    let uninit = runtime.submit().alloc_uninit(8, 256).expect("uninit");
+    assert!(matches!(Dest::Init(&init).arg(), Arg::DevicePtr(_)));
+    assert!(matches!(
+        Dest::Uninit(&uninit).arg(),
+        Arg::DevicePtrUninit(_)
+    ));
+}
+
+#[test]
 fn unary_matches_the_host_reference() {
     let Some(runtime) = runtime() else { return };
     let len = 1024i64;
@@ -55,14 +68,28 @@ fn unary_matches_the_host_reference() {
         .expect("out");
     let mut dispatch = Dispatcher::for_entries(&runtime, &[Entry::Unary]).expect("prepare");
     dispatch
-        .unary(UnaryOp::Neg, DType::F64, DType::F64, len, &out, &input)
+        .unary(
+            UnaryOp::Neg,
+            DType::F64,
+            DType::F64,
+            len,
+            Dest::Init(&out),
+            &input,
+        )
         .expect("launch");
     let observed = from_f64_bytes(&runtime.download_bytes(&out).expect("download"));
     let expected: Vec<f64> = data.iter().map(|value| -value).collect();
     assert_eq!(observed, expected);
 
     dispatch
-        .unary(UnaryOp::Sqrt, DType::F64, DType::F64, len, &out, &input)
+        .unary(
+            UnaryOp::Sqrt,
+            DType::F64,
+            DType::F64,
+            len,
+            Dest::Init(&out),
+            &input,
+        )
         .expect("launch");
     let observed = from_f64_bytes(&runtime.download_bytes(&out).expect("download"));
     for (index, value) in data.iter().enumerate() {
@@ -94,7 +121,7 @@ fn binary_matches_the_host_reference() {
             DType::F64,
             ScalarSide::Both,
             len,
-            &out,
+            Dest::Init(&out),
             &lhs,
             &rhs,
             &status,
@@ -127,7 +154,14 @@ fn compare_and_select_match_the_host_reference() {
     let mut dispatch =
         Dispatcher::for_entries(&runtime, &[Entry::Compare, Entry::Select]).expect("prepare");
     dispatch
-        .compare(CompareOp::Lt, DType::F64, len, &predicate, &lhs, &rhs)
+        .compare(
+            CompareOp::Lt,
+            DType::F64,
+            len,
+            Dest::Init(&predicate),
+            &lhs,
+            &rhs,
+        )
         .expect("compare");
     let observed = runtime.download_bytes(&predicate).expect("download");
     let expected: Vec<u8> = lhs_data
@@ -150,7 +184,14 @@ fn compare_and_select_match_the_host_reference() {
         .upload_bytes(&vec![0u8; len as usize * 8])
         .expect("out");
     dispatch
-        .select(DType::F64, len, &out, &predicate, &on_true, &on_false)
+        .select(
+            DType::F64,
+            len,
+            Dest::Init(&out),
+            &predicate,
+            &on_true,
+            &on_false,
+        )
         .expect("select");
     let observed = from_f64_bytes(&runtime.download_bytes(&out).expect("download"));
     for (index, take_true) in expected.iter().enumerate() {
@@ -179,7 +220,7 @@ fn clamp_and_convert_match_the_host_reference() {
     let mut dispatch =
         Dispatcher::for_entries(&runtime, &[Entry::Clamp, Entry::Convert]).expect("prepare");
     dispatch
-        .clamp(DType::F64, len, &out, &input, &lower, &upper)
+        .clamp(DType::F64, len, Dest::Init(&out), &input, &lower, &upper)
         .expect("clamp");
     let observed = from_f64_bytes(&runtime.download_bytes(&out).expect("download"));
     let expected: Vec<f64> = data.iter().map(|value| value.clamp(-1.0, 1.0)).collect();
