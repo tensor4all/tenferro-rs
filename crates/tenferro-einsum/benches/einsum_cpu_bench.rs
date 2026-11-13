@@ -53,18 +53,24 @@ fn c64_tensor(shape: Vec<usize>, seed: usize) -> Tensor {
 }
 
 fn eager(ctx: &Arc<EagerRuntime>, tensor: Tensor) -> EagerTensor {
-    EagerTensor::from_tensor_in(tensor, Arc::clone(ctx)).unwrap()
+    ctx.constant_from(tensor).unwrap()
 }
 
 fn consume_f64(tensor: &EagerTensor, engine: &mut CpuEngine) {
-    let materialized = tensor.to_tensor(engine).unwrap();
+    let materialized = tensor
+        .runtime()
+        .with_eager_session(engine, |s| s.duplicate_value(tensor))
+        .unwrap();
     let data = &materialized;
     black_box(data.shape());
     black_box(data.as_slice::<f64>().expect("f64 tensor")[0]);
 }
 
 fn consume_c64(tensor: &EagerTensor, engine: &mut CpuEngine) {
-    let materialized = tensor.to_tensor(engine).unwrap();
+    let materialized = tensor
+        .runtime()
+        .with_eager_session(engine, |s| s.duplicate_value(tensor))
+        .unwrap();
     let data = &materialized;
     black_box(data.shape());
     black_box(data.as_slice::<Complex64>().expect("c64 tensor")[0]);

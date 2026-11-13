@@ -71,7 +71,7 @@ Eager and traced serve different workflows on the same tensor stack.
 | Inspect intermediate values while developing | Eager CPU or eager GPU with explicit download |
 | Immediate forward execution through one runtime | `EagerTensor` |
 | Reverse-mode AD on scalar losses with gradient accumulation | tracked `EagerTensor` variables + `backward()` |
-| Functional eager `grad`, `vjp`, `jvp`, or HVP composition | `EagerRuntime` functional APIs |
+| Functional eager `grad`, `vjp`, `jvp`, or HVP composition | `EagerSession` functional APIs |
 | Compiled `grad`, `vjp`, `jvp`, and higher-order AD | `TracedTensor` |
 | Reuse the same computation many times | `GraphCompiler` + `Runtime::prepare` then `Runtime::run` |
 | Keep code without autodiff simple | `TypedTensor<T, R>` or `Tensor` |

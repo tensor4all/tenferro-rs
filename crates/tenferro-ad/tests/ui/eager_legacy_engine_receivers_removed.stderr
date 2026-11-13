@@ -1,0 +1,107 @@
+error[E0599]: no method named `backward` found for reference `&EagerTensor` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:10:15
+   |
+10 |     let _ = x.backward(&mut e);
+   |               ^^^^^^^^ method not found in `&EagerTensor`
+
+error[E0599]: no method named `backward_with` found for reference `&EagerTensor` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:11:15
+   |
+11 |     let _ = x.backward_with(&mut e, x);
+   |               ^^^^^^^^^^^^^ method not found in `&EagerTensor`
+
+error[E0599]: no method named `grad` found for reference `&Arc<EagerRuntime>` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:12:17
+   |
+12 |     let _ = ctx.grad(&mut e, x, x);
+   |                 ^^^^
+   |
+help: there is a method `no_grad` with a similar name, but with different arguments
+  --> src/eager.rs
+   |
+   |     pub fn no_grad(&self) -> EagerNoGradGuard {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `grad_optional` found for reference `&Arc<EagerRuntime>` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:13:17
+   |
+13 |     let _ = ctx.grad_optional(&mut e, x, x);
+   |                 ^^^^^^^^^^^^^ method not found in `&Arc<EagerRuntime>`
+
+error[E0599]: no method named `vjp` found for reference `&Arc<EagerRuntime>` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:14:17
+   |
+14 |     let _ = ctx.vjp(&mut e, x, x, x);
+   |                 ^^^ method not found in `&Arc<EagerRuntime>`
+
+error[E0599]: no method named `vjp_optional` found for reference `&Arc<EagerRuntime>` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:15:17
+   |
+15 |     let _ = ctx.vjp_optional(&mut e, x, x, x);
+   |                 ^^^^^^^^^^^^ method not found in `&Arc<EagerRuntime>`
+
+error[E0599]: no method named `jvp` found for reference `&Arc<EagerRuntime>` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:16:17
+   |
+16 |     let _ = ctx.jvp(&mut e, x, x, x);
+   |                 ^^^ method not found in `&Arc<EagerRuntime>`
+
+error[E0599]: no method named `jvp_optional` found for reference `&Arc<EagerRuntime>` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:17:17
+   |
+17 |     let _ = ctx.jvp_optional(&mut e, x, x, x);
+   |                 ^^^^^^^^^^^^ method not found in `&Arc<EagerRuntime>`
+
+error[E0599]: no method named `detach` found for reference `&EagerTensor` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:18:15
+   |
+18 |     let _ = x.detach(&mut e);
+   |               ^^^^^^ method not found in `&EagerTensor`
+
+error[E0599]: no method named `detach_into` found for reference `&EagerTensor` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:19:15
+   |
+19 |     let _ = x.detach_into(&mut e, ctx);
+   |               ^^^^^^^^^^^ method not found in `&EagerTensor`
+
+error[E0599]: no method named `to_tensor` found for reference `&EagerTensor` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:20:15
+   |
+20 |     let _ = x.to_tensor(&mut e);
+   |               ^^^^^^^^^ method not found in `&EagerTensor`
+
+error[E0599]: no method named `duplicate_value` found for reference `&EagerTensor` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:21:15
+   |
+21 |     let _ = x.duplicate_value(&mut e);
+   |               ^^^^^^^^^^^^^^^
+   |
+help: there is a method `into_value` with a similar name, but with different arguments
+  --> src/eager.rs
+   |
+   |     pub fn into_value(self) -> std::result::Result<Tensor, IntoValueError<Self>> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `from_tensor_in` found for struct `EagerTensor` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:22:26
+   |
+22 |     let _ = EagerTensor::from_tensor_in(t, Arc::clone(ctx));
+   |                          ^^^^^^^^^^^^^^ associated function or constant not found in `EagerTensor`
+
+error[E0599]: no associated function or constant named `requires_grad_in` found for struct `EagerTensor` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:23:26
+   |
+23 |     let _ = EagerTensor::requires_grad_in(u, Arc::clone(ctx));
+   |                          ^^^^^^^^^^^^^^^^ associated function or constant not found in `EagerTensor`
+
+error[E0599]: no method named `backend_session` found for mutable reference `&mut EagerSession<'_>` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:25:19
+   |
+25 |         let _ = s.backend_session();
+   |                   ^^^^^^^^^^^^^^^ method not found in `&mut EagerSession<'_>`
+
+error[E0599]: no method named `to_tensor` found for mutable reference `&mut EagerSession<'_>` in the current scope
+  --> tests/ui/eager_legacy_engine_receivers_removed.rs:26:11
+   |
+26 |         s.to_tensor(x)
+   |           ^^^^^^^^^ method not found in `&mut EagerSession<'_>`

@@ -14,11 +14,9 @@ fn prelude_calls_concrete_linalg_operation() {
 #[test]
 fn prelude_calls_eager_linalg_operation() {
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let input = runtime
+        .constant_from(Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap())
+        .unwrap();
     let Svd {
         s: singular_values, ..
     } = runtime

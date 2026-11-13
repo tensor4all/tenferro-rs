@@ -87,6 +87,20 @@ Recording these matters more than the rules, because each one is plausible and e
 | "never normalize an input layout without the caller's permission" (R3 as amended, R8) | The prohibition had no stable definition: its target depended on the selected kernel, an unconditional copy was exempt, and success proved neither "no copies" nor a memory bound. On native CPU it refused only SVD-read gathers (prototype 4). Withdrawn by the #2552 decision update; a public counter is not its replacement. |
 | "`GlobalAlloc == 0` still needs proving" | `tests/cpu_linalg_allocation.rs:591-599` already asserts it for every borrowed entry on x86_64. The missing assertion is a **pool checkout counter** (one `svd_workspace`-sized checkout per call, same count for transposed and rank-3 input, unchanged output pointers). |
 
+### Eager AD, value and leaf entry points (#2602)
+
+Each removal below is admitted under rule 3 of section 3 (a duplicate is a defect only when shown to disagree or
+to cost maintenance):
+
+| Removed | Kept | Evidence |
+|---|---|---|
+| `EagerTensor::to_tensor(exec)` | `EagerSession::duplicate_value(&x)` | `to_tensor` forwarded to `duplicate_value` unchanged (`eager.rs` on `d9bb0172`), so the two names were one operation with two doc surfaces, and a third copy lived on the session. |
+| `EagerTensor::{duplicate_value, detach}(exec)` | `EagerSession::{duplicate_value, detach}` | Disagreement: the tensor forms accepted any engine and no runtime check, the session forms reject a foreign runtime. The probe on #2602 showed `loss.backward(s.engine())` writing runtime A's gradient slots from a session of runtime B. |
+| `EagerTensor::detach_into(exec, &ctx)` | `duplicate_value` in the source session, `constant_from` in the target session | Same body (`to_tensor` + engine-backed `new_leaf`), now spelled with the two operations it was made of; the result is an untracked leaf of the target runtime, as before. |
+| `EagerTensor::{from_tensor_in, requires_grad_in, from_vec_col_major_in}` | `EagerRuntime::{constant_from, variable_from}` | The first two forwarded to the same engine-free `new_leaf` as the runtime constructors: one operation on two receivers, with about 580 occurrences split between them in code and docs. The engine-backed session constructors stay: they accept device-resident and view inputs the engine-free path rejects. |
+| `EagerRuntime::{grad, vjp, jvp}*(exec, ..)`, `EagerTensor::{backward, backward_with}(exec, ..)` | `EagerSession::{grad, vjp, jvp}*`, `EagerSession::{backward, backward_with}` | The receiver and argument order contradicted the #2552 grammar; `grad_optional` built and materialized its seed before the runtime check. |
+| `EagerSession::backend_session() -> &mut dyn Engine` | `EagerSession::engine() -> &mut dyn ExecutionEngine` | Two accessors for one engine; `ExecutionEngine: Engine`. |
+
 ## 3. How a claim gets admitted
 
 Three rules, all learned by being wrong:

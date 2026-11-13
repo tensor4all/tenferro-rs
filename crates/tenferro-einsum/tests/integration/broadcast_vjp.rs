@@ -6,7 +6,7 @@
 //! be summed over that label and keep the primal extent 1. Each case feeds an
 //! all-ones cotangent and compares every element of both operand gradients.
 
-use tenferro_ad::{AdContext, EagerRuntime, EagerTensor};
+use tenferro_ad::{AdContext, EagerRuntime};
 use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{EagerEinsumOps, TracedEinsumOps};
 use tenferro_runtime::{GraphCompiler, TraceContext};
@@ -118,8 +118,8 @@ fn assert_traced_vjp(case: &BroadcastCase) {
 fn assert_eager_vjp(case: &BroadcastCase) {
     let ad = einsum_ad();
     let ctx = EagerRuntime::with_ad_context(&ad).unwrap();
-    let lhs = EagerTensor::requires_grad_in(ones(case.lhs_shape), ctx.clone()).unwrap();
-    let rhs = EagerTensor::requires_grad_in(ones(case.rhs_shape), ctx.clone()).unwrap();
+    let lhs = ctx.variable_from(ones(case.lhs_shape)).unwrap();
+    let rhs = ctx.variable_from(ones(case.rhs_shape)).unwrap();
     let mut engine = CpuEngine::serial();
     let output = ctx
         .with_eager_session(&mut engine, |s| s.einsum(&[&lhs, &rhs], case.subscripts))
@@ -134,7 +134,10 @@ fn assert_eager_vjp(case: &BroadcastCase) {
             )
         })
         .unwrap();
-    let _ = loss.backward(&mut engine).unwrap();
+    let _ = loss
+        .runtime()
+        .with_eager_session(&mut engine, |s| s.backward(&loss))
+        .unwrap();
 
     let lhs_grad = lhs.grad().unwrap().unwrap().to_tensor(&mut engine).unwrap();
     assert_filled(

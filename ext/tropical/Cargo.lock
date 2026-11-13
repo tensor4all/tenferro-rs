@@ -1426,6 +1426,7 @@ dependencies = [
  "num-complex",
  "num-traits",
  "tenferro-cpu",
+ "tenferro-internal-extension-macros",
  "tenferro-internal-ops",
  "tenferro-runtime",
  "tenferro-tensor",

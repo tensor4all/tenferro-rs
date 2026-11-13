@@ -22,11 +22,9 @@ fn prelude_calls_concrete_fft_operation() {
 fn prelude_calls_eager_fft_operation() {
     let mut engine = CpuEngine::serial();
     let runtime = EagerRuntime::new().unwrap();
-    let input = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let input = runtime
+        .constant_from(Tensor::from_vec_col_major([4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap())
+        .unwrap();
     let spectrum = runtime
         .with_eager_session(&mut engine, |session| session.rfft(&input))
         .unwrap();

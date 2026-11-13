@@ -170,7 +170,16 @@ fn forwarding(op: &str, layer: &str, complex: bool) -> R<(Vec<u64>, Vec<u64>)> {
                     ))
                 }
             })?;
-            Ok((bits(&p.to_tensor(&mut e)?)?, bits(&w.to_tensor(&mut e)?)?))
+            Ok((
+                bits(
+                    &p.runtime()
+                        .with_eager_session(&mut e, |s| s.duplicate_value(&p))?,
+                )?,
+                bits(
+                    &w.runtime()
+                        .with_eager_session(&mut e, |s| s.duplicate_value(&w))?,
+                )?,
+            ))
         }
         other => Err(format!("no forwarding case for {other:?}").into()),
     }

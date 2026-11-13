@@ -90,23 +90,21 @@ fn ad_context_transform_cache_limits_stats_and_clear_are_public() {
 fn eager_runtime_built_from_ad_context_uses_shared_transform_cache() {
     let ad = AdContext::builder().build().unwrap();
     let ctx = EagerRuntime::with_ad_context(&ad).unwrap();
-    let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let seed = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let x = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap())
+        .unwrap();
+    let seed = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap())
+        .unwrap();
     let y = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))
         .unwrap();
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
     let _ = ctx
-        .vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &x, &seed)
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.vjp(&y, &x, &seed)
+        })
         .unwrap();
     assert!(ad.ad_transform_cache_stats().unwrap().entries > 0);
 
@@ -121,33 +119,31 @@ fn ad_transform_cache_entry_limit_evicts_lru_entries() {
         .unwrap();
     let ctx = EagerRuntime::with_ad_context(&ad).unwrap();
 
-    let x0 = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let x1 = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![1], vec![4.0_f64]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let seed = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let x0 = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap())
+        .unwrap();
+    let x1 = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![1], vec![4.0_f64]).unwrap())
+        .unwrap();
+    let seed = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap())
+        .unwrap();
 
     let output0 = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x0, &x0))
         .unwrap();
     let _ = ctx
-        .vjp(&mut tenferro_cpu::CpuEngine::serial(), &output0, &x0, &seed)
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.vjp(&output0, &x0, &seed)
+        })
         .unwrap();
     let output1 = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x1, &x1))
         .unwrap();
     let _ = ctx
-        .vjp(&mut tenferro_cpu::CpuEngine::serial(), &output1, &x1, &seed)
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.vjp(&output1, &x1, &seed)
+        })
         .unwrap();
 
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
@@ -203,8 +199,8 @@ fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
     }
 
     fn fixture(ctx: &std::sync::Arc<EagerRuntime>, shape: Vec<usize>, seed: usize) -> Fixture {
-        let x = EagerTensor::requires_grad_in(tensor(shape.clone(), seed), ctx.clone()).unwrap();
-        let weight = EagerTensor::from_tensor_in(tensor(shape, seed + 1000), ctx.clone()).unwrap();
+        let x = ctx.variable_from(tensor(shape.clone(), seed)).unwrap();
+        let weight = ctx.constant_from(tensor(shape, seed + 1000)).unwrap();
         let loss = ctx
             .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
                 let weighted = s.mul(&x, &weight)?;
@@ -229,7 +225,10 @@ fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
         ctx.clear_grads().unwrap();
         fixture
             .loss
-            .backward(&mut tenferro_cpu::CpuEngine::serial())
+            .runtime()
+            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                s.backward(&fixture.loss)
+            })
             .unwrap();
         let grad = fixture.x.grad().unwrap().unwrap();
         assert_eq!(grad.shape(), fixture.x.shape());

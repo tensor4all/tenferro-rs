@@ -36,16 +36,19 @@ fn mat2(m00: f64, m01: f64, m10: f64, m11: f64) -> Tensor {
 }
 
 fn eager_untracked_from(tensor: Tensor, rt: &Arc<EagerRuntime>) -> EagerTensor {
-    EagerTensor::from_tensor_in(tensor, Arc::clone(rt)).expect("eager tensor")
+    rt.constant_from(tensor).expect("eager tensor")
 }
 
 fn eager_tracked_from(tensor: Tensor, rt: &Arc<EagerRuntime>) -> EagerTensor {
-    EagerTensor::requires_grad_in(tensor, Arc::clone(rt)).expect("eager tensor")
+    rt.variable_from(tensor).expect("eager tensor")
 }
 
 /// Materialize and consume the scalar result so lazy work actually runs.
 fn consume(engine: &mut CpuEngine, output: EagerTensor) {
-    let t = output.to_tensor(engine).expect("materialize");
+    let t = output
+        .runtime()
+        .with_eager_session(engine, |s| s.duplicate_value(&output))
+        .expect("materialize");
     black_box(t.shape());
     black_box(t.as_slice::<f64>().expect("f64")[0]);
 }

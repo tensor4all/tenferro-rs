@@ -205,7 +205,10 @@ fn eager_value_and_grad(
     let x = ctx
         .with_eager_session(&mut *engine, |s| s.constant_from_host(host.x.duplicate()?))
         .unwrap();
-    let x = x.to_tensor(&mut *engine).unwrap();
+    let x = x
+        .runtime()
+        .with_eager_session(&mut *engine, |s| s.duplicate_value(&x))
+        .unwrap();
     let x = ctx
         .with_eager_session(&mut *engine, |s| s.variable_from(x))
         .unwrap();
@@ -213,7 +216,10 @@ fn eager_value_and_grad(
         .with_eager_session(&mut *engine, |s| eager_op(s, op, &x, host))
         .unwrap_or_else(|err| panic!("{op:?} {:?}: {err:?}", host.x.dtype()));
     let value = {
-        let t = y.to_tensor(&mut *engine).unwrap();
+        let t = y
+            .runtime()
+            .with_eager_session(&mut *engine, |s| s.duplicate_value(&y))
+            .unwrap();
         host_f64(&download(&mut *engine, &t))
     };
     let weights: Vec<f64> = value
@@ -238,9 +244,14 @@ fn eager_value_and_grad(
     let cotangent = ctx
         .with_eager_session(&mut *engine, |s| s.constant_from_host(cotangent))
         .unwrap();
-    let grad = ctx.vjp(&mut *engine, &y, &x, &cotangent).unwrap();
+    let grad = ctx
+        .with_eager_session(&mut *engine, |s| s.vjp(&y, &x, &cotangent))
+        .unwrap();
     let grad = {
-        let t = grad.to_tensor(&mut *engine).unwrap();
+        let t = grad
+            .runtime()
+            .with_eager_session(&mut *engine, |s| s.duplicate_value(&grad))
+            .unwrap();
         host_f64(&download(&mut *engine, &t))
     };
     (value, grad)
@@ -353,7 +364,10 @@ fn test_gpu_softmax_nan_and_infinity_policy_matches_cpu() {
                 })
                 .unwrap();
             {
-                let t = y.to_tensor(&mut *engine).unwrap();
+                let t = y
+                    .runtime()
+                    .with_eager_session(&mut *engine, |s| s.duplicate_value(&y))
+                    .unwrap();
                 host_f64(&download(&mut *engine, &t))
             }
         };
@@ -690,7 +704,10 @@ fn test_gpu_softplus_is_one_fused_launch_matching_the_composite() {
             let y = ctx
                 .with_eager_session(&mut *engine, |s| s.softplus(&tracked))
                 .unwrap();
-            let y = y.to_tensor(&mut *engine).unwrap();
+            let y = y
+                .runtime()
+                .with_eager_session(&mut *engine, |s| s.duplicate_value(&y))
+                .unwrap();
             download(engine, &y)
         };
 
@@ -754,7 +771,10 @@ fn test_gpu_softplus_is_one_fused_launch_matching_the_composite() {
         );
         let eager = {
             let engine: &mut dyn ExecutionEngine = &mut gpu;
-            let t = eager.to_tensor(&mut *engine).unwrap();
+            let t = eager
+                .runtime()
+                .with_eager_session(&mut *engine, |s| s.duplicate_value(&eager))
+                .unwrap();
             download(engine, &t)
         };
         assert_same_bits(&eager, &composite, &format!("eager {dtype:?}"));

@@ -249,6 +249,7 @@ let _ = 1;
             omissions: [];
             example concrete: "let _ = 7;";
             example session: "let _ = 8;";
+            signature core_eager: "pub fn dummy::Session::split(&mut self, &Vecf) -> Result<Pair<Vec<f64>, f64>>";
         }
 
         exceptions {
@@ -413,6 +414,14 @@ fn metadata_holds_declared_data() {
     assert_eq!(API_OPS[4].output, "Pair<V, R>");
     assert_eq!(API_OPS[4].layers, ["concrete", "session", "core_eager"]);
     assert_eq!(
+        API_OPS[4].signatures,
+        [(
+            "core_eager",
+            "pub fn dummy::Session::split(&mut self, &Vecf) -> Result<Pair<Vec<f64>, f64>>"
+        )]
+    );
+    assert!(API_OPS[0].signatures.is_empty());
+    assert_eq!(
         API_OPS[0].errors,
         ["Validation", "NumericalFailure(NonConvergence)"]
     );
@@ -435,6 +444,9 @@ fn markdown_has_table_rows_and_exceptions() {
     assert!(md.contains("| `norm` |"));
     assert!(md.contains("| `roll` |"));
     assert!(md.contains("### add"));
+    assert!(md.contains(
+        "- Signature (core_eager): `pub fn dummy::Session::split(&mut self, &Vecf) -> Result<Pair<Vec<f64>, f64>>`"
+    ));
     assert!(md.contains("### Exceptions"));
     assert!(md.contains(
         "| ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |"

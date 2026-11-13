@@ -216,7 +216,7 @@ def test_llms_missing_readme_link_fails() -> None:
 
 def make_eager_ad_fixture(root: pathlib.Path) -> None:
     """Create the sources read by check_eager_functional_ad_docs in the checker."""
-    write(root / "docs/index.md", "# Home\n\n`EagerRuntime` functional `grad`, `vjp`, and `jvp`\n")
+    write(root / "docs/index.md", "# Home\n\n`EagerSession` functional `grad`, `vjp`, and `jvp`\n")
     write(
         root / "docs/getting-started/index.md",
         "functional eager `grad`, `vjp`, and `jvp`\n",
@@ -227,12 +227,12 @@ def make_eager_ad_fixture(root: pathlib.Path) -> None:
     )
     write(
         root / "docs/getting-started/pytorch-jax-mapping.md",
-        "`EagerRuntime` functional `grad`/`vjp`/`jvp`\n",
+        "functional `s.grad`/`s.vjp`/`s.jvp`\n",
     )
     write(root / "docs/tutorials/index.md", "functional eager AD entry point\n")
     write(
         root / "docs/spec/operation-categories.md",
-        "stateful `backward()` plus functional `grad`/`vjp`/`jvp`\n",
+        "stateful `s.backward(&loss)` plus functional `s.grad`/`s.vjp`/`s.jvp`\n",
     )
     write(
         root / "docs/guides/eager-operations.md",

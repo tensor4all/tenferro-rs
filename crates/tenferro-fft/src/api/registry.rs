@@ -88,10 +88,7 @@ api_ops! {
             ///
             /// let runtime = EagerRuntime::new()?;
             /// let mut engine = CpuEngine::serial();
-            /// let x = EagerTensor::from_tensor_in(
-            ///     Tensor::from_vec_col_major([2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)])?,
-            ///     runtime.clone(),
-            /// )?;
+            /// let x = runtime.constant_from(Tensor::from_vec_col_major([2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)])?)?;
             /// // Match before `?` to recover a rejected input.
             /// let x = match runtime.with_eager_session(&mut engine, |s| {
             ///     Ok::<_, tenferro_ad::Error>(s.fft_in_place(x, &FftOptions::default().n(Some(4))))
@@ -128,10 +125,7 @@ api_ops! {
             /// use tenferro_fft::{EagerFftOps, FftOptions};
             ///
             /// let runtime = EagerRuntime::new()?;
-            /// let x = EagerTensor::from_tensor_in(
-            ///     Tensor::from_vec_col_major([2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)])?,
-            ///     runtime.clone(),
-            /// )?;
+            /// let x = runtime.constant_from(Tensor::from_vec_col_major([2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)])?)?;
             /// let y = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
             ///     Ok::<_, tenferro_ad::Error>(s.ifft_in_place(x, &FftOptions::default())?)
             /// })?;

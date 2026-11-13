@@ -4,42 +4,42 @@ use super::*;
 fn semantic_ad_returns_gradients_without_an_enable_switch() {
     let ctx = EagerRuntime::new().unwrap();
     let mut engine = tenferro_cpu::CpuEngine::serial();
-    let x = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major([], vec![3.0_f64]).unwrap(),
-        Arc::clone(&ctx),
-    )
-    .unwrap();
-    let seed = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([], vec![2.0_f64]).unwrap(),
-        Arc::clone(&ctx),
-    )
-    .unwrap();
+    let x = ctx
+        .variable_from(Tensor::from_vec_col_major([], vec![3.0_f64]).unwrap())
+        .unwrap();
+    let seed = ctx
+        .constant_from(Tensor::from_vec_col_major([], vec![2.0_f64]).unwrap())
+        .unwrap();
     let output = ctx
         .with_eager_session(&mut engine, |s| s.mul(&x, &x))
         .unwrap();
     let vjp = ctx
-        .vjp_optional(&mut engine, &output, &x, &seed)
+        .with_eager_session(&mut engine, |s| s.vjp_optional(&output, &x, &seed))
         .unwrap()
         .unwrap();
     let jvp = ctx
-        .jvp_optional(&mut engine, &output, &x, &seed)
+        .with_eager_session(&mut engine, |s| s.jvp_optional(&output, &x, &seed))
         .unwrap()
         .unwrap();
     assert_eq!(vjp.value().unwrap().as_slice::<f64>().unwrap(), &[12.0]);
     assert_eq!(jvp.value().unwrap().as_slice::<f64>().unwrap(), &[12.0]);
-    let gradients = output.backward(&mut engine).unwrap();
+    let gradients = output
+        .runtime()
+        .with_eager_session(&mut engine, |s| s.backward(&output))
+        .unwrap();
     assert_eq!(gradients.len(), 1);
     assert_eq!(
         gradients.grad(&x.key).unwrap().as_slice::<f64>().unwrap(),
         &[6.0]
     );
 
-    let zero = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([], vec![0.0_f64]).unwrap(),
-        Arc::clone(&ctx),
-    )
-    .unwrap();
-    let gradients = output.backward_with(&mut engine, &zero).unwrap();
+    let zero = ctx
+        .constant_from(Tensor::from_vec_col_major([], vec![0.0_f64]).unwrap())
+        .unwrap();
+    let gradients = output
+        .runtime()
+        .with_eager_session(&mut engine, |s| s.backward_with(&output, &zero))
+        .unwrap();
     assert_eq!(gradients.len(), 1);
     assert_eq!(
         gradients.grad(&x.key).unwrap().as_slice::<f64>().unwrap(),
@@ -75,17 +75,19 @@ fn semantic_ad_ignores_retired_switch_in_fresh_processes() {
 fn backward_rejects_empty_gradients_but_storage_allows_empty_groups() {
     let ctx = EagerRuntime::new().unwrap();
     let mut engine = tenferro_cpu::CpuEngine::serial();
-    let output = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([], vec![3.0_f64]).unwrap(),
-        Arc::clone(&ctx),
-    )
-    .unwrap();
+    let output = ctx
+        .constant_from(Tensor::from_vec_col_major([], vec![3.0_f64]).unwrap())
+        .unwrap();
     assert!(matches!(
-        output.backward(&mut engine),
+        output
+            .runtime()
+            .with_eager_session(&mut engine, |s| s.backward(&output)),
         Err(Error::RuntimeState { .. })
     ));
     assert!(matches!(
-        output.backward_with(&mut engine, &output),
+        output
+            .runtime()
+            .with_eager_session(&mut engine, |s| s.backward_with(&output, &output)),
         Err(Error::RuntimeState { .. })
     ));
     assert!(matches!(
@@ -101,11 +103,8 @@ fn backward_rejects_absent_derivative_before_accumulating_any_target() {
     let ctx = EagerRuntime::new().unwrap();
     let mut engine = tenferro_cpu::CpuEngine::serial();
     let leaf = |value| {
-        EagerTensor::requires_grad_in(
-            Tensor::from_vec_col_major([], vec![value]).unwrap(),
-            Arc::clone(&ctx),
-        )
-        .unwrap()
+        ctx.variable_from(Tensor::from_vec_col_major([], vec![value]).unwrap())
+            .unwrap()
     };
     let x = leaf(3.0_f64);
     let y = leaf(5.0_f64);
@@ -115,27 +114,35 @@ fn backward_rejects_absent_derivative_before_accumulating_any_target() {
             s.add(&sign, &y)
         })
         .unwrap();
-    let seed = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([], vec![1.0_f64]).unwrap(),
-        Arc::clone(&ctx),
-    )
-    .unwrap();
+    let seed = ctx
+        .constant_from(Tensor::from_vec_col_major([], vec![1.0_f64]).unwrap())
+        .unwrap();
     assert!(ctx
-        .vjp_optional(&mut engine, &output, &x, &seed)
+        .with_eager_session(&mut engine, |s| s.vjp_optional(&output, &x, &seed))
         .unwrap()
         .is_none());
     assert!(ctx
-        .jvp_optional(&mut engine, &output, &x, &seed)
+        .with_eager_session(&mut engine, |s| s.jvp_optional(&output, &x, &seed))
         .unwrap()
         .is_none());
-    assert!(ctx.vjp(&mut engine, &output, &x, &seed).is_err());
-    assert!(ctx.jvp(&mut engine, &output, &x, &seed).is_err());
+    assert!(ctx
+        .with_eager_session(&mut engine, |s| s.vjp(&output, &x, &seed))
+        .is_err());
+    assert!(ctx
+        .with_eager_session(&mut engine, |s| s.jvp(&output, &x, &seed))
+        .is_err());
     for error in [
-        output.backward(&mut engine).unwrap_err(),
-        output.backward_with(&mut engine, &seed).unwrap_err(),
+        output
+            .runtime()
+            .with_eager_session(&mut engine, |s| s.backward(&output))
+            .unwrap_err(),
+        output
+            .runtime()
+            .with_eager_session(&mut engine, |s| s.backward_with(&output, &seed))
+            .unwrap_err(),
     ] {
         assert!(matches!(error, Error::Validation { op: "backward", .. }));
-        assert!(error.to_string().contains("EagerRuntime::vjp_optional"));
+        assert!(error.to_string().contains("EagerSession::vjp_optional"));
     }
     assert!(x.grad().unwrap().is_none());
     assert!(y.grad().unwrap().is_none());

@@ -25,7 +25,7 @@ to a CUDA backend.
 | --- | --- | --- |
 | `TypedTensor<T>` | Concrete tensor with compile-time scalar type | Most typed numeric code, typed host data, typed linalg/einsum |
 | `Tensor` | Concrete tensor with runtime dtype | Dynamic dtype workflows, backend dispatch, CPU/CUDA values |
-| `EagerTensor` | Concrete tensor in an eager runtime, with optional gradient tracking | Immediate forward execution; `backward()` on scalar losses and `EagerRuntime` functional transforms when tracked |
+| `EagerTensor` | Concrete tensor in an eager runtime, with optional gradient tracking | Immediate forward execution; `backward()` on scalar losses and `EagerSession` functional transforms when tracked |
 | `TracedTensor` | Graph-building tensor | Compiled `grad`, `vjp`, and `jvp` on traced graphs, graph optimization, repeated execution |
 
 Use the smallest layer that matches the job. AD is optional, and many projects
@@ -108,11 +108,11 @@ sequence of eager operations; each computes or submits immediately and returns
 a concrete tensor handle. CPU values are host-readable; CUDA-resident values
 require explicit download before host inspection. If a tensor is a tracked
 variable, eager operations also record reverse-mode state so a scalar loss can
-call `backward()` and accumulate gradients.
+call `s.backward(&loss)` and accumulate gradients.
 
 When the derivative itself should be returned as an eager tensor instead of
-accumulated into a gradient slot, call `EagerRuntime::grad`,
-`EagerRuntime::vjp`, or `EagerRuntime::jvp`. These functional eager transforms
+accumulated into a gradient slot, call `s.grad`, `s.vjp`, or `s.jvp` on the
+eager session. These functional eager transforms
 can be composed for HVP-style workflows. Use `TracedTensor` when the derivative
 workflow should be compiled, optimized as a graph, or reused across runs.
 
@@ -128,7 +128,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let loss = session.reduce_sum(&squared, Some(&[0]))?;
         Ok::<_, tenferro_ad::Error>((x, loss))
     })?;
-    loss.backward(&mut tenferro_cpu::CpuEngine::serial())?;
+    loss.runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.backward(&loss)
+        })?;
 
     assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 

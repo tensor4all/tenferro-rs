@@ -35,11 +35,11 @@ let x = runtime.variable_from(Tensor::from_vec_col_major(
     vec![3],
     vec![1.0_f64, 2.0, 3.0],
 )?)?;
-let loss = runtime.with_eager_session(&mut engine, |s| {
+runtime.with_eager_session(&mut engine, |s| {
     let prediction = s.mul(&x, &x)?;
-    s.reduce_sum(&prediction, Some(&[0]))
+    let loss = s.reduce_sum(&prediction, Some(&[0]))?;
+    s.backward(&loss)
 })?;
-loss.backward(&mut engine)?;
 assert_eq!(
     x.grad()?.expect("tracked variable should receive a gradient").as_slice::<f64>()?,
     &[2.0, 4.0, 6.0],

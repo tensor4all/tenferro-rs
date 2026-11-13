@@ -25,8 +25,10 @@ traced.op_with(operands…, &opts)   // traced: no exec, run through prepare →
 | `_with` | Explicit `XxxOptions`. |
 | `_into` | Writes into a caller-provided `Dest` (`Overwrite`, `Accumulate` or `Scaled`), only where the registry declares it. |
 | `_in_place` | Consuming destructive update; exception E01 (in-place FFT). |
+| `_optional` | Eager AD only: `None` for an inactive input instead of an error; exception E11. |
 
-Every other spelling of input kind, parameters, layer or output mode is not a
+`backward_with(&output, &seed)` (exception E11) takes its seed as an operand; it is
+not the `_with` options form. Every other spelling of input kind, parameters, layer or output mode is not a
 suffix: it is a receiver type, an options field or a `Dest` value.
 
 <!-- api-ops:linalg:begin -->
@@ -1402,3 +1404,145 @@ Inverse of `rfftn`.
 | E02 | retained | `tenferro_fft::FftExecutor::fft_with`<br>`tenferro_fft::FftExecutor::ifft_with`<br>`tenferro_fft::FftExecutor::rfft_with`<br>`tenferro_fft::FftExecutor::irfft_with`<br>`tenferro_fft::FftExecutor::fftn_with`<br>`tenferro_fft::FftExecutor::ifftn_with`<br>`tenferro_fft::FftExecutor::rfftn_with`<br>`tenferro_fft::FftExecutor::irfftn_with`<br>`tenferro_fft::FftExecutor::new`<br>`tenferro_fft::FftExecutor::plan_cache`<br>`tenferro_fft::FftExecutor::plan_cache_mut`<br>`tenferro_fft::FftExecutor::cache_stats`<br>`tenferro_fft::FftExecutor::clear_cache` | the caller-owned FFT plan cache and its transforms | cache owner | `tenferro_fft` | the receiver is the plan cache, not the input; the transforms take the input, the options and the engine in grammar order | src/api/tests/registry.rs: every `_with` equals the `FftOps` result bit for bit and fills the caller's plan cache | plan caches owned by the engine for every caller |
 
 <!-- api-ops:fft:end -->
+
+<!-- api-ops:eager_ad:begin -->
+## eager_ad
+
+| Op | eager | Suffixes |
+|---|---|---|
+| `grad` | described | `grad` |
+| `vjp` | described | `vjp` |
+| `jvp` | described | `jvp` |
+| `backward` | described | `backward` |
+| `detach` | described | `detach` |
+| `duplicate_value` | described | `duplicate_value` |
+| `constant_from` | described | `constant_from` |
+| `constant_from_host` | described | `constant_from_host` |
+| `variable_from` | described | `variable_from` |
+
+### grad
+
+Gradient of a scalar eager output with respect to an eager tensor; returns a composable eager tensor and touches no gradient slot.
+
+- Options: none
+- Output: `EagerTensor`
+- Signature (eager): `pub fn tenferro_ad::EagerSession<'_>::grad(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>`
+- Dtypes: See the method documentation.
+- Layout: Reads the retained values of the operands; the derivative program is prepared and run on the session's engine. Every eager operand and seed is checked against the session's runtime before any value is materialized or any gradient slot is written.
+- Errors: `ContextMismatch`, `NonScalarGrad`, `Validation`, `UnsupportedAdRule`
+- Omissions:
+  - concrete: not available (no AD); traced: `AdContext::grad`/`vjp`/`jvp` build a graph and take no engine
+
+### vjp
+
+Reverse-mode vector-Jacobian product of eager tensors; touches no gradient slot.
+
+- Options: none
+- Output: `EagerTensor`
+- Signature (eager): `pub fn tenferro_ad::EagerSession<'_>::vjp(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>`
+- Dtypes: See the method documentation.
+- Layout: Reads the retained values of the operands; the derivative program is prepared and run on the session's engine. Every eager operand and seed is checked against the session's runtime before any value is materialized or any gradient slot is written.
+- Errors: `ContextMismatch`, `Validation`, `UnsupportedAdRule`
+- Omissions:
+  - concrete: not available (no AD); traced: `AdContext::grad`/`vjp`/`jvp` build a graph and take no engine
+
+### jvp
+
+Forward-mode Jacobian-vector product of eager tensors.
+
+- Options: none
+- Output: `EagerTensor`
+- Signature (eager): `pub fn tenferro_ad::EagerSession<'_>::jvp(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>`
+- Dtypes: See the method documentation.
+- Layout: Reads the retained values of the operands; the derivative program is prepared and run on the session's engine. Every eager operand and seed is checked against the session's runtime before any value is materialized or any gradient slot is written.
+- Errors: `ContextMismatch`, `Validation`, `UnsupportedAdRule`
+- Omissions:
+  - concrete: not available (no AD); traced: `AdContext::grad`/`vjp`/`jvp` build a graph and take no engine
+
+### backward
+
+Reverse-mode AD from a scalar eager output: returns the cotangent map and accumulates into the `grad()` slots of the reachable tracked leaves.
+
+- Options: none
+- Output: `Gradients`
+- Signature (eager): `pub fn tenferro_ad::EagerSession<'_>::backward(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>`
+- Dtypes: See the method documentation.
+- Layout: Reads the retained values of the operands; the derivative program is prepared and run on the session's engine. Every eager operand and seed is checked against the session's runtime before any value is materialized or any gradient slot is written.
+- Errors: `ContextMismatch`, `NonScalarGrad`, `Validation`, `RuntimeState`, `UnsupportedAdRule`
+- Omissions:
+  - concrete and traced: not available; traced code differentiates with `AdContext::grad` and has no gradient slots
+
+### detach
+
+Detach an eager tensor from the reverse graph: same value and runtime, no gradient flow.
+
+- Options: none
+- Output: `EagerTensor`
+- Signature (eager): `pub fn tenferro_ad::EagerSession<'_>::detach(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>`
+- Dtypes: See the method documentation.
+- Layout: Copies the retained value once through the session's engine (`to_contiguous_read`), at the same placement and dtype.
+- Errors: `ContextMismatch`, `TensorRuntime`, `RuntimeState`
+- Omissions:
+  - concrete and traced: not available; cross-runtime import is `duplicate_value` in the source session plus `constant_from` in the target session
+
+### duplicate_value
+
+Copy an eager value into an independent owned `Tensor` (the one owned-copy spelling; `EagerTensor::into_value` consumes without copying).
+
+- Options: none
+- Output: `Tensor`
+- Signature (eager): `pub fn tenferro_ad::EagerSession<'_>::duplicate_value(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>`
+- Dtypes: See the method documentation.
+- Layout: Copies the retained value once through the session's engine (`to_contiguous_read`), at the same placement and dtype.
+- Errors: `ContextMismatch`, `TensorRuntime`, `RuntimeState`
+- Omissions:
+  - concrete and traced: not available
+
+### constant_from
+
+Import a tensor the engine can read as an untracked eager leaf.
+
+- Options: none
+- Output: `EagerTensor`
+- Signature (eager): `pub fn tenferro_ad::EagerSession<'_>::constant_from(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>`
+- Dtypes: See the method documentation.
+- Layout: The input is read through the session's engine, so a device-resident or strided tensor the engine can read becomes a leaf without a host round trip.
+- Errors: `TensorRuntime`, `RuntimeState`
+- Omissions:
+  - concrete and traced: not available; `EagerRuntime::constant_from` is the engine-free form for owned host tensors (E12)
+
+### constant_from_host
+
+Upload a host tensor to the session's backend and import it as an untracked eager leaf.
+
+- Options: none
+- Output: `EagerTensor`
+- Signature (eager): `pub fn tenferro_ad::EagerSession<'_>::constant_from_host(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>`
+- Dtypes: See the method documentation.
+- Layout: Uploads the host tensor once through the session's engine (`upload_host_tensor`); a host copy on a CPU runtime.
+- Errors: `TensorRuntime`, `RuntimeState`
+- Omissions:
+  - concrete and traced: not available
+
+### variable_from
+
+Import a tensor the engine can read as a trainable eager leaf.
+
+- Options: none
+- Output: `EagerTensor`
+- Signature (eager): `pub fn tenferro_ad::EagerSession<'_>::variable_from(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>`
+- Dtypes: See the method documentation.
+- Layout: The input is read through the session's engine, so a device-resident or strided tensor the engine can read becomes a leaf without a host round trip.
+- Errors: `TensorRuntime`, `RuntimeState`
+- Omissions:
+  - concrete and traced: not available; `EagerRuntime::variable_from` is the engine-free form for owned host tensors (E12)
+
+### Exceptions
+
+| ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |
+|---|---|---|---|---|---|---|---|---|
+| E11 | retained | `pub fn tenferro_ad::EagerSession<'_>::grad_optional(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>`<br>`pub fn tenferro_ad::EagerSession<'_>::vjp_optional(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>`<br>`pub fn tenferro_ad::EagerSession<'_>::jvp_optional(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>`<br>`pub fn tenferro_ad::EagerSession<'_>::backward_with(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>` | the inactive-input result form of the eager functional transforms, and the seeded form of eager backward | eager AD \| result form, seed operand | `tenferro_ad::eager` | `_optional` returns `None` for an inactive input instead of an error, an output mode the grammar does not otherwise spell as a suffix; `backward_with(&output, &cotangent)` takes the seed as an operand, not an options value, so it is not the `_with` options form (#2602) | scripts/check-api-registry-conformance.py; tenferro-ad `eager_session_ad_contract` tests (inactive inputs, seeded backward, foreign seeds) | kept while eager AD distinguishes inactive inputs and seeded backward |
+| E12 | retained | `pub fn tenferro_ad::EagerRuntime::constant_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>`<br>`pub fn tenferro_ad::EagerRuntime::variable_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>`<br>`pub fn tenferro_ad::EagerTensor::grad(&self) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::GradientValue>>`<br>`pub fn tenferro_ad::EagerTensor::into_value(self) -> core::result::Result<tenferro_tensor::types::Tensor, tenferro_ad::IntoValueError<Self>>`<br>`pub fn tenferro_ad::Gradients::grad(&self, &computegraph::types::ValueKey<tenferro_ops::std_tensor_op::StdTensorOp>) -> core::option::Option<tenferro_tensor::types::TensorView<'_>>`<br>`pub fn tenferro_ad::GradientValue::to_tensor(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>` | engine-free eager leaf import, gradient-slot lookup, consuming value extraction, and the stored-gradient copy | eager value \| engine-free, concrete record | `tenferro_ad::eager` | the runtime constructors import an owned host tensor without an engine and reject device or view inputs (use the session constructors); `grad()` reads a slot and `into_value` moves the allocation out, so neither needs an engine; a `GradientValue` carries no eager-runtime identity and follows the concrete grammar `recv.op(exec)` (#2602) | scripts/check-api-registry-conformance.py; tenferro-ad leaf-construction and into_value tests | kept |
+| E13 | retained | `pub fn tenferro_ad::EagerRuntime::with_eager_session<T, E: core::convert::From<tenferro_runtime::error::Error>>(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, impl core::ops::function::FnOnce(&mut tenferro_ad::EagerSession<'_>) -> core::result::Result<T, E>) -> core::result::Result<T, E>`<br>`pub fn tenferro_ad::EagerSession<'_>::engine(&mut self) -> &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine`<br>`pub fn tenferro_ad::extension::apply_eager(&mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, alloc::sync::Arc<dyn tenferro_ops::ext_op::ExtensionOp>, &[&tenferro_ad::EagerTensor]) -> tenferro_runtime::error::Result<alloc::vec::Vec<tenferro_ad::EagerTensor>>` | the eager session boundary, its one engine accessor, and the extension-authoring entry | eager boundary \| lifecycle, accessor, bridge | `tenferro_ad::eager, tenferro_ad::extension` | `with_eager_session` is where the caller's engine enters; `engine()` lends that engine as `&mut dyn ExecutionEngine` (which is also an `Engine`) for AD-free tensor work inside the boundary; `apply_eager` is the extension-authoring entry that opens its own session for an extension op | scripts/check-api-registry-conformance.py; tenferro-ad session-boundary and extension tests | apply_eager moves to an EagerSession method when the extension-authoring facade is revised |
+
+<!-- api-ops:eager_ad:end -->

@@ -156,7 +156,7 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
 
     // The CPU control path stays on host placement and keeps its own plans in
     // the CPU engine, not in this CUDA engine.
-    let cpu_input = EagerTensor::from_tensor_in(real_f64(&[8], 0.25), ctx.clone()).unwrap();
+    let cpu_input = ctx.constant_from(real_f64(&[8], 0.25)).unwrap();
     let cpu_output = ctx
         .with_eager_session(&mut cpu, |session| session.rfft(&cpu_input))
         .unwrap()

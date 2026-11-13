@@ -44,6 +44,7 @@ cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.11.0", default-features = false }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.11.0", default-features = false, features = ["autodiff"] }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.11.0" }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.11.0", default-features = false }
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.11.0", default-features = false }
 tenferro-gpu = { path = "../tenferro-gpu", version = "0.11.0", default-features = false, optional = true }

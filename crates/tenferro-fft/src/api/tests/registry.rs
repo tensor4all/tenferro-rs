@@ -238,8 +238,11 @@ mod in_place {
     #[test]
     fn a_length_change_is_rejected_and_returns_the_input_unchanged() -> TestResult<()> {
         let runtime = EagerRuntime::new()?;
-        let x = EagerTensor::from_tensor_in(complex()?, runtime.clone())?;
-        let before = tensor_bits(&x.to_tensor(&mut CpuEngine::serial())?)?;
+        let x = runtime.constant_from(complex()?)?;
+        let before = tensor_bits(
+            &x.runtime()
+                .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&x))?,
+        )?;
         let outcome = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
             Ok::<_, tenferro_ad::Error>(s.ifft_in_place(x, &FftOptions::default().n(Some(8))))
         })?;
@@ -254,7 +257,12 @@ mod in_place {
                 );
                 assert!(source.to_string().contains("ifft_in_place"), "{source}");
                 assert_eq!(
-                    tensor_bits(&input.to_tensor(&mut CpuEngine::serial())?)?,
+                    tensor_bits(
+                        &input
+                            .runtime()
+                            .with_eager_session(&mut CpuEngine::serial(), |s| s
+                                .duplicate_value(&input))?
+                    )?,
                     before
                 );
             }
@@ -266,7 +274,7 @@ mod in_place {
     #[test]
     fn a_real_input_is_rejected_with_the_ifft_label() -> TestResult<()> {
         let runtime = EagerRuntime::new()?;
-        let x = EagerTensor::from_tensor_in(real()?, runtime.clone())?;
+        let x = runtime.constant_from(real()?)?;
         let outcome = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
             Ok::<_, tenferro_ad::Error>(s.ifft_in_place(x, &FftOptions::default()))
         })?;
@@ -289,7 +297,7 @@ mod in_place {
             Ok(s.fft_in_place(x, &FftOptions::default())?)
         }
         let runtime = EagerRuntime::new()?;
-        let x = EagerTensor::from_tensor_in(real()?, runtime.clone())?;
+        let x = runtime.constant_from(real()?)?;
         let err = runtime
             .with_eager_session(&mut CpuEngine::serial(), |s| transform(s, x))
             .expect_err("real input");
@@ -301,8 +309,11 @@ mod in_place {
     fn in_place_rejects_a_tensor_from_another_runtime_and_returns_it() -> TestResult<()> {
         let mut e = CpuEngine::serial();
         let (a, b) = (EagerRuntime::new()?, EagerRuntime::new()?);
-        let x = EagerTensor::from_tensor_in(complex()?, b.clone())?;
-        let before = tensor_bits(&x.to_tensor(&mut e)?)?;
+        let x = b.constant_from(complex()?)?;
+        let before = tensor_bits(
+            &x.runtime()
+                .with_eager_session(&mut e, |s| s.duplicate_value(&x))?,
+        )?;
         let outcome = a.with_eager_session(&mut e, |s| {
             let out_of_place = s.fft(&x).map(|_| ()).expect_err("foreign tensor");
             let rejected = s
@@ -321,8 +332,15 @@ mod in_place {
                     matches!(source, tenferro_ad::Error::ContextMismatch { .. }),
                     "{source}"
                 );
-                assert!(input.same_context(&EagerTensor::from_tensor_in(complex()?, b)?));
-                assert_eq!(tensor_bits(&input.to_tensor(&mut e)?)?, before);
+                assert!(input.same_context(&b.constant_from(complex()?)?));
+                assert_eq!(
+                    tensor_bits(
+                        &input
+                            .runtime()
+                            .with_eager_session(&mut e, |s| s.duplicate_value(&input))?
+                    )?,
+                    before
+                );
             }
             other => panic!("expected Rejected, got {other:?}"),
         }
@@ -335,13 +353,19 @@ mod in_place {
         let want =
             complex()?.fft_with(&FftOptions::default().axis(0).norm(FftNorm::Ortho), &mut e)?;
         let runtime = EagerRuntime::new()?;
-        let x = EagerTensor::from_tensor_in(complex()?, runtime.clone())?;
+        let x = runtime.constant_from(complex()?)?;
         let y = runtime.with_eager_session(&mut e, |s| {
             Ok::<_, tenferro_ad::Error>(
                 s.fft_in_place(x, &FftOptions::default().axis(0).norm(FftNorm::Ortho))?,
             )
         })?;
-        assert_eq!(tensor_bits(&y.to_tensor(&mut e)?)?, tensor_bits(&want)?);
+        assert_eq!(
+            tensor_bits(
+                &y.runtime()
+                    .with_eager_session(&mut e, |s| s.duplicate_value(&y))?
+            )?,
+            tensor_bits(&want)?
+        );
         assert!(API_EXCEPTIONS.iter().any(|x| x.id == "E01"));
         Ok(())
     }

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_ad::EagerRuntime;
 use tenferro_tensor::Tensor;
 
 fn runtime() -> Arc<EagerRuntime> {
@@ -27,7 +27,7 @@ fn leaf(runtime: &Arc<EagerRuntime>, dims: &[usize]) {
     let len = dims.iter().product();
     let tensor =
         Tensor::from_vec_col_major(dims.to_vec(), vec![1.0_f64; len]).expect("valid tensor");
-    let value = EagerTensor::from_tensor_in(tensor, Arc::clone(runtime)).expect("leaf");
+    let value = runtime.constant_from(tensor).expect("leaf");
     black_box(value);
 }
 
@@ -55,7 +55,7 @@ fn bench_leaf_construction(c: &mut Criterion) {
         b.iter(|| {
             let tensor =
                 Tensor::from_vec_col_major(vec![2, 2, 2], vec![1.0_f64; 8]).expect("valid tensor");
-            let value = EagerTensor::requires_grad_in(tensor, Arc::clone(&runtime)).expect("leaf");
+            let value = runtime.variable_from(tensor).expect("leaf");
             black_box(value);
         })
     });

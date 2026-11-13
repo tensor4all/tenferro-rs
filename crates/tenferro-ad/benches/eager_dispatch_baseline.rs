@@ -28,7 +28,8 @@ fn eager(runtime: &Arc<EagerRuntime>, shape: Vec<usize>) -> EagerTensor {
     let len = shape.iter().product();
     let tensor = Tensor::from_vec_col_major(shape, vec![1.0_f64; len])
         .expect("benchmark tensor should be valid");
-    EagerTensor::from_tensor_in(tensor, Arc::clone(runtime))
+    runtime
+        .constant_from(tensor)
         .expect("benchmark eager tensor should be valid")
 }
 
@@ -38,7 +39,10 @@ fn consume_lazy(output: EagerTensor) {
 }
 
 fn consume_materialized(output: EagerTensor, engine: &mut tenferro_cpu::CpuEngine) {
-    let output = output.to_tensor(engine).expect("output should materialize");
+    let output = output
+        .runtime()
+        .with_eager_session(engine, |s| s.duplicate_value(&output))
+        .expect("output should materialize");
     black_box(output.shape());
     black_box(output.as_slice::<f64>().expect("f64 output")[0]);
 }

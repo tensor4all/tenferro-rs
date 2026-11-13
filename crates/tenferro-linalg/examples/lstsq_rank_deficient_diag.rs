@@ -205,10 +205,10 @@ fn to_eager(
     runtime: &std::sync::Arc<EagerRuntime>,
     fixture: &Fixture,
 ) -> tenferro_ad::Result<EagerTensor> {
-    EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major([fixture.rows, fixture.cols], fixture.data.clone())?,
-        runtime.clone(),
-    )
+    runtime.constant_from(Tensor::from_vec_col_major(
+        [fixture.rows, fixture.cols],
+        fixture.data.clone(),
+    )?)
 }
 
 /// What the pre-check solve returned for one fixture.

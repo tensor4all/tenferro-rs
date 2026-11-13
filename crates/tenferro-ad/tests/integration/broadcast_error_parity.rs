@@ -6,9 +6,8 @@ use tenferro_tensor::{Error as TensorError, ShapeMismatch, ValidationError};
 
 fn eager_tensor(ctx: Arc<EagerRuntime>, shape: Vec<usize>) -> EagerTensor {
     let size = shape.iter().product();
-    EagerTensor::from_tensor_in(
+    ctx.constant_from(
         tenferro_tensor::Tensor::from_vec_col_major(shape, vec![1.0_f64; size]).unwrap(),
-        ctx,
     )
     .unwrap()
 }

@@ -63,16 +63,12 @@ fn dot_general_retained_bytes_count_only_spilled_capacity() {
 #[test]
 fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
     let ctx = EagerRuntime::new().unwrap();
-    let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let lhs = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap())
+        .unwrap();
+    let rhs = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap())
+        .unwrap();
 
     let mut engine = CpuEngine::serial();
     let out = einsum_with_engine(&mut engine, &[&lhs, &rhs], "ji,kj->ki").unwrap();
@@ -88,17 +84,18 @@ fn binary_einsum_col_major_matmul_uses_direct_dot_general_fast_path() {
 #[test]
 fn outer_product_einsum_reuses_its_extension_cache_entry() {
     let ctx = EagerRuntime::new().unwrap();
-    let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], (0..6).map(|i| i as f64 + 1.0).collect()).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 4], (0..12).map(|i| i as f64 * 0.5 - 2.0).collect())
-            .unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let a = ctx
+        .constant_from(
+            Tensor::from_vec_col_major(vec![2, 3], (0..6).map(|i| i as f64 + 1.0).collect())
+                .unwrap(),
+        )
+        .unwrap();
+    let b = ctx
+        .constant_from(
+            Tensor::from_vec_col_major(vec![3, 4], (0..12).map(|i| i as f64 * 0.5 - 2.0).collect())
+                .unwrap(),
+        )
+        .unwrap();
     let mut engine = CpuEngine::serial();
     let first = einsum_with_engine(&mut engine, &[&a, &b], "ij,kl->ijkl").unwrap();
     let first_stats = extension_cache_stats(&mut engine, &ctx);
@@ -113,21 +110,15 @@ fn outer_product_einsum_reuses_its_extension_cache_entry() {
 #[test]
 fn nary_eager_einsum_expands_to_standard_ops_with_runtime_cache() {
     let ctx = EagerRuntime::new().unwrap();
-    let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let c = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let a = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap())
+        .unwrap();
+    let b = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap())
+        .unwrap();
+    let c = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap())
+        .unwrap();
 
     let mut engine = CpuEngine::serial();
     let out = einsum_with_engine(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
@@ -143,21 +134,15 @@ fn nary_eager_einsum_expands_to_standard_ops_with_runtime_cache() {
 #[test]
 fn nary_eager_einsum_expanded_standard_ops_reuse_runtime_cache() {
     let ctx = EagerRuntime::new().unwrap();
-    let a = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let c = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let a = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap())
+        .unwrap();
+    let b = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap())
+        .unwrap();
+    let c = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap())
+        .unwrap();
 
     let mut engine = CpuEngine::serial();
     let first = einsum_with_engine(&mut engine, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
@@ -190,16 +175,12 @@ fn expanded_eager_einsum_cache_hit_preserves_lazy_view_output() {
     let t = 5;
     let lhs_data: Vec<f64> = (0..k * j * t).map(|idx| idx as f64 + 1.0).collect();
     let rhs_data: Vec<f64> = (0..o * t).map(|idx| idx as f64 + 101.0).collect();
-    let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![k, j, t], lhs_data).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![o, t], rhs_data).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let lhs = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![k, j, t], lhs_data).unwrap())
+        .unwrap();
+    let rhs = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![o, t], rhs_data).unwrap())
+        .unwrap();
 
     let mut engine = CpuEngine::serial();
     let first = einsum_with_engine(&mut engine, &[&lhs, &rhs], "kjt,ot->jkot").unwrap();
@@ -227,21 +208,15 @@ fn expanded_eager_einsum_cache_hit_preserves_lazy_view_output() {
 #[test]
 fn nary_eager_einsum_expanded_standard_ops_preserve_backward() {
     let ctx = EagerRuntime::new().unwrap();
-    let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let b = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let c = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap(),
-        ctx,
-    )
-    .unwrap();
+    let a = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap())
+        .unwrap();
+    let b = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap())
+        .unwrap();
+    let c = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap())
+        .unwrap();
 
     let out = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
     let loss = out
@@ -250,7 +225,10 @@ fn nary_eager_einsum_expanded_standard_ops_preserve_backward() {
             s.reduce_sum(&out, Some(&[0, 1]))
         })
         .unwrap();
-    let _ = loss.backward(&mut CpuEngine::serial()).unwrap();
+    let _ = loss
+        .runtime()
+        .with_eager_session(&mut CpuEngine::serial(), |s| s.backward(&loss))
+        .unwrap();
 
     assert_eq!(
         a.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
@@ -261,21 +239,15 @@ fn nary_eager_einsum_expanded_standard_ops_preserve_backward() {
 #[test]
 fn tracked_nary_einsum_gradients_match_expected_values() {
     let ctx = EagerRuntime::new().unwrap();
-    let a = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let b = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let c = EagerTensor::requires_grad_in(
-        Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap(),
-        ctx,
-    )
-    .unwrap();
+    let a = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap())
+        .unwrap();
+    let b = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap())
+        .unwrap();
+    let c = ctx
+        .variable_from(Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap())
+        .unwrap();
 
     let out = einsum(&[&a, &b, &c], "ij,jk,kl->il").unwrap();
     assert_eq!(out.shape(), &[2, 5]);
@@ -286,7 +258,10 @@ fn tracked_nary_einsum_gradients_match_expected_values() {
             s.reduce_sum(&out, Some(&[0, 1]))
         })
         .unwrap();
-    let _ = loss.backward(&mut CpuEngine::serial()).unwrap();
+    let _ = loss
+        .runtime()
+        .with_eager_session(&mut CpuEngine::serial(), |s| s.backward(&loss))
+        .unwrap();
 
     assert_eq!(
         a.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
@@ -305,16 +280,12 @@ fn tracked_nary_einsum_gradients_match_expected_values() {
 #[test]
 fn eager_outer_product_can_use_untracked_backend_broadcast_multiply() {
     let ctx = EagerRuntime::new().unwrap();
-    let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
+    let lhs = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap())
+        .unwrap();
+    let rhs = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![3], vec![5.0_f64, 7.0, 11.0]).unwrap())
+        .unwrap();
 
     let out = ctx
         .with_eager_session(&mut CpuEngine::serial(), |session| {
@@ -340,16 +311,12 @@ fn eager_outer_product_can_return_lazy_noncompact_output() {
     let t = 5;
     let lhs_data: Vec<f64> = (0..k * j * t).map(|idx| idx as f64 + 1.0).collect();
     let rhs_data: Vec<f64> = (0..o * t).map(|idx| idx as f64 + 101.0).collect();
-    let lhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![k, j, t], lhs_data.clone()).unwrap(),
-        ctx.clone(),
-    )
-    .unwrap();
-    let rhs = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![o, t], rhs_data.clone()).unwrap(),
-        ctx,
-    )
-    .unwrap();
+    let lhs = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![k, j, t], lhs_data.clone()).unwrap())
+        .unwrap();
+    let rhs = ctx
+        .constant_from(Tensor::from_vec_col_major(vec![o, t], rhs_data.clone()).unwrap())
+        .unwrap();
 
     let out = einsum(&[&lhs, &rhs], "kjt,ot->jkot").unwrap();
 
@@ -377,7 +344,8 @@ fn eager_outer_product_can_return_lazy_noncompact_output() {
         })
         .collect();
     assert_eq!(
-        out.to_tensor(&mut CpuEngine::serial())
+        out.runtime()
+            .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&out))
             .unwrap()
             .as_slice::<f64>()
             .unwrap(),
@@ -392,25 +360,24 @@ fn eager_outer_product_can_return_lazy_noncompact_output() {
 #[test]
 fn captured_untracked_einsum_keeps_its_vjp() {
     let runtime = EagerRuntime::new().unwrap();
-    let x = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
-    let seed = EagerTensor::from_tensor_in(
-        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
-        runtime.clone(),
-    )
-    .unwrap();
+    let x = runtime
+        .constant_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap())
+        .unwrap();
+    let seed = runtime
+        .constant_from(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap())
+        .unwrap();
     let y = {
         let _capture = runtime.capture_trace();
         einsum(&[&x, &x, &x], "i,i,i->").unwrap()
     };
-    let grad = runtime
-        .vjp(&mut CpuEngine::serial(), &y, &x, &seed)
-        .unwrap()
-        .to_tensor(&mut CpuEngine::serial())
-        .unwrap();
+    let grad = ({
+        let t = runtime
+            .with_eager_session(&mut CpuEngine::serial(), |s| s.vjp(&y, &x, &seed))
+            .unwrap();
+        t.runtime()
+            .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&t))
+    })
+    .unwrap();
     // d/dx_i sum_j x_j^3 = 3 x_i^2.
     assert_eq!(grad.as_slice::<f64>().unwrap(), &[12.0, 27.0]);
 }

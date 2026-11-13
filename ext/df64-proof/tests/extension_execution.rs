@@ -46,7 +46,10 @@ fn the_extension_operation_runs_through_the_registered_module() {
     let outputs = apply_total(&mut engine, &input).expect("extension execution");
     assert_eq!(outputs.len(), 1);
 
-    let value = outputs[0].to_tensor(&mut engine).expect("output tensor");
+    let value = outputs[0]
+        .runtime()
+        .with_eager_session(&mut engine, |s| s.duplicate_value(&outputs[0]))
+        .expect("output tensor");
     let total = payload(&value);
     assert_eq!(total.len(), 1);
     assert_eq!(total[0], Df64 { hi: 1.0, lo: low });
@@ -97,7 +100,10 @@ fn the_runtime_retains_and_returns_a_caller_owned_payload() {
 
     // A caller-owned payload keeps every bit while the runtime retains it, so the
     // low-order component survives the round trip unchanged.
-    let value = leaf.to_tensor(&mut engine).expect("round trip");
+    let value = leaf
+        .runtime()
+        .with_eager_session(&mut engine, |s| s.duplicate_value(&leaf))
+        .expect("round trip");
     assert_eq!(payload(&value), vec![original, Df64::from_f64(3.0)]);
     assert!(value.external_payload().is_some());
 }

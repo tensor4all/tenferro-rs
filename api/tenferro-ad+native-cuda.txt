@@ -80,44 +80,29 @@ pub fn tenferro_ad::EagerRuntime::clear_caches(&self) -> tenferro_runtime::error
 pub fn tenferro_ad::EagerRuntime::clear_grads(&self) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerRuntime::clear_prepared_derivative_cache(&self) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerRuntime::constant_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::grad(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::grad_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
 pub fn tenferro_ad::EagerRuntime::id(&self) -> tenferro_runtime::error::ContextId
 pub fn tenferro_ad::EagerRuntime::install_extension_module(&self, alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>) -> tenferro_runtime::error::Result<tenferro_runtime::runtime::identity::RuntimeEpoch>
-pub fn tenferro_ad::EagerRuntime::jvp(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::jvp_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
 pub fn tenferro_ad::EagerRuntime::new() -> tenferro_runtime::error::Result<alloc::sync::Arc<Self>>
 pub fn tenferro_ad::EagerRuntime::no_grad(&self) -> tenferro_ad::EagerNoGradGuard
 pub fn tenferro_ad::EagerRuntime::prepared_derivative_cache_limits(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdTransformCacheLimits>
 pub fn tenferro_ad::EagerRuntime::set_ad_transform_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerRuntime::set_prepared_derivative_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerRuntime::variable_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::vjp(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::vjp_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
 pub fn tenferro_ad::EagerRuntime::with_ad_context(&tenferro_ad::AdContext) -> tenferro_runtime::error::Result<alloc::sync::Arc<Self>>
 pub fn tenferro_ad::EagerRuntime::with_eager_session<T, E: core::convert::From<tenferro_runtime::error::Error>>(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, impl core::ops::function::FnOnce(&mut tenferro_ad::EagerSession<'_>) -> core::result::Result<T, E>) -> core::result::Result<T, E>
 impl core::fmt::Debug for tenferro_ad::EagerRuntime
 pub fn tenferro_ad::EagerRuntime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_ad::prelude::EagerTensor
 impl tenferro_ad::EagerTensor
-pub fn tenferro_ad::EagerTensor::backward(&self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
-pub fn tenferro_ad::EagerTensor::backward_with(&self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
 pub fn tenferro_ad::EagerTensor::clear_grad(&self) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerTensor::ctx_id(&self) -> tenferro_runtime::error::ContextId
-pub fn tenferro_ad::EagerTensor::detach(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<Self>
-pub fn tenferro_ad::EagerTensor::detach_into(&self, &mut dyn tenferro_tensor::backend::Engine, &alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
 pub fn tenferro_ad::EagerTensor::dtype(&self) -> tenferro_tensor_core::DType
-pub fn tenferro_ad::EagerTensor::duplicate_value(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_ad::EagerTensor::from_tensor_in(tenferro_tensor::types::Tensor, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
-pub fn tenferro_ad::EagerTensor::from_vec_col_major_in<T: tenferro_tensor::types::TensorScalar>(impl tenferro_tensor_core::IntoShapeVec, alloc::vec::Vec<T>, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
 pub fn tenferro_ad::EagerTensor::grad(&self) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::GradientValue>>
 pub fn tenferro_ad::EagerTensor::into_value(self) -> core::result::Result<tenferro_tensor::types::Tensor, tenferro_ad::IntoValueError<Self>>
-pub fn tenferro_ad::EagerTensor::requires_grad_in(tenferro_tensor::types::Tensor, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
 pub fn tenferro_ad::EagerTensor::runtime(&self) -> &alloc::sync::Arc<tenferro_ad::EagerRuntime>
 pub fn tenferro_ad::EagerTensor::same_context(&self, &Self) -> bool
 pub fn tenferro_ad::EagerTensor::shape(&self) -> &[usize]
 pub fn tenferro_ad::EagerTensor::tensor_read(&self) -> tenferro_tensor::types::TensorRead<'_>
-pub fn tenferro_ad::EagerTensor::to_tensor(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_ad::EagerTensor::tracks_grad(&self) -> bool
 pub fn tenferro_ad::EagerTensor::value(&self) -> tenferro_runtime::error::Result<tenferro_ad::ValueGuard<'_>>
 impl tenferro_ad::EagerTensor
@@ -507,20 +492,14 @@ pub fn tenferro_ad::EagerRuntime::clear_caches(&self) -> tenferro_runtime::error
 pub fn tenferro_ad::EagerRuntime::clear_grads(&self) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerRuntime::clear_prepared_derivative_cache(&self) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerRuntime::constant_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::grad(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::grad_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
 pub fn tenferro_ad::EagerRuntime::id(&self) -> tenferro_runtime::error::ContextId
 pub fn tenferro_ad::EagerRuntime::install_extension_module(&self, alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>) -> tenferro_runtime::error::Result<tenferro_runtime::runtime::identity::RuntimeEpoch>
-pub fn tenferro_ad::EagerRuntime::jvp(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::jvp_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
 pub fn tenferro_ad::EagerRuntime::new() -> tenferro_runtime::error::Result<alloc::sync::Arc<Self>>
 pub fn tenferro_ad::EagerRuntime::no_grad(&self) -> tenferro_ad::EagerNoGradGuard
 pub fn tenferro_ad::EagerRuntime::prepared_derivative_cache_limits(&self) -> tenferro_runtime::error::Result<tenferro_ad::AdTransformCacheLimits>
 pub fn tenferro_ad::EagerRuntime::set_ad_transform_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerRuntime::set_prepared_derivative_cache_limits(&self, tenferro_ad::AdTransformCacheLimits) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerRuntime::variable_from(&alloc::sync::Arc<Self>, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::vjp(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerRuntime::vjp_optional(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
 pub fn tenferro_ad::EagerRuntime::with_ad_context(&tenferro_ad::AdContext) -> tenferro_runtime::error::Result<alloc::sync::Arc<Self>>
 pub fn tenferro_ad::EagerRuntime::with_eager_session<T, E: core::convert::From<tenferro_runtime::error::Error>>(&alloc::sync::Arc<Self>, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, impl core::ops::function::FnOnce(&mut tenferro_ad::EagerSession<'_>) -> core::result::Result<T, E>) -> core::result::Result<T, E>
 impl core::fmt::Debug for tenferro_ad::EagerRuntime
@@ -544,7 +523,8 @@ impl tenferro_ad::EagerSession<'_>
 pub fn tenferro_ad::EagerSession<'_>::abs(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::add(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::apply_standard_op(&mut self, tenferro_ops::std_tensor_op::StdTensorOp, &[&tenferro_ad::EagerTensor]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
-pub fn tenferro_ad::EagerSession<'_>::backend_session(&mut self) -> &mut dyn tenferro_tensor::backend::Engine
+pub fn tenferro_ad::EagerSession<'_>::backward(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
+pub fn tenferro_ad::EagerSession<'_>::backward_with(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
 pub fn tenferro_ad::EagerSession<'_>::broadcast_in_dim(&mut self, &tenferro_ad::EagerTensor, &[usize], &[usize]) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::cast(&mut self, &tenferro_ad::EagerTensor, tenferro_tensor_core::DType) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::clamp(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
@@ -555,6 +535,7 @@ pub fn tenferro_ad::EagerSession<'_>::constant_from(&mut self, tenferro_tensor::
 pub fn tenferro_ad::EagerSession<'_>::constant_from_host(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::convert(&mut self, &tenferro_ad::EagerTensor, tenferro_tensor_core::DType) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::cos(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::detach(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::div(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::dot_general(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::DotGeneralConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::dot_general_with(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::DotGeneralConfig, &tenferro_tensor::dest::DotGeneralOptions) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
@@ -567,6 +548,10 @@ pub fn tenferro_ad::EagerSession<'_>::exp(&mut self, &tenferro_ad::EagerTensor) 
 pub fn tenferro_ad::EagerSession<'_>::expm1(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::extract_diag(&mut self, &tenferro_ad::EagerTensor, isize, isize) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::gather(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, tenferro_tensor::config::GatherConfig) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::grad(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::grad_optional(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
+pub fn tenferro_ad::EagerSession<'_>::jvp(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::jvp_optional(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
 pub fn tenferro_ad::EagerSession<'_>::log(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::log1p(&mut self, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::matmul(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
@@ -599,6 +584,8 @@ pub fn tenferro_ad::EagerSession<'_>::transpose(&mut self, &tenferro_ad::EagerTe
 pub fn tenferro_ad::EagerSession<'_>::tril(&mut self, &tenferro_ad::EagerTensor, i64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::triu(&mut self, &tenferro_ad::EagerTensor, i64) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::variable_from(&mut self, tenferro_tensor::types::Tensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::vjp(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
+pub fn tenferro_ad::EagerSession<'_>::vjp_optional(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::EagerTensor>>
 pub fn tenferro_ad::EagerSession<'_>::where_select(&mut self, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::EagerTensor>
 pub fn tenferro_ad::EagerSession<'_>::with_extension_caches<R>(&mut self, impl core::ops::function::FnOnce(&mut tenferro_runtime::extension_cache::ExtensionCacheStore) -> R) -> tenferro_runtime::error::Result<R>
 impl tenferro_ad::EagerSession<'_>
@@ -637,24 +624,15 @@ impl<'a> core::fmt::Debug for tenferro_ad::EagerSliceBuilder<'a>
 pub fn tenferro_ad::EagerSliceBuilder<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_ad::EagerTensor
 impl tenferro_ad::EagerTensor
-pub fn tenferro_ad::EagerTensor::backward(&self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
-pub fn tenferro_ad::EagerTensor::backward_with(&self, &mut dyn tenferro_runtime::runtime::engine::ExecutionEngine, &tenferro_ad::EagerTensor) -> tenferro_runtime::error::Result<tenferro_ad::Gradients>
 pub fn tenferro_ad::EagerTensor::clear_grad(&self) -> tenferro_runtime::error::Result<()>
 pub fn tenferro_ad::EagerTensor::ctx_id(&self) -> tenferro_runtime::error::ContextId
-pub fn tenferro_ad::EagerTensor::detach(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<Self>
-pub fn tenferro_ad::EagerTensor::detach_into(&self, &mut dyn tenferro_tensor::backend::Engine, &alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
 pub fn tenferro_ad::EagerTensor::dtype(&self) -> tenferro_tensor_core::DType
-pub fn tenferro_ad::EagerTensor::duplicate_value(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
-pub fn tenferro_ad::EagerTensor::from_tensor_in(tenferro_tensor::types::Tensor, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
-pub fn tenferro_ad::EagerTensor::from_vec_col_major_in<T: tenferro_tensor::types::TensorScalar>(impl tenferro_tensor_core::IntoShapeVec, alloc::vec::Vec<T>, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
 pub fn tenferro_ad::EagerTensor::grad(&self) -> tenferro_runtime::error::Result<core::option::Option<tenferro_ad::GradientValue>>
 pub fn tenferro_ad::EagerTensor::into_value(self) -> core::result::Result<tenferro_tensor::types::Tensor, tenferro_ad::IntoValueError<Self>>
-pub fn tenferro_ad::EagerTensor::requires_grad_in(tenferro_tensor::types::Tensor, alloc::sync::Arc<tenferro_ad::EagerRuntime>) -> tenferro_runtime::error::Result<Self>
 pub fn tenferro_ad::EagerTensor::runtime(&self) -> &alloc::sync::Arc<tenferro_ad::EagerRuntime>
 pub fn tenferro_ad::EagerTensor::same_context(&self, &Self) -> bool
 pub fn tenferro_ad::EagerTensor::shape(&self) -> &[usize]
 pub fn tenferro_ad::EagerTensor::tensor_read(&self) -> tenferro_tensor::types::TensorRead<'_>
-pub fn tenferro_ad::EagerTensor::to_tensor(&self, &mut dyn tenferro_tensor::backend::Engine) -> tenferro_runtime::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_ad::EagerTensor::tracks_grad(&self) -> bool
 pub fn tenferro_ad::EagerTensor::value(&self) -> tenferro_runtime::error::Result<tenferro_ad::ValueGuard<'_>>
 impl tenferro_ad::EagerTensor

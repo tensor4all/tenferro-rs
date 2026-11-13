@@ -159,7 +159,10 @@ fn cuda_einsum_ownership_copies_stay_resident() {
             .collect::<Vec<_>>();
         let eager_refs = eager_inputs.iter().collect::<Vec<_>>();
         let eager = einsum(&mut engine, &eager_refs, expression).unwrap();
-        let resident = eager.to_tensor(&mut engine).unwrap();
+        let resident = eager
+            .runtime()
+            .with_eager_session(&mut engine, |s| s.duplicate_value(&eager))
+            .unwrap();
         assert_eq!(resident.shape(), cpu.shape(), "eager {expression}");
         assert!(
             resident.as_slice::<f32>().is_err(),
@@ -201,7 +204,10 @@ fn cuda_eager_three_operand_einsum_stays_resident() {
 
     assert_eq!(output.runtime().id(), runtime.id());
     assert_eq!(output.shape(), &[2, 2, 2]);
-    let resident = output.to_tensor(&mut engine).unwrap();
+    let resident = output
+        .runtime()
+        .with_eager_session(&mut engine, |s| s.duplicate_value(&output))
+        .unwrap();
     assert!(resident.as_slice::<f64>().is_err());
     let host = download_tensor(engine.runtime(), &resident).unwrap();
     assert_eq!(host.as_slice::<f64>().unwrap(), &[4.0; 8]);

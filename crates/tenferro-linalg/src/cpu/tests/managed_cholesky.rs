@@ -563,14 +563,17 @@ fn managed_eager_cholesky_preserves_domain_and_values() {
     let input_id = input.allocation_id();
     let runtime = EagerRuntime::new().unwrap();
     let mut engine = backend(&domain);
-    let output = runtime
-        .with_eager_session(&mut engine, |session| {
-            let eager = session.constant_from(Tensor::from_typed(input))?;
-            session.cholesky(&eager)
-        })
-        .unwrap()
-        .to_tensor(&mut engine)
-        .unwrap();
+    let output = ({
+        let t = &runtime
+            .with_eager_session(&mut engine, |session| {
+                let eager = session.constant_from(Tensor::from_typed(input))?;
+                session.cholesky(&eager)
+            })
+            .unwrap();
+        t.runtime()
+            .with_eager_session(&mut engine, |s| s.duplicate_value(t))
+    })
+    .unwrap();
     let output = output.as_typed::<f64>().unwrap();
     assert_eq!(output.allocation_domain(), Some(domain.id()));
     assert_ne!(output.allocation_id(), input_id);

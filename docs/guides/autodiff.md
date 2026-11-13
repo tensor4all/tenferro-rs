@@ -2,8 +2,8 @@
 
 tenferro supports two autodiff workflows on top of the same dense tensor stack:
 
-- PyTorch-like eager execution with `EagerTensor::backward()` on scalar losses
-  and `EagerRuntime` functional `grad`, `vjp`, and `jvp`,
+- PyTorch-like eager execution with `EagerSession::backward` on scalar losses
+  and `EagerSession` functional `grad`, `vjp`, and `jvp`,
 - JAX-like `grad`, `vjp`, and `jvp` on `TracedTensor` graphs.
 
 This page focuses on traced graph workflows that you compile and execute

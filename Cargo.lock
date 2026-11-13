@@ -2462,6 +2462,7 @@ dependencies = [
  "num-traits",
  "tenferro-cpu",
  "tenferro-gpu",
+ "tenferro-internal-extension-macros",
  "tenferro-internal-ops",
  "tenferro-runtime",
  "tenferro-tensor",

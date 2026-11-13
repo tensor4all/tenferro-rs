@@ -192,9 +192,55 @@ jobs:
           REASON: ${{ needs.changes.outputs.reason }}
         run: echo "Extension tests not required - ${REASON}"
 
+  api-surface:
+    # Public API snapshot (#2552) and its registry conformance (#2602) on the
+    # surface compiled from this commit. The conformance check reads the
+    # api_ops! registries, so an undeclared eager entry point, a duplicate
+    # alias or an engine argument outside the session boundary fails even when
+    # the snapshots in api/ were regenerated to match.
+    name: Public API snapshot and registry conformance
+    needs: changes
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Registry-conformance checker self-test
+        run: python3 scripts/test-check-api-registry-conformance.py
+      - name: Committed snapshots conform to the registries
+        run: python3 scripts/check-api-registry-conformance.py
+      # Pinned: rustdoc JSON rendering changes between nightlies, and
+      # scripts/api-snapshot.sh uses this exact toolchain (#2552 Q4).
+      - uses: dtolnay/rust-toolchain@master
+        if: needs.changes.outputs.run_workspace == 'true'
+        with:
+          toolchain: nightly-2026-07-18
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.run_workspace == 'true'
+      - uses: taiki-e/install-action@v2
+        if: needs.changes.outputs.run_workspace == 'true'
+        with:
+          tool: cargo-public-api@0.52.0
+      - name: Compiled public API matches api/ and conforms to the registries
+        if: needs.changes.outputs.run_workspace == 'true'
+        run: scripts/api-snapshot.sh --check
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.run_workspace == 'true'
+        with:
+          prefix-key: v1-rust-ubuntu24-api-surface
+      # The workspace lanes run under nextest, which skips trybuild contracts;
+      # plain cargo test runs them: the session spellings compile and the
+      # removed engine-taking receivers and copy aliases stay compile errors.
+      - name: Eager session compile contracts (trybuild)
+        if: needs.changes.outputs.run_workspace == 'true'
+        run: cargo test -p tenferro-ad --test integration eager_backend_capability_boundary
+      - name: Report compiled-surface no-op
+        if: needs.changes.outputs.run_workspace != 'true'
+        env:
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: echo "No Rust change; the committed snapshots were checked against the registries - ${REASON}"
+
   ci-gate:
     name: CI gate (PR workspace tests)
-    needs: [changes, ci-fork, ci-maintainer, ext-samples]
+    needs: [changes, ci-fork, ci-maintainer, ext-samples, api-surface]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -204,6 +250,7 @@ jobs:
           FORK_RESULT: ${{ needs.ci-fork.result }}
           MAINTAINER_RESULT: ${{ needs.ci-maintainer.result }}
           EXT_RESULT: ${{ needs.ext-samples.result }}
+          API_RESULT: ${{ needs.api-surface.result }}
           RUN_WORKSPACE: ${{ needs.changes.outputs.run_workspace }}
           RUN_EXTENSIONS: ${{ needs.changes.outputs.run_extensions }}
         run: |
@@ -213,6 +260,10 @@ jobs:
           fi
           if [ "${EXT_RESULT}" != success ]; then
             echo "Expected ext-samples to succeed or no-op; got ${EXT_RESULT}"
+            exit 1
+          fi
+          if [ "${API_RESULT}" != success ]; then
+            echo "Expected the public API snapshot and registry conformance to pass; got ${API_RESULT}"
             exit 1
           fi
           if [ "${FORK_RESULT}" != success ] && [ "${MAINTAINER_RESULT}" != success ]; then

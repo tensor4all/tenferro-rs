@@ -21,7 +21,7 @@ backend and device choices remain explicit.
 | Graph-building tensor handle | `torch.Tensor` under compiled/tracing tools | traced `jax.Array` values | `TracedTensor` |
 | Concrete result | `torch.Tensor` | `jax.Array` | `Tensor` returned by `Runtime::run` |
 | Execution | Eager by default | Eager arrays, often staged with `jit` | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphCompiler` + `Runtime`) |
-| Eager forward and gradients | eager ops plus `loss.backward()` or `torch.autograd.grad(...)` | eager arrays with function transforms | `EagerTensor` forward ops, `backward()` for accumulated gradients, and `EagerRuntime` functional `grad`/`vjp`/`jvp` |
+| Eager forward and gradients | eager ops plus `loss.backward()` or `torch.autograd.grad(...)` | eager arrays with function transforms | `EagerSession` forward ops, `s.backward(&loss)` for accumulated gradients, and functional `s.grad`/`s.vjp`/`s.jvp` |
 | Transform AD | `torch.autograd.grad(...)`, `torch.func.jvp` | `jax.grad`, `jax.vjp`, `jax.jvp`, HVP via composition | `EagerRuntime::{grad,vjp,jvp}` or traced `.grad()?` / `.vjp()?` / `.jvp()?`; HVP via composition |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or runtime engine registrations |
 | CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro_gpu::cuda::upload_tensor(...)` and `download_tensor(...)` |
@@ -43,7 +43,7 @@ backend and device choices remain explicit.
 | QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `x.qr(&mut engine)?` via `LinalgOps` | `x.qr()?` via `TracedLinalgOps` |
 | Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `x.cholesky(&mut engine)?` via `LinalgOps` | `x.cholesky()?` via `TracedLinalgOps` |
 | Solve | `torch.linalg.solve(a, b)` | `jnp.linalg.solve(a, b)` | `a.solve(&b, &mut engine)?` via `LinalgOps` | `a.solve(&b)?` via `TracedLinalgOps` |
-| Scalar-loss backward | `loss.backward()` | — | `loss.backward()` on `EagerTensor` | — |
+| Scalar-loss backward | `loss.backward()` | — | `s.backward(&loss)` on `EagerSession` | — |
 | Reverse-mode grad | `torch.autograd.grad(loss, x)` | `jax.grad(f)(x)` | `ctx.grad(&loss, &x)?` | `loss.grad(&x)` |
 | VJP | `torch.autograd.grad(..., grad_outputs=...)` | `jax.vjp` | `ctx.vjp(&y, &x, &cotangent)?` | `y.vjp(&x, &cotangent)?` |
 | JVP | `torch.func.jvp` | `jax.jvp` | `ctx.jvp(&y, &x, &tangent)?` | `y.jvp(&x, &tangent)?` |
@@ -115,8 +115,9 @@ resulting `CompiledGraph` with `Runtime::prepare` and `Runtime::run`.
 
 Eager tenferro matches PyTorch-style eager forward execution. When tensors are
 tracked, it also matches the scalar loss `loss.backward()` workflow with
-accumulation semantics, and `EagerRuntime` exposes functional `grad`, `vjp`,
-and `jvp` when the derivative should be returned as another eager tensor.
+accumulation semantics (spelled `s.backward(&loss)` on the eager session), and
+the session exposes functional `grad`, `vjp`, and `jvp` when the derivative
+should be returned as another eager tensor.
 Traced tenferro is the compiled-graph API for the same transform vocabulary and
 higher-order compositions such as HVPs.
 

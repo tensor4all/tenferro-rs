@@ -51,8 +51,11 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check bans
+      # The public API snapshot and its registry conformance run in the
+      # `api-surface` job of ci-pr-workspace-tests.yml, which the required
+      # `CI gate (PR workspace tests)` depends on (#2602).
       # Pinned: rustdoc JSON rendering changes between nightlies, and
-      # scripts/api-snapshot.sh uses this exact toolchain (#2552 Q4).
+      # scripts/check-no-public-rayon.sh uses this exact toolchain (#2552 Q4).
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-07-18
@@ -62,8 +65,6 @@ jobs:
           tool: cargo-public-api@0.52.0
       - name: No rayon type in the public API of tenferro-cpu
         run: scripts/check-no-public-rayon.sh
-      - name: Public API snapshot matches api/ (#2552)
-        run: scripts/api-snapshot.sh --check
       - uses: Swatinem/rust-cache@v2
       - name: Placement ledger (live tasks within budget, no pool entry for small work, global pool unstarted)
         run: cargo test -p tenferro-cpu -p tenferro-linalg -p tenferro-einsum --features ledger --no-fail-fast

@@ -2,7 +2,7 @@
 
 tenferro is a Rust-native tensor computation stack with opt-in autodiff for
 scientific workloads: typed tensors, dynamic tensors, PyTorch-style immediate
-execution with `backward()` and `EagerRuntime` functional `grad`, `vjp`, and
+execution with `backward()` and `EagerSession` functional `grad`, `vjp`, and
 `jvp`, JAX-style traced graphs, einsum, linear algebra, FFT, and explicit CPU,
 CUDA backend control.
 

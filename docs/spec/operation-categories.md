@@ -16,7 +16,7 @@ Related:
 |---|---|---|
 | **TypedTensor** | `TypedTensor<T, R>` (non-AD) | Static/dynamic-rank typed value; the "lightweight array" path |
 | **Tensor** | `Tensor` (runtime dtype) | Dynamic-dtype value with explicit backend |
-| **Eager** | `EagerTensor` | PyTorch-style immediate execution + stateful `backward()` plus functional `grad`/`vjp`/`jvp` |
+| **Eager** | `EagerTensor` (handle) on an `EagerSession` | PyTorch-style immediate execution + stateful `s.backward(&loss)` plus functional `s.grad`/`s.vjp`/`s.jvp` |
 | **Traced** | `TracedTensor` | JAX-style traced graph + `grad`/`vjp`/`jvp` |
 
 **Rank model.** `TypedTensor<T, R = DynRank>` offers `Rank<N>` (opt-in static rank)
@@ -193,9 +193,10 @@ and traced surfaces (subject to the same parity rule within each family):
 
 ## 9. AD transforms
 
-Not value operations; listed for completeness. `EagerRuntime` exposes stateful
-`backward()` / `backward_with(seed)` plus functional `grad` / `vjp` / `jvp` /
-HVP composition on eager tensors. `TracedTensor` and `AdContext` expose graph
+Not value operations; listed for completeness. `EagerSession` exposes stateful
+`backward(&loss)` / `backward_with(&loss, &seed)` plus functional `grad` / `vjp`
+/ `jvp` (and their `_optional` forms) / HVP composition on eager tensors; like
+every eager operation that needs an engine, they are session methods (#2602). `TracedTensor` and `AdContext` expose graph
 `grad` / `vjp` / `jvp` / HVP workflows for compiled execution and graph reuse.
 
 ## 10. Host iteration and closure map (non-AD surfaces only)

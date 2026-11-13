@@ -123,7 +123,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .unwrap();
                     }
                     Some(
-                        out.to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+                        out.runtime()
+                            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                                s.duplicate_value(&out)
+                            })
                             .unwrap(),
                     )
                 }
@@ -136,17 +139,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 // Tensor construction is included in this standalone diagnostic.
                 "leaf" => Some(
-                    runtime
-                        .constant_from(
-                            Tensor::from_vec_col_major(
-                                [2, 2],
-                                black_box(vec![1.0_f64, 2.0, 3.0, 4.0]),
+                    ({
+                        let t = runtime
+                            .constant_from(
+                                Tensor::from_vec_col_major(
+                                    [2, 2],
+                                    black_box(vec![1.0_f64, 2.0, 3.0, 4.0]),
+                                )
+                                .unwrap(),
                             )
-                            .unwrap(),
-                        )
-                        .unwrap()
-                        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
-                        .unwrap(),
+                            .unwrap();
+                        t.runtime()
+                            .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+                                s.duplicate_value(&t)
+                            })
+                    })
+                    .unwrap(),
                 ),
                 _ => unreachable!(),
             }

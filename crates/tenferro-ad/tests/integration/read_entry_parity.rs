@@ -63,7 +63,10 @@ fn assert_read_parity(
     strided: TensorRead<'_>,
 ) {
     let eager = eager
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.duplicate_value(eager)
+        })
         .expect("materialize the eager output");
     for (flavour, read) in [("compact", compact), ("strided", strided)] {
         let traced = run_traced_on_read(traced_output, placeholder, read);
@@ -87,7 +90,7 @@ fn eager_and_traced_agree_on_a_borrowed_view_operand() {
         (0..24).map(|index| index as f64).collect::<Vec<_>>(),
     )
     .expect("source tensor");
-    let owned = EagerTensor::from_tensor_in(source, ctx.clone()).expect("eager source");
+    let owned = ctx.constant_from(source).expect("eager source");
     let view = ctx
         .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
             s.transpose(&owned, &[1, 2, 0])
@@ -100,7 +103,10 @@ fn eager_and_traced_agree_on_a_borrowed_view_operand() {
     assert_eq!(view.shape(), &[3, 4, 2]);
 
     let logical = view
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.duplicate_value(&view)
+        })
         .expect("materialize the eager input");
     let compact = TensorRead::from_view(
         TensorRead::from_tensor(&logical)

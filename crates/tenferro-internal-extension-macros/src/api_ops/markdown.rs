@@ -63,6 +63,9 @@ pub(crate) fn render(reg: &Registry) -> String {
             None => out.push_str("- Options: none\n"),
         }
         out.push_str(&format!("- Output: `{}`\n", tidy(&quote!(#output))));
+        for (layer, sig) in &op.signatures {
+            out.push_str(&format!("- Signature ({layer}): `{}`\n", sig.value()));
+        }
         out.push_str(&format!("- Dtypes: {}\n", op.dtypes.value()));
         out.push_str(&format!("- Layout: {}\n", op.layout.value()));
         let errs = op

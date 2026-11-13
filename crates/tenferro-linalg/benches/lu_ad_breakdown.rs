@@ -58,11 +58,11 @@ fn tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
 }
 
 fn eager(ctx: &Arc<EagerRuntime>, shape: Vec<usize>, data: Vec<f64>) -> EagerTensor {
-    EagerTensor::from_tensor_in(tensor(shape, data), Arc::clone(ctx)).unwrap()
+    ctx.constant_from(tensor(shape, data)).unwrap()
 }
 
 fn variable(ctx: &Arc<EagerRuntime>, shape: Vec<usize>, data: Vec<f64>) -> EagerTensor {
-    EagerTensor::requires_grad_in(tensor(shape, data), Arc::clone(ctx)).unwrap()
+    ctx.variable_from(tensor(shape, data)).unwrap()
 }
 
 fn dense_matrix(n: usize, seed: u64) -> Vec<f64> {
@@ -154,7 +154,9 @@ fn fixture(n: usize, threads: usize) -> Fixture {
             s.add(&l_sum, &u_sum)
         })
         .unwrap();
-    let warm = ctx.jvp(&mut engine, &lu_loss, &matrix, &tangent).unwrap();
+    let warm = ctx
+        .with_eager_session(&mut engine, |s| s.jvp(&lu_loss, &matrix, &tangent))
+        .unwrap();
     consume_f64(&warm);
 
     Fixture {
@@ -172,7 +174,10 @@ fn fixture(n: usize, threads: usize) -> Fixture {
 
 fn consume_f64(tensor: &EagerTensor) {
     let materialized = tensor
-        .to_tensor(&mut tenferro_cpu::CpuEngine::serial())
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+            s.duplicate_value(tensor)
+        })
         .unwrap();
     black_box(materialized.shape());
     black_box(materialized.as_slice::<f64>().unwrap()[0]);
@@ -195,12 +200,13 @@ fn bench_lu_ad_breakdown(c: &mut Criterion) {
             bench.iter(|| {
                 let out = fixture
                     .ctx
-                    .jvp(
-                        &mut fixture.engine,
-                        black_box(&fixture.lu_loss),
-                        black_box(&fixture.matrix),
-                        black_box(&fixture.tangent),
-                    )
+                    .with_eager_session(&mut fixture.engine, |s| {
+                        s.jvp(
+                            black_box(&fixture.lu_loss),
+                            black_box(&fixture.matrix),
+                            black_box(&fixture.tangent),
+                        )
+                    })
                     .unwrap();
                 consume_f64(&out);
             });

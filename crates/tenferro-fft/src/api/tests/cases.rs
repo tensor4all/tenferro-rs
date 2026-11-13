@@ -61,8 +61,14 @@ pub(super) fn all() -> Vec<Case> {
                     })?;
                     let mut e = CpuEngine::serial();
                     Ok((
-                        tensor_bits(&p.to_tensor(&mut e)?)?,
-                        tensor_bits(&w.to_tensor(&mut e)?)?,
+                        tensor_bits(
+                            &p.runtime()
+                                .with_eager_session(&mut e, |s| s.duplicate_value(&p))?,
+                        )?,
+                        tensor_bits(
+                            &w.runtime()
+                                .with_eager_session(&mut e, |s| s.duplicate_value(&w))?,
+                        )?,
                     ))
                 }),
             });

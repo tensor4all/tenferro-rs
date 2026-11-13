@@ -76,7 +76,9 @@ fn eager_runtime() -> Arc<EagerRuntime> {
 
 #[cfg(feature = "autodiff")]
 fn eager(tensor: &Tensor) -> EagerTensor {
-    EagerTensor::from_tensor_in(tensor.duplicate().unwrap(), eager_runtime()).unwrap()
+    eager_runtime()
+        .constant_from(tensor.duplicate().unwrap())
+        .unwrap()
 }
 
 const RECTANGULAR_DETERMINANT_SHAPES: [&[usize]; 5] =
@@ -199,15 +201,24 @@ fn empty_square_determinant_remains_one_and_zero() {
         } = runtime
             .with_eager_session(&mut CpuEngine::serial(), |session| session.slogdet(&eager))
             .unwrap();
-        let sign = sign.to_tensor(&mut CpuEngine::serial()).unwrap();
-        let logabsdet = logabsdet.to_tensor(&mut CpuEngine::serial()).unwrap();
+        let sign = sign
+            .runtime()
+            .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&sign))
+            .unwrap();
+        let logabsdet = logabsdet
+            .runtime()
+            .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&logabsdet))
+            .unwrap();
         assert_eq!(sign.as_slice::<f64>().unwrap(), &[1.0]);
         assert_eq!(logabsdet.as_slice::<f64>().unwrap(), &[0.0]);
-        let det = runtime
-            .with_eager_session(&mut CpuEngine::serial(), |session| session.det(&eager))
-            .unwrap()
-            .to_tensor(&mut CpuEngine::serial())
-            .unwrap();
+        let det = ({
+            let t = runtime
+                .with_eager_session(&mut CpuEngine::serial(), |session| session.det(&eager))
+                .unwrap();
+            t.runtime()
+                .with_eager_session(&mut CpuEngine::serial(), |s| s.duplicate_value(&t))
+        })
+        .unwrap();
         assert_eq!(det.as_slice::<f64>().unwrap(), &[1.0]);
     }
 

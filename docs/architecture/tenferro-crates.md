@@ -152,7 +152,8 @@ tenferro-runtime          -> tenferro-tensor, tenferro-core-ops,
 tenferro-xla              -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor
 tenferro-ad               -> tenferro-runtime, tenferro-internal-ops,
-                              tenferro-tensor, tenferro-cpu
+                              tenferro-tensor, tenferro-cpu,
+                              tenferro-internal-extension-macros
 
 tenferro-einsum           -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu,
@@ -179,6 +180,10 @@ Additional internal dependencies:
 - `tenferro-runtime` depends on `tenferro-internal-extension-macros` only to
   re-export the supported out-of-tree authoring macro; the proc-macro crate
   emits runtime paths and does not depend back on `tenferro-runtime`.
+- `tenferro-ad` depends on `tenferro-internal-extension-macros` only for the
+  `api_ops!` registry of its eager AD, value and leaf entry points (#2602); the
+  registry describes inherent `EagerSession` methods and generates no code
+  beyond metadata.
 - `tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft` depend on
   `tenferro-runtime` for extension application and runtime registration.
 - `tenferro-xla` depends on `tenferro-runtime` to read compiled programs and

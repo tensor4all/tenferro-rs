@@ -104,10 +104,7 @@ pub(crate) fn eager_capture_active() -> bool {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::new()?;
-/// let x = EagerTensor::requires_grad_in(
-///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-///     ctx.clone(),
-/// )?;
+/// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap())?;
 /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
 ///     let _guard = ctx.no_grad();
 ///     s.mul(&x, &x)
@@ -150,19 +147,13 @@ impl Drop for EagerNoGradGuard {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::new()?;
-/// let x = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-///     ctx.clone(),
-/// )?;
+/// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())?;
 /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
 ///     let _capture = ctx.capture_trace();
 ///     s.mul(&x, &x)
 /// })?;
-/// let seed = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
-///     ctx.clone(),
-/// )?;
-/// let dx = ctx.vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &x, &seed)?;
+/// let seed = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap())?;
+/// let dx = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.vjp(&y, &x, &seed))?;
 /// assert_eq!(dx.value()?.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -388,10 +379,7 @@ pub(crate) struct EagerGraphExecution {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::new()?;
-/// let value = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
-///     ctx,
-/// )?;
+/// let value = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
 /// let view = value.value()?;
 /// assert_eq!(view.shape(), &[2]);
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -470,15 +458,12 @@ impl<'a> ValueGuard<'a> {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::new()?;
-/// let x = EagerTensor::requires_grad_in(
-///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?,
-///     ctx,
-/// )?;
+/// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?)?;
 /// let loss = x.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
 ///     let squared = s.mul(&x, &x)?;
 ///     s.reduce_sum(&squared, Some(&[0]))
 /// })?;
-/// let _gradients = loss.backward(&mut tenferro_cpu::CpuEngine::serial())?;
+/// let _gradients = loss.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.backward(&loss))?;
 /// let gradient = x.grad()?.expect("tracked leaf has a gradient");
 /// assert_eq!(gradient.shape(), &[2]);
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -572,15 +557,12 @@ impl GradientValue {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::new()?;
-/// let x = EagerTensor::requires_grad_in(
-///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?,
-///     ctx,
-/// )?;
+/// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?)?;
 /// let loss = x.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
 ///     let squared = s.mul(&x, &x)?;
 ///     s.reduce_sum(&squared, Some(&[0]))
 /// })?;
-/// let gradients = loss.backward(&mut tenferro_cpu::CpuEngine::serial())?;
+/// let gradients = loss.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.backward(&loss))?;
 /// assert!(!gradients.is_empty());
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
@@ -596,7 +578,7 @@ impl Gradients {
             return Err(Error::runtime_state(
                 "backward",
                 ErrorPhase::Execution,
-                "no gradients were produced for reachable tracked leaves; use EagerRuntime::grad_optional or vjp_optional to observe inactive differentiation",
+                "no gradients were produced for reachable tracked leaves; use EagerSession::grad_optional or EagerSession::vjp_optional to observe inactive differentiation",
             ));
         }
         let (keys, values): (Vec<_>, Vec<_>) = tensors.into_iter().unzip();
@@ -657,10 +639,7 @@ impl Gradients {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, IntoValueError, Tensor};
 ///
 /// let ctx = EagerRuntime::new()?;
-/// let value = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?,
-///     ctx,
-/// )?;
+/// let value = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?)?;
 /// let _shared = value.clone();
 /// assert!(matches!(
 ///     value.into_value(),
@@ -836,8 +815,8 @@ impl AdValueRecord {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::new()?;
-/// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
-/// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx.clone()).unwrap();
+/// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()).unwrap();
+/// let y = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap()).unwrap();
 /// let z = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.add(&x, &y)).unwrap();
 ///
 /// assert_eq!(z.value().unwrap().as_slice::<f64>().unwrap(), &[3.0]);
@@ -876,9 +855,7 @@ pub struct EagerRuntime {
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::new()?;
-/// let x = EagerTensor::from_tensor_in(
-///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?, ctx.clone(),
-/// )?;
+/// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?)?;
 /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.neg(&x))?;
 /// assert_eq!(y.value()?.as_slice::<f64>()?, &[-3.0]);
 /// # Ok::<(), tenferro_ad::Error>(())
@@ -914,9 +891,7 @@ impl EagerSession<'_> {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![4.0_f64])?, ctx.clone(),
-    /// )?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![4.0_f64])?)?;
     /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.neg(&x))?;
     /// assert_eq!(y.value()?.as_slice::<f64>()?, &[-4.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -937,7 +912,7 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?)?;
     /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.exp(&x))?;
     /// assert_eq!(y.value()?.as_slice::<f64>()?, &[1.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -958,7 +933,7 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![-2.0_f64])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![-2.0_f64])?)?;
     /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.abs(&x))?;
     /// assert_eq!(y.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -979,7 +954,7 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
     /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.conj(&x))?;
     /// assert_eq!(y.value()?.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -1288,7 +1263,7 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.reshape(&x, [1, 2]))?;
     /// assert_eq!(y.shape(), &[1, 2]);
     /// assert_eq!(y.value()?.as_slice::<f64>()?, &[1.0, 2.0]);
@@ -1339,7 +1314,7 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     /// let copy = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
     ///     let y = session.broadcast_in_dim(&x, &[2, 2], &[0])?;
     ///     session.duplicate_value(&y)
@@ -1682,7 +1657,7 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
     /// let sum = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.reduce_sum(&x, None))?;
     /// assert_eq!(sum.value()?.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -1875,7 +1850,7 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
     /// let copy = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.duplicate_value(&x))?;
     /// assert_eq!(copy.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -1973,6 +1948,381 @@ impl EagerSession<'_> {
         EagerTensor::new_leaf_in_session(Arc::clone(self.runtime), tensor, true, &mut *self.engine)
     }
 
+    /// Detach an eager tensor from the reverse graph within this session.
+    ///
+    /// The result keeps the concrete value, belongs to the same runtime and
+    /// contributes no gradients to the graph that produced `input`. To move a
+    /// value into another eager runtime, duplicate it here with
+    /// [`Self::duplicate_value`] and import the owned tensor in the target
+    /// runtime's session with [`Self::constant_from`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.detach(&x))?;
+    /// assert_eq!(y.value()?.as_slice::<f64>()?, &[1.0, 2.0]);
+    /// assert!(!y.tracks_grad());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for a tensor from another runtime,
+    /// [`Error::TensorRuntime`] when the engine cannot materialize the
+    /// retained value, or [`Error::RuntimeState`] when the value record or its
+    /// allocation-group descriptor is unavailable.
+    pub fn detach(&mut self, input: &EagerTensor) -> Result<EagerTensor> {
+        self.ensure_runtime(input)?;
+        input.detach_in_session(&mut *self.engine)
+    }
+
+    /// Gradient of a scalar eager output with respect to an eager tensor.
+    ///
+    /// Functional eager gradients return ordinary eager tensors and do not
+    /// write into `grad()` slots. The returned tensor keeps a trace when the
+    /// derivative computation depends on tracked eager values, so it can be
+    /// differentiated again (higher-order derivatives).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?)?;
+    /// let dx = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let loss = s.mul(&x, &x)?;
+    ///     s.grad(&loss, &x)
+    /// })?;
+    /// assert_eq!(dx.value()?.as_slice::<f64>()?, &[6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] when `output` or `wrt` belongs to
+    /// another runtime (checked before anything is materialized),
+    /// [`Error::NonScalarGrad`] for a non-scalar output,
+    /// [`Error::UnsupportedAdRule`] when an AD rule is unavailable, or a typed
+    /// validation/backend error from eager execution. An inactive `wrt`
+    /// returns [`Error::Validation`] with `argument: "wrt"`; use
+    /// [`Self::grad_optional`] to observe that state.
+    pub fn grad(&mut self, output: &EagerTensor, wrt: &EagerTensor) -> Result<EagerTensor> {
+        self.grad_optional(output, wrt)?
+            .ok_or_else(|| crate::traced::inactive_wrt_error("grad", &wrt.key))
+    }
+
+    /// Gradient that returns `None` when `wrt` is inactive.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?)?;
+    /// let y = ctx.variable_from(Tensor::from_vec_col_major(vec![], vec![4.0_f64])?)?;
+    /// let dx = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let loss = s.mul(&y, &y)?;
+    ///     s.grad_optional(&loss, &x)
+    /// })?;
+    /// assert!(dx.is_none());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] when `output` or `wrt` belongs to
+    /// another runtime (checked before the seed is built),
+    /// [`Error::NonScalarGrad`] for a non-scalar output, or a typed
+    /// validation/backend/runtime-state error from eager execution.
+    pub fn grad_optional(
+        &mut self,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
+        self.ensure_runtime(output)?;
+        self.ensure_runtime(wrt)?;
+        let seed = self.unit_seed(output)?;
+        let seed =
+            EagerTensor::new_result(Arc::clone(self.runtime), eager_val_key(), seed, false, None)?;
+        self.vjp_optional(output, wrt, &seed)
+    }
+
+    /// Reverse-mode vector-Jacobian product for eager tensors.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?)?;
+    /// let seed = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0])?)?;
+    /// let dx = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let y = s.mul(&x, &x)?;
+    ///     s.vjp(&y, &x, &seed)
+    /// })?;
+    /// assert_eq!(dx.value()?.as_slice::<f64>()?, &[4.0, 6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] when `output`, `wrt` or `cotangent`
+    /// belongs to another runtime, [`Error::Validation`] when the cotangent
+    /// shape or dtype does not match the output, [`Error::UnsupportedAdRule`]
+    /// when a rule is not registered, or a typed backend/runtime-state error.
+    /// An inactive `wrt` returns [`Error::Validation`] with `argument: "wrt"`;
+    /// use [`Self::vjp_optional`] to observe that state.
+    pub fn vjp(
+        &mut self,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        cotangent: &EagerTensor,
+    ) -> Result<EagerTensor> {
+        self.vjp_optional(output, wrt, cotangent)?
+            .ok_or_else(|| crate::traced::inactive_wrt_error("vjp", &wrt.key))
+    }
+
+    /// Reverse-mode vector-Jacobian product that returns `None` for inactive inputs.
+    ///
+    /// `None` means the input is disconnected, its eager computation was not
+    /// recorded, or the semantic derivative has no cotangent flow (for example,
+    /// real `sign` or an integer conversion). A present numerical zero is still
+    /// returned as `Some`. Missing rules and execution failures return errors;
+    /// semantic differentiation cannot be disabled by an environment variable.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    /// let y = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![4.0_f64])?)?;
+    /// let seed = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?)?;
+    /// let dx = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let loss = s.mul(&y, &y)?;
+    ///     s.vjp_optional(&loss, &x, &seed)
+    /// })?;
+    /// assert!(dx.is_none());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] when `output`, `wrt` or `cotangent`
+    /// belongs to another runtime, [`Error::Validation`] when the cotangent
+    /// shape or dtype does not match the output, [`Error::UnsupportedAdRule`]
+    /// when a rule is not registered, or a typed backend/runtime-state error.
+    pub fn vjp_optional(
+        &mut self,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        cotangent: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
+        self.ensure_runtime(output)?;
+        self.ensure_runtime(wrt)?;
+        self.ensure_runtime(cotangent)?;
+        validate_seed_tensor("vjp", output, cotangent)?;
+        Ok(
+            semantic_eager_vjp_many(self.runtime, &mut *self.engine, output, &[wrt], cotangent)?
+                .pop()
+                .flatten(),
+        )
+    }
+
+    /// Forward-mode Jacobian-vector product for eager tensors.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?)?;
+    /// let tangent = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?)?;
+    /// let dy = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let y = s.mul(&x, &x)?;
+    ///     s.jvp(&y, &x, &tangent)
+    /// })?;
+    /// assert_eq!(dy.value()?.as_slice::<f64>()?, &[6.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] when `output`, `wrt` or `tangent`
+    /// belongs to another runtime, [`Error::Validation`] when the tangent
+    /// shape or dtype does not match `wrt`, [`Error::UnsupportedAdRule`] when
+    /// a rule is unavailable, or a typed backend/runtime-state error. An
+    /// inactive `wrt` returns [`Error::Validation`] with `argument: "wrt"`;
+    /// use [`Self::jvp_optional`] to observe that state.
+    pub fn jvp(
+        &mut self,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        tangent: &EagerTensor,
+    ) -> Result<EagerTensor> {
+        self.jvp_optional(output, wrt, tangent)?
+            .ok_or_else(|| crate::traced::inactive_wrt_error("jvp", &wrt.key))
+    }
+
+    /// Forward-mode Jacobian-vector product that returns `None` for inactive outputs.
+    ///
+    /// `None` means `wrt` is disconnected, its eager computation was not
+    /// recorded, or the semantic derivative has no tangent flow (for example,
+    /// real `sign` or an integer conversion). A present numerical zero is still
+    /// returned as `Some`. Missing rules and execution failures return errors;
+    /// semantic differentiation cannot be disabled by an environment variable.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
+    /// let y = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![4.0_f64])?)?;
+    /// let tangent = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?)?;
+    /// let dy = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let loss = s.mul(&y, &y)?;
+    ///     s.jvp_optional(&loss, &x, &tangent)
+    /// })?;
+    /// assert!(dy.is_none());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] when `output`, `wrt` or `tangent`
+    /// belongs to another runtime, [`Error::Validation`] when the tangent
+    /// shape or dtype does not match `wrt`, [`Error::UnsupportedAdRule`] when
+    /// a rule is unavailable, or a typed backend/runtime-state error.
+    pub fn jvp_optional(
+        &mut self,
+        output: &EagerTensor,
+        wrt: &EagerTensor,
+        tangent: &EagerTensor,
+    ) -> Result<Option<EagerTensor>> {
+        self.ensure_runtime(output)?;
+        self.ensure_runtime(wrt)?;
+        self.ensure_runtime(tangent)?;
+        validate_seed_tensor("jvp", wrt, tangent)?;
+        semantic_eager_jvp_optional(self.runtime, &mut *self.engine, output, wrt, tangent)
+    }
+
+    /// Run reverse-mode AD from a scalar eager output.
+    ///
+    /// Returns the full cotangent map produced by the reverse pass and also
+    /// accumulates into `grad()` for tracked eager leaves reachable from
+    /// `output`; repeated calls add to the stored gradients until they are
+    /// cleared. A pass with no gradients is an error, not an empty successful
+    /// bundle. If a reachable leaf has no cotangent flow, the pass fails before
+    /// accumulating any gradients; use [`Self::vjp_optional`] to observe absent
+    /// flow explicitly.
+    ///
+    /// For complex scalar outputs, cotangents use tenferro's Hermitian
+    /// real-inner-product convention. See
+    /// <https://tensor4all.org/tenferro-rs/guides/complex-ad.html>.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?)?;
+    /// for _ in 0..2 {
+    ///     ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///         let doubled = s.add(&x, &x)?;
+    ///         let loss = s.reduce_sum(&doubled, Some(&[0]))?;
+    ///         s.backward(&loss)
+    ///     })?;
+    /// }
+    /// assert_eq!(x.grad()?.expect("tracked leaf").as_slice::<f64>()?, &[4.0, 4.0, 4.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] when `output` belongs to another
+    /// runtime (checked before any gradient slot is written),
+    /// [`Error::NonScalarGrad`] when `output` is not scalar,
+    /// [`Error::Validation`] when a reachable tracked leaf has no cotangent,
+    /// [`Error::RuntimeState`] when no tracked leaf produces a gradient,
+    /// [`Error::UnsupportedAdRule`] when a graph operation lacks a reverse
+    /// rule, or a typed validation/backend/runtime-state error during the
+    /// reverse pass.
+    pub fn backward(&mut self, output: &EagerTensor) -> Result<Gradients> {
+        self.ensure_runtime(output)?;
+        let seed = self.unit_seed(output)?;
+        output.backward_from_seed(&mut *self.engine, seed)
+    }
+
+    /// Run reverse-mode AD from an eager output with an explicit cotangent seed.
+    ///
+    /// The seed is an operand, not an options value: this is the registry's
+    /// documented seeded form of [`Self::backward`]. Like `backward`, it
+    /// rejects absent cotangents for reachable tracked leaves before
+    /// accumulation, accumulates into the reachable leaves' `grad()` slots and
+    /// never returns an empty successful bundle. Use [`Self::vjp`] when the
+    /// VJP result should be a composable eager tensor that touches no
+    /// gradient slot.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?)?;
+    /// let seed = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    /// ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let y = s.mul(&x, &x)?;
+    ///     s.backward_with(&y, &seed)
+    /// })?;
+    /// assert_eq!(x.grad()?.expect("tracked leaf").as_slice::<f64>()?, &[4.0, 12.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] when `output` or `cotangent` belongs
+    /// to another runtime (checked before the seed is materialized or any
+    /// gradient slot is written), [`Error::Validation`] when the seed's shape
+    /// or dtype does not match `output` or a reachable tracked leaf has no
+    /// cotangent, [`Error::RuntimeState`] when no tracked leaf produces a
+    /// gradient, [`Error::UnsupportedAdRule`] for an unavailable reverse rule,
+    /// or a typed backend/runtime-state error during execution.
+    pub fn backward_with(
+        &mut self,
+        output: &EagerTensor,
+        cotangent: &EagerTensor,
+    ) -> Result<Gradients> {
+        self.ensure_runtime(output)?;
+        self.ensure_runtime(cotangent)?;
+        validate_seed_tensor("backward", output, cotangent)?;
+        let seed = cotangent.duplicate_value_in_session(&mut *self.engine)?;
+        output.backward_from_seed(&mut *self.engine, seed)
+    }
+
+    /// The all-ones seed of a scalar output, after the runtime checks.
+    fn unit_seed(&mut self, output: &EagerTensor) -> Result<Tensor> {
+        if !output.shape().is_empty() {
+            return Err(Error::NonScalarGrad {
+                shape: output.shape().to_vec(),
+            });
+        }
+        let value = output.duplicate_value_in_session(&mut *self.engine)?;
+        one_like_tensor(&value, &mut *self.engine)
+    }
+
     /// Add eager tensors with the same broadcast and AD rules as the eager
     /// operation surface, reusing this borrowed execution session.
     ///
@@ -1981,8 +2331,8 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?, ctx.clone())?;
-    /// let scalar = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    /// let scalar = ctx.constant_from(Tensor::from_vec_col_major(vec![], vec![3.0_f64])?)?;
     /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.add(&x, &scalar))?;
     /// assert_eq!(y.value()?.as_slice::<f64>()?, &[4.0, 5.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2003,7 +2353,7 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?)?;
     /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.sub(&x, &x))?;
     /// assert_eq!(y.value()?.as_slice::<f64>()?, &[0.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2024,7 +2374,7 @@ impl EagerSession<'_> {
     /// ```rust
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?)?;
     /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| session.mul(&x, &x))?;
     /// assert_eq!(y.value()?.as_slice::<f64>()?, &[9.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -2546,33 +2896,6 @@ impl EagerSession<'_> {
         EagerTensor::nary_op_in_session(inputs, op, &mut *self.engine)
     }
 
-    /// Borrow the backend session this eager session runs on.
-    ///
-    /// Extension crates use it to run their backend kernels on untracked
-    /// values inside the same execution region instead of entering a second
-    /// session, which would be rejected as reentry. It grants the same access
-    /// as passing the engine directly.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_ad::{EagerRuntime, Tensor};
-    /// use tenferro_tensor::TensorRead;
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0])?;
-    /// let copy = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-    ///     s.backend_session()
-    ///         .to_contiguous_read(TensorRead::from_tensor(&x))
-    ///         .map_err(tenferro_ad::Error::from)
-    /// })?;
-    /// assert_eq!(copy.as_slice::<f64>()?, &[1.0, -2.0]);
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn backend_session(&mut self) -> &mut dyn Engine {
-        &mut *self.engine
-    }
-
     /// Borrow the engine this eager session runs on.
     ///
     /// # Examples
@@ -2889,10 +3212,7 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap())?;
     /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let _guard = ctx.no_grad();
     ///     s.mul(&x, &x)
@@ -3203,8 +3523,8 @@ impl EagerRuntime {
     ///
     /// let ctx = EagerRuntime::new()?;
     /// let mut engine = CpuEngine::serial();
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?, ctx.clone())?;
-    /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?, ctx.clone())?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?)?;
+    /// let y = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?)?;
     /// let z = ctx.with_eager_session(&mut engine, |s| s.add(&x, &y))?;
     /// assert_eq!(z.value()?.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -3379,7 +3699,7 @@ impl EagerRuntime {
     /// Clear all live gradient slots tracked by this context.
     ///
     /// This resets the stored gradients to `None` without unregistering the
-    /// tensors, so future `backward()` calls can accumulate again.
+    /// tensors, so future `EagerSession::backward` calls can accumulate again.
     ///
     /// # Examples
     ///
@@ -3387,13 +3707,13 @@ impl EagerRuntime {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
-    /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx.clone()).unwrap();
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
+    /// let y = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap()).unwrap();
     /// let loss = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let product = s.mul(&x, &y)?;
     ///     s.reduce_sum(&product, Some(&[0]))
     /// })?;
-    /// let _ = loss.backward(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
+    /// let _ = loss.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.backward(&loss)).unwrap();
     ///
     /// ctx.clear_grads()?;
     ///
@@ -3457,7 +3777,7 @@ impl EagerRuntime {
     ///
     /// let ctx = EagerRuntime::new()?;
     /// let c = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone())?;
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap())?;
     /// let z = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.add(&x, &c))?;
     ///
     /// assert_eq!(z.value()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
@@ -3488,7 +3808,7 @@ impl EagerRuntime {
     ///     let y = s.exp(&p)?;
     ///     s.reduce_sum(&y, Some(&[0]))
     /// })?;
-    /// let _ = loss.backward(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
+    /// let _ = loss.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.backward(&loss)).unwrap();
     ///
     /// let grad = p.grad().unwrap().unwrap();
     /// assert_eq!(grad.shape(), &[2]);
@@ -3501,278 +3821,6 @@ impl EagerRuntime {
     /// or the eager backend state cannot be registered.
     pub fn variable_from(self: &Arc<Self>, tensor: Tensor) -> Result<EagerTensor> {
         EagerTensor::new_leaf(Arc::clone(self), tensor, true)
-    }
-
-    /// Gradient of a scalar eager output with respect to an eager tensor.
-    ///
-    /// Functional eager gradients return ordinary eager tensors and do not
-    /// write into `grad()` slots. The returned tensor keeps a trace when the
-    /// derivative computation depends on tracked eager values.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let loss = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))?;
-    /// let dx = ctx.grad(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x)?;
-    /// assert_eq!(dx.value()?.as_slice::<f64>().unwrap(), &[6.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
-    /// output, [`Error::ContextMismatch`] for tensors from another runtime,
-    /// [`Error::UnsupportedAdRule`] when an AD rule is unavailable, or a typed
-    /// validation/backend error from eager execution. An inactive `wrt` returns
-    /// [`Error::Validation`] with `argument: "wrt"`; use
-    /// [`grad_optional`](Self::grad_optional) to observe that state.
-    pub fn grad(
-        self: &Arc<Self>,
-        engine: &mut dyn ExecutionEngine,
-        output: &EagerTensor,
-        wrt: &EagerTensor,
-    ) -> Result<EagerTensor> {
-        self.grad_optional(engine, output, wrt)?
-            .ok_or_else(|| crate::traced::inactive_wrt_error("grad", &wrt.key))
-    }
-
-    /// Gradient that returns `None` when `wrt` is inactive.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let y = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![], vec![4.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let loss = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&y, &y))?;
-    /// assert!(ctx.grad_optional(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x)?.is_none());
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
-    /// output, [`Error::ContextMismatch`] for a foreign runtime, or a typed
-    /// validation/backend/runtime-state error from eager execution.
-    pub fn grad_optional(
-        self: &Arc<Self>,
-        engine: &mut dyn ExecutionEngine,
-        output: &EagerTensor,
-        wrt: &EagerTensor,
-    ) -> Result<Option<EagerTensor>> {
-        if !output.shape().is_empty() {
-            return Err(Error::NonScalarGrad {
-                shape: output.shape().to_vec(),
-            });
-        }
-
-        let value = output.to_tensor(&mut *engine)?;
-        let seed = one_like_tensor(&value, &mut *engine)?;
-        let seed = EagerTensor::new_result(Arc::clone(self), eager_val_key(), seed, false, None)?;
-        self.vjp_optional(engine, output, wrt, &seed)
-    }
-
-    /// Reverse-mode vector-Jacobian product for eager tensors.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))?;
-    /// let seed = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let dx = ctx.vjp(&mut tenferro_cpu::CpuEngine::serial(), &y, &x, &seed)?;
-    /// assert_eq!(dx.value()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::ContextMismatch`] for tensors from different eager
-    /// runtimes, [`Error::Validation`] when the cotangent shape or dtype does
-    /// not match the output, [`Error::UnsupportedAdRule`] when a rule is not
-    /// registered, or a typed backend/runtime-state error. An inactive `wrt`
-    /// returns [`Error::Validation`] with `argument: "wrt"`; use
-    /// [`vjp_optional`](Self::vjp_optional) to observe that state.
-    pub fn vjp(
-        self: &Arc<Self>,
-        engine: &mut dyn ExecutionEngine,
-        output: &EagerTensor,
-        wrt: &EagerTensor,
-        cotangent: &EagerTensor,
-    ) -> Result<EagerTensor> {
-        self.vjp_optional(engine, output, wrt, cotangent)?
-            .ok_or_else(|| crate::traced::inactive_wrt_error("vjp", &wrt.key))
-    }
-
-    /// Reverse-mode vector-Jacobian product that returns `None` for inactive inputs.
-    ///
-    /// `None` means the input is disconnected, its eager computation was not
-    /// recorded, or the semantic derivative has no cotangent flow (for example,
-    /// real `sign` or an integer conversion). A present numerical zero is still
-    /// returned as `Some`. Missing rules and execution failures return errors;
-    /// semantic differentiation cannot be disabled by an environment variable.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let y = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![4.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let seed = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let loss = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&y, &y))?;
-    /// assert!(ctx.vjp_optional(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x, &seed)?.is_none());
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::ContextMismatch`] for tensors from different eager
-    /// runtimes, [`Error::Validation`] when the cotangent shape or dtype does
-    /// not match the output, [`Error::UnsupportedAdRule`] when a rule is not
-    /// registered, or a typed backend/runtime-state error.
-    pub fn vjp_optional(
-        self: &Arc<Self>,
-        engine: &mut dyn ExecutionEngine,
-        output: &EagerTensor,
-        wrt: &EagerTensor,
-        cotangent: &EagerTensor,
-    ) -> Result<Option<EagerTensor>> {
-        validate_same_runtime(self, output, "vjp output")?;
-        validate_same_runtime(self, wrt, "vjp wrt")?;
-        validate_same_runtime(self, cotangent, "vjp cotangent")?;
-        validate_seed_tensor("vjp", output, cotangent)?;
-        Ok(
-            semantic_eager_vjp_many(self, engine, output, &[wrt], cotangent)?
-                .pop()
-                .flatten(),
-        )
-    }
-
-    /// Forward-mode Jacobian-vector product for eager tensors.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let tangent = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let y = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))?;
-    /// let dy = ctx.jvp(&mut tenferro_cpu::CpuEngine::serial(), &y, &x, &tangent)?;
-    /// assert_eq!(dy.value()?.as_slice::<f64>().unwrap(), &[6.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::ContextMismatch`] for tensors from different eager
-    /// runtimes, [`Error::Validation`] when the tangent shape or dtype does not
-    /// match `wrt`, [`Error::UnsupportedAdRule`] when a rule is unavailable, or
-    /// a typed backend/runtime-state error. An inactive `wrt` returns
-    /// [`Error::Validation`] with `argument: "wrt"`; use
-    /// [`jvp_optional`](Self::jvp_optional) to observe that state.
-    pub fn jvp(
-        self: &Arc<Self>,
-        engine: &mut dyn ExecutionEngine,
-        output: &EagerTensor,
-        wrt: &EagerTensor,
-        tangent: &EagerTensor,
-    ) -> Result<EagerTensor> {
-        self.jvp_optional(engine, output, wrt, tangent)?
-            .ok_or_else(|| crate::traced::inactive_wrt_error("jvp", &wrt.key))
-    }
-
-    /// Forward-mode Jacobian-vector product that returns `None` for inactive outputs.
-    ///
-    /// `None` means `wrt` is disconnected, its eager computation was not
-    /// recorded, or the semantic derivative has no tangent flow (for example,
-    /// real `sign` or an integer conversion). A present numerical zero is still
-    /// returned as `Some`. Missing rules and execution failures return errors;
-    /// semantic differentiation cannot be disabled by an environment variable.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let y = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![4.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let tangent = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let loss = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&y, &y))?;
-    /// assert!(ctx.jvp_optional(&mut tenferro_cpu::CpuEngine::serial(), &loss, &x, &tangent)?.is_none());
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::ContextMismatch`] for tensors from different eager
-    /// runtimes, [`Error::Validation`] when the tangent shape or dtype does not
-    /// match `wrt`, [`Error::UnsupportedAdRule`] when a rule is unavailable, or
-    /// a typed backend/runtime-state error.
-    pub fn jvp_optional(
-        self: &Arc<Self>,
-        engine: &mut dyn ExecutionEngine,
-        output: &EagerTensor,
-        wrt: &EagerTensor,
-        tangent: &EagerTensor,
-    ) -> Result<Option<EagerTensor>> {
-        validate_same_runtime(self, output, "jvp output")?;
-        validate_same_runtime(self, wrt, "jvp wrt")?;
-        validate_same_runtime(self, tangent, "jvp tangent")?;
-        validate_seed_tensor("jvp", wrt, tangent)?;
-        semantic_eager_jvp_optional(self, engine, output, wrt, tangent)
     }
 
     fn store_grads(
@@ -4136,7 +4184,7 @@ fn semantic_eager_vjp_many(
     };
 
     let cotangent_tensor = Arc::new(RetainedValue::from_tensor(
-        cotangent.to_tensor(&mut *engine)?,
+        cotangent.duplicate_value_in_session(&mut *engine)?,
     ));
     let input_count = execution_program.input_count();
     let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
@@ -4324,7 +4372,9 @@ fn semantic_eager_jvp_optional(
 
     let mut compiler = GraphCompiler::new();
     let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
-    let tangent_tensor = Arc::new(RetainedValue::from_tensor(tangent.to_tensor(&mut *engine)?));
+    let tangent_tensor = Arc::new(RetainedValue::from_tensor(
+        tangent.duplicate_value_in_session(&mut *engine)?,
+    ));
     let input_count = derivative_program.input_count();
     let mut owned_inputs: Vec<Option<Tensor>> = (0..input_count).map(|_| None).collect();
     // Primal bindings and the seed are staged on the caller's engine.
@@ -4451,21 +4501,6 @@ fn derivative_semantic(
     ))
 }
 
-fn validate_same_runtime(
-    runtime: &Arc<EagerRuntime>,
-    tensor: &EagerTensor,
-    role: &'static str,
-) -> Result<()> {
-    if tensor.ctx_id() != runtime.id() {
-        return Err(Error::ContextMismatch {
-            lhs: runtime.id(),
-            rhs: tensor.ctx_id(),
-        });
-    }
-    let _ = role;
-    Ok(())
-}
-
 fn copy_value_in_session(session: &mut dyn Engine, value: &RetainedValue) -> Result<Tensor> {
     let read = value.tensor_read().map_err(|error| {
         Error::runtime_state_source("copy_value_for_runtime", ErrorPhase::Execution, error)
@@ -4490,7 +4525,7 @@ fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTens
 /// Eager tensor with reverse-mode autodiff over concrete tensor values.
 ///
 /// This executes each primitive immediately and records a lightweight reverse
-/// DAG for `backward()`. Gradients accumulate across repeated `backward()`
+/// DAG for `EagerSession::backward`. Gradients accumulate across repeated `EagerSession::backward`
 /// calls until they are cleared explicitly.
 ///
 /// # Examples
@@ -4499,13 +4534,13 @@ fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTens
 /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
 ///
 /// let ctx = EagerRuntime::new()?;
-/// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx)?;
+/// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap())?;
 /// for _ in 0..2 {
 ///     let loss = x.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
 ///         let squared = s.mul(&x, &x)?;
 ///         s.reduce_sum(&squared, Some(&[0]))
 ///     })?;
-///     loss.backward(&mut tenferro_cpu::CpuEngine::serial())?;
+///     loss.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.backward(&loss))?;
 /// }
 ///
 /// assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
@@ -4560,71 +4595,6 @@ impl fmt::Debug for EagerTensor {
 }
 
 impl EagerTensor {
-    /// Create an untracked eager tensor inside an existing eager context.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
-    ///
-    /// assert_eq!(x.value()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_runtime::Error::RuntimeState`] when metadata cannot
-    /// be registered in the target context, or a typed tensor/backend error
-    /// while materializing the source value.
-    pub fn from_tensor_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Result<Self> {
-        Self::new_leaf(ctx, tensor, false)
-    }
-
-    /// Create an untracked eager tensor from compact column-major data inside
-    /// an existing eager runtime.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] when the shape and
-    /// data length disagree, or with
-    /// [`tenferro_tensor::ValidationError::IntegerOverflow`] when shape
-    /// arithmetic overflows. Returns [`Error::RuntimeState`] when eager
-    /// metadata cannot be registered.
-    pub fn from_vec_col_major_in<T: TensorScalar>(
-        shape: impl IntoShapeVec,
-        data: Vec<T>,
-        ctx: Arc<EagerRuntime>,
-    ) -> Result<Self> {
-        Self::from_tensor_in(Tensor::from_vec_col_major(shape, data)?, ctx)
-    }
-
-    /// Create a tracked eager leaf inside an existing eager context.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
-    ///
-    /// assert!(x.grad().unwrap().is_none());
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_runtime::Error::RuntimeState`] when gradient metadata
-    /// cannot be registered in the target context, or a typed tensor/backend
-    /// error while creating the leaf.
-    pub fn requires_grad_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Result<Self> {
-        Self::new_leaf(ctx, tensor, true)
-    }
-
     pub(crate) fn new_leaf(
         ctx: Arc<EagerRuntime>,
         tensor: Tensor,
@@ -4870,71 +4840,6 @@ impl EagerTensor {
         }
     }
 
-    /// Detach this tensor from the reverse graph.
-    ///
-    /// The returned tensor keeps the concrete value but no longer contributes
-    /// gradients to the original graph.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::TensorRuntime`] when `engine` cannot materialize the
-    /// retained value, [`Error::RuntimeStateSource`] when the value has no
-    /// readable tensor or symbolic graph metadata registration is unavailable,
-    /// and [`Error::RuntimeState`] when the detached record's allocation-group
-    /// descriptor is invalid.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx)?;
-    /// let y = x.detach(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
-    ///
-    /// assert_eq!(y.value()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
-    /// assert!(y.grad().unwrap().is_none());
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    pub fn detach(&self, engine: &mut dyn Engine) -> Result<Self> {
-        let tensor = self.duplicate_value(engine)?;
-        let data = Arc::new(RetainedValue::from_tensor(tensor));
-        let semantic =
-            SemanticValue::leaf(next_input_key(), data.dtype(), data.shape().len(), data);
-        Ok(Self::new_untracked_value_record(
-            self.ctx.clone(),
-            Arc::clone(&self._record.value),
-            Some(semantic),
-        ))
-    }
-
-    /// Detach this tensor from its graph and re-register it in a different
-    /// context as an untracked leaf.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx_a = EagerRuntime::new()?;
-    /// let ctx_b = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx_a)?;
-    /// let d = x.detach_into(&mut tenferro_cpu::CpuEngine::serial(), &ctx_b)?;
-    ///
-    /// assert!(!d.tracks_grad());
-    /// assert_eq!(d.ctx_id(), ctx_b.id());
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::RuntimeState`] if the source cannot be materialized or
-    /// the target context cannot register its metadata.
-    pub fn detach_into(&self, engine: &mut dyn Engine, ctx: &Arc<EagerRuntime>) -> Result<Self> {
-        let tensor = self.to_tensor(&mut *engine)?;
-        Self::new_leaf_in_session(Arc::clone(ctx), tensor, false, engine)
-    }
-
     /// Borrow the retained value without creating an owner or copy.
     ///
     /// # Errors
@@ -4945,37 +4850,25 @@ impl EagerTensor {
         self._record.value.value("EagerTensor::value")
     }
 
-    /// Explicitly duplicate this value into a fresh standalone allocation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::RuntimeState`] when the retained value or execution
-    /// session is unavailable, or a typed host/backend error when the value
-    /// cannot be materialized as a contiguous tensor.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let value = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?,
-    ///     ctx,
-    /// )?;
-    /// let duplicate = value.duplicate_value(&mut tenferro_cpu::CpuEngine::serial())?;
-    /// assert_eq!(duplicate.as_slice::<f64>()?, &[1.0, 2.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    pub fn duplicate_value(&self, engine: &mut dyn Engine) -> Result<Tensor> {
-        self.duplicate_value_in_session(engine)
-    }
-
     fn duplicate_host_value(&self) -> Option<Tensor> {
         // A pooled value duplicates through its descriptor view; a caller-owned
         // payload has no such view and duplicates through its own read path, which
         // copies the value while keeping its element type.
         self.value().ok()?.duplicate_host_tensor().ok()
+    }
+
+    /// Detach this value from its graph: same value and runtime, a fresh
+    /// untracked semantic leaf. The caller has checked the runtime.
+    fn detach_in_session(&self, session: &mut dyn Engine) -> Result<Self> {
+        let tensor = self.duplicate_value_in_session(session)?;
+        let data = Arc::new(RetainedValue::from_tensor(tensor));
+        let semantic =
+            SemanticValue::leaf(next_input_key(), data.dtype(), data.shape().len(), data);
+        Ok(Self::new_untracked_value_record(
+            self.ctx.clone(),
+            Arc::clone(&self._record.value),
+            Some(semantic),
+        ))
     }
 
     pub(crate) fn duplicate_value_in_session(&self, session: &mut dyn Engine) -> Result<Tensor> {
@@ -5010,10 +4903,7 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::new()?;
-    /// let value = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?,
-    ///     ctx,
-    /// )?;
+    /// let value = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?)?;
     /// let owner = value
     ///     .into_value()
     ///     .expect("a uniquely owned value should be extractable");
@@ -5136,23 +5026,9 @@ impl EagerTensor {
             .expect("validated eager value record")
     }
 
-    /// Materialize this eager tensor as an owned [`Tensor`].
-    ///
-    /// This is the owned materialization boundary for callers that need a
-    /// standalone compact tensor. The operation is fallible because eager
-    /// values may be backed by lazy or backend-resident storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::RuntimeState`] if backend state is unavailable, or a
-    /// typed tensor backend error when contiguous materialization fails.
-    pub fn to_tensor(&self, engine: &mut dyn Engine) -> Result<Tensor> {
-        self.duplicate_value(engine)
-    }
-
     /// Return the accumulated gradient currently stored for this tensor.
     ///
-    /// The stored gradient accumulates across repeated `backward()` calls
+    /// The stored gradient accumulates across repeated `EagerSession::backward` calls
     /// until it is cleared explicitly.
     ///
     /// For complex scalar losses, stored gradients use tenferro's
@@ -5165,12 +5041,12 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
     /// let loss = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let y = s.exp(&x)?;
     ///     s.reduce_sum(&y, Some(&[0]))
     /// })?;
-    /// let _cotangents = loss.backward(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
+    /// let _cotangents = loss.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.backward(&loss)).unwrap();
     ///
     /// let grad = x.grad()?.unwrap();
     /// assert_eq!(grad.shape(), &[2]);
@@ -5210,13 +5086,13 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
-    /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx).unwrap();
+    /// let x = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap()).unwrap();
+    /// let y = ctx.variable_from(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap()).unwrap();
     /// let loss = x.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
     ///     let product = s.mul(&x, &y)?;
     ///     s.reduce_sum(&product, Some(&[0]))
     /// })?;
-    /// let _ = loss.backward(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
+    /// let _ = loss.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.backward(&loss)).unwrap();
     ///
     /// x.clear_grad()?;
     ///
@@ -5250,9 +5126,9 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::new()?;
-    /// let plain = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
-    /// let tracked = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
-    /// let detached = tracked.detach(&mut tenferro_cpu::CpuEngine::serial()).unwrap();
+    /// let plain = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap()).unwrap();
+    /// let tracked = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap()).unwrap();
+    /// let detached = tracked.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.detach(&tracked)).unwrap();
     ///
     /// assert!(!plain.tracks_grad());
     /// assert!(tracked.tracks_grad());
@@ -5276,7 +5152,7 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()).unwrap();
     ///
     /// assert_eq!(x.ctx_id(), ctx.id());
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -5298,8 +5174,8 @@ impl EagerTensor {
     /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
     ///
     /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(), ctx.clone()).unwrap();
-    /// let y = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap(), ctx).unwrap();
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()).unwrap();
+    /// let y = ctx.constant_from(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap()).unwrap();
     ///
     /// assert!(x.same_context(&y));
     /// # Ok::<(), tenferro_ad::Error>(())
@@ -5339,7 +5215,7 @@ impl EagerTensor {
             .map(|(key, tensor)| {
                 Ok((
                     ValueKey::Input(key.clone()),
-                    tensor.to_tensor(&mut *engine)?,
+                    tensor.duplicate_value_in_session(&mut *engine)?,
                 ))
             })
             .collect::<Result<HashMap<_, _>>>()?;
@@ -5399,113 +5275,6 @@ impl EagerTensor {
                 )
             })
             .collect()
-    }
-
-    /// Run reverse-mode AD from this scalar output.
-    ///
-    /// Returns the full cotangent map produced by the reverse pass and also
-    /// accumulates into `grad()` for tracked eager leaves reachable from this
-    /// output. A pass with no gradients is an error, not an empty successful
-    /// bundle. If a reachable leaf has no cotangent flow, the pass fails before
-    /// accumulating any gradients; use [`EagerRuntime::vjp_optional`] to observe
-    /// absent flow explicitly.
-    ///
-    /// For complex scalar outputs, cotangents use tenferro's Hermitian
-    /// real-inner-product convention. See
-    /// <https://tensor4all.org/tenferro-rs/guides/complex-ad.html>.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx).unwrap();
-    /// for _ in 0..2 {
-    ///     let loss = x.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
-    ///         let doubled = s.add(&x, &x)?;
-    ///         s.reduce_sum(&doubled, Some(&[0]))
-    ///     })?;
-    ///     loss.backward(&mut tenferro_cpu::CpuEngine::serial())?;
-    /// }
-    ///
-    /// assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::NonScalarGrad`] when this output is not scalar,
-    /// [`Error::Validation`] when a reachable tracked leaf has no cotangent,
-    /// [`Error::RuntimeState`] when no tracked leaf produces a gradient,
-    /// [`Error::UnsupportedAdRule`] when a graph operation lacks a reverse rule,
-    /// or a typed validation/backend/runtime-state error during the reverse pass.
-    pub fn backward(&self, engine: &mut dyn ExecutionEngine) -> Result<Gradients> {
-        if !self.shape().is_empty() {
-            return Err(Error::NonScalarGrad {
-                shape: self.shape().to_vec(),
-            });
-        }
-
-        let value = self.to_tensor(&mut *engine)?;
-        let seed = one_like_tensor(&value, &mut *engine)?;
-        self.backward_from_seed(engine, seed)
-    }
-
-    /// Run reverse-mode AD from this output with an explicit cotangent seed.
-    ///
-    /// Like [`backward`](Self::backward), this rejects absent cotangents for
-    /// reachable tracked leaves before accumulation and never returns an empty
-    /// successful gradient bundle. [`EagerRuntime::vjp_optional`] exposes
-    /// absent flow as `None` instead.
-    ///
-    /// This is the stateful eager VJP sugar: it returns the cotangent map and
-    /// accumulates reachable tracked leaves into their `grad()` slots. Use
-    /// [`EagerRuntime::vjp`] when the VJP result should be returned as a
-    /// composable eager tensor without touching grad slots.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
-    ///
-    /// let ctx = EagerRuntime::new()?;
-    /// let x = EagerTensor::requires_grad_in(
-    ///     Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
-    ///     ctx.clone(),
-    /// )?;
-    /// let seed = EagerTensor::from_tensor_in(
-    ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
-    ///     ctx,
-    /// )?;
-    /// let y = x.runtime().with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| s.mul(&x, &x))?;
-    /// y.backward_with(&mut tenferro_cpu::CpuEngine::serial(), &seed)?;
-    /// assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
-    /// # Ok::<(), tenferro_ad::Error>(())
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::ContextMismatch`] when `cotangent` belongs to another
-    /// eager runtime, [`Error::Validation`] when its shape or dtype is not a
-    /// valid seed or a reachable tracked leaf has no cotangent,
-    /// [`Error::RuntimeState`] when no tracked leaf produces a gradient,
-    /// [`Error::UnsupportedAdRule`] for an unavailable reverse rule, or a typed
-    /// backend/runtime-state error during execution.
-    pub fn backward_with(
-        &self,
-        engine: &mut dyn ExecutionEngine,
-        cotangent: &EagerTensor,
-    ) -> Result<Gradients> {
-        if !self.same_context(cotangent) {
-            return Err(Error::ContextMismatch {
-                lhs: self.ctx_id(),
-                rhs: cotangent.ctx_id(),
-            });
-        }
-        validate_seed_tensor("backward", self, cotangent)?;
-        let seed = cotangent.to_tensor(&mut *engine)?;
-        self.backward_from_seed(engine, seed)
     }
 
     fn backward_from_seed(
@@ -5569,7 +5338,7 @@ impl EagerTensor {
                         ErrorPhase::GraphBuild,
                         "wrt",
                         format!(
-                            "no cotangent flow for reachable tracked leaf {key:?}; use EagerRuntime::vjp_optional to observe absent differentiation"
+                            "no cotangent flow for reachable tracked leaf {key:?}; use EagerSession::vjp_optional to observe absent differentiation"
                         ),
                     )
                 })?;
