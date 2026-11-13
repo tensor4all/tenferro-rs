@@ -5,8 +5,11 @@ title: "[Feature]: "
 labels: ["enhancement"]
 ---
 
-New features start here. Please do not open a new-feature implementation PR
-before maintainers accept the issue and agree that implementation should start.
+A feature request or design discussion issue starts here. It is the best place
+to agree the intended behavior, the API, and the non-goals before
+implementation, and it is recommended rather than required: you may also open a
+pull request directly, and maintainers will ask for an issue or a short design
+if the change needs one.
 
 If you already have prototype code, link to a fork branch, gist, or repository
 from this issue.

@@ -428,9 +428,9 @@ directly by repository URL and version or commit.
 
 Bug reports, minimal reproducers, proposed regression tests, feature
 requests, design discussions, documentation improvements, benchmark reports,
-and prototype branches are welcome in issues. Pull request creation is
-currently restricted to collaborators, and collaborator feature PRs must
-start from accepted feature-request issues.
+prototype branches, and pull requests are welcome. Pull requests are accepted
+from any account, forks included; a prior issue is recommended for substantial
+work, not required.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution policy and the
 supported AI-assisted workflows, and [GOVERNANCE.md](GOVERNANCE.md) for

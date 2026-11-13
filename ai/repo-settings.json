@@ -2,6 +2,7 @@
   "default_branch": "main",
   "allow_auto_merge": true,
   "delete_branch_on_merge": true,
+  "fork_pr_contributor_approval": "all_external_contributors",
   "required_status_checks": {
     "strict": false,
     "contexts": [

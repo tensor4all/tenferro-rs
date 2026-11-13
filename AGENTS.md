@@ -81,10 +81,10 @@ Use the repository-local workflows for external-facing issues and PRs:
 - `ai/agent-workflow-lessons.md`: model-independent process self-audits during
   long multi-phase implementation work.
 
-Do not open a new-feature implementation PR before maintainers accept the
-issue. If a bug-fix PR needs a new public API, operation family, backend,
-dependency, feature flag, architectural layer, or AD semantics change, stop and
-use issue intake.
+A prior issue is recommended for a new-feature implementation PR, not required.
+If a bug-fix PR needs a new public API, operation family, backend, dependency,
+feature flag, architectural layer, or AD semantics change, stop and use issue
+intake, because that decision needs its own record.
 
 Batched remediation follows `repository-remediation.md`, a deliberate exception
 to the one-bug-fix-PR path: finish all local fixes and verification before

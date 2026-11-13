@@ -1,6 +1,6 @@
 ---
 name: tenferro-issue-intake
-description: Create or refine tenferro-rs GitHub issues through a step-by-step intake workflow. Use for bug reports, feature requests, design discussion issues, documentation issues, article-topic issues, and when a user proposes a new feature PR that must be redirected to an issue first. Do not use for implementation work.
+description: Create or refine tenferro-rs GitHub issues through a step-by-step intake workflow. Use for bug reports, feature requests, design discussion issues, documentation issues, article-topic issues, and when a user proposes a new feature PR that maintainers may redirect to an issue. Do not use for implementation work.
 ---
 
 # Tenferro Issue Intake
