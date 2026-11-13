@@ -12,6 +12,18 @@ spec.loader.exec_module(scalar)
 
 
 class ScalarProfileTests(unittest.TestCase):
+    def test_assemblies_are_found_in_both_cargo_layouts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            profile = Path(temporary) / "ci"
+            old = profile / "deps" / "composition-aaaa.s"
+            new = profile / "build" / "tenferro-df64-proof" / "bbbb" / "out" / "composition-bbbb.s"
+            for path in (old, new):
+                path.parent.mkdir(parents=True)
+                path.write_text("")
+            (profile / "deps" / "other-cccc.s").write_text("")
+            found = set(scalar.emitted_assemblies(profile, "composition"))
+            self.assertEqual(found, {old, new})
+
     def test_profile_controls_both_builds_and_assembly_lookup(self) -> None:
         for options, profile, directory in (([], "release", "release"), (["--debug"], "dev", "debug"), (["--profile", "ci"], "ci", "ci")):
             with self.subTest(profile=profile), tempfile.TemporaryDirectory() as temporary:

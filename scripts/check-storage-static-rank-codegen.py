@@ -87,8 +87,14 @@ def main() -> int:
         )
         return 1
 
+    # Cargo before 1.100 writes to release/deps/; Cargo 1.100's build-dir layout
+    # writes to release/build/<package>/<hash>/out/.
+    release = ROOT / "target" / "release"
     assemblies = sorted(
-        (ROOT / "target" / "release" / "deps").glob("element_access-*.s"),
+        [
+            *(release / "deps").glob("element_access-*.s"),
+            *(release / "build").glob("*/*/out/element_access-*.s"),
+        ],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
