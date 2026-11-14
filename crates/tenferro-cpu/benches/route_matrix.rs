@@ -14,7 +14,7 @@ use tenferro_cpu::CpuEngine;
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     DType, DotGeneralConfig, Tensor, TensorDot, TensorElementwise, TensorIndexing, TensorRead,
-    TensorReduction, TensorStructural,
+    TensorReduction, TensorStructural, TensorView, TypedTensorView,
 };
 
 /// Operations per iteration for the `marginal` arms.
@@ -165,8 +165,11 @@ fn bench_indexing(c: &mut Criterion) {
     group.finish();
 }
 
-/// Cast: a dtype-conversion kernel provided on the engine surface rather than
-/// a dedicated `_read` method.
+/// Cast: an owned tensor takes `cast`, a borrowed view the `cast_read` hook (#2223).
+///
+/// The `to_contiguous+cast` arm is the shape the traced `Convert` used before the read hook
+/// existed, so the two read arms measure the staging copy the hook removes on one machine in
+/// one run.
 fn bench_cast(c: &mut Criterion) {
     let mut group = c.benchmark_group("route_matrix/cast_f64_f32");
     let len = 4096;
@@ -177,6 +180,43 @@ fn bench_cast(c: &mut Criterion) {
 
     group.bench_function("engine/single", |bench| {
         bench.iter(|| black_box(engine.cast(black_box(&a), DType::F32).expect("cast")));
+    });
+
+    // A view with a nonzero offset over a larger allocation: not a compact operand.
+    let data = vec![1.0_f64; len + 1];
+    let sliced = TensorRead::from_view(TensorView::F64(
+        TypedTensorView::from_slice(vec![len], vec![1], 1, &data)
+            .expect("an offset view of the benchmark buffer"),
+    ));
+    let staged = engine.to_contiguous_read(sliced.clone()).expect("staging");
+    assert_eq!(
+        engine.cast(&staged, DType::F32).expect("cast").shape(),
+        &[len]
+    );
+    assert_eq!(
+        engine
+            .cast_read(sliced.clone(), DType::F32)
+            .expect("cast_read")
+            .shape(),
+        &[len]
+    );
+
+    group.bench_function("read_view/to_contiguous+cast", |bench| {
+        bench.iter(|| {
+            let compact = engine
+                .to_contiguous_read(black_box(sliced.clone()))
+                .expect("staging");
+            black_box(engine.cast(black_box(&compact), DType::F32).expect("cast"))
+        });
+    });
+    group.bench_function("read_view/cast_read", |bench| {
+        bench.iter(|| {
+            black_box(
+                engine
+                    .cast_read(black_box(sliced.clone()), DType::F32)
+                    .expect("cast_read"),
+            )
+        });
     });
     group.finish();
 }

@@ -2350,6 +2350,66 @@ pub trait TensorStructural {
         self.cast(input, to)
     }
 
+    /// Cast the read's logical elements to another dtype using explicit dtype projection.
+    ///
+    /// This is the read form of [`TensorStructural::cast`]: a backend that can address a
+    /// borrowed operand's own layout should override it so a view is not staged. The
+    /// default stages each borrowed view into compact storage (an owned tensor is passed
+    /// through) and delegates to the owned-input method (#2223).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor, TensorRead, TensorStructural};
+    ///
+    /// fn cast_read_to_i32<B: TensorStructural>(
+    ///     backend: &mut B,
+    ///     input: TensorRead<'_>,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.cast_read(input, DType::I32)
+    /// }
+    /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
+    fn cast_read(&mut self, input: TensorRead<'_>, to: crate::DType) -> crate::Result<Tensor> {
+        // shortcut: the staging default goes away with the owned `cast` in #2223 PR 3.
+        let input = stage_view(self, input)?;
+        self.cast(&input, to)
+    }
+
+    /// Convert the read's logical elements using checked dtype conversion.
+    ///
+    /// `convert_read` accepts only conversions allowed by tenferro's dtype-promotion
+    /// lattice; the check runs before any backend work. Use
+    /// [`TensorStructural::cast_read`] for explicit lossy projection. This is a
+    /// provided method, not a backend hook: a backend implements `cast_read`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor, TensorRead, TensorStructural};
+    ///
+    /// fn convert_read_to_f64<B: TensorStructural>(
+    ///     backend: &mut B,
+    ///     input: TensorRead<'_>,
+    /// ) -> tenferro_tensor::Result<Tensor> {
+    ///     backend.convert_read(input, DType::F64)
+    /// }
+    /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// when the requested conversion is outside the checked dtype-promotion lattice,
+    /// and the same errors [`TensorStructural::cast_read`] reports.
+    fn convert_read(&mut self, input: TensorRead<'_>, to: crate::DType) -> crate::Result<Tensor> {
+        validate_convert_dtype("convert", input.dtype(), to)?;
+        self.cast_read(input, to)
+    }
+
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source

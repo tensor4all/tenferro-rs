@@ -139,6 +139,7 @@ pub fn tenferro_cpu::CpuEngine::reduce_sum_read(&mut self, tenferro_tensor::type
 impl tenferro_tensor::backend::TensorStructural for tenferro_cpu::CpuEngine
 pub fn tenferro_cpu::CpuEngine::broadcast_in_dim_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize], &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_cpu::CpuEngine::cast(&mut self, &tenferro_tensor::types::Tensor, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_cpu::CpuEngine::cast_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_cpu::CpuEngine::copy_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
 pub fn tenferro_cpu::CpuEngine::embed_diagonal(&mut self, &tenferro_tensor::types::Tensor, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_cpu::CpuEngine::embed_diagonal_read(&mut self, tenferro_tensor::types::TensorRead<'_>, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>

@@ -6,8 +6,8 @@ use tenferro_tensor::{
 };
 
 use super::{
-    collect_tensor_reads, constant_tensor, ensure_owned, get, get_read, resolve_tensor_shape_exprs,
-    ExecInstruction, ExecOp, ExecSlot, InputView,
+    collect_tensor_reads, constant_tensor, get_read, resolve_tensor_shape_exprs, ExecInstruction,
+    ExecOp, ExecSlot, InputView,
 };
 use crate::scalar_semantics::dynamic_truncate_size;
 
@@ -188,14 +188,14 @@ pub(super) fn is_host_op(op: &ExecOp) -> bool {
 /// Whether the executor of `op` reads input `input_index` as a `TensorRead`,
 /// so a metadata-only producer can be folded onto that input (#2226).
 ///
-/// Every backend entry but `Convert` (`cast` takes an owned tensor) reads its
-/// inputs through `get_read`; the FFI entries (`dot_general_read_cached`,
+/// Every backend entry reads its inputs through `get_read`, including `Convert`
+/// since its read hook (#2223); the FFI entries (`dot_general_read_cached`,
 /// extension executors), `ShapeOf`, `DynamicTruncate` and `PadToMatch` take
-/// reads; `Constant` has no inputs. The owned accessors reject a folded view
-/// typed, so a consumer this predicate misclassifies fails loudly.
+/// reads; `Constant` has no inputs.
 pub(super) fn reads_input_view(op: &ExecOp, input_index: usize) -> bool {
-    if let Some(entry) = backend_dispatch_entry(op) {
-        return entry.key != PrimitiveOpKind::Convert;
+    let _ = input_index;
+    if backend_dispatch_entry(op).is_some() {
+        return true;
     }
     match FfiDispatchKey::for_op(op) {
         Some(FfiDispatchKey::DotGeneral | FfiDispatchKey::DotGeneralWithConj) => {
@@ -291,18 +291,6 @@ pub(super) fn execute_host_dispatch<B: HostExecution + ?Sized>(
         )));
     };
     (entry.execute)(backend, slots, inst)
-}
-
-fn ensure_backend_inputs(
-    exec: &mut dyn Engine,
-    slots: &mut [Option<ExecSlot<'_>>],
-    inst: &ExecInstruction,
-    indices: &[usize],
-) -> Result<()> {
-    for &idx in indices {
-        ensure_owned(exec, slots, inst, idx)?;
-    }
-    Ok(())
 }
 
 fn dispatch_mismatch(expected: PrimitiveOpKind, op: &ExecOp) -> Error {
@@ -488,11 +476,12 @@ fn execute_convert(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
 ) -> Result<Tensor> {
-    ensure_backend_inputs(exec, slots, inst, &[0])?;
     let ExecOp::Convert { to } = &inst.op else {
         return Err(dispatch_mismatch(PrimitiveOpKind::Convert, &inst.op));
     };
-    Ok(exec.cast(get(slots, inst, 0)?, *to)?)
+    // The read hook consumes the operand where it lies, so a view folds into Convert
+    // without a staging copy (#2223).
+    Ok(exec.cast_read(get_read(slots, inst, 0)?, *to)?)
 }
 
 fn execute_reduce_sum(

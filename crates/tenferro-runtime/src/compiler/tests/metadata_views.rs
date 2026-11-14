@@ -131,7 +131,9 @@ fn a_value_with_two_consumers_keeps_its_command() {
 }
 
 #[test]
-fn an_owned_input_consumer_keeps_the_command() {
+fn a_transpose_folds_into_convert() {
+    // `Convert` reads its operand through `cast_read` (#2223), so a metadata view folds
+    // into it like into any other reading consumer.
     let mut program = make_exec_program(
         vec![
             make_exec_instr(ExecOp::Negate, vec![0], vec![1]),
@@ -145,7 +147,13 @@ fn an_owned_input_consumer_keeps_the_command() {
 
     fold_all(&mut program);
 
-    assert_eq!(program.instructions.len(), 3);
+    assert_eq!(ops(&program), vec!["Negate", "Convert { to: F32 }"]);
+    let convert = &program.instructions[1];
+    assert_eq!(convert.input_slots, vec![1]);
+    assert_eq!(
+        convert.input_views,
+        vec![(0, InputView::Transpose { perm: vec![1, 0] })]
+    );
 }
 
 #[test]
