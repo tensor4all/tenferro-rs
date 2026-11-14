@@ -1,0 +1,57 @@
+[package]
+name = "tenferro-mpi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+publish = true
+description = "Blocking point-to-point MPI transport for tenferro host tensors."
+repository = "https://github.com/tensor4all/tenferro-rs"
+homepage = "https://tensor4all.org/tenferro-rs/"
+documentation = "https://docs.rs/tenferro-mpi"
+readme = "README.md"
+keywords = ["mpi", "tensor", "message-passing", "hpc"]
+categories = ["science", "concurrency"]
+include = [
+    "src/**/*.rs",
+    "examples/**/*.rs",
+    "scripts/*.sh",
+    "Cargo.toml",
+    "README.md",
+]
+
+# Standalone manifest, excluded from the root workspace (same pattern as ext/sparse):
+# the `upstream` backend needs system MPI and libclang at build time, so a root-workspace
+# member would add MPI to every existing CI lane and to every developer `cargo test`.
+[workspace]
+resolver = "2"
+
+[features]
+default = ["upstream"]
+# crates.io rsmpi with its system-MPI (bindgen) backend. The published backend.
+upstream = ["dep:mpi"]
+# Protocol only, no MPI binding: used by a separate backend crate such as tenferro-mpi-rt.
+engine = []
+
+[dependencies]
+tenferro-tensor = { path = "../../crates/tenferro-tensor", version = "0.11.0", default-features = false }
+thiserror = "2"
+# Keep this pin identical to hataori-rs's `mpi` pin so a combined build resolves one `mpi`.
+mpi = { version = "=0.8.1", default-features = false, optional = true }
+
+[dev-dependencies]
+# The 2-rank test installs a counting global allocator; no dev dependency is needed.
+
+[[test]]
+name = "mpi_p2p"
+harness = false
+
+[[example]]
+name = "send_recv"
+
+# Match workspace [profile.ci] used by scripts/ci/run_profile.py.
+[profile.ci]
+inherits = "test"
+debug = 0
+incremental = false
+strip = "symbols"
