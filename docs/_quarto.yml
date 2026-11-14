@@ -78,6 +78,7 @@ website:
           - text: "Parallelism and Caching"
             href: guides/parallelism-and-caching.md
           - guides/dispatch-and-engine-cost.md
+          - guides/hdf5-io.md
           - guides/troubleshooting.md
       - section: "API"
         contents:

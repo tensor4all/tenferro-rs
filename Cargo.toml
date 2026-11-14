@@ -24,6 +24,7 @@ members = [
     "ext/scalar-consumer-application",
 ]
 exclude = [
+    "ext/hdf5",
     "ext/mpi",
     "ext/mpi-rt",
     "ext/sparse",

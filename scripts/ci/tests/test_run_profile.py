@@ -66,6 +66,7 @@ class RunProfileTests(unittest.TestCase):
                 "cargo fmt --all --check",
                 "cargo fmt --manifest-path ext/tropical/Cargo.toml --all --check",
                 "cargo fmt --manifest-path ext/sparse/Cargo.toml --all --check",
+                "cargo fmt --manifest-path ext/hdf5/Cargo.toml --all --check",
                 "cargo fmt --manifest-path ext/mpi/Cargo.toml --all --check",
                 "cargo fmt --manifest-path ext/mpi-rt/Cargo.toml --all --check",
             ),

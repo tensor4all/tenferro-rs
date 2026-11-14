@@ -1,0 +1,31 @@
+[package]
+name = "tenferro-hdf5"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+description = "Thin HDF5 payload adapter for tenferro tensors."
+publish = false
+
+[workspace]
+resolver = "2"
+
+[lib]
+name = "tenferro_hdf5"
+path = "src/lib.rs"
+
+[dependencies]
+hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", rev = "6d15b680dcf695f57ce11a9dd4c8c80e72d449e5", features = ["complex"] }
+num-complex = "0.4"
+tenferro-tensor = { path = "../../crates/tenferro-tensor", default-features = false }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Match workspace [profile.ci] used by scripts/ci/run_profile.py extensions.
+[profile.ci]
+inherits = "test"
+debug = 0
+incremental = false
+strip = "symbols"
