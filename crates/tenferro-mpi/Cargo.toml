@@ -1,0 +1,64 @@
+[package]
+name = "tenferro-mpi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+publish = true
+description = "Blocking point-to-point MPI transport for tenferro host tensors."
+repository = "https://github.com/tensor4all/tenferro-rs"
+homepage = "https://tensor4all.org/tenferro-rs/"
+documentation = "https://docs.rs/tenferro-mpi"
+readme = "README.md"
+keywords = ["mpi", "tensor", "message-passing", "hpc"]
+categories = ["science", "concurrency"]
+include = [
+    "src/**/*.rs",
+    "examples/**/*.rs",
+    "tests/**/*.rs",
+    "Cargo.toml",
+    "README.md",
+]
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+# docs.rs otherwise builds `default = []` and would show only the protocol shell.
+# The runtime backend is the MPIABI loader, so building it needs no MPI headers.
+features = ["runtime"]
+
+# A workspace member. Neither backend is a default feature: `default = []` keeps
+# system MPI headers, libclang and the rsmpi-rt dependency out of the root
+# `cargo test --workspace` graph. `engine` alone compiles the protocol with no MPI
+# binding, for a caller that supplies its own backend implementation.
+[features]
+default = []
+# rsmpi-rt's bindgen backend: crates.io rsmpi-sys 0.2.4 (aliased as `mpi-sys` inside
+# rsmpi-rt; library `mpi_sys`) and therefore system MPI headers and libclang.
+system = ["dep:mpi", "mpi/mpi-sys-backend"]
+# rsmpi-rt's MPIABI runtime-loading backend: crates.io mpi-rt-sys 0.1.0, no headers.
+runtime = ["dep:mpi", "mpi/mpi-rt-sys-backend"]
+# Protocol only, no MPI binding.
+engine = []
+
+[dependencies]
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.11.0", default-features = false }
+thiserror = "2"
+# The published rsmpi-rt 0.8.2 package kept its library target as `mpi`, so the
+# dependency is aliased back to `mpi` and the adapter's `use mpi::...` paths and
+# public re-export keep working. `default-features = false` is required: the default
+# is the system-MPI backend, which neither feature may select implicitly.
+mpi = { package = "rsmpi-rt", version = "0.8.2", default-features = false, optional = true }
+
+[[test]]
+name = "mpi_p2p"
+harness = false
+required-features = ["system"]
+
+[[test]]
+name = "mpi_p2p_runtime"
+harness = false
+required-features = ["runtime"]
+
+[[example]]
+name = "send_recv"
+required-features = ["system"]

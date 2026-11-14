@@ -1,0 +1,24 @@
+[package]
+name = "tenferro-scalar-consumer-application"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Final application role of the external-scalar consumer (not published)."
+
+[lib]
+name = "tenferro_scalar_consumer_application"
+
+[dependencies]
+tenferro-df64-proof = { path = "../df64-proof", default-features = false }
+tenferro-tensor-core = { path = "../../../crates/tenferro-tensor-core" }
+# The scalar-set declaration macro names the canonical host container, so the
+# library (not only its tests) depends on the tensor crate.
+tenferro-tensor = { path = "../../../crates/tenferro-tensor" }
+
+[dev-dependencies]
+tenferro-scalar-consumer-algorithm = { path = "../scalar-consumer-algorithm", default-features = false }
+tenferro-cpu = { path = "../../../crates/tenferro-cpu", default-features = false }
+tenferro-ad = { path = "../../../crates/tenferro-ad", default-features = false }
+tenferro-linalg = { path = "../../../crates/tenferro-linalg", default-features = false, features = ["autodiff"] }
+tenferro-runtime = { path = "../../../crates/tenferro-runtime", default-features = false }

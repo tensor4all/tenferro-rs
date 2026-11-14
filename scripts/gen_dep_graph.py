@@ -58,10 +58,14 @@ _MEMBER_CLASSES = {
     # The external-scalar contribution and the two consumer roles are extensions of
     # the documented surface rather than part of a layer: they add a scalar
     # tenferro does not declare and show how an application composes it.
-    "ext/bf16-proof": "extension",
-    "ext/df64-proof": "extension",
-    "ext/scalar-consumer-algorithm": "extension",
-    "ext/scalar-consumer-application": "extension",
+    "ext/experiments/bf16-proof": "extension",
+    "ext/experiments/df64-proof": "extension",
+    "ext/experiments/scalar-consumer-algorithm": "extension",
+    "ext/experiments/scalar-consumer-application": "extension",
+    # Optional workspace adapters: they add a transport or storage family to the
+    # documented surface, with no default system dependency.
+    "crates/tenferro-mpi": "extension",
+    "crates/tenferro-hdf5": "extension",
     "docs/tutorial-code": "tutorial",
 }
 

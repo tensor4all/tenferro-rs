@@ -179,7 +179,7 @@ Part 1b lands incrementally on the same branch. Landed so far: the
 caller-provided-destination entry points `scalar_binary_into` and `scalar_fold`
 in `tenferro-internal-cpu-kernels` (re-exported from `tenferro-cpu`), which run
 the same `zip_map2_into` / `reduce` bodies the preset pool path uses, and the
-`ext/df64-proof` crate, whose own two-`f64` scalar exercises construction,
+`ext/experiments/df64-proof` crate, whose own two-`f64` scalar exercises construction,
 borrowed and mutable access, an elementwise operation, a reduction, and an
 explicit `f64` narrowing through those public functions. Landed next: the open scalar contract (`Scalar`, `ScalarArithmetic`,
 `ScalarDomain`) and `ad_admission` in `tenferro-tensor-core`, with the seven
@@ -303,7 +303,7 @@ This is measured on one release test binary in one crate and is not yet the full
 
 #1785 asks for one more thing than the counts above: "reuse of an external Df64
 kernel by two sets containing that contribution". The application crate
-`ext/scalar-consumer-application` therefore declares its own set, pairing `f32`
+`ext/experiments/scalar-consumer-application` therefore declares its own set, pairing `f32`
 and `f64` with the contribution's `Df64`, beside the contribution's own set that
 pairs `Df64` with `f64`. `tests/contribution_reuse.rs` drives the same arithmetic
 through both sets and `tests/contribution_only.rs` is the control that uses one.
@@ -459,7 +459,7 @@ The pool-backed payload is measured rather than assumed: `TypedTensor<T>`,
 a pool-backed payload with the same identity-based recovery, and the concrete
 payload releases its storage when it is dropped. What remains is a cost and
 ownership choice, not a type-system blocker, and the cost is now measured.
-`ext/df64-proof/tests/erasure_cost.rs` compares the direct host payload with the
+`ext/experiments/df64-proof/tests/erasure_cost.rs` compares the direct host payload with the
 erased one, on one worker thread, host-only, fastest of nine rounds of 200,000
 iterations over a 64-element `f64` payload. The numbers below are re-measured after
 the erased value gained a layout, and the earlier record is kept beside them:
@@ -498,11 +498,11 @@ members.
 
 Measured: the derived lattice reproduces the recorded hand-written table for all
 49 pairs (`crates/tenferro-tensor/src/validate/tests.rs`), and the external set in
-`ext/df64-proof` promotes within its own lattice without touching tenferro's.
+`ext/experiments/df64-proof` promotes within its own lattice without touching tenferro's.
 
 Landed and measured: `DType` and `DefaultScalars` are now generated from one
 declaration in `tenferro-tensor-core`, `ScalarSet` is the open membership
-contract, and `ext/df64-proof` declares its own two-member set with the same
+contract, and `ext/experiments/df64-proof` declares its own two-member set with the same
 macro without touching tenferro's set. With `Tensor` aliased to the generated
 set, `cargo check --workspace --all-targets` reports **zero errors and zero
 warnings** across every crate, which verifies #1785's source-compatibility claim
@@ -677,7 +677,7 @@ cache-key identity carries the actual scalar rather than a shared code.
 The registered-extension path now executes end to end. The extension op family,
 its planning config, engine, prepared operation, executor, and module all live in
 the downstream crate, the family rejects a preset input explicitly, and
-`ext/df64-proof/tests/extension_execution.rs` runs the operation on a
+`ext/experiments/df64-proof/tests/extension_execution.rs` runs the operation on a
 caller-owned payload through the registered module and checks that the low-order
 component survives.
 
@@ -702,7 +702,7 @@ scratch, cross-owner handoffs, and the accounting a caller-owned payload
 participates in. The payload here is retained and returned, not pooled.
 
 Session composition is also demonstrated on its own.
-`ext/df64-proof/tests/session_composition.rs` carries an external payload as a
+`ext/experiments/df64-proof/tests/session_composition.rs` carries an external payload as a
 runtime `Tensor`, enters `with_backend_session`, runs an ordinary addition on `f64`
 tensors in that session, then runs the extension's own Df64 kernel on the carried
 payloads through the public caller-destination entry point, and checks after the
@@ -711,7 +711,7 @@ ordinary tensor work inside one admitted session and inherits its admission and
 thread budget.
 
 **The required extended-precision example and directed conversions run.**
-`ext/df64-proof/tests/directed_conversion.rs` walks #1785's example through public
+`ext/experiments/df64-proof/tests/directed_conversion.rs` walks #1785's example through public
 boundaries: `Df64` tensors holding `1` and `2^-80` are added in `Df64`, `1` is
 subtracted in `Df64`, the result is exactly `2^-80`, and the same computation in
 `f64` yields `0`. `conversion::to_f64` and `conversion::to_df64` declare their
@@ -742,7 +742,7 @@ typed view types, because the layout lives in the erased value instead:
   rejecting it, and the erased layout feeds `Tensor::shape`/`layout_summary`, so
   the erased tensor type reports the view it carries.
 
-`ext/df64-proof/tests/external_views.rs` covers the requirements: a permutation
+`ext/experiments/df64-proof/tests/external_views.rs` covers the requirements: a permutation
 that shares its payload and preserves every component through typed reads, a
 mutable view that writes exactly the element it names, a shared payload that
 refuses a mutable borrow, materialization into logical order, and a sum reduction
@@ -757,7 +757,7 @@ reversed pair is `External(i64)`.
 
 What matters is that no executing entry point can turn that imprecise answer into a
 wrong value, and that is verified in
-`ext/df64-proof/tests/external_mixing.rs`:
+`ext/experiments/df64-proof/tests/external_mixing.rs`:
 
 - A conversion between two distinct external tags is rejected in both directions,
   as is a conversion between a preset and an external tag. The promotion answer can
@@ -794,7 +794,7 @@ route the proof crate uses — is unaffected.
 What would enable the traced and prepared path is a contribution-declared stable
 scalar identity (a name that survives across processes and builds), which is a new
 payload contract rather than a mechanical encoding, so it is recorded here instead
-of being guessed at. `ext/df64-proof/tests/extension_execution.rs` pins the
+of being guessed at. `ext/experiments/df64-proof/tests/extension_execution.rs` pins the
 rejection, and installing the module into a runtime with the CPU engine is
 verified in the same test.
 
@@ -823,7 +823,7 @@ passes 1927 doctests with none failing, and `cargo nextest run --workspace --car
 reports 3348 passed against a single `trybuild` fixture failure that the pristine `origin/main`
 worktree reports identically.
 
-`ext/df64-proof/tests/extension_execution.rs` verifies both halves: the undeclared
+`ext/experiments/df64-proof/tests/extension_execution.rs` verifies both halves: the undeclared
 case is a typed error, and the declared case runs the registered operation through
 trace, compilation, and prepared execution
 (`the_module_installs_and_plans_the_declared_scalar`). The repository's extension AD
@@ -850,7 +850,7 @@ declare — and `Df64TotalVjpRule` emits it from the output cotangent, reading t
 target shape from the primal input metadata and rejecting a symbolic shape rather
 than guessing one. Both directions run: `Df64TotalLinearizeRule` sums the tangent inputs (the sum is
 linear, so the linearization is the same operation) and `Df64TotalVjpRule` emits the
-broadcast. `ext/df64-proof/tests/extension_ad.rs` verifies the traced VJP and JVP,
+broadcast. `ext/experiments/df64-proof/tests/extension_ad.rs` verifies the traced VJP and JVP,
 their compilation, and the execution of both programs, including cases whose
 cotangent and tangent carry a `2^-80` low component that survives.
 
@@ -878,7 +878,7 @@ corrections evaluated in the two-component arithmetic, and `Df64::sqrt` refines 
 square root the same way, so `(1/3) * 3 - 1` and `sqrt(2)^2 - 2` are non-zero in the
 external scalar while the `f64` computation reports zero.
 
-`ext/df64-proof/tests/extension_qr.rs` verifies the factorization through the traced,
+`ext/experiments/df64-proof/tests/extension_qr.rs` verifies the factorization through the traced,
 compiled, and executed path: a square factorisation reconstructs its input with an
 error below `1e-30`, its columns are orthonormal below `1e-30`, its diagonal is
 positive, `[[3], [4]]` gives `R = [[5]]` and `Q = [[0.6], [0.8]]`, and a `2^-80` low
@@ -905,7 +905,7 @@ read by its own layout when it does not. That removed a real limitation rather t
 working around it: before this, a connected reverse pass failed with a typed error
 instead of running.
 
-`ext/df64-proof/tests/connected_conversion_ad.rs` verifies both directions:
+`ext/experiments/df64-proof/tests/connected_conversion_ad.rs` verifies both directions:
 
 - `Df64 -> to_f64 -> sum of squares` differentiates back into the external scalar, and
   the gradient is `2x` evaluated at the *narrowed* values: the low component the
@@ -933,8 +933,8 @@ not execute for a scalar tenferro does not declare. The adjoint's payload record
 cotangents are present, because a loss need not depend on both factors, and an absent
 cotangent is the zero cotangent.
 
-`ext/df64-proof/tests/extension_qr.rs` checks the adjoint in isolation against the
-analytic derivative, and `ext/df64-proof/tests/connected_qr_ad.rs` runs the connected
+`ext/experiments/df64-proof/tests/extension_qr.rs` checks the adjoint in isolation against the
+analytic derivative, and `ext/experiments/df64-proof/tests/connected_qr_ad.rs` runs the connected
 program end to end:
 
 - `A -> QR -> R -> f64 -> R^2` with `A = [[3], [4]]` differentiates back into the
@@ -959,13 +959,13 @@ that states the scalar properties and operation capabilities it needs, and a fin
 application that composes a canonical support with an optional scalar contribution. Both
 exist and both tests pass:
 
-- `ext/scalar-consumer-algorithm` declares
+- `ext/experiments/scalar-consumer-algorithm` declares
   `ScalarSupport { fn qr(&self, &TracedTensor) -> (Q, R); fn to_f64(&self, &TracedTensor) -> f64 }`
   and builds the connected program from it, using only public traced operations and never
   naming a scalar, a provider, or a dtype. `factor_norm_gradient` is the whole algorithm:
   factor, present the factor as ordinary `f64`, form the squared norm, and take the
   reverse pass.
-- `ext/scalar-consumer-application` supplies two bindings for that one algorithm:
+- `ext/experiments/scalar-consumer-application` supplies two bindings for that one algorithm:
   canonical standard support (`tenferro_linalg`'s factorization and the identity
   presentation) and standard support plus the external scalar contribution
   (`Df64Qr` and `Df64ToF64`). The application is the only role that names a scalar, an
@@ -1049,13 +1049,13 @@ grouped by area: 23094 insertions and 2509 deletions in total), the largest area
 
 | Area | Added | Removed |
 | --- | --- | --- |
-| `ext/df64-proof` (the contribution) | 7831 | 0 |
+| `ext/experiments/df64-proof` (the contribution) | 7831 | 0 |
 | `docs` | 3740 | 102 |
 | `crates/tenferro-gpu` (the CubeCL and WebGPU arm conversions) | 1966 | 887 |
 | `crates/tenferro-tensor-core` | 1855 | 38 |
-| `ext/bf16-proof` (the bf16 contribution) | 1689 | 0 |
+| `ext/experiments/bf16-proof` (the bf16 contribution) | 1689 | 0 |
 | `crates/tenferro-linalg` (the provider tables) | 1461 | 669 |
-| `ext/scalar-consumer-application` | 1122 | 0 |
+| `ext/experiments/scalar-consumer-application` | 1122 | 0 |
 | `crates/tenferro-internal-cpu-kernels` | 1029 | 482 |
 | `crates/tenferro-runtime` | 511 | 88 |
 | `crates/tenferro-tensor` | 426 | 106 |
@@ -1068,12 +1068,12 @@ tenferro-scalar-consumer-application --json`:
 
 | File | Line coverage |
 | --- | --- |
-| `ext/df64-proof/src/dense.rs` | 99.2% |
-| `ext/df64-proof/src/lib.rs` | 95.2% |
-| `ext/df64-proof/src/conversion.rs` | 93.5% |
-| `ext/df64-proof/src/extension.rs` | 86.7% |
-| `ext/df64-proof/src/ad.rs` | 78.5% |
-| `ext/scalar-consumer-algorithm/src/lib.rs` | 78.3% |
+| `ext/experiments/df64-proof/src/dense.rs` | 99.2% |
+| `ext/experiments/df64-proof/src/lib.rs` | 95.2% |
+| `ext/experiments/df64-proof/src/conversion.rs` | 93.5% |
+| `ext/experiments/df64-proof/src/extension.rs` | 86.7% |
+| `ext/experiments/df64-proof/src/ad.rs` | 78.5% |
+| `ext/experiments/scalar-consumer-algorithm/src/lib.rs` | 78.3% |
 
 Two facts explain why the smaller numbers are not untested behavior. First, llvm-cov does
 not instrument doctests, and this branch's public items carry runnable examples: whole
@@ -1088,14 +1088,14 @@ matrix and a zero column for the factorization; a preset input for the narrowing
 external one for the widening; a payload of another element type for both conversions; a
 singular triangular factor for both derivative operations; a derivative rule asked about an
 operation outside its domain; and an algorithm whose loss does not depend on its input. Those
-are `ext/df64-proof/tests/extension_boundaries.rs`, `tests/directed_conversion.rs`, and the
+are `ext/experiments/df64-proof/tests/extension_boundaries.rs`, `tests/directed_conversion.rs`, and the
 algorithm crate's own tests. The coverage these boundary tests do not reach is the doctest bodies,
 which llvm-cov does not instrument, plus arms another guard makes unreachable; covering those would
 mean testing examples twice or padding defensives, which the repository's coverage policy forbids.
 
 ### 5.12 The survival half of #1790's "later backward"
 
-`ext/scalar-consumer-application/tests/later_backward.rs` covers the half of that
+`ext/experiments/scalar-consumer-application/tests/later_backward.rs` covers the half of that
 checkpoint that does not need #1789's pool contract:
 
 - A forward factorization runs in its own runtime, which is then dropped, so nothing can
@@ -1114,7 +1114,7 @@ reuse* and releasing storage so it can be reused need the pool accounting that i
 ### 5.13 The storage gap, measured before it is extended
 
 #1789 prescribes trying the existing mechanisms first and extending the owning boundary only
-for a demonstrated gap. `ext/df64-proof/tests/scratch_allocation.rs` measures what the
+for a demonstrated gap. `ext/experiments/df64-proof/tests/scratch_allocation.rs` measures what the
 contribution's bodies allocate per execution with a counting global allocator, on a 64 by 64
 matrix whose payload is 65536 bytes:
 
@@ -1319,7 +1319,7 @@ second kind, which is exactly the sealed pool boundary the objective keeps in pl
 a resource boundary owned by #1789 until that issue's contract is agreed". The removal is consequently gated by
 the objective's own constraint and by #1789's contract, not by its size alone.
 
-**The trade-off is measured rather than argued** (`ext/df64-proof/tests/scratch_allocation.rs`,
+**The trade-off is measured rather than argued** (`ext/experiments/df64-proof/tests/scratch_allocation.rs`,
 `report_erased_payload_allocation_cost`). The seven variants hold the typed tensor inline, so wrapping one is a
 move and costs nothing: `size_of::<Tensor>()` is 1464 bytes, and adapting a prepared `TypedTensor<f64>` through
 `Tensor::from_typed` allocates zero times and moves zero bytes. The single payload the removal names can be
@@ -1663,7 +1663,7 @@ trade is finished, and the representation change that does need it is the part t
 **#1793's einsum with an externally defined scalar.** The issue's own example now runs: the
 contribution owns a matrix contraction, `einsum("ik,kj->ij", A, B)`, which reproduces #1793's table
 and keeps `2^-80` through the contraction of `[1, 1]` with `[1, 2^-80]`
-(`ext/df64-proof/tests/einsum.rs`). Every other label pattern is refused with a typed error rather
+(`ext/experiments/df64-proof/tests/einsum.rs`). Every other label pattern is refused with a typed error rather
 than approximated, because the general cases need the diagonal, reduction, and permutation stages
 the ordinary lowering plans, and differentiating the contraction fails explicitly with the family's own message that
 it has no Linearize rule for `Einsum`, rather than returning a zero gradient. The narrower rejection of an externally defined
@@ -1677,7 +1677,7 @@ does not authorize a feature implementation PR.
 done and evidenced. Its fifth item asks for allocation counts, session and dispatch overhead, preparation, and
 build and code-size evidence against an exact baseline, with the profile, features, compiler,
 target, and cold and warm conditions recorded and no unmeasured speedup or absence of regression
-claimed. `ext/df64-proof/tests/dispatch_overhead.rs` measures the layer around the numerical
+claimed. `ext/experiments/df64-proof/tests/dispatch_overhead.rs` measures the layer around the numerical
 bodies: the same tiny operation runs as a preset `f64` program through the runtime's prepared
 path, as the contribution's program through that path, and as a direct call to the contribution's
 body, on one worker thread that the test asserts and prints. The report names the configuration it
@@ -1741,7 +1741,7 @@ because `RetainedValue` is not a public item.
 
 #1785 asks for `half::bf16` as a standard scalar representation, and #1787 requires bf16 CPU
 storage, conversions, and reached forward arithmetic to execute with documented kernel precision
-and rounding. Both are satisfied by `ext/bf16-proof`, which carries the standard `half::bf16` type
+and rounding. Both are satisfied by `ext/experiments/bf16-proof`, which carries the standard `half::bf16` type
 through the same external boundary the extended scalar uses, so no pooled storage and therefore no
 new variant in `#1789`'s per-member resource pin is involved. A *preset* member would be a
 different change and is still the open one: it would extend the pool boundary this branch is
@@ -1773,7 +1773,7 @@ independent references.
 
 The rule now solves `W = S R + R_dot` for the skew `S` and takes `R_dot = W - S R`, the assertion
 in the connected test reads `3/5`, and the two new references in
-`ext/df64-proof/tests/qr_derivative_references.rs` pass: the duality identity agrees to a
+`ext/experiments/df64-proof/tests/qr_derivative_references.rs` pass: the duality identity agrees to a
 relative `5.7e-33`, and a central difference at a step of `1e-16` reproduces the adjoint's
 directional derivative, which no `f64` intermediate could resolve. The duality comparison also
 reproduces the orientation gradient `[[6], [8]]`, which guards that the two programs' inputs were
@@ -1867,14 +1867,14 @@ are closed on purpose, and the row says which.
 | Core runtime identity tensor for a caller-owned scalar | rejected by design; the declared identity replaces it | `external_dtype_boundaries.rs` (`the_runtime_builds_no_core_identity_tensor_for_a_caller_owned_scalar`); `ProgramValueMetadata::with_scalar_identity` and `ProgramBuildError::ExternalScalarWithoutIdentity` | none: a program names its scalar through the declared identity, which this branch adds |
 | First-order AD through the contribution's rules | present | `extension_ad.rs`, `connected_conversion_ad.rs`, `connected_qr_ad.rs` | none |
 | An AD order other than one, a scalar that is not a field, and an operation outside the contribution's rule set | rejected | `crates/tenferro-tensor-core/src/scalar/tests.rs` (all three `ad_admission` branches) and `ad_rule_boundaries.rs` | none: the contract admits first-order field arithmetic and refuses the rest with a typed error |
-| A two-input contraction, which is #1793's example | present | `ext/df64-proof/tests/einsum.rs`: `einsum("ik,kj->ij", A, B)` returns `[[19, 22], [43, 50]]` for #1793's own table, the contraction of `[1, 1]` with `[1, 2^-80]` keeps `2^-80` after subtracting one, and batched, outer-product, summed-label, and Hadamard patterns each have a test with hand-checkable values | none beyond the contribution: the body is the contribution's own, reached through the runtime's extension module |
-| The adjoint of the pairwise contraction | present | `ext/df64-proof/tests/einsum_ad.rs`: the adjoint matches hand-written products, a `1e-12` central difference of a scalar loss, and a cotangent of `1 + 2^-80` that keeps its low component beside the `f64` control | none beyond the contribution: the adjoint rotates the labels and reuses the contraction body |
-| The forward tangent of the contraction | present | `ext/df64-proof/tests/einsum_ad.rs`: the tangent matches hand-written products, and JVP/VJP duality holds exactly, one operand at a time | none beyond the contribution: the tangent contracts each tangent with the other operand and adds the halves |
-| A repeated label inside one operand: a trace, or a diagonal extraction when the output names it | present | `ext/df64-proof/tests/einsum.rs`: a diagonal extraction against hand-written values, and a trace the output omits | none beyond the contribution: the body reads a repeated label's axes at the same index |
-| The adjoint of a pattern wider than pairwise | present | `ext/df64-proof/tests/einsum_ad.rs` checks a three-operand contraction's adjoint against hand-written products: the cotangent of each operand is the output cotangent contracted with the others, with the cotangent taking that operand's place and the output's labels | follows the same fold the forward body uses |
-| The tangent of a pattern wider than pairwise | present | `ext/df64-proof/tests/einsum_ad.rs` checks a three-operand tangent against hand-written products and against the adjoint through the duality identity, with the two sides agreeing exactly. The mask the payload carries says which operands contribute a tangent, so an inactive one is never materialised as a zero | follows the same fold the forward body uses, with the tangent taking its operand's place under that operand's own labels |
-| bf16 through the ordinary einsum surface | present as a contribution operation | #1793's precision table asks for a bf16 CPU einsum with documented f32 accumulation and a contraction that distinguishes f32 accumulation from repeated bfloat16 rounding. `ext/bf16-proof/src/einsum.rs` supplies the operation, its engine, and its module, and `ext/bf16-proof/tests/einsum.rs` is the comparison: three hundred stored ones contract to 300, while the same sum with the storage type's own addition stalls at 256. The operands are widened to f32, the contraction accumulates there, and the result is rounded once. Traces, repeated output labels, and N-ary patterns are refused with typed errors, because the row is about the accumulation contract rather than the wider pattern surface |
-| N-ary patterns | present | `ext/df64-proof/tests/einsum.rs`: a three-operand fold with hand-written values, a three-operand pattern whose first operand repeats a label, and a single-operand refusal | none beyond the contribution: the body folds from the left and an intermediate keeps the labels the remaining operands or the output still need | the same file's `the_pattern_validator_refuses_anything_but_a_matrix_contraction` and `the_body_refuses_disagreeing_contracted_dimensions`; `ad.rs` refuses the contraction with the family's message that it has no Linearize rule for `Einsum` | measured below rather than guessed for the general cases: the surface assumes preset dtypes in 28 `TensorView` variant matches and 37 `DType` uses across its 44 source files, while `tenferro_einsum::lowering` and its `GemmPlan` are already public and generic, which is how `ext/tropical` reaches them. The missing piece is therefore a scalar-generic contraction slot rather than the lowering. Owned by #1793, whose text says the issue alone does not authorize a feature implementation PR |
+| A two-input contraction, which is #1793's example | present | `ext/experiments/df64-proof/tests/einsum.rs`: `einsum("ik,kj->ij", A, B)` returns `[[19, 22], [43, 50]]` for #1793's own table, the contraction of `[1, 1]` with `[1, 2^-80]` keeps `2^-80` after subtracting one, and batched, outer-product, summed-label, and Hadamard patterns each have a test with hand-checkable values | none beyond the contribution: the body is the contribution's own, reached through the runtime's extension module |
+| The adjoint of the pairwise contraction | present | `ext/experiments/df64-proof/tests/einsum_ad.rs`: the adjoint matches hand-written products, a `1e-12` central difference of a scalar loss, and a cotangent of `1 + 2^-80` that keeps its low component beside the `f64` control | none beyond the contribution: the adjoint rotates the labels and reuses the contraction body |
+| The forward tangent of the contraction | present | `ext/experiments/df64-proof/tests/einsum_ad.rs`: the tangent matches hand-written products, and JVP/VJP duality holds exactly, one operand at a time | none beyond the contribution: the tangent contracts each tangent with the other operand and adds the halves |
+| A repeated label inside one operand: a trace, or a diagonal extraction when the output names it | present | `ext/experiments/df64-proof/tests/einsum.rs`: a diagonal extraction against hand-written values, and a trace the output omits | none beyond the contribution: the body reads a repeated label's axes at the same index |
+| The adjoint of a pattern wider than pairwise | present | `ext/experiments/df64-proof/tests/einsum_ad.rs` checks a three-operand contraction's adjoint against hand-written products: the cotangent of each operand is the output cotangent contracted with the others, with the cotangent taking that operand's place and the output's labels | follows the same fold the forward body uses |
+| The tangent of a pattern wider than pairwise | present | `ext/experiments/df64-proof/tests/einsum_ad.rs` checks a three-operand tangent against hand-written products and against the adjoint through the duality identity, with the two sides agreeing exactly. The mask the payload carries says which operands contribute a tangent, so an inactive one is never materialised as a zero | follows the same fold the forward body uses, with the tangent taking its operand's place under that operand's own labels |
+| bf16 through the ordinary einsum surface | present as a contribution operation | #1793's precision table asks for a bf16 CPU einsum with documented f32 accumulation and a contraction that distinguishes f32 accumulation from repeated bfloat16 rounding. `ext/experiments/bf16-proof/src/einsum.rs` supplies the operation, its engine, and its module, and `ext/experiments/bf16-proof/tests/einsum.rs` is the comparison: three hundred stored ones contract to 300, while the same sum with the storage type's own addition stalls at 256. The operands are widened to f32, the contraction accumulates there, and the result is rounded once. Traces, repeated output labels, and N-ary patterns are refused with typed errors, because the row is about the accumulation contract rather than the wider pattern surface |
+| N-ary patterns | present | `ext/experiments/df64-proof/tests/einsum.rs`: a three-operand fold with hand-written values, a three-operand pattern whose first operand repeats a label, and a single-operand refusal | none beyond the contribution: the body folds from the left and an intermediate keeps the labels the remaining operands or the output still need | the same file's `the_pattern_validator_refuses_anything_but_a_matrix_contraction` and `the_body_refuses_disagreeing_contracted_dimensions`; `ad.rs` refuses the contraction with the family's message that it has no Linearize rule for `Einsum` | measured below rather than guessed for the general cases: the surface assumes preset dtypes in 28 `TensorView` variant matches and 37 `DType` uses across its 44 source files, while `tenferro_einsum::lowering` and its `GemmPlan` are already public and generic, which is how `ext/tropical` reaches them. The missing piece is therefore a scalar-generic contraction slot rather than the lowering. Owned by #1793, whose text says the issue alone does not authorize a feature implementation PR |
 | Bulk pooled storage for a custom type | missing | the measured gap (189 allocations and 174857 bytes for a steady 64 by 64 factorization; 258 and 724668 for the adjoint) and the preset-only `PoolScalar` boundary | extend the pool boundary for a demonstrated gap, or take scratch from an account the runtime already tracks. Owned by #1789 |
 | Scratch reuse without extending the pool boundary | present | `scratch_allocation.rs` (one extension cache entry, 524288 retained bytes, one hit, and the steady adjoint costing fewer bytes than the first) and `retention_controls.rs` (clear releases the retained bytes and a live value is unchanged) | none: the accounted extension cache is the sanctioned mechanism |
 | GPU and XLA backends | rejected | the sixteen GPU arms in `tenferro-linalg` that reject through `unsupported_linalg_dtype`, and the XLA configuration | a backend-scoped implementation for the contribution, which is out of this issue's scope |

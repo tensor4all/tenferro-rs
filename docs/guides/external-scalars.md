@@ -11,9 +11,9 @@ The code lives in three unpublished crates:
 
 | Crate | Role |
 | --- | --- |
-| `ext/df64-proof` | The contribution: the scalar, its arithmetic, QR, extension operations, and first-order AD rules. |
-| `ext/scalar-consumer-algorithm` | The algorithm role. States the capabilities it needs and names no scalar, provider, or dtype. |
-| `ext/scalar-consumer-application` | The application role. Binds standard support, or standard support plus the contribution, and declares its own set. |
+| `ext/experiments/df64-proof` | The contribution: the scalar, its arithmetic, QR, extension operations, and first-order AD rules. |
+| `ext/experiments/scalar-consumer-algorithm` | The algorithm role. States the capabilities it needs and names no scalar, provider, or dtype. |
+| `ext/experiments/scalar-consumer-application` | The application role. Binds standard support, or standard support plus the contribution, and declares its own set. |
 
 ## Run it
 
@@ -102,7 +102,7 @@ what makes it visible to `Runtime::cache_stats` and releasable by `Runtime::clea
 `tests/scratch_allocation.rs` records the allocation counts and the retained bytes, and
 `tests/retention_controls.rs` shows that clearing releases the retention without touching a value
 that was live across it. Two owners that share a compatible CPU domain may hand a value over, which
-`ext/scalar-consumer-application/tests/configurations.rs` exercises with disjoint CPU slices under
+`ext/experiments/scalar-consumer-application/tests/configurations.rs` exercises with disjoint CPU slices under
 distinct engine identities, and the typed-rejection path is asserted in case the contract tightens.
 
 ## Derivative order and helper closure
@@ -117,11 +117,11 @@ the rules emit are terminal: `Df64QrVjp` and `Df64QrJvp` are runtime-registered 
 helpers with no further AD rule, so differentiation *through* them is unsupported by declaration
 rather than by accident, and it fails with a typed error instead of a zero gradient
 (`tests/ad_rule_boundaries.rs`). Differentiation after the forward session exits is covered by
-`ext/scalar-consumer-application/tests/later_backward.rs`.
+`ext/experiments/scalar-consumer-application/tests/later_backward.rs`.
 
 ## Standard bfloat16
 
-`ext/bf16-proof` carries the standard `half::bf16` type through the same boundary, and its tests
+`ext/experiments/bf16-proof` carries the standard `half::bf16` type through the same boundary, and its tests
 run with:
 
 ```bash
@@ -167,7 +167,7 @@ let op = Df64Einsum::new(&[0, 1], &[1, 2], &[0, 2])?;   // "ik,kj->ij"
 let output = apply(std::sync::Arc::new(op), &[&lhs, &rhs])?;
 ```
 
-`ext/df64-proof/tests/einsum.rs` reproduces #1793's table exactly — `A = [[1, 2], [3, 4]]` and
+`ext/experiments/df64-proof/tests/einsum.rs` reproduces #1793's table exactly — `A = [[1, 2], [3, 4]]` and
 `B = [[5, 6], [7, 8]]` contract to `[[19, 22], [43, 50]]` — and runs the precision row the issue
 names: contracting the row `[1, 1]` with the column `[1, 2^-80]` keeps `2^-80` after subtracting
 one, which an `f64` accumulator cannot. The contrast is asserted in the same test.
@@ -182,7 +182,7 @@ away.
 The contraction is differentiable in reverse mode. Its adjoint rotates the labels rather than
 changing them — `lhs_bar = einsum(out, rhs -> lhs)` and `rhs_bar = einsum(lhs, out -> rhs)` — so the
 cotangent of each operand is computed with the extended scalar's own accumulation.
-`ext/df64-proof/tests/einsum_ad.rs` checks it three ways: against hand-written products for the
+`ext/experiments/df64-proof/tests/einsum_ad.rs` checks it three ways: against hand-written products for the
 matrix case, against a scalar loss's central difference at a step of `1e-12` (where the two agree
 exactly, and where an `f64` loss could not agree at all), and against a configuration whose
 cotangent is `1 + 2^-80` and has to keep the low component, with the `f64` control losing it. The
@@ -211,7 +211,7 @@ einsum/tropical example", so it meets that bar and goes past it on repeated labe
 ## A bfloat16 contraction
 
 #1793's precision table asks for a bf16 CPU einsum whose internal calculation and accumulation are
-`f32` with a documented output rounding. `ext/bf16-proof::einsum` supplies it: the operands are
+`f32` with a documented output rounding. `ext/experiments/bf16-proof::einsum` supplies it: the operands are
 widened, the contraction accumulates in `f32`, and the result is rounded to bfloat16 once.
 
 ```rust,ignore
@@ -236,7 +236,7 @@ The AD contract admits first-order field arithmetic: an order other than one ret
 `UnsupportedAdOrder`, a scalar that is not a field returns `NonFieldScalar`, and an operation
 outside the contributed rule set returns `AdRuleUnavailable`, each covered in
 `crates/tenferro-tensor-core/src/scalar/tests.rs` and cross-crate in
-`ext/df64-proof/tests/ad_rule_boundaries.rs`. The ordinary einsum surface rejects an externally
+`ext/experiments/df64-proof/tests/ad_rule_boundaries.rs`. The ordinary einsum surface rejects an externally
 defined dtype with a typed error. The core backend's elementwise and reduction operations refuse a
 caller-owned payload, and a reduction over no axes returns the caller's value unchanged because it
 is the identity for every scalar.

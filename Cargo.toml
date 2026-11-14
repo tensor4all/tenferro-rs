@@ -17,16 +17,17 @@ members = [
     "crates/tenferro-einsum",
     "crates/tenferro-linalg",
     "crates/tenferro-fft",
+    # Optional adapters. Their default features select no system library, so the
+    # root lanes can build them; the MPI/HDF5 backends are opt-in features.
+    "crates/tenferro-mpi",
+    "crates/tenferro-hdf5",
     "docs/tutorial-code",
-    "ext/bf16-proof",
-    "ext/df64-proof",
-    "ext/scalar-consumer-algorithm",
-    "ext/scalar-consumer-application",
+    "ext/experiments/bf16-proof",
+    "ext/experiments/df64-proof",
+    "ext/experiments/scalar-consumer-algorithm",
+    "ext/experiments/scalar-consumer-application",
 ]
 exclude = [
-    "ext/hdf5",
-    "ext/mpi",
-    "ext/mpi-rt",
     "ext/sparse",
     "ext/tropical",
 ]

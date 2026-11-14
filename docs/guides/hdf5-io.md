@@ -1,20 +1,21 @@
 # HDF5 payload I/O
 
-`tenferro-hdf5` (`ext/hdf5`) stores ordinary tenferro tensor values in HDF5
-datasets: `TypedTensor<T, R, Host>`, the same tensor once it became `Dynamic`
+`tenferro-hdf5` (`crates/tenferro-hdf5`) stores ordinary tenferro tensor values in
+HDF5 datasets: `TypedTensor<T, R, Host>`, the same tensor once it became `Dynamic`
 while still host-resident, and the dtype-erased `Tensor`.
 
-It is an **optional adapter crate**. No tenferro compute crate depends on it, it
-is not a workspace member of the root build, and it adds no HDF5 edge to
-`tenferro-tensor`. Add it by path or git revision:
+It is an **optional adapter crate**. No tenferro compute crate depends on it, and
+it adds no HDF5 edge to `tenferro-tensor`. It is a workspace member with
+`default = []`, so the root `cargo test --workspace` graph contains no HDF5 edge;
+the adapter is behind the `hdf5` feature. Add it by path or git revision:
 
 ```toml
 [dependencies]
-tenferro-hdf5 = { git = "https://github.com/tensor4all/tenferro-rs", rev = "<rev>" }
+tenferro-hdf5 = { features = ["hdf5"], git = "https://github.com/tensor4all/tenferro-rs", rev = "<rev>" }
 ```
 
-The crate is `publish = false`: `hdf5-rt` is a git dependency, so it cannot be
-published to crates.io as it stands.
+The crate is `publish = false` until `hdf5-rt` is on crates.io: `hdf5-rt` is a git
+dependency, so it cannot be published as it stands.
 
 ## Backend
 
@@ -168,14 +169,15 @@ disagreement, null dataspace), `InvalidBool`, `InvalidAttributeValue`, `Hdf5`
 
 ## Testing this adapter
 
-Its tests need a runtime `libhdf5`, so they are not part of the root workspace
-test run. The dedicated `hdf5-adapter` CI job installs `libhdf5-dev` and runs:
+Its tests need a runtime `libhdf5`, so they only build behind the `hdf5` feature
+and are not part of the root workspace test run. The dedicated `hdf5-adapter` CI
+job installs `libhdf5-dev` and runs:
 
 ```bash
-cargo fmt --manifest-path ext/hdf5/Cargo.toml --all --check
-cargo clippy --manifest-path ext/hdf5/Cargo.toml --all-targets -- -D warnings
-cargo test --manifest-path ext/hdf5/Cargo.toml
-TENFERRO_HDF5_INTEROP=1 cargo test --manifest-path ext/hdf5/Cargo.toml interop
+cargo fmt -p tenferro-hdf5 -- --check
+cargo clippy -p tenferro-hdf5 --features hdf5 --all-targets -- -D warnings
+cargo test -p tenferro-hdf5 --features hdf5
+TENFERRO_HDF5_INTEROP=1 cargo test -p tenferro-hdf5 --features hdf5 interop
 ```
 
 The h5py interoperability test uses `python3` with `h5py` (override with
