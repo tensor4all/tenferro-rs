@@ -193,18 +193,6 @@ fn slice_bound(value: usize) -> Result<isize> {
     })
 }
 
-/// Whether `inst` reads input `idx` through a folded view.
-fn has_input_view(inst: &ExecInstruction, idx: usize) -> bool {
-    inst.input_views.iter().any(|(input, _)| *input == idx)
-}
-
-fn owned_input_has_view(inst: &ExecInstruction, idx: usize, caller: &'static str) -> Error {
-    Error::Internal(format!(
-        "{caller}: input {idx} of {:?} carries a folded view, but the operation reads owned inputs",
-        inst.op
-    ))
-}
-
 pub type ExecOutputShapes = TinyVec<[Vec<DimExpr>; 1]>;
 pub type ExecOutputExtents = TinyVec<[Vec<ShapeExtent<DimExpr>>; 1]>;
 
@@ -458,49 +446,6 @@ fn exec_op_input_arity_bounds(op: &ExecOp) -> Option<(usize, usize)> {
                 })
         }),
     }
-}
-
-/// The owned tensor in input `idx`.
-///
-/// An input that carries a folded view has no owned form: the fold rule only
-/// folds into consumers that read views, so reaching here with one is a
-/// classification defect, reported typed instead of reading the source value.
-pub(crate) fn get<'slot, 'input>(
-    slots: &'slot [Option<ExecSlot<'input>>],
-    inst: &ExecInstruction,
-    idx: usize,
-) -> Result<&'slot Tensor>
-where
-    'input: 'slot,
-{
-    if has_input_view(inst, idx) {
-        return Err(owned_input_has_view(inst, idx, "get"));
-    }
-    let slot = checked_input_slot(&inst.input_slots, idx, "get")?;
-    slot_ref(slots, slot, "input", "get").and_then(|value| value.as_tensor("get"))
-}
-
-pub(crate) fn ensure_owned<'input>(
-    exec: &mut dyn Engine,
-    slots: &mut [Option<ExecSlot<'input>>],
-    inst: &ExecInstruction,
-    idx: usize,
-) -> Result<()> {
-    if has_input_view(inst, idx) {
-        return Err(owned_input_has_view(inst, idx, "ensure_owned"));
-    }
-    let input_slots = &inst.input_slots;
-    let slot = checked_input_slot(input_slots, idx, "ensure_owned")?;
-    let needs_materialization = matches!(
-        slot_ref(slots, slot, "input", "ensure_owned")?,
-        ExecSlot::Read(TensorRead::View(_))
-    );
-    if needs_materialization {
-        let read = slot_ref(slots, slot, "input", "ensure_owned")?.as_read();
-        let tensor = exec.to_contiguous_read(read)?;
-        slots[slot] = Some(ExecSlot::Owned(tensor));
-    }
-    Ok(())
 }
 
 /// Input `idx` as a read, with its folded views applied.

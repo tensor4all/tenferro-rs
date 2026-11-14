@@ -145,10 +145,10 @@ fn promote_read_to_dtype<'a>(
     if input.dtype() == promoted {
         Ok(PromotedTensorRead::Borrowed(Box::new(input)))
     } else {
-        let input = concrete_tensor_read(exec, input)?;
+        // The checked read entry consumes the operand where it lies, so a promotion
+        // costs no staging copy (#2223).
         Ok(PromotedTensorRead::Owned(Box::new(
-            exec.convert(input.tensor(), promoted)
-                .map_err(Error::from)?,
+            exec.convert_read(input, promoted).map_err(Error::from)?,
         )))
     }
 }
@@ -502,8 +502,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
         StdTensorOp::Log1p => vec![exec.log1p_read(inputs[0].clone())?],
         StdTensorOp::Erf => vec![exec.erf_read(inputs[0].clone())?],
         StdTensorOp::Convert { to, .. } => {
-            let input = concrete_tensor_read(exec, inputs[0].clone())?;
-            vec![exec.cast(input.tensor(), *to)?]
+            vec![exec.cast_read(inputs[0].clone(), *to)?]
         }
         StdTensorOp::Constant { .. } => {
             return Err(Error::Internal(

@@ -196,20 +196,14 @@ pub(crate) fn reduce_mean(a: R<'_>, axes: Option<&[usize]>, e: &mut dyn Engine) 
 pub(crate) fn convert(a: R<'_>, to: DType, e: &mut dyn Engine) -> Result<Tensor> {
     match a.as_tensor() {
         Some(t) => e.convert(t, to),
-        None => {
-            let compact = e.to_contiguous_read(a)?;
-            e.convert(&compact, to)
-        }
+        None => e.convert_read(a, to),
     }
 }
 
 pub(crate) fn cast(a: R<'_>, to: DType, e: &mut dyn Engine) -> Result<Tensor> {
     match a.as_tensor() {
         Some(t) => e.cast(t, to),
-        None => {
-            let compact = e.to_contiguous_read(a)?;
-            e.cast(&compact, to)
-        }
+        None => e.cast_read(a, to),
     }
 }
 

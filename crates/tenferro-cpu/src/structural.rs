@@ -39,9 +39,9 @@ macro_rules! preset_scalar {
 use super::tensor_from_array;
 #[cfg(test)]
 use super::typed_array_uninit;
-use super::{
-    cpu_backend_buffer_error, typed_host_data, typed_view, typed_view_from_view, PooledUninitOutput,
-};
+#[cfg(test)]
+use super::typed_view;
+use super::{cpu_backend_buffer_error, typed_view_from_view, PooledUninitOutput};
 use threadteam::Exec;
 
 #[cfg(test)]
@@ -640,184 +640,519 @@ pub(crate) fn convert_with_pool(
     cast_with_pool(buffers, input, to, Exec::serial())
 }
 
+/// A source dtype's explicit-cast table.
+///
+/// The matrix is keyed on the *source* dtype so the owned path (`host_view`) and the
+/// borrowed-view path (`read_host_view`) share one conversion table instead of two (#2223).
+trait CastFrom: Copy + TensorScalar {
+    /// Project every logical element of `src` to `to` into fresh compact storage.
+    fn cast_from(
+        buffers: &mut BufferPool,
+        src: &StridedView<'_, Self>,
+        placement: &tenferro_tensor::Placement,
+        to: DType,
+        exec: Exec<'_>,
+    ) -> crate::Result<Tensor>;
+}
+
+/// Map a strided source into a fresh compact output of `to`, keeping the source placement.
+fn cast_map<S, T>(
+    buffers: &mut BufferPool,
+    src: &StridedView<'_, S>,
+    placement: &tenferro_tensor::Placement,
+    map: impl Fn(S) -> T + Sync,
+    exec: Exec<'_>,
+) -> crate::Result<TypedTensor<T>>
+where
+    S: Copy + Send + Sync + TensorScalar,
+    T: Copy + Clone + PoolScalar + TensorScalar,
+{
+    let mut out = PooledUninitOutput::<T>::new(buffers, src.dims())?;
+    map_into(
+        &mut out.as_uninit_view_mut()?,
+        src,
+        |x| MaybeUninit::new(map(x)),
+        exec,
+    )
+    .map_err(|err| crate::Error::backend_source("convert", err))?;
+    // SAFETY: the successful conversion map writes every logical destination element.
+    let mut out = unsafe { out.assume_init_recycled()? };
+    out.set_placement(placement.clone())?;
+    Ok(out)
+}
+
+/// Visit every logical element of `src`, in column-major order.
+///
+/// shortcut: the walk indexes the layout element by element; that is fine for a
+/// validation pass, revisit if a narrowing cast ever shows up in a profile.
+fn for_each_element<T: Copy>(
+    src: &StridedView<'_, T>,
+    mut visit: impl FnMut(T) -> crate::Result<()>,
+) -> crate::Result<()> {
+    let dims = src.dims();
+    if dims.contains(&0) {
+        return Ok(());
+    }
+    if dims.is_empty() {
+        return visit(src.get(&[]));
+    }
+    let mut index = vec![0usize; dims.len()];
+    loop {
+        visit(src.get(&index))?;
+        // Advance the column-major odometer: the first axis is the fastest.
+        let mut axis = 0;
+        loop {
+            if axis == dims.len() {
+                return Ok(());
+            }
+            index[axis] += 1;
+            if index[axis] < dims[axis] {
+                break;
+            }
+            index[axis] = 0;
+            axis += 1;
+        }
+    }
+}
+
+/// Wrap a `cast_map` call in the tensor variant it produces.
+macro_rules! cast_to {
+    ($buffers:expr, $src:expr, $placement:expr, $variant:ident, $map:expr, $exec:expr) => {
+        cast_map($buffers, $src, $placement, $map, $exec)
+            .map(Tensor::from_typed::<preset_scalar!($variant)>)
+    };
+}
+
+/// Refuse a destination outside this table (an externally defined payload).
+fn cast_outside_table(from: DType, to: DType) -> crate::Error {
+    crate::Error::dtype_mismatch("convert", from, to)
+}
+
+impl CastFrom for f32 {
+    fn cast_from(
+        buffers: &mut BufferPool,
+        src: &StridedView<'_, Self>,
+        placement: &tenferro_tensor::Placement,
+        to: DType,
+        exec: Exec<'_>,
+    ) -> crate::Result<Tensor> {
+        match to {
+            DType::F32 => cast_to!(buffers, src, placement, F32, |x| x, exec),
+            DType::F64 => cast_to!(buffers, src, placement, F64, |x| x as f64, exec),
+            DType::I32 => {
+                validate_real_values_cast_to_i32(src, |x| x as f64)?;
+                cast_to!(buffers, src, placement, I32, |x| x as i32, exec)
+            }
+            DType::I64 => {
+                validate_real_values_cast_to_i64(src, |x| x as f64)?;
+                cast_to!(buffers, src, placement, I64, |x| x as i64, exec)
+            }
+            DType::Bool => cast_to!(buffers, src, placement, Bool, |x| x != 0.0, exec),
+            DType::C32 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C32,
+                |x| Complex32::new(x, 0.0),
+                exec
+            ),
+            DType::C64 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C64,
+                |x| Complex64::new(x as f64, 0.0),
+                exec
+            ),
+            _ => Err(cast_outside_table(DType::F32, to)),
+        }
+    }
+}
+
+impl CastFrom for f64 {
+    fn cast_from(
+        buffers: &mut BufferPool,
+        src: &StridedView<'_, Self>,
+        placement: &tenferro_tensor::Placement,
+        to: DType,
+        exec: Exec<'_>,
+    ) -> crate::Result<Tensor> {
+        match to {
+            DType::F32 => cast_to!(buffers, src, placement, F32, |x| x as f32, exec),
+            DType::F64 => cast_to!(buffers, src, placement, F64, |x| x, exec),
+            DType::I32 => {
+                validate_real_values_cast_to_i32(src, |x| x)?;
+                cast_to!(buffers, src, placement, I32, |x| x as i32, exec)
+            }
+            DType::I64 => {
+                validate_real_values_cast_to_i64(src, |x| x)?;
+                cast_to!(buffers, src, placement, I64, |x| x as i64, exec)
+            }
+            DType::Bool => cast_to!(buffers, src, placement, Bool, |x| x != 0.0, exec),
+            DType::C32 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C32,
+                |x| Complex32::new(x as f32, 0.0),
+                exec
+            ),
+            DType::C64 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C64,
+                |x| Complex64::new(x, 0.0),
+                exec
+            ),
+            _ => Err(cast_outside_table(DType::F64, to)),
+        }
+    }
+}
+
+impl CastFrom for i32 {
+    fn cast_from(
+        buffers: &mut BufferPool,
+        src: &StridedView<'_, Self>,
+        placement: &tenferro_tensor::Placement,
+        to: DType,
+        exec: Exec<'_>,
+    ) -> crate::Result<Tensor> {
+        match to {
+            DType::F32 => cast_to!(buffers, src, placement, F32, |x| x as f32, exec),
+            DType::F64 => cast_to!(buffers, src, placement, F64, |x| x as f64, exec),
+            DType::I32 => cast_to!(buffers, src, placement, I32, |x| x, exec),
+            DType::I64 => cast_to!(buffers, src, placement, I64, |x| x as i64, exec),
+            DType::Bool => cast_to!(buffers, src, placement, Bool, |x| x != 0, exec),
+            DType::C32 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C32,
+                |x| Complex32::new(x as f32, 0.0),
+                exec
+            ),
+            DType::C64 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C64,
+                |x| Complex64::new(x as f64, 0.0),
+                exec
+            ),
+            _ => Err(cast_outside_table(DType::I32, to)),
+        }
+    }
+}
+
+impl CastFrom for i64 {
+    fn cast_from(
+        buffers: &mut BufferPool,
+        src: &StridedView<'_, Self>,
+        placement: &tenferro_tensor::Placement,
+        to: DType,
+        exec: Exec<'_>,
+    ) -> crate::Result<Tensor> {
+        match to {
+            DType::F32 => cast_to!(buffers, src, placement, F32, |x| x as f32, exec),
+            DType::F64 => cast_to!(buffers, src, placement, F64, |x| x as f64, exec),
+            DType::I32 => cast_to!(buffers, src, placement, I32, |x| x as i32, exec),
+            DType::I64 => cast_to!(buffers, src, placement, I64, |x| x, exec),
+            DType::Bool => cast_to!(buffers, src, placement, Bool, |x| x != 0, exec),
+            DType::C32 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C32,
+                |x| Complex32::new(x as f32, 0.0),
+                exec
+            ),
+            DType::C64 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C64,
+                |x| Complex64::new(x as f64, 0.0),
+                exec
+            ),
+            _ => Err(cast_outside_table(DType::I64, to)),
+        }
+    }
+}
+
+impl CastFrom for bool {
+    fn cast_from(
+        buffers: &mut BufferPool,
+        src: &StridedView<'_, Self>,
+        placement: &tenferro_tensor::Placement,
+        to: DType,
+        exec: Exec<'_>,
+    ) -> crate::Result<Tensor> {
+        match to {
+            DType::F32 => cast_to!(
+                buffers,
+                src,
+                placement,
+                F32,
+                |x| if x { 1.0 } else { 0.0 },
+                exec
+            ),
+            DType::F64 => cast_to!(
+                buffers,
+                src,
+                placement,
+                F64,
+                |x| if x { 1.0 } else { 0.0 },
+                exec
+            ),
+            DType::I32 => cast_to!(
+                buffers,
+                src,
+                placement,
+                I32,
+                |x| if x { 1 } else { 0 },
+                exec
+            ),
+            DType::I64 => cast_to!(
+                buffers,
+                src,
+                placement,
+                I64,
+                |x| if x { 1 } else { 0 },
+                exec
+            ),
+            DType::Bool => cast_to!(buffers, src, placement, Bool, |x| x, exec),
+            DType::C32 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C32,
+                |x| Complex32::new(if x { 1.0 } else { 0.0 }, 0.0),
+                exec
+            ),
+            DType::C64 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C64,
+                |x| Complex64::new(if x { 1.0 } else { 0.0 }, 0.0),
+                exec
+            ),
+            _ => Err(cast_outside_table(DType::Bool, to)),
+        }
+    }
+}
+
+impl CastFrom for Complex32 {
+    fn cast_from(
+        buffers: &mut BufferPool,
+        src: &StridedView<'_, Self>,
+        placement: &tenferro_tensor::Placement,
+        to: DType,
+        exec: Exec<'_>,
+    ) -> crate::Result<Tensor> {
+        match to {
+            DType::F32 => cast_to!(buffers, src, placement, F32, |z| z.re, exec),
+            DType::F64 => cast_to!(buffers, src, placement, F64, |z| z.re as f64, exec),
+            DType::I32 => {
+                validate_real_values_cast_to_i32(src, |z| z.re as f64)?;
+                cast_to!(buffers, src, placement, I32, |z| z.re as i32, exec)
+            }
+            DType::I64 => {
+                validate_real_values_cast_to_i64(src, |z| z.re as f64)?;
+                cast_to!(buffers, src, placement, I64, |z| z.re as i64, exec)
+            }
+            DType::Bool => cast_to!(
+                buffers,
+                src,
+                placement,
+                Bool,
+                |z| z.re != 0.0 || z.im != 0.0,
+                exec
+            ),
+            DType::C32 => cast_to!(buffers, src, placement, C32, |z| z, exec),
+            DType::C64 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C64,
+                |z| Complex64::new(z.re as f64, z.im as f64),
+                exec
+            ),
+            _ => Err(cast_outside_table(DType::C32, to)),
+        }
+    }
+}
+
+impl CastFrom for Complex64 {
+    fn cast_from(
+        buffers: &mut BufferPool,
+        src: &StridedView<'_, Self>,
+        placement: &tenferro_tensor::Placement,
+        to: DType,
+        exec: Exec<'_>,
+    ) -> crate::Result<Tensor> {
+        match to {
+            DType::F32 => cast_to!(buffers, src, placement, F32, |z| z.re as f32, exec),
+            DType::F64 => cast_to!(buffers, src, placement, F64, |z| z.re, exec),
+            DType::I32 => {
+                validate_real_values_cast_to_i32(src, |z| z.re)?;
+                cast_to!(buffers, src, placement, I32, |z| z.re as i32, exec)
+            }
+            DType::I64 => {
+                validate_real_values_cast_to_i64(src, |z| z.re)?;
+                cast_to!(buffers, src, placement, I64, |z| z.re as i64, exec)
+            }
+            DType::Bool => cast_to!(
+                buffers,
+                src,
+                placement,
+                Bool,
+                |z| z.re != 0.0 || z.im != 0.0,
+                exec
+            ),
+            DType::C32 => cast_to!(
+                buffers,
+                src,
+                placement,
+                C32,
+                |z| Complex32::new(z.re as f32, z.im as f32),
+                exec
+            ),
+            DType::C64 => cast_to!(buffers, src, placement, C64, |z| z, exec),
+            _ => Err(cast_outside_table(DType::C64, to)),
+        }
+    }
+}
+
 pub(crate) fn cast_with_pool(
     buffers: &mut BufferPool,
     input: &Tensor,
     to: DType,
     exec: Exec<'_>,
 ) -> crate::Result<Tensor> {
-    macro_rules! converted {
-        ($variant:ident, $tensor:expr, $map:expr) => {
-            Ok(Tensor::from_typed::<preset_scalar!($variant)>(
-                typed_convert_with_pool(buffers, $tensor, $map, exec)?,
-            ))
-        };
-    }
-
-    match (input.dtype(), to) {
-        (DType::F32, DType::F32) => Ok(Tensor::from_typed::<f32>(
-            cast_operand::<f32>(input)?.duplicate()?,
-        )),
-        (DType::F32, DType::F64) => converted!(F64, cast_operand::<f32>(input)?, |x| x as f64),
-        (DType::F32, DType::I32) => {
-            validate_real_values_cast_to_i32(cast_operand::<f32>(input)?, |x| x as f64)?;
-            converted!(I32, cast_operand::<f32>(input)?, |x| x as i32)
-        }
-        (DType::F32, DType::I64) => {
-            validate_real_values_cast_to_i64(cast_operand::<f32>(input)?, |x| x as f64)?;
-            converted!(I64, cast_operand::<f32>(input)?, |x| x as i64)
-        }
-        (DType::F32, DType::Bool) => converted!(Bool, cast_operand::<f32>(input)?, |x| x != 0.0),
-        (DType::F32, DType::C32) => {
-            converted!(C32, cast_operand::<f32>(input)?, |x| Complex32::new(x, 0.0))
-        }
-        (DType::F32, DType::C64) => {
-            converted!(C64, cast_operand::<f32>(input)?, |x| Complex64::new(
-                x as f64, 0.0
-            ))
-        }
-        (DType::F64, DType::F32) => converted!(F32, cast_operand::<f64>(input)?, |x| x as f32),
-        (DType::F64, DType::F64) => Ok(Tensor::from_typed::<f64>(
-            cast_operand::<f64>(input)?.duplicate()?,
-        )),
-        (DType::F64, DType::I32) => {
-            validate_real_values_cast_to_i32(cast_operand::<f64>(input)?, |x| x)?;
-            converted!(I32, cast_operand::<f64>(input)?, |x| x as i32)
-        }
-        (DType::F64, DType::I64) => {
-            validate_real_values_cast_to_i64(cast_operand::<f64>(input)?, |x| x)?;
-            converted!(I64, cast_operand::<f64>(input)?, |x| x as i64)
-        }
-        (DType::F64, DType::Bool) => converted!(Bool, cast_operand::<f64>(input)?, |x| x != 0.0),
-        (DType::F64, DType::C32) => {
-            converted!(C32, cast_operand::<f64>(input)?, |x| Complex32::new(
-                x as f32, 0.0
-            ))
-        }
-        (DType::F64, DType::C64) => {
-            converted!(C64, cast_operand::<f64>(input)?, |x| Complex64::new(x, 0.0))
-        }
-        (DType::I32, DType::F32) => converted!(F32, cast_operand::<i32>(input)?, |x| x as f32),
-        (DType::I32, DType::F64) => converted!(F64, cast_operand::<i32>(input)?, |x| x as f64),
-        (DType::I32, DType::I32) => Ok(Tensor::from_typed::<i32>(
-            cast_operand::<i32>(input)?.duplicate()?,
-        )),
-        (DType::I32, DType::I64) => converted!(I64, cast_operand::<i32>(input)?, |x| x as i64),
-        (DType::I32, DType::Bool) => converted!(Bool, cast_operand::<i32>(input)?, |x| x != 0),
-        (DType::I32, DType::C32) => {
-            converted!(C32, cast_operand::<i32>(input)?, |x| Complex32::new(
-                x as f32, 0.0
-            ))
-        }
-        (DType::I32, DType::C64) => {
-            converted!(C64, cast_operand::<i32>(input)?, |x| Complex64::new(
-                x as f64, 0.0
-            ))
-        }
-        (DType::I64, DType::F32) => converted!(F32, cast_operand::<i64>(input)?, |x| x as f32),
-        (DType::I64, DType::F64) => converted!(F64, cast_operand::<i64>(input)?, |x| x as f64),
-        (DType::I64, DType::I32) => converted!(I32, cast_operand::<i64>(input)?, |x| x as i32),
-        (DType::I64, DType::I64) => Ok(Tensor::from_typed::<i64>(
-            cast_operand::<i64>(input)?.duplicate()?,
-        )),
-        (DType::I64, DType::Bool) => converted!(Bool, cast_operand::<i64>(input)?, |x| x != 0),
-        (DType::I64, DType::C32) => {
-            converted!(C32, cast_operand::<i64>(input)?, |x| Complex32::new(
-                x as f32, 0.0
-            ))
-        }
-        (DType::I64, DType::C64) => {
-            converted!(C64, cast_operand::<i64>(input)?, |x| Complex64::new(
-                x as f64, 0.0
-            ))
-        }
-        (DType::Bool, DType::F32) => converted!(F32, cast_operand::<bool>(input)?, |x| if x {
-            1.0
-        } else {
-            0.0
-        }),
-        (DType::Bool, DType::F64) => converted!(F64, cast_operand::<bool>(input)?, |x| if x {
-            1.0
-        } else {
-            0.0
-        }),
-        (DType::Bool, DType::I32) => {
-            converted!(I32, cast_operand::<bool>(input)?, |x| if x { 1 } else { 0 })
-        }
-        (DType::Bool, DType::I64) => {
-            converted!(I64, cast_operand::<bool>(input)?, |x| if x { 1 } else { 0 })
-        }
-        (DType::Bool, DType::Bool) => Ok(Tensor::from_typed::<bool>(
-            cast_operand::<bool>(input)?.duplicate()?,
-        )),
-        (DType::Bool, DType::C32) => {
-            converted!(C32, cast_operand::<bool>(input)?, |x| Complex32::new(
-                if x { 1.0 } else { 0.0 },
-                0.0
-            ))
-        }
-        (DType::Bool, DType::C64) => {
-            converted!(C64, cast_operand::<bool>(input)?, |x| Complex64::new(
-                if x { 1.0 } else { 0.0 },
-                0.0
-            ))
-        }
-        (DType::C32, DType::F32) => converted!(F32, cast_operand::<Complex32>(input)?, |z| z.re),
-        (DType::C32, DType::F64) => {
-            converted!(F64, cast_operand::<Complex32>(input)?, |z| z.re as f64)
-        }
-        (DType::C32, DType::I32) => {
-            validate_real_values_cast_to_i32(cast_operand::<Complex32>(input)?, |z| z.re as f64)?;
-            converted!(I32, cast_operand::<Complex32>(input)?, |z| z.re as i32)
-        }
-        (DType::C32, DType::I64) => {
-            validate_real_values_cast_to_i64(cast_operand::<Complex32>(input)?, |z| z.re as f64)?;
-            converted!(I64, cast_operand::<Complex32>(input)?, |z| z.re as i64)
-        }
-        (DType::C32, DType::Bool) => converted!(Bool, cast_operand::<Complex32>(input)?, |z| z.re
-            != 0.0
-            || z.im != 0.0),
-        (DType::C32, DType::C32) => Ok(Tensor::from_typed::<Complex32>(
-            cast_operand::<Complex32>(input)?.duplicate()?,
-        )),
-        (DType::C32, DType::C64) => {
-            converted!(C64, cast_operand::<Complex32>(input)?, |z| Complex64::new(
-                z.re as f64,
-                z.im as f64
-            ))
-        }
-        (DType::C64, DType::F32) => {
-            converted!(F32, cast_operand::<Complex64>(input)?, |z| z.re as f32)
-        }
-        (DType::C64, DType::F64) => converted!(F64, cast_operand::<Complex64>(input)?, |z| z.re),
-        (DType::C64, DType::I32) => {
-            validate_real_values_cast_to_i32(cast_operand::<Complex64>(input)?, |z| z.re)?;
-            converted!(I32, cast_operand::<Complex64>(input)?, |z| z.re as i32)
-        }
-        (DType::C64, DType::I64) => {
-            validate_real_values_cast_to_i64(cast_operand::<Complex64>(input)?, |z| z.re)?;
-            converted!(I64, cast_operand::<Complex64>(input)?, |z| z.re as i64)
-        }
-        (DType::C64, DType::Bool) => converted!(Bool, cast_operand::<Complex64>(input)?, |z| z.re
-            != 0.0
-            || z.im != 0.0),
-        (DType::C64, DType::C32) => {
-            converted!(C32, cast_operand::<Complex64>(input)?, |z| Complex32::new(
-                z.re as f32,
-                z.im as f32
-            ))
-        }
-        (DType::C64, DType::C64) => Ok(Tensor::from_typed::<Complex64>(
-            cast_operand::<Complex64>(input)?.duplicate()?,
-        )),
-        // An externally defined destination has no conversion table here, so the
-        // conversion rejects it explicitly rather than guessing a representation.
-        (_, DType::External(_)) => Err(crate::Error::dtype_mismatch("convert", input.dtype(), to)),
+    let placement = input.placement().clone();
+    match input.dtype() {
+        DType::F32 => f32::cast_from(
+            buffers,
+            &host_view("cast", cast_operand::<f32>(input)?)?,
+            &placement,
+            to,
+            exec,
+        ),
+        DType::F64 => f64::cast_from(
+            buffers,
+            &host_view("cast", cast_operand::<f64>(input)?)?,
+            &placement,
+            to,
+            exec,
+        ),
+        DType::I32 => i32::cast_from(
+            buffers,
+            &host_view("cast", cast_operand::<i32>(input)?)?,
+            &placement,
+            to,
+            exec,
+        ),
+        DType::I64 => i64::cast_from(
+            buffers,
+            &host_view("cast", cast_operand::<i64>(input)?)?,
+            &placement,
+            to,
+            exec,
+        ),
+        DType::Bool => bool::cast_from(
+            buffers,
+            &host_view("cast", cast_operand::<bool>(input)?)?,
+            &placement,
+            to,
+            exec,
+        ),
+        DType::C32 => Complex32::cast_from(
+            buffers,
+            &host_view("cast", cast_operand::<Complex32>(input)?)?,
+            &placement,
+            to,
+            exec,
+        ),
+        DType::C64 => Complex64::cast_from(
+            buffers,
+            &host_view("cast", cast_operand::<Complex64>(input)?)?,
+            &placement,
+            to,
+            exec,
+        ),
         // A caller-owned payload has no conversion table here, so the conversion
         // rejects it instead of guessing a representation.
-        (DType::External(_), _) => Err(crate::Error::dtype_mismatch("convert", input.dtype(), to)),
+        DType::External(_) => Err(cast_outside_table(input.dtype(), to)),
     }
 }
+
+/// Explicit dtype projection of a read, reading a borrowed view in place (#2223).
+pub(crate) fn cast_read_with_pool(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    to: DType,
+    exec: Exec<'_>,
+) -> crate::Result<Tensor> {
+    let view = match input {
+        TensorRead::Tensor(input) => return cast_with_pool(buffers, input, to, exec),
+        TensorRead::View(view) => view,
+    };
+    let placement = view.placement().clone();
+    match view {
+        TensorView::F32(view) => f32::cast_from(
+            buffers,
+            &read_host_view("cast", &view)?,
+            &placement,
+            to,
+            exec,
+        ),
+        TensorView::F64(view) => f64::cast_from(
+            buffers,
+            &read_host_view("cast", &view)?,
+            &placement,
+            to,
+            exec,
+        ),
+        TensorView::I32(view) => i32::cast_from(
+            buffers,
+            &read_host_view("cast", &view)?,
+            &placement,
+            to,
+            exec,
+        ),
+        TensorView::I64(view) => i64::cast_from(
+            buffers,
+            &read_host_view("cast", &view)?,
+            &placement,
+            to,
+            exec,
+        ),
+        TensorView::Bool(view) => bool::cast_from(
+            buffers,
+            &read_host_view("cast", &view)?,
+            &placement,
+            to,
+            exec,
+        ),
+        TensorView::C32(view) => Complex32::cast_from(
+            buffers,
+            &read_host_view("cast", &view)?,
+            &placement,
+            to,
+            exec,
+        ),
+        TensorView::C64(view) => Complex64::cast_from(
+            buffers,
+            &read_host_view("cast", &view)?,
+            &placement,
+            to,
+            exec,
+        ),
+    }
+}
+
 /// The typed tensor behind `input`, or the refusal a pair outside this table reports.
 ///
 /// Callers reach this from a match on `input.dtype()`, so `None` means the tag and the runtime dtype
@@ -834,24 +1169,23 @@ fn cast_operand<T: tenferro_tensor::TensorScalar>(
     })
 }
 
+/// Refuse a source whose logical real values are not representable as `i32`.
+///
+/// The walk covers the read's *logical* elements, so a value outside a sliced view
+/// cannot refuse a cast of the view (#2223).
 fn validate_real_values_cast_to_i32<S: Copy + TensorScalar>(
-    tensor: &TypedTensor<S>,
+    src: &StridedView<'_, S>,
     real: impl Fn(S) -> f64,
 ) -> crate::Result<()> {
-    for &value in typed_host_data("cast", tensor)? {
-        validate_real_cast_to_i32(real(value))?;
-    }
-    Ok(())
+    for_each_element(src, |value| validate_real_cast_to_i32(real(value)))
 }
 
+/// Refuse a source whose logical real values are not representable as `i64`.
 fn validate_real_values_cast_to_i64<S: Copy + TensorScalar>(
-    tensor: &TypedTensor<S>,
+    src: &StridedView<'_, S>,
     real: impl Fn(S) -> f64,
 ) -> crate::Result<()> {
-    for &value in typed_host_data("cast", tensor)? {
-        validate_real_cast_to_i64(real(value))?;
-    }
-    Ok(())
+    for_each_element(src, |value| validate_real_cast_to_i64(real(value)))
 }
 
 fn validate_real_cast_to_i32(value: f64) -> crate::Result<()> {
@@ -1318,28 +1652,6 @@ where
     copy_into(&mut out.view_mut(), &broadcast, Exec::serial())
         .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     tensor_from_array_with_placement("broadcast_in_dim", out, view.placement())
-}
-
-fn typed_convert_with_pool<S, T>(
-    buffers: &mut BufferPool,
-    tensor: &TypedTensor<S>,
-    f: impl Fn(S) -> T + Sync,
-    exec: Exec<'_>,
-) -> crate::Result<TypedTensor<T>>
-where
-    S: Copy + Send + Sync + TensorScalar,
-    T: Copy + Clone + PoolScalar,
-{
-    let mut out = PooledUninitOutput::<T>::new(buffers, tensor.shape())?;
-    map_into(
-        &mut out.as_uninit_view_mut()?,
-        &typed_view("convert", tensor)?,
-        |x| MaybeUninit::new(f(x)),
-        exec,
-    )
-    .map_err(|err| crate::Error::backend_source("convert", err))?;
-    // SAFETY: the successful conversion map writes every logical destination element.
-    unsafe { out.assume_init_recycled() }
 }
 
 #[cfg(test)]

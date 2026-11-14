@@ -9,7 +9,7 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{ShapeExtent, SymDim};
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, Engine, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor,
+    SliceConfig, Tensor, TensorValue,
 };
 
 use super::dispatch::{
@@ -17,8 +17,8 @@ use super::dispatch::{
     BACKEND_DISPATCH_TABLE,
 };
 use super::{
-    constant_tensor, get, initialize_exec_slots_in, validate_exec_program, ExecInstruction, ExecOp,
-    ExecProgram, ExecSlot, InputView,
+    constant_tensor, get_read, initialize_exec_slots_in, validate_exec_program, ExecInstruction,
+    ExecOp, ExecProgram, ExecSlot, InputView,
 };
 use crate::runtime::{
     EngineId, ExecutionContextIdentity, HardwareClassId, InputSignature, PreparedOperation,
@@ -177,7 +177,7 @@ fn exec_accessors_reject_bad_input_slot_index_without_panicking() {
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
     ))];
 
-    let err = get(&slots, &negate_instruction(vec![]), 0).unwrap_err();
+    let err = get_read(&slots, &negate_instruction(vec![]), 0).unwrap_err();
 
     assert!(matches!(err, crate::Error::Internal(message) if message.contains("input index 0")));
 }
@@ -188,7 +188,7 @@ fn exec_accessors_reject_out_of_range_slot_without_panicking() {
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
     ))];
 
-    let err = get(&slots, &negate_instruction(vec![4]), 0).unwrap_err();
+    let err = get_read(&slots, &negate_instruction(vec![4]), 0).unwrap_err();
 
     let message = err.to_string();
     assert!(message.contains("slot 4"), "{message}");
@@ -752,21 +752,14 @@ fn get_read_applies_a_folded_view_to_an_owned_slot() {
 }
 
 #[test]
-fn owned_accessors_reject_a_folded_view_typed() {
+fn a_read_accessor_applies_the_folded_view() {
     let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let mut slots = [Some(ExecSlot::Owned(tensor))];
+    let slots = [Some(ExecSlot::Owned(tensor))];
     let mut instruction = negate_instruction(vec![0]);
     instruction.input_views = vec![(0, InputView::Transpose { perm: vec![1, 0] })];
-    let mut engine = CpuEngine::serial();
 
-    assert!(matches!(
-        get(&slots, &instruction, 0),
-        Err(crate::Error::Internal(message)) if message.contains("folded view")
-    ));
-    assert!(matches!(
-        super::ensure_owned(&mut engine, &mut slots, &instruction, 0),
-        Err(crate::Error::Internal(message)) if message.contains("folded view")
-    ));
+    let read = get_read(&slots, &instruction, 0).unwrap();
+    assert_eq!(read.shape(), &[2, 2]);
 }
 
 #[test]
@@ -782,15 +775,10 @@ fn input_view_definition_matches_the_view_ops_and_read_entries() {
         );
         assert_eq!(InputView::from_op(&op).is_some(), is_view, "{op:?}");
     }
-    // Every backend entry but `Convert` reads its inputs as `TensorRead`.
+    // Every backend entry reads its inputs as `TensorRead`, `Convert` included (#2223).
     for entry in BACKEND_DISPATCH_TABLE {
         let op = ExecOp::sample_from_kind(entry.key);
-        assert_eq!(
-            super::reads_input_view(&op, 0),
-            entry.key != PrimitiveOpKind::Convert,
-            "{:?}",
-            entry.key
-        );
+        assert!(super::reads_input_view(&op, 0), "{:?}", entry.key);
     }
     assert!(super::reads_input_view(
         &ExecOp::Extension(Arc::new(TestExtension)),
@@ -834,4 +822,39 @@ fn validate_exec_program_rejects_a_view_on_a_missing_input() {
         err.to_string().contains("folds a view onto input 1"),
         "{err}"
     );
+}
+
+/// #2223: the traced `Convert` consumes a borrowed view through its read hook.
+///
+/// The executor no longer has an owned accessor for a converted operand, so a view reaching
+/// this instruction can only be served by `cast_read`; the values pin that it was.
+#[test]
+fn execute_convert_reads_a_borrowed_view_in_place() {
+    use super::dispatch::execute_backend_dispatch;
+    use tenferro_tensor::TensorRead;
+
+    let source = Tensor::from_vec_col_major(vec![2, 2], vec![1.5_f64, 2.5, 3.5, 4.5]).unwrap();
+    let value = TensorValue::from_tensor(source);
+    let view = value
+        .tensor_view()
+        .expect("the f64 value always has an f64 view");
+    let mut slots = [Some(ExecSlot::Read(TensorRead::from_view(view)))];
+    let inst = ExecInstruction {
+        op: ExecOp::Convert { to: DType::F32 },
+        semantic_operation_index: None,
+        input_slots: vec![0],
+        output_slots: vec![1],
+        dtype: DType::F32,
+        output_shapes: Default::default(),
+        output_extents: Default::default(),
+        last_use: Vec::new(),
+        input_views: Vec::new(),
+        effectful: false,
+    };
+    let mut engine = CpuEngine::serial();
+
+    let out = execute_backend_dispatch(&mut engine, &mut slots, &inst).unwrap();
+
+    assert_eq!(out.dtype(), DType::F32);
+    assert_eq!(out.as_slice::<f32>().unwrap(), &[1.5, 2.5, 3.5, 4.5]);
 }

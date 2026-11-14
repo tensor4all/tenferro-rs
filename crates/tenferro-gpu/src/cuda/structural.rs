@@ -1409,6 +1409,20 @@ impl TensorStructural for CudaEngine {
         Ok(output)
     }
 
+    fn cast_read(&mut self, input: TensorRead<'_>, to: DType) -> crate::Result<Tensor> {
+        // An owned tensor is what the flat entry already takes. A borrowed view is staged
+        // once into a compact device copy of this runtime, which the engine's staging counter
+        // records: the `Convert` ABI takes one flat span and no layout, so a layout-taking
+        // category would be a t4a-cuda-kernels entry plus a pin bump (issue #2223, D6).
+        match input {
+            TensorRead::Tensor(input) => self.cast(input, to),
+            view => {
+                let staged = self.device_read(view, "cast")?;
+                self.cast(staged.tensor(), to)
+            }
+        }
+    }
+
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         let source = self.device_read(input, "transpose_read")?;
         let shape = source.shape().to_vec();
