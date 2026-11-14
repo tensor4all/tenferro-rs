@@ -40,8 +40,8 @@ thiserror.workspace = true
 # versioned dev-dependency would fail registry resolution during `cargo
 # package`. Dev-dependencies are stripped from the published manifest, so an
 # unversioned path dev-dependency is sufficient.
-# The CPU backend feature comes from this workspace's `native`/`blas`
-# selection; forcing `native` here would collide with a `blas` build.
+# The CPU backend of this workspace is unconditional, so this dependency takes
+# no backend feature.
 tenferro-einsum = { path = "../tenferro-einsum", default-features = false }
 
 [[test]]

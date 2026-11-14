@@ -19,7 +19,7 @@
 //!
 //! Which ranks and strides are eligible is therefore this provider's internal
 //! decision and not part of the public contract; the CPU lane's predicate lives
-//! in `cpu::linalg::faer::faer_strided_ok`.
+//! in `cpu::linalg::faer_linalg::faer_strided_ok`.
 mod ffi;
 mod linalg;
 

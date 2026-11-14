@@ -199,10 +199,9 @@ pub(crate) mod private {
 /// A bin that empties while another capacity is taken is usually transient: a kernel
 /// that cycles a handful of scratch sizes keeps them in flight in turn, and
 /// re-inserting their map nodes is what the pool exists to avoid. `tenferro-linalg`'s
-/// LAPACK allocation ceilings count exactly that and are the guard: they hold at this
-/// budget of 8 or 16 and break at 4 (measured locally with
-/// `--no-default-features --features blas`), so 16 leaves margin above the empties an
-/// SVD/QR call crosses.
+/// allocation ceilings count exactly that and are the guard: they hold at this budget
+/// of 8 or 16 and break at 4, so 16 leaves margin above the empties an SVD/QR call
+/// crosses.
 ///
 /// A varying-shape run instead leaves one emptied bin per capacity it has ever used,
 /// and then every acquisition walks all of them (#2170: 41.8 us per acquire after

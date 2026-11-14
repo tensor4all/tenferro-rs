@@ -564,7 +564,8 @@ was demonstrated on the highest-density CPU file that can be verified locally,
 - Six call sites (the `full_piv_lu_solve`, `triangular_solve`, and `solve` paths
   for the faer and blas providers) were converted: **102 lines deleted net**, with
   `cargo test -p tenferro-linalg` passing (127 + 163 + 1 + 144 tests) and the
-  `blas` feature path still compiling.
+  `blas` feature path still compiling. (The `blas` provider no longer exists;
+  #2608 deleted it.)
 - What this buys is not only the deletion: a call site no longer names the
   variants, so it does not change again when the value type stops being a closed
   enum. That is why this happens before the representation change.

@@ -59,22 +59,6 @@ class RunProfileTests(unittest.TestCase):
     def test_hosted_full_profile_does_not_include_local_gate(self) -> None:
         self.assertNotIn("local-gate", expand_profiles(["full"]))
 
-    def test_workspace_blas_matches_ci_feature_contract(self) -> None:
-        self.assertEqual(
-            commands_for("workspace-blas"),
-            (
-                "cargo-nextest nextest run --workspace --cargo-profile ci "
-                "--no-default-features "
-                "--features blas --no-fail-fast",
-                "cargo test --doc --workspace --profile ci --no-default-features "
-                "--features blas",
-                # Issue #1602: downstream BLAS interop example linked against
-                # the system OpenBLAS/LAPACK via the profile RUSTFLAGS.
-                "cargo run -p tenferro-tutorial-code --profile ci "
-                "--no-default-features --features blas --bin blas_interop",
-            ),
-        )
-
     def test_fmt_profile_covers_workspace_and_standalone_extensions(self) -> None:
         self.assertEqual(
             commands_for("fmt"),
@@ -137,9 +121,7 @@ class RunProfileTests(unittest.TestCase):
     def test_hosted_profiles_use_cargo_ci_profile_not_release(self) -> None:
         for name in (
             "workspace-faer",
-            "workspace-blas",
-            "macos-accelerate",
-            "blas-inject",
+            "macos",
             "extensions",
             "coverage",
         ):
@@ -163,19 +145,12 @@ class RunProfileTests(unittest.TestCase):
         commands = commands_for("docs")
         self.assertIn(
             "cargo run -p tenferro-tutorial-code --profile ci "
-            "--no-default-features --features native --bin faer_interop",
-            commands,
-        )
-        self.assertIn(
-            "RUSTFLAGS='-l dylib=openblas -l dylib=lapack' "
-            "cargo run -p tenferro-tutorial-code --profile ci "
-            "--no-default-features --features blas --bin blas_interop",
+            "--no-default-features --bin faer_interop",
             commands,
         )
         self.assertLess(
             commands.index("cargo run -p tenferro-tutorial-code --profile ci "
-                           "--no-default-features --features native "
-                           "--bin faer_interop"),
+                           "--no-default-features --bin faer_interop"),
             commands.index("bash scripts/build_docs_site.sh"),
         )
 
@@ -185,7 +160,7 @@ class RunProfileTests(unittest.TestCase):
         # surviving vendor-interop binary is the one the docs profile compiles.
         command = (
             "cargo check -p tenferro-tutorial-code --profile ci "
-            "--no-default-features --features cuda,native "
+            "--no-default-features --features cuda "
             "--bin cuda_vendor_interop"
         )
 
@@ -316,8 +291,6 @@ class RunProfileTests(unittest.TestCase):
                 "fmt",
                 "clippy",
                 "workspace-faer",
-                "workspace-blas",
-                "blas-inject",
                 "extensions",
                 "docs",
                 "coverage",
@@ -338,9 +311,9 @@ class RunProfileTests(unittest.TestCase):
     def test_dry_run_prints_commands_without_executing(self) -> None:
         output = io.StringIO()
         with patch("scripts.ci.run_profile.subprocess.run") as run:
-            run_profiles(["blas-inject"], dry_run=True, output=output)
+            run_profiles(["extensions"], dry_run=True, output=output)
         run.assert_not_called()
-        self.assertIn("+ cargo test -p tenferro-cpu", output.getvalue())
+        self.assertIn("+ cargo test --manifest-path ext/tropical/Cargo.toml", output.getvalue())
 
     def test_python_children_use_selected_interpreter_not_path_python3(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -393,146 +366,6 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][0], "bash scripts/build_docs_site.sh")
         self.assertEqual(calls[0][1]["PYTHON"], sys.executable)
-
-    def test_workspace_blas_uses_linker_flags_only_for_that_profile(self) -> None:
-        calls: list[dict[str, str]] = []
-
-        def record_run(*_args: object, **kwargs: object) -> None:
-            calls.append(kwargs["env"])  # type: ignore[arg-type]
-
-        with patch.dict("os.environ", {}, clear=True), patch(
-            "scripts.ci.run_profile.subprocess.run", side_effect=record_run
-        ):
-            run_profiles(
-                ["workspace-faer", "workspace-blas"],
-                dry_run=False,
-                output=io.StringIO(),
-            )
-        # The boundary is the size of the unoptimized profile rather than a literal, so that
-        # adding a step to workspace-faer does not silently move the BLAS assertions onto it.
-        plain_commands = len(commands_for("workspace-faer"))
-        for call in calls[:plain_commands]:
-            self.assertNotIn("RUSTFLAGS", call)
-            self.assertNotIn("TENFERRO_TRYBUILD_RUSTFLAGS", call)
-            self.assertNotIn("CARGO", call)
-        for call in calls[plain_commands:]:
-            self.assertEqual(
-                call["RUSTFLAGS"], "-l dylib=openblas -l dylib=lapack"
-            )
-            self.assertEqual(
-                call["TENFERRO_TRYBUILD_RUSTFLAGS"],
-                "-l dylib=openblas -l dylib=lapack",
-            )
-            self.assertEqual(
-                call["CARGO"],
-                str((ROOT / "scripts" / "ci" / "trybuild-cargo.py").resolve()),
-            )
-
-    def test_trybuild_cargo_preserves_and_augments_complete_rustflags(self) -> None:
-        build_flags = [
-            "--cfg",
-            "trybuild",
-            "--verbose",
-            "--diagnostic-width=140",
-            "-A",
-            "dead_code",
-            "-C",
-            "instrument-coverage",
-        ]
-        target_flags = [
-            "--cfg",
-            "target-specific",
-            "-C",
-            "target-cpu=native",
-        ]
-        blas_flags = ["-l", "dylib=openblas", "-l", "dylib=lapack"]
-
-        with tempfile.TemporaryDirectory() as directory:
-            temp = Path(directory)
-            capture = temp / "capture.json"
-            fake_cargo = temp / "cargo"
-            fake_cargo.write_text(
-                """#!/usr/bin/env python3
-import json
-import os
-import sys
-from pathlib import Path
-
-Path(os.environ["TRYBUILD_CARGO_CAPTURE"]).write_text(
-    json.dumps({"args": sys.argv[1:], "cargo": os.environ.get("CARGO")})
-)
-"""
-            )
-            fake_cargo.chmod(0o755)
-
-            environment = os.environ.copy()
-            environment["PATH"] = f"{temp}{os.pathsep}{environment['PATH']}"
-            environment["CARGO"] = "must-not-recurse"
-            environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = " ".join(blas_flags)
-            environment["TRYBUILD_CARGO_CAPTURE"] = str(capture)
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts" / "ci" / "trybuild-cargo.py"),
-                    "check",
-                    "--config=build.rustflags=" + json.dumps(build_flags),
-                    "--config=target.x86_64-unknown-linux-gnu.rustflags="
-                    + json.dumps(target_flags),
-                    "--offline",
-                ],
-                check=True,
-                env=environment,
-            )
-
-            result = json.loads(capture.read_text())
-
-        build_argument = next(
-            argument
-            for argument in result["args"]
-            if argument.startswith("--config=build.rustflags=")
-        )
-        target_argument = next(
-            argument
-            for argument in result["args"]
-            if argument.startswith(
-                "--config=target.x86_64-unknown-linux-gnu.rustflags="
-            )
-        )
-        self.assertEqual(
-            json.loads(build_argument.split("=", 2)[2]),
-            build_flags + blas_flags,
-        )
-        self.assertEqual(
-            json.loads(target_argument.split("=", 2)[2]),
-            target_flags + blas_flags,
-        )
-        self.assertIn("--offline", result["args"])
-        self.assertIsNone(result["cargo"])
-
-    def test_trybuild_cargo_runs_without_tomllib(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            temp = Path(directory)
-            (temp / "tomllib.py").write_text(
-                'raise ModuleNotFoundError("No module named tomllib")\n'
-            )
-            fake_cargo = temp / "cargo"
-            fake_cargo.write_text("#!/bin/sh\nexit 0\n")
-            fake_cargo.chmod(0o755)
-
-            environment = os.environ.copy()
-            environment["PATH"] = f"{temp}{os.pathsep}{environment['PATH']}"
-            environment["PYTHONPATH"] = str(temp)
-            environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = "-l dylib=openblas"
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts" / "ci" / "trybuild-cargo.py"),
-                    "check",
-                    '--config=build.rustflags=["--cfg","trybuild"]',
-                ],
-                check=True,
-                env=environment,
-            )
 
     def test_fast_preflight_delegates_profiles_without_redefining_them(self) -> None:
         source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()

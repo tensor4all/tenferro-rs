@@ -9,7 +9,6 @@ fn payload(error: &TensorError) -> Option<&crate::Error> {
 /// One row of the public `map_error` contract: a provider failure and the tenferro error it must
 /// become. `check` asserts the variant and payload; `kind` is asserted separately so a drift in
 /// either is reported on its own.
-#[cfg(feature = "native")]
 struct Case {
     name: &'static str,
     op: tlinalg::Op,
@@ -24,7 +23,6 @@ struct Case {
 /// `tlinalg::Error` is `#[non_exhaustive]`, so the compiler cannot tell this list that a variant
 /// was added; a row per known variant instead fails when an arm is removed, reordered into the
 /// catch-all, or rebuilt as a different tenferro variant or kind.
-#[cfg(feature = "native")]
 fn contract_cases() -> Vec<Case> {
     use tenferro_tensor::{ValidationError, ValidationKind};
     use tlinalg::{Error as TlError, NonFiniteRole, Op};
@@ -144,7 +142,6 @@ fn contract_cases() -> Vec<Case> {
     ]
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn every_known_variant_maps_to_its_documented_tenferro_error() {
     for case in contract_cases() {
@@ -160,7 +157,6 @@ fn every_known_variant_maps_to_its_documented_tenferro_error() {
     }
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn public_path_is_the_mapping_tenferro_uses() {
     // The re-export is the same function, not a second copy: both paths agree on every row.
@@ -177,7 +173,6 @@ fn public_path_is_the_mapping_tenferro_uses() {
     }
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn op_argument_wins_over_the_op_stored_in_the_error() {
     use tlinalg::{Error as TlError, NonFiniteRole, Op};
@@ -240,86 +235,5 @@ fn op_argument_wins_over_the_op_stored_in_the_error() {
             op: Op::LuFactor,
             ..
         })
-    ));
-}
-
-#[cfg(feature = "blas")]
-#[test]
-fn every_blas_variant_rebuilds_tenferros_kind_role_and_source() {
-    use super::map_blas_error;
-    use tlinalg_blas::{Error as BlasError, NonFiniteRole, Op};
-
-    let error = map_blas_error(Op::Cholesky, BlasError::NonConvergence { op: Op::Cholesky });
-    assert_eq!(error.kind(), ErrorKind::NumericalFailure);
-    assert!(matches!(
-        payload(&error),
-        Some(crate::Error::NonConvergence { op: "cholesky" })
-    ));
-
-    let error = map_blas_error(
-        Op::RankRevealingQr,
-        BlasError::NonFinite {
-            op: Op::RankRevealingQr,
-            role: NonFiniteRole::Input,
-        },
-    );
-    assert!(matches!(
-        payload(&error),
-        Some(crate::Error::NonFinite {
-            op: "rank_revealing_qr",
-            role: "input"
-        })
-    ));
-
-    let error = map_blas_error(Op::Solve, BlasError::Singular { op: Op::Solve });
-    assert!(matches!(
-        payload(&error),
-        Some(crate::Error::Singular { op: "solve" })
-    ));
-
-    let error = map_blas_error(
-        Op::LuFactor,
-        BlasError::InvalidArgument {
-            op: Op::LuFactor,
-            role: "lapack_argument",
-            detail: "LAPACK getrf argument 3 had an illegal value".to_owned(),
-        },
-    );
-    let rendered = error.to_string();
-    assert!(rendered.contains("lapack_argument"), "{rendered}");
-    assert!(rendered.contains("getrf argument 3"), "{rendered}");
-
-    let error = map_blas_error(
-        Op::Svd,
-        BlasError::InvalidWorkspace {
-            op: Op::Svd,
-            library: "LAPACK",
-            routine: "dgesdd",
-            detail: "query was zero".to_owned(),
-        },
-    );
-    assert_eq!(error.kind(), ErrorKind::BackendFailure);
-    assert!(error.to_string().contains("dgesdd"));
-
-    let error = map_blas_error(
-        Op::LuSolvePrepared,
-        BlasError::Inconsistent {
-            op: Op::LuSolvePrepared,
-            detail: "different batches",
-        },
-    );
-    assert!(matches!(error, TensorError::Internal(_)));
-
-    // `Internal` is the provider's complete message, passed through unchanged.
-    let error = map_blas_error(
-        Op::Lu,
-        BlasError::Internal {
-            op: Op::Lu,
-            detail: "LAPACK getrf returned an invalid pivot index".to_owned(),
-        },
-    );
-    assert!(matches!(
-        &error,
-        TensorError::Internal(message) if message == "LAPACK getrf returned an invalid pivot index"
     ));
 }

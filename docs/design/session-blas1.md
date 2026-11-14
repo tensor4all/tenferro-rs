@@ -81,4 +81,4 @@ VDOT follows the selected dot provider's reduction order. Norm-squared follows s
 
 ## Verification
 
-Run tensor contract tests/doctests, CPU faer and BLAS feature tests, allocation/alias/placement tests, the downstream microfixture, release benchmark, clippy, modified-file coverage review, and combined PR gates.
+Run tensor contract tests/doctests, CPU `blas1` tests, allocation/alias/placement tests, the downstream microfixture, release benchmark, clippy, modified-file coverage review, and combined PR gates.

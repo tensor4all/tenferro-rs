@@ -17,18 +17,11 @@ documentation = "https://docs.rs/tenferro-runtime"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["native"]
+# No backend selection and no features at all: every build is the default build.
+all-features = true
 
 [lib]
 name = "tenferro_runtime"
-
-[features]
-default = ["native"]
-native = ["tenferro-cpu/native"]
-blas = ["tenferro-cpu/blas"]
-blas-openblas = ["tenferro-cpu/blas-openblas"]
-blas-accelerate = ["tenferro-cpu/blas-accelerate"]
-blas-mkl = ["tenferro-cpu/blas-mkl"]
 
 [dependencies]
 tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.11.0" }
@@ -49,9 +42,6 @@ criterion.workspace = true
 # tenferro-runtime, forming a publish cycle. Dev-dependencies are stripped from
 # the published manifest, so an unversioned path dev-dependency is sufficient.
 #
-# The backend feature comes from this crate's own `native`/`blas` forwarding, not
-# from a hard-coded `native` here: a hard-coded choice would collide with the
-# `blas` test configuration the workspace gate runs.
 tenferro-cpu = { path = "../tenferro-cpu", default-features = false }
 
 [[bench]]
@@ -81,7 +71,6 @@ path = "tests/binary_allocations.rs"
 [[test]]
 name = "session_softmax_broadcast_routes"
 path = "tests/session_softmax_broadcast_routes.rs"
-required-features = ["native"]
 
 [[test]]
 name = "degenerate_dot_shape"

@@ -10,8 +10,6 @@ use crate::{
     reduce_min, reduce_prod, reduce_sum, reduce_sum_squares, rem, reshape, scatter, select, sign,
     transpose, tril, triu, with_cpu_engine, CpuEngine, Error,
 };
-#[cfg(feature = "blas")]
-use tenferro_tensor::StridedSliceSpec;
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
@@ -387,7 +385,6 @@ mod indexing_coverage;
 mod managed_copy_boundaries;
 #[path = "tests/cpu_tests/reshape_tensor_pool.rs"]
 mod reshape_tensor_pool;
-#[cfg(feature = "native")]
 /// The analytic read view carries one arm per preset scalar, and the read entry for `pow` takes it for both
 /// operands. The owned-tensor tests reach the floating arms only, so this drives every dtype, including the
 /// boolean arm, whose analytic view is a unit marker and is therefore refused.

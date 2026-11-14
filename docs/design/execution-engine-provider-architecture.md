@@ -12,10 +12,18 @@
 > the pluggable `CpuDomainExecutor`, `CpuProviderBundle`, runtime provider
 > selection, external/caller-managed domains, `CpuBatchPolicy`, and host lane
 > planning - were removed by the CPU boundary integration. The CPU provider is
-> now compile-time (`native` or `blas`), every engine is tenferro-owned, session
+> now unconditional (one faer-backed stack, no backend feature), every engine is
+> tenferro-owned, session
 > entry is admission-only, and lane selection belongs to cpueinsum/tlinalg. See
 > [cpu-backend-execution.md](cpu-backend-execution.md). The GPU, XLA, and
 > process-boundary sections still describe current architecture.
+>
+> **The vendor-BLAS provider analysis below is history.** The CPU stack now
+> links one faer-backed `cpueinsum`/`tcontract`/`tlinalg` set in every build, so
+> there is no OpenBLAS/MKL/Accelerate provider to classify, no count or
+> placement capability to probe, and no exclusivity policy: those sections are
+> retained only to record why the pluggable provider was removed (#2004,
+> #2608).
 
 The umbrella architecture is accepted for child planning and governed by the
 execution-engine umbrella plan. This document records the agreed design
@@ -123,9 +131,8 @@ explicit operation-family and provider traits, and explicit runtime resources.
 - A public `DistributedTensor` type in the initial refactor.
 - Implicit CPU fallback, implicit device transfer, or implicit provider
   fallback.
-- Making provider-specific global state, such as OpenBLAS worker management,
-  appear runtime-local when the external library does not provide that
-  isolation.
+- Making provider-specific global state appear runtime-local when the external
+  library does not provide that isolation.
 
 ## Architectural Overview
 
@@ -605,7 +612,7 @@ provenance, and validation rejects any mismatch.
 
 Runtime operation-family traits consume validated semantic requests and
 produce prepared or executable operations. They do not define compiler shape
-inference and do not mention ambient Rayon, process-global BLAS state, or
+inference and do not mention ambient Rayon, process-global library state, or
 unresolved device selection.
 
 Illustrative shapes are:
@@ -659,8 +666,7 @@ Transfers use a separate registry keyed by source and destination execution
 endpoints, and collectives use a separate registry. Neither may hide a host
 transfer.
 
-Providers may be implemented by faer, general BLAS/LAPACK, TBLIS, CubeCL,
-cuTENSOR, or user code. A provider does not select a resource domain, create a
+Providers may be implemented by faer, CubeCL, cuTENSOR, or user code. A provider does not select a resource domain, create a
 thread pool, acquire an arbiter permit, choose a stream, or perform an implicit
 fallback.
 
@@ -1630,13 +1636,11 @@ thread-count contract for every finite strict bundle budget; it remains
 available only through the process-global `ProviderDefaultExclusive`
 compatibility policy.
 
-### BLAS and faer behavior
+### Faer behavior (historical vendor-BLAS notes below)
 
 Faer and tenferro-native parallel kernels can use the selected executor when
-their APIs permit it. General BLAS/LAPACK providers often expose only a global
-or provider-specific thread count, not a per-call executor. Such a provider
-receives the execution thread budget and provider exclusivity policy, but it
-does not receive a Rayon pool as if BLAS could execute on that pool.
+their APIs permit it. The vendor-BLAS analysis that follows described an
+architecture no build has any more; read it as the rejected alternative (#2608).
 
 Thread-control capability is resolved when constructing the provider or during
 preparation, never by probing on every call. OpenBLAS symbol presence does not
@@ -2330,15 +2334,15 @@ for each backend and provider family:
 - which object owns the thread pool, stream, or queue;
 - whether thread counts are per-runtime, per-domain, per-provider, or global;
 - what `Managed` and `ExternalManaged` guarantee;
-- how faer differs from general BLAS/LAPACK;
+- why the CPU provider is not selectable;
 - when synchronization occurs;
 - what single-device and multi-device placement mean;
 - which behavior is unsupported rather than silently degraded.
 
 SVD, QR, and other batched linalg documentation must explicitly describe outer
-batch parallelism and inner decomposition parallelism. Users who need a
-different policy select or implement providers; tenferro does not bury that
-policy in operation hooks.
+batch parallelism and inner decomposition parallelism. The CPU provider is
+fixed, so a user who needs a different policy chooses the pool;
+tenferro does not bury that policy in operation hooks.
 
 ## Alternatives Considered
 

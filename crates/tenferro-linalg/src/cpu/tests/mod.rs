@@ -6,7 +6,6 @@ use std::{ffi::OsString, sync::MutexGuard};
 
 use num_complex::{Complex32, Complex64};
 
-#[cfg(feature = "native")]
 use super::linalg::faer_linalg;
 use crate::LinalgBackend;
 use tenferro_cpu::{with_cpu_engine, CpuEngine};
@@ -290,11 +289,9 @@ fn diagonal_scatter_config() -> ScatterConfig {
 }
 
 mod backend;
-#[cfg(any(feature = "native", feature = "blas"))]
 mod batch_policy;
 mod batched;
 mod dtype;
-#[cfg(feature = "native")]
 mod faer_lanes;
 mod linalg;
 mod managed_cholesky;

@@ -14,7 +14,6 @@
 //! indicative only: the balance also subtracts frees of memory that was allocated before the
 //! window was armed, so it is not a peak-memory measurement.
 
-#![cfg(feature = "native")]
 // The placement ledger allocates per token, so allocation counts are taken without it.
 #![cfg(not(feature = "ledger"))]
 
@@ -115,11 +114,6 @@ fn measure(operation: impl FnOnce()) -> AllocationReport {
 }
 
 fn faer_backend() -> CpuEngine {
-    tenferro_cpu::CpuEngine::serial()
-}
-
-#[cfg(feature = "blas")]
-fn blas_backend() -> CpuEngine {
     tenferro_cpu::CpuEngine::serial()
 }
 
@@ -238,11 +232,7 @@ const F64_LU_CEILINGS: &[(&str, usize)] = &[
     ("faer/lu_factor/48", 3),
     ("faer/lu_solve_prepared/48", 4),
     ("faer/lu_factor_solve/48", 5),
-    ("blas/lu_factor/48", 6),
-    ("blas/lu_solve_prepared/48", 5),
-    ("blas/lu_factor_solve/48", 8),
     ("faer/lu_factor/complex32", 3),
-    ("blas/lu_factor/complex32", 6),
     // The SVD family, faer route.
     ("faer/svd/48", 3),
     ("faer/svdvals/48", 1),
@@ -253,10 +243,8 @@ const F64_LU_CEILINGS: &[(&str, usize)] = &[
 ];
 
 /// Baselines for the families that followed SVD and packed LU out of `tenferro-linalg`, measured
-/// through the public tensor routes on both CPU kinds, and lowered to the borrowed-workspace route
-/// (`tlinalg 0.3.1`): every faer family is now the host-side residual. The `blas` cases below are
-/// recorded from the `blas` lane; this target compiles only under `native` (the two CPU routes are
-/// mutually exclusive), so they are the historical record rather than a live check.
+/// through the public tensor routes, and lowered to the borrowed-workspace route
+/// (`tlinalg 0.3.1`): every family is now the host-side residual.
 const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
     ("faer/cholesky/48", 1),
     ("faer/triangular_solve/48", 1),
@@ -276,24 +264,6 @@ const REMAINING_FAMILY_CEILINGS: &[(&str, usize)] = &[
     ("faer/qr/complex32", 3),
     ("faer/eigh/complex32", 1),
     ("faer/eig/complex32", 3),
-    ("blas/cholesky/48", 3),
-    ("blas/triangular_solve/48", 2),
-    ("blas/lu/48", 12),
-    ("blas/full_piv_lu/48", 15),
-    ("blas/full_piv_lu_solve/48", 5),
-    ("blas/solve/48", 5),
-    ("blas/qr/48", 7),
-    ("blas/qr/tall", 7),
-    ("blas/householder_qr/tall", 4),
-    ("blas/rank_revealing_qr/tall", 13),
-    ("blas/eigh/48", 7),
-    ("blas/eigvalsh/48", 4),
-    ("blas/eig/48", 7),
-    ("blas/eigvals/48", 4),
-    ("blas/solve/complex32", 5),
-    ("blas/qr/complex32", 7),
-    ("blas/eigh/complex32", 8),
-    ("blas/eig/complex32", 8),
 ];
 
 /// Steady-state ceiling overrides, for a host whose counts differ from the baselines above.
@@ -401,48 +371,6 @@ fn cpu_linalg_routes_take_their_scratch_from_the_session_buffer_pool() {
         },
     );
 
-    #[cfg(feature = "blas")]
-    {
-        let mut blas = blas_backend();
-        let packed = with_session(&mut blas, |cpu| cpu.lu_factor(&a).unwrap());
-        check(&mut blas, &mut failures, "blas/lu_factor/48", |session| {
-            with_session(session, |cpu| {
-                cpu.lu_factor(&a).unwrap();
-            });
-        });
-        check(
-            &mut blas,
-            &mut failures,
-            "blas/lu_solve_prepared/48",
-            |session| {
-                with_session(session, |cpu| {
-                    cpu.lu_solve_prepared(&a, &packed[0], &packed[1], &a, false, false)
-                        .unwrap();
-                });
-            },
-        );
-        check(
-            &mut blas,
-            &mut failures,
-            "blas/lu_factor_solve/48",
-            |session| {
-                with_session(session, |cpu| {
-                    cpu.lu_factor_solve(&a, &a).unwrap();
-                });
-            },
-        );
-        check(
-            &mut blas,
-            &mut failures,
-            "blas/lu_factor/complex32",
-            |session| {
-                with_session(session, |cpu| {
-                    cpu.lu_factor(&c).unwrap();
-                });
-            },
-        );
-    }
-
     // The SVD family on the faer route: thin, values-only, square, tall and complex.
     let tall = f64_tall(64, 24);
     check(&mut faer, &mut failures, "faer/svd/48", |session| {
@@ -547,8 +475,6 @@ fn remaining_linalg_families_keep_their_steady_state_allocation_counts() {
     let _serial = serial_test();
     let mut failures = Vec::new();
     check_remaining_families(&mut faer_backend(), "faer", &mut failures);
-    #[cfg(feature = "blas")]
-    check_remaining_families(&mut blas_backend(), "blas", &mut failures);
     assert!(
         failures.is_empty(),
         "CPU linalg routes allocate more per call than the recorded ceilings:\n{}",

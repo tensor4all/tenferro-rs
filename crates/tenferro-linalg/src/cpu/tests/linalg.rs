@@ -11,49 +11,76 @@ fn assert_c32_close(actual: Complex32, expected: Complex32) {
     );
 }
 
-/// The compile-time CPU backend this build selected.
-fn compiled_linalg_providers() -> Vec<&'static str> {
-    vec![tenferro_cpu::cpu_provider_id()]
-}
-
 #[test]
-fn solve_read_accepts_owned_and_strided_inputs_for_compiled_providers() {
+fn solve_read_accepts_owned_and_strided_inputs_on_the_cpu_backend() {
     let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
     let a_storage = vec![-1.0, 3.0, -1.0, 1.0, -1.0, -1.0, 0.0, -1.0, 2.0];
     let b_storage = vec![-1.0, 7.0, -1.0, 4.0];
 
-    for _provider in compiled_linalg_providers() {
-        let mut backend = tenferro_cpu::CpuEngine::serial();
-        with_cpu_linalg(&mut backend, |backend| {
-            let owned = backend
-                .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-                .unwrap();
-            let strided = backend
-                .solve_read(
-                    TensorRead::from_view(TensorView::F64(
-                        TypedTensorView::from_slice(vec![2, 2], vec![2, 5], 1, &a_storage).unwrap(),
-                    )),
-                    TensorRead::from_view(TensorView::F64(
-                        TypedTensorView::from_slice(vec![2, 1], vec![2, 5], 1, &b_storage).unwrap(),
-                    )),
-                )
-                .unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    with_cpu_linalg(&mut backend, |backend| {
+        let owned = backend
+            .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+            .unwrap();
+        let strided = backend
+            .solve_read(
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 2], vec![2, 5], 1, &a_storage).unwrap(),
+                )),
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 1], vec![2, 5], 1, &b_storage).unwrap(),
+                )),
+            )
+            .unwrap();
 
-            for row in 0..2 {
-                assert_f64_close(get_f64(&owned, &[row, 0]), get_f64(&strided, &[row, 0]));
-            }
+        for row in 0..2 {
+            assert_f64_close(get_f64(&owned, &[row, 0]), get_f64(&strided, &[row, 0]));
+        }
 
-            let vector_b = Tensor::from_vec_col_major([2], vec![7.0_f64, 4.0]).unwrap();
-            let vector_x = backend
-                .solve_read(
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&vector_b),
-                )
-                .unwrap();
-            assert_eq!(vector_x.shape(), &[2]);
-        });
-    }
+        let vector_b = Tensor::from_vec_col_major([2], vec![7.0_f64, 4.0]).unwrap();
+        let vector_x = backend
+            .solve_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&vector_b),
+            )
+            .unwrap();
+        assert_eq!(vector_x.shape(), &[2]);
+    });
+}
+
+#[test]
+fn solve_read_accepts_a_negative_stride_operand() {
+    // A reversed slice has a negative stride. The route that used to own `solve` handed such an
+    // operand to a provider that refused it; it is now gathered once and solved, so the answer
+    // must equal the contiguous one.
+    let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
+    let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
+    // Storage laid out so (0, 0) sits at the highest address: address = offset + i * stride0.
+    let a_storage = vec![2.0_f64, 1.0, 0.0, 3.0];
+    let b_storage = vec![4.0_f64, 7.0];
+
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    with_cpu_linalg(&mut backend, |backend| {
+        let expected = backend
+            .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+            .unwrap();
+        let reversed = backend
+            .solve_read(
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 2], vec![-2, -1], 3, &a_storage).unwrap(),
+                )),
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 1], vec![-1, 1], 1, &b_storage).unwrap(),
+                )),
+            )
+            .unwrap();
+
+        assert_eq!(reversed.shape(), expected.shape());
+        for row in 0..2 {
+            assert_f64_close(get_f64(&expected, &[row, 0]), get_f64(&reversed, &[row, 0]));
+        }
+    });
 }
 
 #[test]
@@ -61,39 +88,34 @@ fn solve_read_into_writes_owned_and_padded_column_major_outputs() {
     let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
 
-    for _provider in compiled_linalg_providers() {
-        let mut backend = tenferro_cpu::CpuEngine::serial();
-        with_cpu_linalg(&mut backend, |backend| {
-            let mut owned = Tensor::from_vec_col_major([2, 1], vec![-9.0_f64; 2]).unwrap();
-            backend
-                .solve_read_into(
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&b),
-                    tenferro_tensor::TensorWrite::from_tensor(&mut owned),
-                )
-                .unwrap();
-            assert_f64_close(get_f64(&owned, &[0, 0]), 7.0 / 3.0);
-            assert_f64_close(get_f64(&owned, &[1, 0]), 5.0 / 6.0);
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    with_cpu_linalg(&mut backend, |backend| {
+        let mut owned = Tensor::from_vec_col_major([2, 1], vec![-9.0_f64; 2]).unwrap();
+        backend
+            .solve_read_into(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                tenferro_tensor::TensorWrite::from_tensor(&mut owned),
+            )
+            .unwrap();
+        assert_f64_close(get_f64(&owned, &[0, 0]), 7.0 / 3.0);
+        assert_f64_close(get_f64(&owned, &[1, 0]), 5.0 / 6.0);
 
-            let mut storage = vec![-17.0_f64; 8];
-            let view =
-                tenferro_tensor::TypedTensorViewMut::from_slice([2, 1], [1, 4], 1, &mut storage)
-                    .unwrap();
-            backend
-                .solve_read_into(
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&b),
-                    tenferro_tensor::TensorWrite::from_view(tenferro_tensor::TensorViewMut::F64(
-                        view,
-                    )),
-                )
-                .unwrap();
-            assert_f64_close(storage[1], 7.0 / 3.0);
-            assert_f64_close(storage[2], 5.0 / 6.0);
-            assert_eq!(storage[0], -17.0);
-            assert_eq!(storage[5], -17.0);
-        });
-    }
+        let mut storage = vec![-17.0_f64; 8];
+        let view = tenferro_tensor::TypedTensorViewMut::from_slice([2, 1], [1, 4], 1, &mut storage)
+            .unwrap();
+        backend
+            .solve_read_into(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                tenferro_tensor::TensorWrite::from_view(tenferro_tensor::TensorViewMut::F64(view)),
+            )
+            .unwrap();
+        assert_f64_close(storage[1], 7.0 / 3.0);
+        assert_f64_close(storage[2], 5.0 / 6.0);
+        assert_eq!(storage[0], -17.0);
+        assert_eq!(storage[5], -17.0);
+    });
 }
 
 #[test]
@@ -101,27 +123,25 @@ fn solve_read_into_rejects_bad_destination_before_mutation() {
     let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
 
-    for _provider in compiled_linalg_providers() {
-        let mut backend = tenferro_cpu::CpuEngine::serial();
-        with_cpu_linalg(&mut backend, |backend| {
-            let mut out = Tensor::from_vec_col_major([3, 1], vec![-23.0_f64; 3]).unwrap();
-            let error = backend
-                .solve_read_into(
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&b),
-                    tenferro_tensor::TensorWrite::from_tensor(&mut out),
-                )
-                .unwrap_err();
-            assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
-            assert_eq!(
-                out.as_typed::<f64>()
-                    .expect("test output is f64")
-                    .host_data()
-                    .unwrap(),
-                &[-23.0, -23.0, -23.0]
-            );
-        });
-    }
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    with_cpu_linalg(&mut backend, |backend| {
+        let mut out = Tensor::from_vec_col_major([3, 1], vec![-23.0_f64; 3]).unwrap();
+        let error = backend
+            .solve_read_into(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                tenferro_tensor::TensorWrite::from_tensor(&mut out),
+            )
+            .unwrap_err();
+        assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
+        assert_eq!(
+            out.as_typed::<f64>()
+                .expect("test output is f64")
+                .host_data()
+                .unwrap(),
+            &[-23.0, -23.0, -23.0]
+        );
+    });
 }
 
 #[test]
@@ -304,138 +324,134 @@ fn output_from_rhs_view_covers_vector_matrix_and_rank_validation() {
 }
 
 #[test]
-fn solve_accepts_tiny_nonzero_real_and_complex_pivots_for_compiled_providers() {
+fn solve_accepts_tiny_nonzero_real_and_complex_pivots_on_the_cpu_backend() {
     // What: ordinary and prepared solve treat scaling as units, not as an implicit rank cutoff.
-    for _provider in compiled_linalg_providers() {
-        let mut backend = tenferro_cpu::CpuEngine::serial();
-        with_cpu_linalg(&mut backend, |backend| {
-            let scale = 2.0_f32.powi(-80);
-            let a = Tensor::from_vec_col_major([2, 2], vec![scale, 0.0, 0.0, 2.0 * scale]).unwrap();
-            let b = Tensor::from_vec_col_major([2, 1], vec![3.0 * scale, 10.0 * scale]).unwrap();
-            let direct = backend.solve(&a, &b).unwrap();
-            assert!((get_f32(&direct, &[0, 0]) - 3.0).abs() < 1.0e-5);
-            assert!((get_f32(&direct, &[1, 0]) - 5.0).abs() < 1.0e-5);
-            let read = backend
-                .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
-                .unwrap();
-            assert!((get_f32(&read, &[0, 0]) - 3.0).abs() < 1.0e-5);
-            let factors = backend.lu_factor(&a).unwrap();
-            let prepared = backend
-                .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
-                .unwrap();
-            assert!((get_f32(&prepared, &[1, 0]) - 5.0).abs() < 1.0e-5);
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    with_cpu_linalg(&mut backend, |backend| {
+        let scale = 2.0_f32.powi(-80);
+        let a = Tensor::from_vec_col_major([2, 2], vec![scale, 0.0, 0.0, 2.0 * scale]).unwrap();
+        let b = Tensor::from_vec_col_major([2, 1], vec![3.0 * scale, 10.0 * scale]).unwrap();
+        let direct = backend.solve(&a, &b).unwrap();
+        assert!((get_f32(&direct, &[0, 0]) - 3.0).abs() < 1.0e-5);
+        assert!((get_f32(&direct, &[1, 0]) - 5.0).abs() < 1.0e-5);
+        let read = backend
+            .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+            .unwrap();
+        assert!((get_f32(&read, &[0, 0]) - 3.0).abs() < 1.0e-5);
+        let factors = backend.lu_factor(&a).unwrap();
+        let prepared = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+            .unwrap();
+        assert!((get_f32(&prepared, &[1, 0]) - 5.0).abs() < 1.0e-5);
 
-            let scale = 2.0_f64.powi(-600);
-            let a = Tensor::from_vec_col_major([2, 2], vec![scale, 0.0, 0.0, 2.0 * scale]).unwrap();
-            let b = Tensor::from_vec_col_major([2, 1], vec![3.0 * scale, 10.0 * scale]).unwrap();
-            let direct = backend.solve(&a, &b).unwrap();
-            assert_f64_close(get_f64(&direct, &[0, 0]), 3.0);
-            assert_f64_close(get_f64(&direct, &[1, 0]), 5.0);
-            let factors = backend.lu_factor(&a).unwrap();
-            let prepared = backend
-                .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
-                .unwrap();
-            assert_f64_close(get_f64(&prepared, &[1, 0]), 5.0);
+        let scale = 2.0_f64.powi(-600);
+        let a = Tensor::from_vec_col_major([2, 2], vec![scale, 0.0, 0.0, 2.0 * scale]).unwrap();
+        let b = Tensor::from_vec_col_major([2, 1], vec![3.0 * scale, 10.0 * scale]).unwrap();
+        let direct = backend.solve(&a, &b).unwrap();
+        assert_f64_close(get_f64(&direct, &[0, 0]), 3.0);
+        assert_f64_close(get_f64(&direct, &[1, 0]), 5.0);
+        let factors = backend.lu_factor(&a).unwrap();
+        let prepared = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+            .unwrap();
+        assert_f64_close(get_f64(&prepared, &[1, 0]), 5.0);
 
-            let scale = 2.0_f32.powi(-80);
-            let zero = Complex32::new(0.0, 0.0);
-            let a = Tensor::from_vec_col_major(
-                [2, 2],
-                vec![
-                    Complex32::new(scale, 0.0),
-                    zero,
-                    zero,
-                    Complex32::new(2.0 * scale, 0.0),
-                ],
-            )
+        let scale = 2.0_f32.powi(-80);
+        let zero = Complex32::new(0.0, 0.0);
+        let a = Tensor::from_vec_col_major(
+            [2, 2],
+            vec![
+                Complex32::new(scale, 0.0),
+                zero,
+                zero,
+                Complex32::new(2.0 * scale, 0.0),
+            ],
+        )
+        .unwrap();
+        let b = Tensor::from_vec_col_major(
+            [2, 1],
+            vec![
+                Complex32::new(3.0 * scale, 0.0),
+                Complex32::new(10.0 * scale, 0.0),
+            ],
+        )
+        .unwrap();
+        let direct = backend.solve(&a, &b).unwrap();
+        assert!((get_c32(&direct, &[0, 0]) - Complex32::new(3.0, 0.0)).norm() < 1.0e-5);
+        let factors = backend.lu_factor(&a).unwrap();
+        let prepared = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
             .unwrap();
-            let b = Tensor::from_vec_col_major(
-                [2, 1],
-                vec![
-                    Complex32::new(3.0 * scale, 0.0),
-                    Complex32::new(10.0 * scale, 0.0),
-                ],
-            )
-            .unwrap();
-            let direct = backend.solve(&a, &b).unwrap();
-            assert!((get_c32(&direct, &[0, 0]) - Complex32::new(3.0, 0.0)).norm() < 1.0e-5);
-            let factors = backend.lu_factor(&a).unwrap();
-            let prepared = backend
-                .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
-                .unwrap();
-            assert!((get_c32(&prepared, &[1, 0]) - Complex32::new(5.0, 0.0)).norm() < 1.0e-5);
+        assert!((get_c32(&prepared, &[1, 0]) - Complex32::new(5.0, 0.0)).norm() < 1.0e-5);
 
-            let scale = 2.0_f64.powi(-600);
-            let zero = Complex64::new(0.0, 0.0);
-            let a = Tensor::from_vec_col_major(
-                [2, 2],
-                vec![
-                    Complex64::new(0.0, scale),
-                    zero,
-                    zero,
-                    Complex64::new(0.0, 2.0 * scale),
-                ],
-            )
+        let scale = 2.0_f64.powi(-600);
+        let zero = Complex64::new(0.0, 0.0);
+        let a = Tensor::from_vec_col_major(
+            [2, 2],
+            vec![
+                Complex64::new(0.0, scale),
+                zero,
+                zero,
+                Complex64::new(0.0, 2.0 * scale),
+            ],
+        )
+        .unwrap();
+        let b = Tensor::from_vec_col_major(
+            [2, 1],
+            vec![
+                Complex64::new(0.0, 3.0 * scale),
+                Complex64::new(0.0, 10.0 * scale),
+            ],
+        )
+        .unwrap();
+        let direct = backend.solve(&a, &b).unwrap();
+        assert_c64_close(get_c64(&direct, &[0, 0]), Complex64::new(3.0, 0.0));
+        let factors = backend.lu_factor(&a).unwrap();
+        let prepared = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
             .unwrap();
-            let b = Tensor::from_vec_col_major(
-                [2, 1],
-                vec![
-                    Complex64::new(0.0, 3.0 * scale),
-                    Complex64::new(0.0, 10.0 * scale),
-                ],
-            )
-            .unwrap();
-            let direct = backend.solve(&a, &b).unwrap();
-            assert_c64_close(get_c64(&direct, &[0, 0]), Complex64::new(3.0, 0.0));
-            let factors = backend.lu_factor(&a).unwrap();
-            let prepared = backend
-                .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
-                .unwrap();
-            assert_c64_close(get_c64(&prepared, &[1, 0]), Complex64::new(5.0, 0.0));
-        });
-    }
+        assert_c64_close(get_c64(&prepared, &[1, 0]), Complex64::new(5.0, 0.0));
+    });
 }
 
 #[test]
-fn triangular_solve_read_accepts_owned_and_strided_inputs_for_compiled_providers() {
+fn triangular_solve_read_accepts_owned_and_strided_inputs_on_the_cpu_backend() {
     let a = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![5.0_f64, 6.0]).unwrap();
     let a_storage = vec![-1.0, 2.0, -1.0, 0.0, -1.0, -1.0, 1.0, -1.0, 3.0];
     let b_storage = vec![-1.0, 5.0, -1.0, 6.0];
 
-    for _provider in compiled_linalg_providers() {
-        let mut backend = tenferro_cpu::CpuEngine::serial();
-        with_cpu_linalg(&mut backend, |backend| {
-            let owned = backend
-                .triangular_solve_read(
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&b),
-                    true,
-                    false,
-                    false,
-                    false,
-                )
-                .unwrap();
-            let strided = backend
-                .triangular_solve_read(
-                    TensorRead::from_view(TensorView::F64(
-                        TypedTensorView::from_slice(vec![2, 2], vec![2, 5], 1, &a_storage).unwrap(),
-                    )),
-                    TensorRead::from_view(TensorView::F64(
-                        TypedTensorView::from_slice(vec![2, 1], vec![2, 5], 1, &b_storage).unwrap(),
-                    )),
-                    true,
-                    false,
-                    false,
-                    false,
-                )
-                .unwrap();
+    let mut backend = tenferro_cpu::CpuEngine::serial();
+    with_cpu_linalg(&mut backend, |backend| {
+        let owned = backend
+            .triangular_solve_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                true,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+        let strided = backend
+            .triangular_solve_read(
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 2], vec![2, 5], 1, &a_storage).unwrap(),
+                )),
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 1], vec![2, 5], 1, &b_storage).unwrap(),
+                )),
+                true,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
 
-            for row in 0..2 {
-                assert_f64_close(get_f64(&owned, &[row, 0]), get_f64(&strided, &[row, 0]));
-            }
-        });
-    }
+        for row in 0..2 {
+            assert_f64_close(get_f64(&owned, &[row, 0]), get_f64(&strided, &[row, 0]));
+        }
+    });
 }
 
 #[test]
@@ -453,29 +469,7 @@ fn svd_read_accepts_an_owned_tensor_read() {
 }
 
 #[test]
-fn lapack_batched_value_factor_paths_delegate_whole_batches() {
-    // The kernels and the batch loop live in the extracted LAPACK implementation; what this pins
-    // is that each wrapper delegates the whole batch in one call instead of slicing it.
-    let lu_source = include_str!("../linalg/lapack_linalg/lu.rs");
-    let lu_factor = source_from(lu_source, "pub(crate) fn lu_factor");
-    assert!(lu_factor.contains("crate::cpu::tlinalg_blas::factor_batch::<T>("));
-    assert!(!lu_factor.contains("host_data()?[range].to_vec()"));
-
-    let eigh_source = include_str!("../linalg/lapack_linalg/eigh.rs");
-    let eigh_values = source_from(eigh_source, "pub(crate) fn eigh_values");
-    assert_eq!(eigh_values.matches("T::eigh(").count(), 1);
-    assert!(!eigh_values.contains("input.host_data()?[range].to_vec()"));
-
-    let svd_source = include_str!("../linalg/lapack_linalg/svd.rs");
-    let svd_values = source_from(svd_source, "pub(crate) fn svd_values");
-    assert!(svd_values.contains("svd_buffers("));
-    let svd_driver = source_from(svd_source, "fn svd_buffers");
-    assert!(svd_driver.contains("T::svd("));
-    assert!(!svd_values.contains("input.host_data()?[range].to_vec()"));
-}
-
-#[test]
-fn svd_canonicalizes_transposed_host_view_before_lapack() {
+fn svd_canonicalizes_transposed_host_view_before_the_provider() {
     let data = vec![1.0, -2.0, 3.0, 0.5, -1.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
@@ -510,7 +504,7 @@ fn source_from<'a>(source: &'a str, start: &str) -> &'a str {
 }
 
 #[test]
-fn qr_read_canonicalizes_transposed_host_view_before_lapack() {
+fn qr_read_canonicalizes_transposed_host_view_before_the_provider() {
     let data = vec![1.0, -2.0, 3.0, 0.5, -1.0, 4.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
@@ -535,7 +529,7 @@ fn qr_read_canonicalizes_transposed_host_view_before_lapack() {
 }
 
 #[test]
-fn qr_read_canonicalizes_transposed_complex_host_view_before_lapack() {
+fn qr_read_canonicalizes_transposed_complex_host_view_before_the_provider() {
     let data = vec![
         Complex64::new(1.0, 0.5),
         Complex64::new(-2.0, 1.0),
@@ -567,7 +561,7 @@ fn qr_read_canonicalizes_transposed_complex_host_view_before_lapack() {
 }
 
 #[test]
-fn eigh_read_canonicalizes_transposed_host_view_before_lapack() {
+fn eigh_read_canonicalizes_transposed_host_view_before_the_provider() {
     let data = vec![4.0, 1.0, 1.0, 3.0];
     let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], data.clone()).unwrap();
     let view = a.as_view().transpose_view([1, 0]).unwrap();
@@ -603,7 +597,7 @@ fn eigh_read_canonicalizes_transposed_host_view_before_lapack() {
 }
 
 #[test]
-fn eigh_read_canonicalizes_transposed_complex_host_view_before_lapack() {
+fn eigh_read_canonicalizes_transposed_complex_host_view_before_the_provider() {
     let data = vec![
         Complex64::new(4.0, 0.0),
         Complex64::new(1.0, -0.5),
@@ -1047,31 +1041,29 @@ macro_rules! real_rotation_eig_residual_test {
                 .unwrap(),
             );
 
-            for _provider in compiled_linalg_providers() {
-                let mut backend = tenferro_cpu::CpuEngine::serial();
-                let outputs = with_cpu_linalg(&mut backend, |backend| backend.eig(&input)).unwrap();
-                let mut residual_squared = 0.0_f64;
-                let mut vector_squared = 0.0_f64;
-                let mut diagonal_squared = 0.0_f64;
-                for column in 0..2 {
-                    let v0 = $get_complex(&outputs[1], &[0, column]);
-                    let v1 = $get_complex(&outputs[1], &[1, column]);
-                    let lambda = $get_complex(&outputs[0], &[column]);
-                    residual_squared +=
-                        ((-v1 - v0 * lambda).norm_sqr() + (v0 - v1 * lambda).norm_sqr()) as f64;
-                    vector_squared += (v0.norm_sqr() + v1.norm_sqr()) as f64;
-                    diagonal_squared += lambda.norm_sqr() as f64;
-                }
-                let vector_norm = vector_squared.sqrt();
-                let relative_residual = residual_squared.sqrt()
-                    / (2.0_f64.sqrt() * vector_norm + vector_norm * diagonal_squared.sqrt());
-
-                assert!(
-                    relative_residual.is_finite() && relative_residual <= $tol,
-                    "{_provider} relative AV-VD residual {relative_residual:e} exceeds {}",
-                    $tol
-                );
+            let mut backend = tenferro_cpu::CpuEngine::serial();
+            let outputs = with_cpu_linalg(&mut backend, |backend| backend.eig(&input)).unwrap();
+            let mut residual_squared = 0.0_f64;
+            let mut vector_squared = 0.0_f64;
+            let mut diagonal_squared = 0.0_f64;
+            for column in 0..2 {
+                let v0 = $get_complex(&outputs[1], &[0, column]);
+                let v1 = $get_complex(&outputs[1], &[1, column]);
+                let lambda = $get_complex(&outputs[0], &[column]);
+                residual_squared +=
+                    ((-v1 - v0 * lambda).norm_sqr() + (v0 - v1 * lambda).norm_sqr()) as f64;
+                vector_squared += (v0.norm_sqr() + v1.norm_sqr()) as f64;
+                diagonal_squared += lambda.norm_sqr() as f64;
             }
+            let vector_norm = vector_squared.sqrt();
+            let relative_residual = residual_squared.sqrt()
+                / (2.0_f64.sqrt() * vector_norm + vector_norm * diagonal_squared.sqrt());
+
+            assert!(
+                relative_residual.is_finite() && relative_residual <= $tol,
+                "relative AV-VD residual {relative_residual:e} exceeds {}",
+                $tol
+            );
         }
     };
 }

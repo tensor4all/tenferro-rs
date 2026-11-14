@@ -72,20 +72,18 @@ does not support. Higher layers must not silently fall back across devices.
 
 ## CPU Backend
 
-`tenferro_cpu::CpuBackend` is present when exactly one CPU provider feature is enabled:
-
-- `native` (the default) for faer-backed GEMM/linalg plus cpueinsum/tcontract,
-- `blas` for the same stack with the `cpueinsum-blas`/`tlinalg-blas` adapters.
+`tenferro_cpu::CpuBackend` is always present: every build links the same
+faer-backed GEMM/linalg plus cpueinsum/tcontract stack.
 
 CPU execution uses the split strided-rs families: shared traversal and light
 host operations come from `strided-basic`, ordinary dtype-dispatch kernels from
-`strided-kernel`, and runtime-DAG fusion from `strided-fused`. faer or
-BLAS/LAPACK provide GEMM and linalg. Selection is compile-time only: there is
-no per-handle provider kind, provider bundle, or kernel slot.
+`strided-kernel`, and runtime-DAG fusion from `strided-fused`. faer provides
+GEMM and linalg. There is no provider choice at all: no backend feature, no
+per-handle provider kind, provider bundle, or kernel slot.
 `CpuBackend::new()` and `CpuBackend::with_threads(n)` use the compiled stack,
 and `CpuBackend::builder()` selects placement, thread count, worker stack, and
 buffer limit. CPU `dot_general` and grouped GEMM go to cpueinsum prepared plans
-and CPU linalg to tlinalg / tlinalg-blas; tenferro keeps tensor semantics,
+and CPU linalg to tlinalg; tenferro keeps tensor semantics,
 placement, and validation.
 `CpuContext` stores the CPU thread count as the single source of truth for
 tenferro-owned CPU parallelism and owns the Rayon thread pool used by
@@ -100,8 +98,7 @@ use the backend-owned Rayon pool when the relevant parallel feature is enabled.
 `tenferro-cpu-fused` receives the same context and pool for automatic fusion.
 faer-backed kernels receive `Par::Seq` for one thread or explicit
 `Par::rayon(n)` from the configured context degree for multi-threaded execution
-inside that pool. BLAS/LAPACK provider threading remains provider-owned; the
-external TBLIS example clamps TBLIS to one thread for each provider call.
+inside that pool.
 
 ## CubeCL Backend
 

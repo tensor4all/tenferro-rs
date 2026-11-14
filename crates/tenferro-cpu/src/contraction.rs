@@ -1,7 +1,5 @@
 //! Tensor-boundary adapters; numerical plans and scheduling belong to cpueinsum.
 
-#[cfg(feature = "blas")]
-mod blas_plan;
 #[cfg(test)]
 mod tests;
 mod workspaces;
@@ -25,34 +23,7 @@ use tenferro_tensor::{
 use threadteam::HostClass;
 use tinyvec::TinyVec;
 
-#[cfg(feature = "blas")]
-use blas_plan::BinaryPlan;
-#[cfg(feature = "native")]
 use cpueinsum::BinaryPlan;
-
-/// The numerical route a binary contraction took, for allocation/route tests.
-///
-/// Only the vendor/native distinction is exposed: the native alternatives keep
-/// their own finer [`cpueinsum::ExecutionRoute`] variants, which are not a
-/// stable test contract.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ContractionRoute {
-    #[cfg_attr(not(feature = "blas"), allow(dead_code))]
-    Vendor,
-    Native,
-}
-
-#[cfg(test)]
-thread_local! {
-    static LAST_CONTRACTION_ROUTE: std::cell::Cell<Option<ContractionRoute>> =
-        const { std::cell::Cell::new(None) };
-}
-
-#[cfg(test)]
-pub(crate) fn take_last_contraction_route() -> Option<ContractionRoute> {
-    LAST_CONTRACTION_ROUTE.with(|last| last.replace(None))
-}
 
 #[cfg(test)]
 thread_local! {
@@ -65,7 +36,7 @@ pub(crate) fn take_last_route_was_faer() -> Option<bool> {
     LAST_FAER.with(|last| last.replace(None))
 }
 
-#[cfg(all(feature = "native", any(test, feature = "route-report")))]
+#[cfg(any(test, feature = "route-report"))]
 thread_local! {
     /// Algorithm and selection reason of the last prepared plan.
     static LAST_PLAN_ROUTE: std::cell::Cell<
@@ -85,7 +56,7 @@ thread_local! {
 /// The record is written whenever a plan is prepared, which a cached plan is
 /// not, so a read with nothing prepared in between returns `None`; a read that
 /// skips the `None` case reports the previous plan's route.
-#[cfg(all(feature = "native", any(test, feature = "route-report")))]
+#[cfg(any(test, feature = "route-report"))]
 #[doc(hidden)]
 pub fn take_last_plan_route() -> Option<(
     cpueinsum::tcontract::Algorithm,
@@ -94,36 +65,13 @@ pub fn take_last_plan_route() -> Option<(
     LAST_PLAN_ROUTE.with(|last| last.replace(None))
 }
 
-#[cfg(all(test, feature = "blas"))]
-fn record_contraction_route(route: cpueinsum_blas::ExecutionRoute) {
-    use cpueinsum_blas::ExecutionRoute;
-    LAST_FAER.with(|last| {
-        last.set(Some(matches!(
-            route,
-            ExecutionRoute::Native(cpueinsum::ExecutionRoute::Faer)
-        )))
-    });
-    let route = match route {
-        ExecutionRoute::Vendor => ContractionRoute::Vendor,
-        ExecutionRoute::Native(_) => ContractionRoute::Native,
-    };
-    LAST_CONTRACTION_ROUTE.with(|last| last.set(Some(route)));
-}
-
-#[cfg(all(test, not(feature = "blas")))]
+#[cfg(test)]
 fn record_contraction_route(route: cpueinsum::ExecutionRoute) {
     LAST_FAER.with(|last| last.set(Some(matches!(route, cpueinsum::ExecutionRoute::Faer))));
-    LAST_CONTRACTION_ROUTE.with(|last| last.set(Some(ContractionRoute::Native)));
 }
 
-#[cfg(feature = "native")]
 trait Scalar: PoolScalar + cpueinsum::Scalar {}
-#[cfg(feature = "native")]
 impl<T: PoolScalar + cpueinsum::Scalar> Scalar for T {}
-#[cfg(feature = "blas")]
-trait Scalar: PoolScalar + cpueinsum_blas::BlasScalar {}
-#[cfg(feature = "blas")]
-impl<T: PoolScalar + cpueinsum_blas::BlasScalar> Scalar for T {}
 
 /// Translate a lower numerical failure, keeping a typed route decline distinct.
 ///
@@ -160,33 +108,6 @@ impl LowerContractionError for cpueinsum::Error {
             &self,
             cpueinsum::Error::Contract { source, .. } if source.is_unsupported()
         );
-        if declined {
-            return tenferro_tensor::Error::extension(
-                op,
-                "contraction",
-                tenferro_tensor::ErrorKind::Unsupported,
-                self,
-            );
-        }
-        crate::Error::backend_source(op, self)
-    }
-}
-
-#[cfg(feature = "blas")]
-impl LowerContractionError for cpueinsum_blas::BlasError {
-    fn into_crate_error(self, op: &'static str) -> crate::Error {
-        // A short work buffer is a runtime-state failure with a typed source.
-        if let cpueinsum_blas::BlasError::Work { .. } = &self {
-            return crate::Error::runtime_state_source(op, self);
-        }
-        let declined = match &self {
-            cpueinsum_blas::BlasError::Prepare { source }
-            | cpueinsum_blas::BlasError::Native { source } => matches!(
-                source,
-                cpueinsum::Error::Contract { source, .. } if source.is_unsupported()
-            ),
-            _ => false,
-        };
         if declined {
             return tenferro_tensor::Error::extension(
                 op,
@@ -494,7 +415,7 @@ struct Key {
 fn default_faer_limit(_host: HostClass, budget: usize) -> FaerLimit {
     let limit = PlanConfig::default().faer_limit;
     // A budget of one is the serial engine.
-    if budget == 1 && cfg!(feature = "native") {
+    if budget == 1 {
         FaerLimit { c64: None, ..limit }
     } else {
         limit
@@ -510,14 +431,12 @@ fn plan_config(host: HostClass, budget: usize) -> PlanConfig {
         ..PlanConfig::default()
     }
 }
-#[cfg(any(feature = "native", feature = "blas"))]
 struct CachedBinary {
     key: Key,
     config: DotGeneralConfig,
     plan: Arc<dyn Any + Send + Sync>,
 }
 #[derive(Default)]
-#[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) struct BinaryCache {
     slots: Vec<Option<CachedBinary>>,
     hits: u64,
@@ -525,7 +444,6 @@ pub(crate) struct BinaryCache {
     evictions: u64,
     clears: u64,
 }
-#[cfg(any(feature = "native", feature = "blas"))]
 impl fmt::Debug for BinaryCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BinaryCache")
@@ -533,7 +451,6 @@ impl fmt::Debug for BinaryCache {
             .finish()
     }
 }
-#[cfg(any(feature = "native", feature = "blas"))]
 impl BinaryCache {
     pub(crate) fn clear(&mut self) {
         self.slots.clear();
@@ -639,7 +556,7 @@ impl BinaryCache {
             let plan =
                 BinaryPlan::<T>::new(&problem, &plan_config(HostClass::detect(), key.budget))
                     .map_err(|error| error.into_crate_error("dot_general"))?;
-            #[cfg(all(feature = "native", any(test, feature = "route-report")))]
+            #[cfg(any(test, feature = "route-report"))]
             LAST_PLAN_ROUTE
                 .with(|last| last.set(Some((plan.report().algorithm, plan.report().reason))));
             Ok(plan)
@@ -703,7 +620,6 @@ impl BinaryCache {
     }
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 fn key<T: Scalar>(
     lhs: &TypedTensorView<'_, T>,
     rhs: &TypedTensorView<'_, T>,
@@ -722,11 +638,9 @@ fn key<T: Scalar>(
     }
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 fn initialized<T: Scalar>(
     exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
     plans: &crate::CpuPlanCache,
     slot: Option<usize>,
     lhs: TypedTensorView<'_, T>,
@@ -749,38 +663,24 @@ fn initialized<T: Scalar>(
     let b = rhs.host_storage()?;
     let d = out.host_storage_mut()?;
     let plan = plans.binary_plan::<T>(slot, key, config)?;
-    {
-        {
-            #[cfg(feature = "blas")]
-            let mut work = T::pool_acquire_zeroed(buffers, plan.work_len());
-            #[cfg(feature = "native")]
-            let _ = buffers;
-            let result = plan.execute_slices_accum(
-                exec,
-                alpha,
-                (a, lhs.offset()),
-                (b, rhs.offset()),
-                beta,
-                SliceAccumulationSource::Output,
-                (d, output_offset),
-                #[cfg(feature = "blas")]
-                &mut work,
-            );
-            #[cfg(test)]
-            if let Ok(route) = &result {
-                record_contraction_route(*route);
-            }
-            let result = result
-                .map(|_| ())
-                .map_err(|error| error.into_crate_error("dot_general"));
-            #[cfg(feature = "blas")]
-            T::pool_release(buffers, work);
-            result
-        }
+    let result = plan.execute_slices_accum(
+        exec,
+        alpha,
+        (a, lhs.offset()),
+        (b, rhs.offset()),
+        beta,
+        SliceAccumulationSource::Output,
+        (d, output_offset),
+    );
+    #[cfg(test)]
+    if let Ok(route) = &result {
+        record_contraction_route(*route);
     }
+    result
+        .map(|_| ())
+        .map_err(|error| error.into_crate_error("dot_general"))
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 fn fresh<T: Scalar>(
     exec: &mut Exec<'_>,
@@ -808,8 +708,6 @@ fn fresh<T: Scalar>(
     let plan = plans.binary_plan::<T>(slot, key, config)?;
     {
         {
-            #[cfg(feature = "blas")]
-            let mut work = T::pool_acquire_zeroed(buffers, plan.work_len());
             let mut output = PooledUninitOutput::<T>::new(buffers, shape)?;
             let result = plan.execute_uninit_slices(
                 exec,
@@ -819,8 +717,6 @@ fn fresh<T: Scalar>(
                 beta,
                 SliceAccumulationSource::Absent,
                 (output.as_uninit_slice_mut(), 0),
-                #[cfg(feature = "blas")]
-                &mut work,
             );
             #[cfg(test)]
             if let Ok((_, route)) = &result {
@@ -829,8 +725,6 @@ fn fresh<T: Scalar>(
             let result = result
                 .map(|_| ())
                 .map_err(|error| error.into_crate_error("dot_general"));
-            #[cfg(feature = "blas")]
-            T::pool_release(buffers, work);
             result?;
             // SAFETY: BinaryPlan succeeded on MaybeUninit storage and proves complete
             // physical coverage. No initialized output reference existed before it.
@@ -839,7 +733,6 @@ fn fresh<T: Scalar>(
     }
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_fresh(
     exec: &mut Exec<'_>,
@@ -877,11 +770,9 @@ fn writable_view<'a>(out: TensorWrite<'a>, op: &'static str) -> crate::Result<Te
     })
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_into(
     exec: &mut Exec<'_>,
-    buffers: &mut BufferPool,
     plans: &crate::CpuPlanCache,
     slot: Option<usize>,
     lhs: TensorRead<'_>,
@@ -931,14 +822,13 @@ pub(crate) fn dot_into(
     macro_rules! dispatch {
         ($($variant:ident),*) => { match (crate::preset_view("dot_general", lhs)?, crate::preset_view("dot_general", rhs)?, out, accumulation.alpha, accumulation.beta) {
             $((TensorView::$variant(a), TensorView::$variant(b), TensorViewMut::$variant(d), ContractionScalar::$variant(alpha), ContractionScalar::$variant(beta)) =>
-                initialized(exec, buffers, plans, slot, a, b, d, config, accumulation, alpha, beta),)*
+                initialized(exec, plans, slot, a, b, d, config, accumulation, alpha, beta),)*
             _ => Err(crate::Error::runtime_state("dot_general", "operands and accumulation scalars must have matching supported dtypes")),
         } };
     }
     dispatch!(F32, F64, C32, C64)
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 impl crate::CpuPlanCache {
     /// The shared contraction plan for `key`, looked up under the cache lock
     /// and returned for execution after the lock is released.
@@ -979,59 +869,4 @@ mod retention_tests {
         assert!(unwind.is_err());
         assert_eq!(resources.workspace().retained_bytes(), 0);
     }
-}
-
-/// The typed refusal of every numerical route in a no-backend build.
-#[cfg(not(any(feature = "native", feature = "blas")))]
-pub(crate) fn no_backend(op: &'static str) -> crate::Error {
-    crate::Error::unsupported(
-        op,
-        "this build selects no CPU numerical backend; enable the `native` or `blas` feature",
-    )
-}
-
-/// Plan cache placeholder for a no-backend build.
-#[cfg(not(any(feature = "native", feature = "blas")))]
-#[derive(Debug, Default)]
-pub(crate) struct BinaryCache;
-
-#[cfg(not(any(feature = "native", feature = "blas")))]
-impl BinaryCache {
-    pub(crate) fn clear(&mut self) {}
-    pub(crate) fn stats(&self) -> tenferro_tensor::CacheStats {
-        tenferro_tensor::CacheStats::default()
-    }
-    pub(crate) fn set_capacity(&mut self, _capacity: usize) {}
-}
-
-#[cfg(not(any(feature = "native", feature = "blas")))]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn dot_fresh(
-    _exec: &mut Exec<'_>,
-    _buffers: &mut BufferPool,
-    _plans: &crate::CpuPlanCache,
-    _slot: Option<usize>,
-    _lhs: TensorRead<'_>,
-    _rhs: TensorRead<'_>,
-    _config: &DotGeneralConfig,
-    _accumulation: DotGeneralAccumulation,
-    _shape: tenferro_tensor::ShapeVec,
-) -> crate::Result<Tensor> {
-    Err(no_backend("dot_general"))
-}
-
-#[cfg(not(any(feature = "native", feature = "blas")))]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn dot_into(
-    _exec: &mut Exec<'_>,
-    _buffers: &mut BufferPool,
-    _plans: &crate::CpuPlanCache,
-    _slot: Option<usize>,
-    _lhs: TensorRead<'_>,
-    _rhs: TensorRead<'_>,
-    _config: &DotGeneralConfig,
-    _accumulation: DotGeneralAccumulation,
-    _out: TensorWrite<'_>,
-) -> crate::Result<()> {
-    Err(no_backend("dot_general"))
 }

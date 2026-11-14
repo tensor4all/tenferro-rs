@@ -38,10 +38,6 @@ mod gpu_linalg_source_contract;
 mod householder_qr;
 #[path = "integration/incremental_qr_performance_contract.rs"]
 mod incremental_qr_performance_contract;
-#[path = "integration/inject_dual_abi_tests.rs"]
-mod inject_dual_abi_tests;
-#[path = "integration/inject_tests.rs"]
-mod inject_tests;
 #[path = "integration/lane_entries.rs"]
 mod lane_entries;
 #[path = "integration/linalg_internal_path_contract.rs"]

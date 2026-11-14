@@ -48,11 +48,9 @@ println!("workers={}", engine.num_threads());
 <!-- end-snippet-source -->
 
 The worker stack size matters: provider code recurses with large private
-frames (a `NUM_THREADS=64` OpenBLAS build keeps a `job_t job[64]` on the stack
-of every recursive `dgetrf_parallel` frame), and the 2 MiB `std::thread`
-default aborts with a stack overflow at moderate matrix sizes. That is why
-`PoolBuilder` defaults to 16 MiB; lower it with `stack_size` only for pools that
-never run provider code.
+frames, and the 2 MiB `std::thread` default aborts with a stack overflow at
+moderate matrix sizes. That is why `PoolBuilder` defaults to 16 MiB; lower it
+with `stack_size` only for pools that never run provider code.
 
 ## Affinity, NUMA, And Nesting
 
@@ -108,8 +106,6 @@ if token.carries_team() {
 This keeps direct faer work on the same threads as tenferro's own operations.
 tenferro hands out no `faer::Par`; spell the types with `tenferro_cpu::faer`
 (the build tenferro links) to avoid compiling a second faer into one binary.
-This guarantee does not extend to workers created internally by OpenBLAS, MKL,
-Accelerate, or OpenMP.
 
 Work that should keep the engine's guarantees runs inside
 `engine.with_exec(|exec| ..)?` rather than on `engine.exec()?`: the closure gets
@@ -127,39 +123,8 @@ leading waits for it. Idle team members spin for 200 ms after the last
 operation, then park without using CPU; they stay reserved until the engine is
 dropped.
 
-## Vendor BLAS/LAPACK
+## Lanes
 
-A `blas` build adds cpueinsum-blas and tlinalg-blas as compiled adapters; it is
-not a vendor-only execution world, and the native path stays available inside
-it. tenferro calls the vendor from the coordinator thread and makes no placement
-or thread-count promise for the threads the vendor creates. The calling
-thread's mask is the one you control: a caller already pinned to one CPU also
-confines a newly created vendor team.
-
-A multi-worker `CpuEngine` pins the thread that built it (the team leader) to
-one CPU of its mask `S` for the engine's life (threadteam 0.5). Every LAPACK
-call of the `blas` linalg route, and the compact-QR GEMM, runs through
-`tenferro-linalg`'s `vendor_call`, which widens the leader to `S` for the call
-through threadteam's `TeamExec::external` and pins it again afterwards (two
-`sched_setaffinity` calls per vendor call on a placed leader, nothing on other
-threads). Without it, #2553 measured MKL's OpenMP team confined to one CPU: at
-4 threads with `MKL_NUM_THREADS=4`, Householder QR, full SVD and solve ran
-6-73x slower on the public-API benchmark (up to 89x in a standalone
-reproducer) than with the widening; with the count unset MKL saw one CPU
-and ran single-threaded. The vendor GEMM inside `cpueinsum-blas` is not widened
-yet. A vendor library usually fixes its worker threads' placement and count on
-its first call, so a process whose first vendor call is that GEMM keeps the
-confinement for later LAPACK calls too.
-
-Provider variables such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and
-`OMP_NUM_THREADS` still control vendor counts where supported. They are outside
-tenferro's resource contract, and a one-worker `CpuEngine` does not imply a
-one-thread vendor call.
-
-### Lanes and the vendor provider
-
-The two providers differ in what a lane can call. The native provider runs a
-factorization on a share of the engine's budget:
 `CpuEngine::with_lanes(&shares, &mut pools, |index, lane| ..)` splits the
 engine's thread budget into one lane per entry of `shares` (the shares must be
 nonzero and sum to at most the budget), pairs each lane with a caller-owned
@@ -200,31 +165,11 @@ buffer taken from the lane's pool and handed back afterwards, so the zero
 steady-state allocation promise holds only for inputs without negative strides.
 The results are bit-identical to the engine entries on the same logical matrix.
 
-The vendor provider has no lane entry, and it will not get one. A `blas`
-build has no lane factorization bodies, so there every lane operation returns
-`Unsupported`, for the reasons below:
-
-- **A vendor call takes the whole engine and the vendor's own threads.** The
-  GEMM entries of a `blas` build are the engine's operations
-  (`TensorDot` on `CpuEngine`). cpueinsum-blas runs its vendor step on the
-  library's own threads and does not use the `Exec` it is handed, so **the
-  context budget is not honoured by the vendor provider**. The vendor's width
-  comes from its process-wide setting, not from the lane.
-- **Lanes must not enter the vendor provider concurrently** unless that vendor
-  library is known to tolerate concurrent calls. Each library has one
-  process-global thread setting, so two lanes that want different widths cannot
-  both be honoured. A caller that needs per-lane widths uses the native
-  provider.
-- **There is no wrapper that simulates per-lane widths.** Setting the vendor's
-  global thread count around each lane's call would hide who owns that setting
-  instead of answering it, and two lanes would silently overwrite each other's
-  choice.
-
 ## Batched Operation Strategy
 
-Lane selection, vendor batching, and the per-item route for batched work
+Lane selection, batching, and the per-item route for batched work
 (strided-batched GEMM, packed LU factor/solve, and the batched linalg families)
-belong to the lower numerical libraries: cpueinsum, tlinalg, and tlinalg-blas.
+belong to the lower numerical libraries: cpueinsum and tlinalg.
 tenferro passes one `tcontract_exec::Exec` bundle (the placement token, the
 engine's workspace and a batch policy), and the lower library decides its own
 lanes within the token's budget by forking it.
@@ -248,9 +193,7 @@ Precedence is the innermost scope, then the engine default:
 until the shared work model lands (tcontract-rs#123 step 3): `tlinalg`'s
 64-extent RHS cutoff in the linalg lane and `cpueinsum`'s width rule in the
 contraction lane. A forced strategy is honored or refused, never silently
-downgraded to `Auto`. `tlinalg-blas` takes no `Exec` and has no tenferro lanes,
-so the BLAS linalg lane refuses a forced `Outer`, `Inner`, or `Split` before any
-write with a typed unsupported error; `Auto` and `Sequential` are accepted.
+downgraded to `Auto`.
 
 A contraction whose axes are all batch axes is an elementwise product and never
 lowers to per-element GEMMs.
@@ -263,13 +206,12 @@ operations never pay a pool entry at all, and a serial engine never touches a
 pool. A fork divides the budget among its children, so nested work inside a
 partition stays within that partition's share.
 
-For a BLAS backend the vendor owns its worker fan-out; the engine's pool is not
-used as BLAS workers. An elementwise operation adjacent to a BLAS call still
-runs on the engine's pool, never on an unconstrained global one.
+Every kernel that can fan out takes the same token, so an operation adjacent to
+a GEMM still runs on the engine's pool, never on an unconstrained global one.
 
-Supported Host instructions, native instructions, and session-capable GEMM FFI
-instructions share one engine. Extension runtimes that cannot execute through
-`Engine` remain explicit boundaries.
+Supported Host instructions and session-capable GEMM instructions share one
+engine. Extension runtimes that cannot execute through `Engine` remain explicit
+boundaries.
 
 ## Diagnostics
 

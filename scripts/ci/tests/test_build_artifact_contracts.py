@@ -164,7 +164,7 @@ class BuildArtifactContracts(unittest.TestCase):
         # registry caret requirements, so one strided source resolves in the
         # graph; the committed lock records which versions.
         providers = (
-            ("Cargo.toml", ("cpueinsum", "cpueinsum-blas", "tlinalg", "tlinalg-blas")),
+            ("Cargo.toml", ("cpueinsum", "tlinalg")),
         )
         for relative, names in providers:
             manifest = tomllib.loads((ROOT / relative).read_text())
@@ -189,10 +189,11 @@ class BuildArtifactContracts(unittest.TestCase):
         features = manifest["features"]
         dependencies = manifest["dependencies"]
 
-        self.assertIn("dep:faer", features["native"])
-        self.assertIn("dep:lapack", features["blas"])
-        self.assertTrue(dependencies["faer"]["optional"])
-        self.assertTrue(dependencies["lapack"]["optional"])
+        for vendor in ("native", "blas", "provider-inject", "blas-accelerate", "blas-mkl"):
+            self.assertNotIn(vendor, features)
+        self.assertNotIn("lapack", dependencies)
+        self.assertNotIn("optional", dependencies["faer"])
+        self.assertNotIn("optional", dependencies["tlinalg"])
 
     def test_cuda_dependencies_are_pinned_revisions(self) -> None:
         """The CUDA engine's two upstream crates are exact revisions of their releases.

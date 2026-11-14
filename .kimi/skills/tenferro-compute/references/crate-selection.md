@@ -17,8 +17,8 @@ A minimal release dependency block for a CPU concrete program is:
 
 ```toml
 [dependencies]
-tenferro-runtime = { version = "0.2", default-features = false, features = ["native"] }
-tenferro-cpu = { version = "0.2", default-features = false, features = ["native"] }
+tenferro-runtime = { version = "0.2", default-features = false }
+tenferro-cpu = { version = "0.2", default-features = false }
 ```
 
 For eager AD and linear algebra, add the owning crates and opt into the
@@ -26,10 +26,10 @@ operation family's AD rules:
 
 ```toml
 [dependencies]
-tenferro-ad = { version = "0.2", default-features = false, features = ["native"] }
-tenferro-runtime = { version = "0.2", default-features = false, features = ["native"] }
-tenferro-cpu = { version = "0.2", default-features = false, features = ["native"] }
-tenferro-linalg = { version = "0.2", default-features = false, features = ["autodiff", "native"] }
+tenferro-ad = { version = "0.2", default-features = false }
+tenferro-runtime = { version = "0.2", default-features = false }
+tenferro-cpu = { version = "0.2", default-features = false }
+tenferro-linalg = { version = "0.2", default-features = false, features = ["autodiff"] }
 ```
 
 The exact current publishable package set is discoverable without compiling:
@@ -43,23 +43,16 @@ The `publish` field identifies the packages intended for downstream use; the
 dependency. Do not hard-code a package count in tooling or skill text; query
 metadata at the revision you are using.
 
-## CPU provider features
+## No CPU backend feature
 
-Exactly one CPU backend feature must be compiled: `native` (the default, faer
-kernels plus tenferro's own thread pool) or `blas` (delegates contractions to
-cpueinsum and linear algebra to tlinalg on a vendor BLAS/LAPACK). Enabling both
-is a build error. For a BLAS build choose one provider feature such as
-`blas-openblas`, `blas-mkl`, or `blas-accelerate`; those provider choices are
-mutually exclusive.
+The CPU crates declare no backend feature. Every build links one faer-backed
+`tlinalg`/`cpueinsum`/`tcontract` stack, so nothing selects a provider and no
+system BLAS/LAPACK has to be installed. A dependency list from an older release
+still carrying `native`, `blas`, or `blas-openblas` fails with "feature does not
+exist": remove the feature and the `default-features = false` that went with it.
 
-```toml
-[dependencies]
-tenferro-runtime = { version = "0.2", default-features = false, features = ["blas"] }
-tenferro-cpu = { version = "0.2", default-features = false, features = ["blas", "blas-openblas"] }
-tenferro-linalg = { version = "0.2", default-features = false, features = ["blas", "blas-openblas"] }
-```
-
-Do not enable two BLAS provider implementations in one dependency graph.
+Features that do exist on the CPU crates are orthogonal: `autodiff` on the
+operation crates, and `ledger` where an engine-internal ledger test needs it.
 
 ## Scratch-crate workspace boundary
 

@@ -26,11 +26,26 @@ fn feature_block(manifest: &str, name: &str) -> String {
     panic!("{name} feature must be declared")
 }
 
+/// One declared feature block, or the empty string when the crate has no such feature.
+///
+/// A crate whose backend is unconditional declares no `default` feature at all, which satisfies
+/// "no GPU provider by default" more strongly than an empty `default = []` would.
+fn optional_feature_block(manifest: &str, name: &str) -> String {
+    let prefix = format!("{name} = [");
+    match manifest
+        .lines()
+        .position(|line| line.trim_start().starts_with(&prefix))
+    {
+        Some(_) => feature_block(manifest, name),
+        None => String::new(),
+    }
+}
+
 #[test]
 fn gpu_backend_features_are_explicit_and_additive() {
     let manifest = repo_file("crates/tenferro-gpu/Cargo.toml");
 
-    let default_feature = feature_block(&manifest, "default");
+    let default_feature = optional_feature_block(&manifest, "default");
     assert!(
         !default_feature.contains("cuda"),
         "GPU backend providers must not be enabled by default"
@@ -60,7 +75,7 @@ fn downstream_gpu_features_are_explicit_and_additive() {
         "crates/tenferro-einsum/Cargo.toml",
     ] {
         let manifest = repo_file(manifest_path);
-        let default_feature = feature_block(&manifest, "default");
+        let default_feature = optional_feature_block(&manifest, "default");
         assert!(
             !default_feature.contains("cuda"),
             "{manifest_path} must not enable GPU providers by default"

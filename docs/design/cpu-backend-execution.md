@@ -14,18 +14,13 @@ the declared mask instead of owning one CPU each, because provider-created
 threads inherit the creating worker's mask and a one-CPU mask would confine a
 provider's whole thread team.
 
-## Provider Selection Is Compile-Time
+## No Provider Selection
 
-Exactly one CPU backend is compiled: `native` (the default) or `blas`.
-
-- `native` uses faer-backed tlinalg plus cpueinsum/tcontract.
-- `blas` adds the `cpueinsum-blas` and `tlinalg-blas` adapters and keeps the
-  native path for steps those adapters decline.
-
-Enabling both, or neither, is a compile-time error. There is no runtime
-provider kind, provider bundle, kernel slot, or per-handle provider selection.
-`tenferro_cpu::cpu_provider_id()` names the compiled provider for diagnostics
-only; it is not a dispatch key.
+There is nothing to compile in or out: every build links the same CPU stack —
+faer-backed `tlinalg` for linalg plus `cpueinsum`/`tcontract` for contraction.
+There is no backend feature, no runtime provider kind, no kernel slot, and no
+per-handle provider selection. `tenferro_cpu::cpu_provider_id()` names the
+compiled provider for diagnostics only; it is not a dispatch key.
 
 ## Engine Ownership And Entry
 
@@ -66,30 +61,17 @@ caller's continuation.
 A caller that wants concurrent numerical work holds several engines over several
 pools, and each engine is used from one calling thread at a time. tenferro hands
 out its provider bundle for one engine but never installs the caller's
-continuation, and vendor threading remains outside tenferro's budget.
+continuation.
 
-Vendor BLAS/LAPACK is called from the coordinator thread. tenferro guarantees
-nothing about the vendor's own worker team, thread count, or placement;
-`num_threads() == 1` on a tenferro engine does not imply a one-thread vendor
-call.
-
-The token is not uniform across the two linalg providers, by design: the
-faer-backed `tlinalg` owns batch lanes and takes a `tcontract_exec::Exec` (token
-plus workspace plus the resolved batch policy), while `tlinalg-blas` is
-deliberately token-free because LAPACK/BLAS own their own threading, its batch
-loop is serial, and a Rayon fan-out around a vendor call would fight the
-vendor's own pool. The host places the vendor call instead; its scratch still
-comes from tenferro's buffer pool through the workspace seam. Because the BLAS
-linalg lane has no `Exec` and no tenferro lanes, tenferro refuses a forced batch
-strategy there before any write with a typed unsupported error; see the
-[CPU-execution guide's Batched Operation Strategy](../guides/cpu-execution.md#batched-operation-strategy).
+The linalg provider owns batch lanes and takes a `tcontract_exec::Exec` (token
+plus workspace plus the resolved batch policy), so a lane is honoured there like
+anywhere else.
 
 ## Data Path
 
 CPU floating/complex `dot_general` and grouped GEMM go to cpueinsum prepared
 binary/grouped plans; CPU N-ary concrete einsum delegates to cpueinsum with the
-order tenferro's planner selected; CPU linalg families go to tlinalg /
-tlinalg-blas. The integer/all-batch elementwise contraction stays in
+order tenferro's planner selected; CPU linalg families go to tlinalg. The integer/all-batch elementwise contraction stays in
 tenferro-cpu. tenferro keeps axis, layout, dtype, placement, and output-form
 validation, the `MaybeUninit` complete-coverage proof for fresh binary outputs,
 and the typed unsupported mapping.

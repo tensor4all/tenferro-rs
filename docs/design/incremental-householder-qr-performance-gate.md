@@ -1,5 +1,9 @@
 # Incremental Householder QR Phase 5 performance gate
 
+> **#2608:** the CPU-BLAS/LAPACK provider described below was deleted; a `CpuEngine` is
+> faer-backed, unconditionally. The BLAS half of every parity, gate and verification
+> requirement recorded here is history, not work anyone can run.
+
 ### Scope and immutable identities
 
 Phase 5 adds the benchmark/gate harness and user documentation. A failed

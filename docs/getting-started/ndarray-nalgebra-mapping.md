@@ -78,23 +78,20 @@ Constructing an engine per call discards the buffer pool and cache each time,
 and defeats reuse of compiled programs. The same rule applies across the tiers —
 see the [performance idioms reference](https://tensor4all.org/tenferro-rs/skill-references/performance-idioms.md).
 
-## faer vs BLAS providers
+## One CPU provider: faer
 
-tenferro's CPU crates have two provider families selected by mutually exclusive
-Cargo features: the `native` provider and the `blas` provider. `ndarray-linalg`
-users know feature-based BLAS selection; tenferro's knobs live in the
-`tenferro-cpu` (and `tenferro-runtime`) features.
+`ndarray-linalg` users know feature-based BLAS selection. tenferro has no such
+knob: the CPU crates declare no backend feature, and every build links the same
+faer-backed `tlinalg`/`cpueinsum`/`tcontract` stack. A dependency list copied
+from an older tenferro version still carrying `native`, `blas`, or
+`blas-openblas` fails with "feature does not exist" — remove the feature and the
+`default-features = false` that went with it.
 
-| Provider | Features | When to use |
-| --- | --- | --- |
-| faer (default) | `native` | Portable, pure Rust, no system dependencies; the right default for most workloads |
-| BLAS / LAPACK | `blas` plus exactly one explicit provider feature | Large GEMM-dominated workloads, or to reuse an already-tuned system BLAS |
-
-A build enables at most one of `native` and `blas`, and that provider is what
-every `CpuEngine` in the process uses. Enabling both is rejected at compile time,
-and so is enabling more than one of the three explicit BLAS provider features
-(`blas-openblas`, `blas-mkl`, `blas-accelerate`). A build with neither provider
-compiles and returns a typed `Unsupported` from the numerical routes.
+Like `ndarray-linalg`'s system BLAS, the numeric library is fixed at build time;
+unlike it, nothing about it has to match a system installation, so `cargo build`
+on any host produces a working `CpuEngine`. The GPU crates keep explicit
+features (`tenferro-gpu` `cuda`), which is where `ndarray` users would otherwise
+expect an ambient choice.
 
 ## Operation arity: `.dot()` to `matmul`
 

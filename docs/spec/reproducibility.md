@@ -14,12 +14,9 @@ count** — across fresh threads, processes and repeated runs. That is the whole
 
 The count is pinned explicitly, by building the `CpuEngine` pool with the width you want
 ([Parallelism and Caching](../guides/parallelism-and-caching.md#cpu-thread-count)); it is never
-inherited from an environment variable. A `blas` build is only half pinned by that: the pool
-bounds tenferro-owned work, while the linked provider keeps its own thread controls
-(`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `OMP_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`). Pin
-those too before comparing bits; otherwise the pool width is unchanged and the vendor still
-changes its own threading
-([BLAS And LAPACK Threads](../guides/parallelism-and-caching.md#blas-and-lapack-threads)).
+inherited from an environment variable. The pool is the only CPU thread control: the faer backend
+has no thread pool of its own and reads no vendor thread variable, so nothing outside the pool
+changes how many threads run.
 
 ## What is not promised
 

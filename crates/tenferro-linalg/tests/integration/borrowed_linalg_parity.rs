@@ -6,8 +6,6 @@
 //! borrowed contract itself: the same result as the owned call, an untouched
 //! source, and a typed refusal for dtypes the provider never sees.
 
-#![cfg(any(feature = "native", feature = "blas"))]
-
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{Diag, Eig, LinalgOps, MatOp, Side, TriangularSolveOptions, Uplo};
@@ -15,11 +13,12 @@ use tenferro_tensor::{
     DType, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorView, TypedTensor,
 };
 
-/// The compile-time CPU linalg provider this build selected.
-fn providers() -> Vec<(&'static str, CpuEngine)> {
-    let name = tenferro_cpu::cpu_provider_id();
-    let backend = tenferro_cpu::CpuEngine::serial();
-    vec![(name, backend)]
+/// The CPU linalg provider this build selected.
+fn provider() -> (&'static str, CpuEngine) {
+    (
+        tenferro_cpu::cpu_provider_id(),
+        tenferro_cpu::CpuEngine::serial(),
+    )
 }
 
 /// A non-symmetric matrix with distinct real eigenvalues, so the spectrum is
@@ -125,40 +124,39 @@ const DTYPES: [DType; 4] = [DType::F32, DType::F64, DType::C32, DType::C64];
 
 #[test]
 fn borrowed_eig_and_eigvals_match_the_owned_call_for_every_dtype() {
-    for (provider, mut host) in providers() {
-        for dtype in DTYPES {
-            let n = 4;
-            let input = tensor_of(dtype, &[n, n], &sample_real(n), &sample_imag(n));
-            let tol = tolerance(dtype);
+    let (provider, mut host) = provider();
+    for dtype in DTYPES {
+        let n = 4;
+        let input = tensor_of(dtype, &[n, n], &sample_real(n), &sample_imag(n));
+        let tol = tolerance(dtype);
 
-            {
-                let Eig {
-                    values: owned_values,
-                    vectors: owned_vectors,
-                } = input.eig(&mut host).unwrap();
-                let Eig {
-                    values: read_values,
-                    vectors: read_vectors,
-                } = TensorRead::from_tensor(&input).eig(&mut host).unwrap();
-                assert_eq!(read_values.shape(), owned_values.shape());
-                assert_eq!(read_vectors.shape(), owned_vectors.shape());
-                assert_same_spectrum(
-                    &complex_values(&read_values),
-                    &complex_values(&owned_values),
-                    tol,
-                    &format!("{provider}/{dtype:?} eig_read"),
-                );
+        {
+            let Eig {
+                values: owned_values,
+                vectors: owned_vectors,
+            } = input.eig(&mut host).unwrap();
+            let Eig {
+                values: read_values,
+                vectors: read_vectors,
+            } = TensorRead::from_tensor(&input).eig(&mut host).unwrap();
+            assert_eq!(read_values.shape(), owned_values.shape());
+            assert_eq!(read_vectors.shape(), owned_vectors.shape());
+            assert_same_spectrum(
+                &complex_values(&read_values),
+                &complex_values(&owned_values),
+                tol,
+                &format!("{provider}/{dtype:?} eig_read"),
+            );
 
-                let owned_only = input.eigvals(&mut host).unwrap();
-                let read_only = TensorRead::from_tensor(&input).eigvals(&mut host).unwrap();
-                assert_eq!(read_only.shape(), owned_only.shape());
-                assert_same_spectrum(
-                    &complex_values(&read_only),
-                    &complex_values(&owned_only),
-                    tol,
-                    &format!("{provider}/{dtype:?} eigvals_read"),
-                );
-            }
+            let owned_only = input.eigvals(&mut host).unwrap();
+            let read_only = TensorRead::from_tensor(&input).eigvals(&mut host).unwrap();
+            assert_eq!(read_only.shape(), owned_only.shape());
+            assert_same_spectrum(
+                &complex_values(&read_only),
+                &complex_values(&owned_only),
+                tol,
+                &format!("{provider}/{dtype:?} eigvals_read"),
+            );
         }
     }
 }
@@ -169,124 +167,117 @@ fn borrowed_eig_consumes_strided_and_reversed_views_without_touching_the_source(
     // strided `MatRef`; the reversed view has negative strides, so the provider
     // packs it first. Both must agree with the owned decomposition of the same
     // logical elements, and neither may modify the source.
-    for (provider, mut host) in providers() {
-        let n = 3;
-        let base = TypedTensor::<f64>::from_vec_col_major(vec![n, n], sample_real(n)).unwrap();
-        let original = base.host_data().unwrap().to_vec();
+    let (provider, mut host) = provider();
+    let n = 3;
+    let base = TypedTensor::<f64>::from_vec_col_major(vec![n, n], sample_real(n)).unwrap();
+    let original = base.host_data().unwrap().to_vec();
 
-        for (label, view) in [
-            ("transposed", base.as_view().transpose_view([1, 0]).unwrap()),
-            (
-                "reversed",
-                base.as_view()
-                    .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
-                    .unwrap(),
-            ),
-        ] {
-            let mut expected_data = vec![0.0_f64; n * n];
-            for col in 0..n {
-                for row in 0..n {
-                    expected_data[row + col * n] = *view.get(&[row, col]).unwrap();
-                }
+    for (label, view) in [
+        ("transposed", base.as_view().transpose_view([1, 0]).unwrap()),
+        (
+            "reversed",
+            base.as_view()
+                .slice_view(&[StridedSliceSpec::reverse(), StridedSliceSpec::reverse()])
+                .unwrap(),
+        ),
+    ] {
+        let mut expected_data = vec![0.0_f64; n * n];
+        for col in 0..n {
+            for row in 0..n {
+                expected_data[row + col * n] = *view.get(&[row, col]).unwrap();
             }
-            let expected = Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![n, n], expected_data).unwrap(),
+        }
+        let expected = Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![n, n], expected_data).unwrap(),
+        );
+
+        {
+            let owned = expected.eigvals(&mut host).unwrap();
+            let borrowed = TensorRead::from_view(TensorView::F64(view.clone()))
+                .eigvals(&mut host)
+                .unwrap();
+            assert_same_spectrum(
+                &complex_values(&borrowed),
+                &complex_values(&owned),
+                1.0e-9,
+                &format!("{provider}/{label}"),
             );
 
-            {
-                let owned = expected.eigvals(&mut host).unwrap();
-                let borrowed = TensorRead::from_view(TensorView::F64(view.clone()))
-                    .eigvals(&mut host)
-                    .unwrap();
-                assert_same_spectrum(
-                    &complex_values(&borrowed),
-                    &complex_values(&owned),
-                    1.0e-9,
-                    &format!("{provider}/{label}"),
-                );
-
-                let Eig { values, vectors } = TensorRead::from_view(TensorView::F64(view.clone()))
-                    .eig(&mut host)
-                    .unwrap();
-                assert_eq!(vectors.shape(), &[n, n]);
-                assert_same_spectrum(
-                    &complex_values(&values),
-                    &complex_values(&owned),
-                    1.0e-9,
-                    &format!("{provider}/{label} eig_read"),
-                );
-            };
-        }
-
-        assert_eq!(
-            base.host_data().unwrap(),
-            original.as_slice(),
-            "{provider}: borrowed eigensolver must not modify its source"
-        );
+            let Eig { values, vectors } = TensorRead::from_view(TensorView::F64(view.clone()))
+                .eig(&mut host)
+                .unwrap();
+            assert_eq!(vectors.shape(), &[n, n]);
+            assert_same_spectrum(
+                &complex_values(&values),
+                &complex_values(&owned),
+                1.0e-9,
+                &format!("{provider}/{label} eig_read"),
+            );
+        };
     }
+
+    assert_eq!(
+        base.host_data().unwrap(),
+        original.as_slice(),
+        "{provider}: borrowed eigensolver must not modify its source"
+    );
 }
 
 #[test]
 fn borrowed_eig_falls_back_for_batched_views_and_keeps_batch_shapes() {
     // A rank-3 view is not a faer `MatRef`, so this exercises the packing
     // fallback while still owing the same batched output shapes.
-    for (provider, mut host) in providers() {
-        let (n, batch) = (2_usize, 2_usize);
-        let data: Vec<f64> = (0..n * n * batch).map(|value| 1.0 + value as f64).collect();
-        let input = Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![n, n, batch], data).unwrap(),
+    let (provider, mut host) = provider();
+    let (n, batch) = (2_usize, 2_usize);
+    let data: Vec<f64> = (0..n * n * batch).map(|value| 1.0 + value as f64).collect();
+    let input = Tensor::from_typed::<f64>(
+        TypedTensor::from_vec_col_major(vec![n, n, batch], data).unwrap(),
+    );
+    {
+        let owned = input.eigvals(&mut host).unwrap();
+        let borrowed = TensorRead::from_tensor(&input).eigvals(&mut host).unwrap();
+        assert_eq!(owned.shape(), &[n, batch]);
+        assert_eq!(borrowed.shape(), owned.shape());
+        assert_same_spectrum(
+            &complex_values(&borrowed),
+            &complex_values(&owned),
+            1.0e-9,
+            provider,
         );
-        {
-            let owned = input.eigvals(&mut host).unwrap();
-            let borrowed = TensorRead::from_tensor(&input).eigvals(&mut host).unwrap();
-            assert_eq!(owned.shape(), &[n, batch]);
-            assert_eq!(borrowed.shape(), owned.shape());
-            assert_same_spectrum(
-                &complex_values(&borrowed),
-                &complex_values(&owned),
-                1.0e-9,
-                provider,
-            );
-        };
-    }
+    };
 }
 
 #[test]
 fn borrowed_eig_keeps_empty_shapes() {
-    for (provider, mut host) in providers() {
-        let input = Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![0, 0], Vec::new()).unwrap(),
-        );
-        {
-            let values = TensorRead::from_tensor(&input).eigvals(&mut host).unwrap();
-            assert_eq!(values.shape(), &[0], "{provider}: empty eigenvalue shape");
-            assert_eq!(values.dtype(), DType::C64);
-            let Eig { values, vectors } = TensorRead::from_tensor(&input).eig(&mut host).unwrap();
-            assert_eq!(values.shape(), &[0]);
-            assert_eq!(vectors.shape(), &[0, 0]);
-        };
-    }
+    let (provider, mut host) = provider();
+    let input =
+        Tensor::from_typed::<f64>(TypedTensor::from_vec_col_major(vec![0, 0], Vec::new()).unwrap());
+    {
+        let values = TensorRead::from_tensor(&input).eigvals(&mut host).unwrap();
+        assert_eq!(values.shape(), &[0], "{provider}: empty eigenvalue shape");
+        assert_eq!(values.dtype(), DType::C64);
+        let Eig { values, vectors } = TensorRead::from_tensor(&input).eig(&mut host).unwrap();
+        assert_eq!(values.shape(), &[0]);
+        assert_eq!(vectors.shape(), &[0, 0]);
+    };
 }
 
 #[test]
 fn borrowed_eigvals_rejects_unsupported_dtypes_before_provider_entry() {
-    for (provider, mut host) in providers() {
-        let input =
-            TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
-        {
-            let error = TensorRead::from_view(TensorView::I64(input.as_view()))
-                .eigvals(&mut host)
-                .unwrap_err();
-            assert_eq!(
-                error.kind(),
-                ErrorKind::Unsupported,
-                "{provider}: integer eigenvalues must be refused"
-            );
-        };
-    }
+    let (provider, mut host) = provider();
+    let input = TypedTensor::<i64>::from_vec_col_major(vec![2, 2], vec![1_i64, 2, 3, 4]).unwrap();
+    {
+        let error = TensorRead::from_view(TensorView::I64(input.as_view()))
+            .eigvals(&mut host)
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            ErrorKind::Unsupported,
+            "{provider}: integer eigenvalues must be refused"
+        );
+    };
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn faer_eig_view_path_does_not_pool_an_input_copy() {
     // Same shape, same outputs, two eligibility stories: a compact owned read
@@ -363,61 +354,60 @@ fn borrowed_rank_revealing_qr_matches_the_owned_call() {
     let (rows, cols) = (4_usize, 3_usize);
     let expected = transposed_pair(&base, rows, cols);
 
-    for (provider, mut host) in providers() {
-        let options = RankRevealingQrOptions::default().rtol(1.0e-12);
-        {
-            let owned = expected
-                .rank_revealing_qr_with(&options, &mut host)
-                .unwrap();
-            let view = base.as_view().transpose_view([1, 0]).unwrap();
-            let borrowed = TensorRead::from_view(TensorView::F64(view))
-                .rank_revealing_qr_with(&options, &mut host)
-                .unwrap();
+    let (provider, mut host) = provider();
+    let options = RankRevealingQrOptions::default().rtol(1.0e-12);
+    {
+        let owned = expected
+            .rank_revealing_qr_with(&options, &mut host)
+            .unwrap();
+        let view = base.as_view().transpose_view([1, 0]).unwrap();
+        let borrowed = TensorRead::from_view(TensorView::F64(view))
+            .rank_revealing_qr_with(&options, &mut host)
+            .unwrap();
 
-            assert_eq!(borrowed.q.shape(), owned.q.shape(), "{provider}: Q shape");
-            assert_eq!(borrowed.r.shape(), owned.r.shape(), "{provider}: R shape");
-            assert_eq!(
-                borrowed.rank.as_slice::<i64>().unwrap(),
-                owned.rank.as_slice::<i64>().unwrap(),
-                "{provider}: rank"
-            );
-            assert_eq!(
-                borrowed.column_permutation.as_slice::<i64>().unwrap(),
-                owned.column_permutation.as_slice::<i64>().unwrap(),
-                "{provider}: permutation"
-            );
+        assert_eq!(borrowed.q.shape(), owned.q.shape(), "{provider}: Q shape");
+        assert_eq!(borrowed.r.shape(), owned.r.shape(), "{provider}: R shape");
+        assert_eq!(
+            borrowed.rank.as_slice::<i64>().unwrap(),
+            owned.rank.as_slice::<i64>().unwrap(),
+            "{provider}: rank"
+        );
+        assert_eq!(
+            borrowed.column_permutation.as_slice::<i64>().unwrap(),
+            owned.column_permutation.as_slice::<i64>().unwrap(),
+            "{provider}: permutation"
+        );
 
-            // The factorization is verified by its own contract, not by
-            // comparing bytes with the owned run: Q is isometric and
-            // `Q R = A P`.
-            let q = borrowed.q.as_slice::<f64>().unwrap();
-            let r = borrowed.r.as_slice::<f64>().unwrap();
-            let permutation = borrowed.column_permutation.as_slice::<i64>().unwrap();
-            let source = expected.as_slice::<f64>().unwrap();
-            let k = rows.min(cols);
-            for left in 0..k {
-                for right in 0..k {
-                    let inner: f64 = (0..rows)
-                        .map(|row| q[row + left * rows] * q[row + right * rows])
-                        .sum();
-                    let want = if left == right { 1.0 } else { 0.0 };
-                    assert!((inner - want).abs() < 1.0e-10, "{provider}: Q^T Q");
-                }
+        // The factorization is verified by its own contract, not by
+        // comparing bytes with the owned run: Q is isometric and
+        // `Q R = A P`.
+        let q = borrowed.q.as_slice::<f64>().unwrap();
+        let r = borrowed.r.as_slice::<f64>().unwrap();
+        let permutation = borrowed.column_permutation.as_slice::<i64>().unwrap();
+        let source = expected.as_slice::<f64>().unwrap();
+        let k = rows.min(cols);
+        for left in 0..k {
+            for right in 0..k {
+                let inner: f64 = (0..rows)
+                    .map(|row| q[row + left * rows] * q[row + right * rows])
+                    .sum();
+                let want = if left == right { 1.0 } else { 0.0 };
+                assert!((inner - want).abs() < 1.0e-10, "{provider}: Q^T Q");
             }
-            for factor_col in 0..cols {
-                let source_col = usize::try_from(permutation[factor_col]).unwrap();
-                for row in 0..rows {
-                    let reconstructed: f64 = (0..k)
-                        .map(|inner| q[row + inner * rows] * r[inner + factor_col * k])
-                        .sum();
-                    assert!(
-                        (reconstructed - source[row + source_col * rows]).abs() < 1.0e-10,
-                        "{provider}: Q R = A P"
-                    );
-                }
+        }
+        for factor_col in 0..cols {
+            let source_col = usize::try_from(permutation[factor_col]).unwrap();
+            for row in 0..rows {
+                let reconstructed: f64 = (0..k)
+                    .map(|inner| q[row + inner * rows] * r[inner + factor_col * k])
+                    .sum();
+                assert!(
+                    (reconstructed - source[row + source_col * rows]).abs() < 1.0e-10,
+                    "{provider}: Q R = A P"
+                );
             }
-        };
-    }
+        }
+    };
 
     assert_eq!(
         base.host_data().unwrap(),
@@ -428,33 +418,31 @@ fn borrowed_rank_revealing_qr_matches_the_owned_call() {
 
 #[test]
 fn borrowed_rank_revealing_qr_keeps_the_zero_and_non_finite_guards() {
-    for (provider, mut host) in providers() {
-        let zeros = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
-        {
-            let view = zeros.as_view().transpose_view([1, 0]).unwrap();
-            let result = TensorRead::from_view(TensorView::F64(view))
-                .rank_revealing_qr(&mut host)
-                .unwrap();
-            assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[0], "{provider}");
-            assert_eq!(result.q.shape(), &[3, 2]);
-            assert_eq!(result.r.shape(), &[2, 2]);
-        };
+    let (provider, mut host) = provider();
+    let zeros = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+    {
+        let view = zeros.as_view().transpose_view([1, 0]).unwrap();
+        let result = TensorRead::from_view(TensorView::F64(view))
+            .rank_revealing_qr(&mut host)
+            .unwrap();
+        assert_eq!(result.rank.as_slice::<i64>().unwrap(), &[0], "{provider}");
+        assert_eq!(result.q.shape(), &[3, 2]);
+        assert_eq!(result.r.shape(), &[2, 2]);
+    };
 
-        let non_finite =
-            TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, f64::NAN, 0.0, 1.0])
-                .unwrap();
-        {
-            let view = non_finite.as_view().transpose_view([1, 0]).unwrap();
-            let error = TensorRead::from_view(TensorView::F64(view))
-                .rank_revealing_qr(&mut host)
-                .unwrap_err();
-            assert_eq!(
-                error.kind(),
-                ErrorKind::NumericalFailure,
-                "{provider}: non-finite input must be refused"
-            );
-        };
-    }
+    let non_finite =
+        TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, f64::NAN, 0.0, 1.0]).unwrap();
+    {
+        let view = non_finite.as_view().transpose_view([1, 0]).unwrap();
+        let error = TensorRead::from_view(TensorView::F64(view))
+            .rank_revealing_qr(&mut host)
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            ErrorKind::NumericalFailure,
+            "{provider}: non-finite input must be refused"
+        );
+    };
 }
 
 #[test]
@@ -479,91 +467,52 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
     // `b` transposed is 3 x 2, the shape a left-side solve needs.
     let b_owned = transposed_pair(&b_base, 3, 2);
 
-    for (provider, mut host) in providers() {
-        for (lower, transpose_a, unit_diagonal) in [
-            (true, false, false),
-            (true, true, false),
-            (false, false, false),
-            (true, false, true),
-        ] {
-            {
-                let owned = a_owned
-                    .triangular_solve_with(
-                        &b_owned,
-                        &TriangularSolveOptions::default()
-                            .uplo(if lower { Uplo::Lower } else { Uplo::Upper })
-                            .op(if transpose_a {
-                                MatOp::Transpose
-                            } else {
-                                MatOp::None
-                            })
-                            .diag(if unit_diagonal {
-                                Diag::Unit
-                            } else {
-                                Diag::NonUnit
-                            }),
-                        &mut host,
-                    )
-                    .unwrap();
-                let b_view = b_base.as_view().transpose_view([1, 0]).unwrap();
-                let borrowed = TensorRead::from_tensor(&a_owned)
-                    .triangular_solve_with(
-                        &TensorRead::from_view(TensorView::F64(b_view)),
-                        &TriangularSolveOptions::default()
-                            .uplo(if lower { Uplo::Lower } else { Uplo::Upper })
-                            .op(if transpose_a {
-                                MatOp::Transpose
-                            } else {
-                                MatOp::None
-                            })
-                            .diag(if unit_diagonal {
-                                Diag::Unit
-                            } else {
-                                Diag::NonUnit
-                            }),
-                        &mut host,
-                    )
-                    .unwrap();
-                assert_eq!(borrowed.shape(), owned.shape());
-                for (borrowed, owned) in borrowed
-                    .as_slice::<f64>()
-                    .unwrap()
-                    .iter()
-                    .zip(owned.as_slice::<f64>().unwrap())
-                {
-                    assert!(
-                        (borrowed - owned).abs() < 1.0e-10,
-                        "{provider}: borrowed and owned triangular solve disagree"
-                    );
-                }
-            };
-        }
-
-        // Right-side solve `X A = B` with a strided `A` view.
+    let (provider, mut host) = provider();
+    for (lower, transpose_a, unit_diagonal) in [
+        (true, false, false),
+        (true, true, false),
+        (false, false, false),
+        (true, false, true),
+    ] {
         {
-            let rhs = Tensor::from_typed::<f64>(
-                TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, -2.0, 0.5, 3.0, 1.5])
-                    .unwrap(),
-            );
             let owned = a_owned
                 .triangular_solve_with(
-                    &rhs,
-                    &TriangularSolveOptions::default().side(Side::Right),
-                    &mut host,
-                )
-                .unwrap();
-            let a_view = a_base.as_view().transpose_view([1, 0]).unwrap();
-            let borrowed = TensorRead::from_view(TensorView::F64(a_view))
-                .triangular_solve_with(
-                    &TensorRead::from_tensor(&rhs),
+                    &b_owned,
                     &TriangularSolveOptions::default()
-                        .side(Side::Right)
-                        .uplo(Uplo::Upper)
-                        .op(MatOp::Transpose),
+                        .uplo(if lower { Uplo::Lower } else { Uplo::Upper })
+                        .op(if transpose_a {
+                            MatOp::Transpose
+                        } else {
+                            MatOp::None
+                        })
+                        .diag(if unit_diagonal {
+                            Diag::Unit
+                        } else {
+                            Diag::NonUnit
+                        }),
                     &mut host,
                 )
                 .unwrap();
-            assert_eq!(borrowed.shape(), owned.shape(), "{provider}");
+            let b_view = b_base.as_view().transpose_view([1, 0]).unwrap();
+            let borrowed = TensorRead::from_tensor(&a_owned)
+                .triangular_solve_with(
+                    &TensorRead::from_view(TensorView::F64(b_view)),
+                    &TriangularSolveOptions::default()
+                        .uplo(if lower { Uplo::Lower } else { Uplo::Upper })
+                        .op(if transpose_a {
+                            MatOp::Transpose
+                        } else {
+                            MatOp::None
+                        })
+                        .diag(if unit_diagonal {
+                            Diag::Unit
+                        } else {
+                            Diag::NonUnit
+                        }),
+                    &mut host,
+                )
+                .unwrap();
+            assert_eq!(borrowed.shape(), owned.shape());
             for (borrowed, owned) in borrowed
                 .as_slice::<f64>()
                 .unwrap()
@@ -572,11 +521,49 @@ fn borrowed_triangular_solve_matches_the_owned_call_on_both_sides() {
             {
                 assert!(
                     (borrowed - owned).abs() < 1.0e-10,
-                    "{provider}: right-side borrowed solve disagrees"
+                    "{provider}: borrowed and owned triangular solve disagree"
                 );
             }
         };
     }
+
+    // Right-side solve `X A = B` with a strided `A` view.
+    {
+        let rhs = Tensor::from_typed::<f64>(
+            TypedTensor::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, -2.0, 0.5, 3.0, 1.5])
+                .unwrap(),
+        );
+        let owned = a_owned
+            .triangular_solve_with(
+                &rhs,
+                &TriangularSolveOptions::default().side(Side::Right),
+                &mut host,
+            )
+            .unwrap();
+        let a_view = a_base.as_view().transpose_view([1, 0]).unwrap();
+        let borrowed = TensorRead::from_view(TensorView::F64(a_view))
+            .triangular_solve_with(
+                &TensorRead::from_tensor(&rhs),
+                &TriangularSolveOptions::default()
+                    .side(Side::Right)
+                    .uplo(Uplo::Upper)
+                    .op(MatOp::Transpose),
+                &mut host,
+            )
+            .unwrap();
+        assert_eq!(borrowed.shape(), owned.shape(), "{provider}");
+        for (borrowed, owned) in borrowed
+            .as_slice::<f64>()
+            .unwrap()
+            .iter()
+            .zip(owned.as_slice::<f64>().unwrap())
+        {
+            assert!(
+                (borrowed - owned).abs() < 1.0e-10,
+                "{provider}: right-side borrowed solve disagrees"
+            );
+        }
+    };
 
     assert_eq!(a_base.host_data().unwrap(), a_original.as_slice());
     assert_eq!(b_base.host_data().unwrap(), b_original.as_slice());
@@ -592,23 +579,22 @@ fn borrowed_triangular_solve_rejects_a_vector_right_hand_side_like_the_owned_cal
     let b_owned = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![2.0, 8.0]).unwrap(),
     );
-    for (provider, mut host) in providers() {
-        {
-            let owned = a
-                .triangular_solve_with(&b_owned, &TriangularSolveOptions::default(), &mut host)
-                .unwrap_err();
-            let borrowed = TensorRead::from_tensor(&a)
-                .triangular_solve_with(
-                    &TensorRead::from_view(TensorView::F64(b.as_view())),
-                    &TriangularSolveOptions::default(),
-                    &mut host,
-                )
-                .unwrap_err();
-            assert_eq!(
-                owned.kind(),
-                borrowed.kind(),
-                "{provider}: owned and borrowed triangular solve must refuse alike"
-            );
-        };
-    }
+    let (provider, mut host) = provider();
+    {
+        let owned = a
+            .triangular_solve_with(&b_owned, &TriangularSolveOptions::default(), &mut host)
+            .unwrap_err();
+        let borrowed = TensorRead::from_tensor(&a)
+            .triangular_solve_with(
+                &TensorRead::from_view(TensorView::F64(b.as_view())),
+                &TriangularSolveOptions::default(),
+                &mut host,
+            )
+            .unwrap_err();
+        assert_eq!(
+            owned.kind(),
+            borrowed.kind(),
+            "{provider}: owned and borrowed triangular solve must refuse alike"
+        );
+    };
 }

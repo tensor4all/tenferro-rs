@@ -1,4 +1,10 @@
-//! CPU execution engine, kernels and provider selection.
+//! CPU execution engine and kernels.
+//!
+//! There is one CPU backend: faer-backed `tlinalg` for linalg and
+//! `cpueinsum`/`tcontract` for contraction, linked unconditionally. The crate has
+//! no backend feature; its only two features, `ledger` and `route-report`, are
+//! off by default, gate host-check hooks that are `#[doc(hidden)]`, and change no
+//! numerical path.
 //!
 //! A [`CpuEngine`] owns one [`Pool`] built by the caller (or none) and the
 //! workspace its operations write. Every operation takes the engine as `&mut`:
@@ -20,21 +26,6 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 #![cfg_attr(docsrs, feature(doc_cfg))]
-// With neither backend the numerical routes are unreachable by design, so the
-// implementation they would call is dead code in that configuration only.
-#![cfg_attr(
-    all(not(feature = "native"), not(feature = "blas")),
-    allow(dead_code, unused_imports)
-)]
-// `provider-inject` unit tests deliberately omit the broad default-backend
-// suite below because no fixture has registered its FFI symbols. That makes
-// private helpers referenced only by the broad suite appear unused in this one
-// test build; call-through coverage lives in the registered integration test.
-#![cfg_attr(
-    all(test, feature = "provider-inject"),
-    allow(dead_code, unused_imports)
-)]
-
 /// The Rust scalar type behind a preset variant name a macro received.
 macro_rules! preset_scalar {
     (F32) => {
@@ -59,36 +50,6 @@ macro_rules! preset_scalar {
         num_complex::Complex64
     };
 }
-// A build with neither backend compiles: the CPU numerical routes report a
-// typed `Unsupported` instead. `native` is the default feature, so a normal
-// dependency always gets a backend, and selecting `blas` alone is the supported
-// alternative. This keeps any subset of the stack compilable, which is what
-// consumers that select a backend crate by crate rely on.
-#[cfg(all(feature = "native", feature = "blas"))]
-compile_error!("native and blas are mutually exclusive; use --no-default-features for blas");
-
-#[cfg(all(feature = "provider-inject", not(feature = "blas")))]
-compile_error!("provider-inject requires blas");
-
-#[cfg(any(
-    all(feature = "blas-openblas", feature = "blas-accelerate"),
-    all(feature = "blas-openblas", feature = "blas-mkl"),
-    all(feature = "blas-accelerate", feature = "blas-mkl"),
-))]
-compile_error!(
-    "enable at most one explicit BLAS provider feature: blas-openblas, blas-accelerate, or blas-mkl"
-);
-
-#[cfg(all(
-    feature = "provider-inject",
-    any(
-        feature = "blas-openblas",
-        feature = "blas-accelerate",
-        feature = "blas-mkl"
-    )
-))]
-compile_error!("provider-inject cannot be combined with explicit BLAS provider features");
-
 mod activation;
 mod analytic;
 pub mod backend;
@@ -107,7 +68,7 @@ mod contraction;
 mod engine;
 mod exec_session;
 mod plan_cache;
-#[cfg(all(feature = "native", feature = "route-report"))]
+#[cfg(feature = "route-report")]
 #[doc(hidden)]
 pub use contraction::take_last_plan_route;
 #[doc(hidden)]
@@ -115,8 +76,6 @@ pub use contraction::ContractionWorkspaces;
 mod gemm;
 mod indexed_plan_cache;
 mod indexing;
-#[cfg(feature = "provider-inject")]
-pub mod inject;
 mod operand;
 mod parallel;
 mod provider;
@@ -137,21 +96,10 @@ use strided_kernel::StridedArray;
 pub(crate) use tenferro_tensor::*;
 use threadteam::Exec;
 
-/// Stable provider identity of the compile-time-selected CPU backend.
+/// Stable identity of the CPU backend (there is only faer).
 #[doc(hidden)]
 pub fn cpu_provider_id() -> &'static str {
-    #[cfg(feature = "native")]
-    {
-        "tenferro.cpu.faer"
-    }
-    #[cfg(feature = "blas")]
-    {
-        "tenferro.cpu.blas"
-    }
-    #[cfg(all(not(feature = "native"), not(feature = "blas")))]
-    {
-        "tenferro.cpu.none"
-    }
+    "tenferro.cpu.faer"
 }
 
 pub(crate) fn cpu_contraction_unsupported_dtype_message(dtype: DType) -> String {
@@ -162,15 +110,6 @@ pub(crate) fn cpu_contraction_unsupported_dtype_message(dtype: DType) -> String 
         remedy.unwrap_or_default()
     )
 }
-
-#[cfg(feature = "provider-src")]
-extern crate blas_src as _;
-#[cfg(feature = "provider-inject")]
-extern crate cblas_inject as _;
-#[cfg(feature = "provider-inject")]
-extern crate lapack_inject as _;
-#[cfg(feature = "provider-src")]
-extern crate lapack_src as _;
 
 pub use batch_policy::{with_batch_policy, CpuBatchPolicy, CpuBatchStrategy, CpuBatchThresholds};
 
@@ -259,8 +198,6 @@ where
 /// # Examples
 ///
 /// ```rust
-/// # #[cfg(feature = "native")]
-/// # {
 /// use tenferro_cpu::faer::{linalg::matmul::matmul, Accum, Mat, MatRef, Par};
 ///
 /// let identity = [1.0_f64, 0.0, 0.0, 1.0];
@@ -275,10 +212,7 @@ where
 ///     Par::Seq,
 /// );
 /// assert_eq!(*out.as_ref().get(1, 0), 3.0);
-/// # }
 /// ```
-#[cfg(feature = "native")]
-#[cfg_attr(docsrs, doc(cfg(feature = "native")))]
 pub use faer;
 
 // Unit tests exercise the pool-aware kernels through the former convenience
@@ -716,9 +650,5 @@ pub(crate) fn tensor_from_array<T: Clone + tenferro_tensor::TensorScalar>(
         .expect("strided array dimensions match owned data length")
 }
 
-// `provider-inject` owns call-through coverage in the serialized integration
-// fixture, which registers every BLAS symbol before the first operation.  The
-// broad unit suite selects the compiled default backend and therefore must not
-// call an intentionally unregistered injected symbol.
-#[cfg(all(test, not(feature = "provider-inject")))]
+#[cfg(test)]
 mod tests;

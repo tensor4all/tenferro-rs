@@ -79,8 +79,8 @@ The key rule is that public API breadth does not imply backend kernel breadth.
 ### CPU kernel ownership
 
 The CPU linalg kernels are not injectable. `tenferro-linalg`'s CPU route calls
-the extracted `tlinalg` (faer) provider and, in a `blas` build, `tlinalg-blas`
-directly, through the adapter in `src/cpu/tlinalg.rs`. The former runtime
+the extracted `tlinalg` (faer) provider directly, through the adapter in
+`src/cpu/tlinalg.rs`. The former runtime
 kernel slot and `install_linalg_kernels` hook were removed by #2004; there is no
 per-primitive override of the CPU linalg basis.
 
@@ -228,11 +228,11 @@ outputs of the source program before differentiating it; a prune to `Solve`
 would drop the saved factors and make the adjoint refactor A. The untracked
 eager surface, which never differentiates, still constructs `Solve` directly.
 
-Batched CPU LAPACK kernels and the faer packed LU kernels follow one loop
-discipline: one workspace query per call, scratch reused across the batch,
-results written directly into the batched output, and no per matrix tensor or
-`Vec` allocation. `lu_solve_prepared` applies the pivots inside the provider solve
-(one `getrs` per matrix for every transpose and conjugate flag).
+The batched CPU kernels (`tlinalg`, faer packed LU) follow one loop discipline:
+one workspace query per call, scratch reused across the batch, results written
+directly into the batched output, and no per matrix tensor or `Vec` allocation.
+`lu_solve_prepared` applies the pivots inside the provider solve, once per matrix
+for every transpose and conjugate flag.
 
 ## Current Implementation Status
 

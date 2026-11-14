@@ -29,7 +29,6 @@ pub(crate) use with_exec::{
 };
 
 /// `(U, S, Vᴴ)` as the public SVD entry returns it.
-#[cfg(feature = "native")]
 type PublicSvd<T> = (
     TypedTensor<T>,
     TypedTensor<<T as crate::LinalgScalar>::RealScalar>,
@@ -101,7 +100,7 @@ pub(crate) trait FaerLinalg:
     /// Put the provider's eigenvectors into the public contract's gauge.
     ///
     /// `eig` documents **unit 2-norm columns** - the vendored oracle records the same for PyTorch
-    /// and tenferro - which the providers do not all guarantee, so the seam normalizes them here.
+    /// and tenferro - which the numeric library does not guarantee, so the seam normalizes them here.
     /// A column the provider left non-finite (a defective, Jordan-like input can overflow inside
     /// its back-substitution) is reported as a numerical failure rather than returned as NaN
     /// (#2148).
@@ -1123,7 +1122,6 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
 // SVD
 // ---------------------------------------------------------------------------------------------
 
-#[cfg(feature = "native")]
 pub(crate) fn svd<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -1132,7 +1130,6 @@ pub(crate) fn svd<T: crate::LinalgScalar>(
     T::svd_on_exec(exec, buffers, &input.clone().into_dynamic(), false)
 }
 
-#[cfg(feature = "native")]
 pub(crate) fn svd_full<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -1141,7 +1138,6 @@ pub(crate) fn svd_full<T: crate::LinalgScalar>(
     T::svd_on_exec(exec, buffers, &input.clone().into_dynamic(), true)
 }
 
-#[cfg(feature = "native")]
 pub(crate) fn svd_values<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -1154,7 +1150,6 @@ pub(crate) fn svd_values<T: crate::LinalgScalar>(
 // QR and rank-revealing QR
 // ---------------------------------------------------------------------------------------------
 
-#[cfg(feature = "native")]
 pub(crate) fn qr<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -1237,7 +1232,6 @@ pub(crate) fn rank_revealing_qr<T: FaerLinalg>(
 // Hermitian eigendecomposition
 // ---------------------------------------------------------------------------------------------
 
-#[cfg(feature = "native")]
 pub(crate) fn eigh<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -1246,7 +1240,6 @@ pub(crate) fn eigh<T: crate::LinalgScalar>(
     T::eigh_on_exec(exec, buffers, &input.clone().into_dynamic())
 }
 
-#[cfg(feature = "native")]
 pub(crate) fn eigh_values<T: crate::LinalgScalar>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -1389,7 +1382,6 @@ pub(crate) fn eig(
     owned_dispatch!(input, "eig", |typed| eig_erased(exec, buffers, &typed))
 }
 
-#[cfg(feature = "native")]
 pub(crate) fn eig_values(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -1873,6 +1865,6 @@ pub(crate) fn faer_strided_ok<T: 'static>(view: &HostView<'_, T>) -> bool {
 }
 
 // The tests drive the public backend, which takes this route only in the `native` build.
-#[cfg(all(test, feature = "native"))]
+#[cfg(test)]
 #[path = "faer_linalg/tests.rs"]
 mod tests;

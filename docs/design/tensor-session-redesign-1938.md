@@ -571,7 +571,7 @@ pool with a budget, or `Sequential`).
 **`Auto` inside an entered session (#1898 follow-up).** A multi-threaded
 session no longer runs every `Auto` batch serially. When the entered Inner
 context owns more than one Rayon thread and the provider may run inside a lane
-(faer; BLAS is excluded by its declared scheduling), `Auto` fans a strided batch
+(faer; the deleted BLAS provider was excluded by its declared scheduling, #2608), `Auto` fans a strided batch
 or a grouped job list out over the context's own lanes, each lane Sequential.
 The gate is a cost model, not the item-count thresholds alone: by default one
 GEMM item costs about 50 ns plus one nanosecond per 16 multiply-adds, and a

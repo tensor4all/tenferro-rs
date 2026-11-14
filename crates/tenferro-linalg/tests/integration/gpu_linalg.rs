@@ -2082,7 +2082,7 @@ fn empty_square_slogdet_keeps_input_residency_check_on_cpu_and_cuda() {
 // ---------------------------------------------------------------------------
 // Full-matrices SVD on CUDA: `U` is `m x m` and `Vt` is `n x n`, so the
 // trailing columns and rows span the left and right nullspaces. The device
-// results must satisfy the same identities the CPU providers owe; equality
+// results must satisfy the same identities the CPU provider owes; equality
 // across providers is reconstruction, unitarity and spectra, never identical
 // basis bytes in degenerate or null subspaces.
 // ---------------------------------------------------------------------------
