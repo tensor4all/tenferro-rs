@@ -148,6 +148,47 @@ jobs:
           if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
           if [ "${REQUIRED}" != true ]; then echo "clippy not required: ${REASON}"; fi
 
+  mpi-adapter:
+    name: MPI transport adapter
+    needs: policy
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        with:
+          components: clippy, rustfmt
+      # The adapter is an excluded standalone workspace (#2612): its binding needs
+      # MPI headers and libclang at build time, which no other lane may pay for. The
+      # gate is `run_rust`, the output this workflow's `policy` job actually declares;
+      # gating on an undeclared output skips every step and reports a green job.
+      - name: Install MPI and libclang
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openmpi-bin libopenmpi-dev libclang-dev
+      - name: Cache the adapter target dirs
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust-ubuntu24
+          workspaces: |
+            ext/mpi
+      - name: Run the upstream MPI lane
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: python3 scripts/ci/run_profile.py mpi-upstream
+      - name: Report MPI adapter disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_rust }}
+          REASON: ${{ needs.policy.outputs.reason }}
+        run: |
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "MPI adapter tests not required: ${REASON}"; fi
+
   test-inject-blas:
     name: cargo test (blas inject)
     needs: policy
