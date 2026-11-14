@@ -1,11 +1,18 @@
-# Pins for the 0.11 migration: what the pin-content policy allows
+# Pins for the CubeCL 0.11 migration: what the pin-content policy allows (superseded)
 
-Status: resolved. The fork published the ported content as the 0.11.0 / 0.3.0
-releases, so the workspace takes them from the **registry** directly
-(`Cargo.toml`: `cubecl = { package = "t4a-cubecl", version = "=0.11.0", ... }`),
-no workspace git pin remains, and `scripts/check-git-pin-content.py` reports
-nothing. The policy below is what a future pin must follow; the constraint that
-blocked pinning during the migration is history.
+> **Superseded: tenferro no longer depends on CubeCL or CubeK.** The CUDA backend
+> moved to the standalone `t4a-cuda-runtime`
+> ([tensor4all/t4a-gpu-backend](https://github.com/tensor4all/t4a-gpu-backend)) and
+> the `t4a-cuda-kernels` NVRTC catalogue on top of `cudarc` (#2208), and the
+> CubeCL-era artifacts were retired in #2312. The workspace has no `cubecl` or
+> `cubek` dependency, so the "Why the ported 0.11 revisions cannot be pinned
+> yet", "Resolution" and "Downstream order" sections below are history of the
+> CubeCL line only.
+>
+> The pin policy itself is still current: the `t4a-cuda-runtime` and
+> `t4a-cuda-kernels` entries in `[workspace.dependencies]` follow it (package
+> identity, exact registry version, git URL and 40-digit rev, checked by
+> `scripts/check-git-pin-content.py`).
 
 ## The policy
 
@@ -14,8 +21,8 @@ workspace git dependency to declare **package identity, an exact registry
 version, git, and a 40-digit rev**:
 
 ```toml
-cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl",
-           rev = "<40 hex>", version = "=0.10.2" }
+t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend",
+                     rev = "<40 hex>", version = "=0.1.1" }
 ```
 
 `scripts/check-git-pin-content.py` then compares the pinned revision against the
