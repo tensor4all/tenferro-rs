@@ -1036,6 +1036,9 @@ gpu	tenferro-gpu	cuda::dispatch::tests::compare_and_select_match_the_host_refere
 gpu	tenferro-gpu	cuda::dispatch::tests::gather_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::scatter_add_matches_the_host_reference
 gpu	tenferro-gpu	cuda::dispatch::tests::unary_matches_the_host_reference
+host	tenferro-gpu	capability::tests::the_descriptor_helpers_set_the_axes_and_output_dtypes
+host	tenferro-gpu	capability::tests::the_cpu_and_cuda_tables_cover_the_same_operations
+host	tenferro-gpu	capability::tests::the_guide_table_is_rendered_from_the_capability_table
 host	tenferro-gpu	cuda::dispatch::tests::a_launch_keeps_every_grid_and_block_axis_the_planner_chose
 host	tenferro-gpu	cuda::structural::activation::tests::softplus_plan_is_one_input_one_output_region_the_emitter_accepts
 gpu	tenferro-gpu	cuda::structural::tests::a_compact_batched_dot_reads_both_operands_in_place

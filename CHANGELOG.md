@@ -176,6 +176,14 @@ layer, generated from a per-family registry. The operation list, options,
     `cargo test (blas inject)` context; the macOS lane is now the `macos`
     profile and no longer selects Accelerate.
 
+- **`TensorBackendCapability::require_capability` is gone** (#2477). The
+  capability descriptor is a declaration, not a gate: no production path called
+  the method, and every backend already refuses a pair it cannot serve in its own
+  dispatch, each spelt in its own layer (`ErrorKind::Unsupported` on CPU, plus
+  `Validation(DTypeMismatch)` where an arm checks dtypes first; on CUDA the
+  kernel's refusal wrapped as `RuntimeStateSource`). Use `capability()` /
+  `capability_entry()` to read a declaration and let the engine refuse
+  execution; `capability_output_dtype()` is unchanged.
 - **Eight unused internal `pub` items are gone** (#2546): the seven in the U02
   table, plus the `transpose_primal_outputs` getter, which the table did not list
   and which with its setter gone could only return `None`. `ShapeGuardContext`

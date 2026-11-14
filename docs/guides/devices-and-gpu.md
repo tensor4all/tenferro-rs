@@ -318,13 +318,14 @@ CUDA coverage is about backend dispatch. It is not the same as AD coverage.
 ## Coverage
 
 The CUDA backend uses the same concrete, eager, and traced tensor APIs as
-the CPU backend. The table below copies the CUDA backend capability
+the CPU backend. The table below is generated from the CUDA backend capability
 descriptor (`tenferro_gpu::cuda::cuda_capabilities()`) for core primitives on
-CUDA-resident `Tensor` values. It is maintained by hand alongside that table and
-is not generated or checked against it. The descriptor is a declaration:
-submitting an operation does not check it, so the table states what the backend
-declares, not a gate. See [the backend capability design note](../design/backend-capability.md).
-It is not an autodiff coverage table.
+CUDA-resident `Tensor` values, and a test in `tenferro-gpu` renders the table
+from the descriptor and fails when this block differs. The descriptor is a
+declaration: submitting an operation does not check it, so the table states what
+the backend declares, not a gate. See
+[the backend capability design note](../design/backend-capability.md). It is not
+an autodiff coverage table.
 
 Legend:
 
@@ -371,6 +372,11 @@ Legend:
 | `reduce_max` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `reduce_min` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 <!-- cuda-core-capability:end -->
+
+Regenerate the block above with
+`TENFERRO_WRITE_CAPABILITY_DOCS=1 cargo test -p tenferro-gpu the_guide_table_is_rendered`;
+without that variable the same test fails when the block and the descriptor
+disagree.
 
 CUDA dot conjugation flags are accepted for all four supported scalar dtypes:
 `F32`/`F64` conjugation is the identity, while `C32`/`C64` conjugate the
