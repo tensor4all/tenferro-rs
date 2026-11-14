@@ -14,7 +14,7 @@ the result.
 | [TypedTensor for numeric computation without autodiff](typed-tensor-non-ad.md) | You know the scalar type in Rust and want ndarray-like CPU tensor computation without AD. |
 | [CUDA and explicit device movement](../guides/devices-and-gpu.md#cuda-quickstart) | You want to upload inputs, run supported operations on CUDA, and download values explicitly. Hardware-executed CUDA tutorial validation lives in the GPU CI lane; CPU CI only compile-checks that artifact. |
 | [Using tenferro with ndarray/faer data](../getting-started/ndarray-nalgebra-mapping.md#zero-copy-interop-keep-your-faerndarray-buffers) | Your application already owns arrays and needs an explicit borrowed-view round trip. |
-| [Calling faer or BLAS/LAPACK directly](../guides/external-linalg-interop.md) | One specialized routine is outside the standard operation families; borrow compact host storage, call the external library, and continue with tenferro. |
+| [Calling faer directly](../guides/external-linalg-interop.md) | One specialized routine is outside the standard operation families; borrow compact host storage, call faer itself, and continue with tenferro. |
 | [Eager autodiff, PyTorch style](eager-autodiff-pytorch-style.md) | You want immediate execution, scalar losses, `backward()`, accumulated gradients, or the functional eager AD entry point. |
 | [Traced autodiff, JAX style](traced-autodiff-jax-style.md) | You want to build a graph, compile/run it, and use `grad` or `jvp` on the traced graph. |
 

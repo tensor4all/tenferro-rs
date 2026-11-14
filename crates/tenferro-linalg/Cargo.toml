@@ -17,63 +17,16 @@ documentation = "https://docs.rs/tenferro-linalg"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["autodiff", "native", "cuda"]
+features = ["autodiff", "cuda"]
 
 [features]
 # Test support, off by default (see `tenferro-cpu`): placement-ledger assertions.
 ledger = ["tenferro-cpu/ledger"]
-default = ["native"]
 __bench_unification_semantic_ad_api = []
 autodiff = [
     "dep:computegraph",
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
-]
-native = [
-    "dep:faer",
-    "tcontract-exec/faer",
-    "dep:tlinalg",
-    "tenferro-ad?/native",
-    "tenferro-cpu/native",
-]
-# The `blas` build keeps tlinalg (faer) for complete-pivoting LU, which LAPACK does not
-# provide in rank-revealing form.
-blas = [
-    "dep:faer",
-    "tcontract-exec/faer",
-    "dep:tlinalg",
-    "dep:cblas-sys",
-    "dep:lapack",
-    "dep:tlinalg-blas",
-    "tenferro-ad?/blas",
-    "tenferro-cpu/blas",
-]
-blas-openblas = [
-    "blas",
-    "tenferro-ad?/blas-openblas",
-    "tenferro-cpu/blas-openblas",
-    "tenferro-gpu?/blas-openblas",
-]
-blas-accelerate = [
-    "blas",
-    "tenferro-ad?/blas-accelerate",
-    "tenferro-cpu/blas-accelerate",
-    "tenferro-gpu?/blas-accelerate",
-]
-blas-mkl = [
-    "blas",
-    "tenferro-ad?/blas-mkl",
-    "tenferro-cpu/blas-mkl",
-    "tenferro-gpu?/blas-mkl",
-]
-provider-inject = [
-    "blas",
-    "tenferro-cpu/provider-inject",
-    "dep:cblas-inject",
-    "dep:lapack-inject",
-    # The injected symbol set exports ?gesvd but not ?gesdd, so the extracted LAPACK
-    # implementation has to select the other driver too.
-    "tlinalg-blas/provider-inject",
 ]
 cuda = [
     "tenferro-gpu/cuda",
@@ -92,21 +45,15 @@ tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-ma
 tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.11.0", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.11.0", default-features = false }
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.11.0", default-features = false }
-cblas-sys = { workspace = true, optional = true }
-cblas-inject = { workspace = true, optional = true }
 computegraph = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
-faer = { workspace = true, optional = true }
-# The extracted tensor-free linalg providers, both from the tlinalg-rs workspace: `tlinalg` (faer)
-# and `tlinalg-blas` (LAPACK/BLAS). Neither depends on the other; the interface they are adapted to
-# lives in this crate. Their requirements live in the workspace manifest, next to the rest of the
-# CPU stack: tlinalg 0.11 takes the engine's `tcontract_exec::Exec` bundle by `&mut` (`*_workspace`
-# entries by `&`) and forks its batch lanes over that token.
-tlinalg = { workspace = true, optional = true }
-tlinalg-blas = { workspace = true, optional = true }
-tcontract-exec.workspace = true
-lapack = { workspace = true, optional = true }
-lapack-inject = { workspace = true, optional = true }
+faer.workspace = true
+# The extracted tensor-free linalg provider (tlinalg-rs). The interface it is adapted to lives in
+# this crate. Its requirement lives in the workspace manifest, next to the rest of the CPU stack:
+# tlinalg 0.11 takes the engine's `tcontract_exec::Exec` bundle by `&mut` (`*_workspace` entries by
+# `&`) and forks its batch lanes over that token.
+tlinalg.workspace = true
+tcontract-exec = { workspace = true, features = ["faer"] }
 libloading = { workspace = true, optional = true }
 num-complex.workspace = true
 strided-view.workspace = true
@@ -163,11 +110,6 @@ path = "tests/integration.rs"
 [[test]]
 name = "prelude"
 path = "tests/prelude.rs"
-
-[[test]]
-name = "lapack_allocation"
-path = "tests/lapack_allocation.rs"
-required-features = ["blas"]
 
 [[test]]
 name = "cpu_linalg_allocation"

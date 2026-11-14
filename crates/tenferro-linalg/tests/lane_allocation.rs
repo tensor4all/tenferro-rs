@@ -11,7 +11,6 @@
 //! reusing the same pool. A negative-stride operand is gathered into a pool buffer and is not
 //! covered by the zero promise.
 
-#![cfg(feature = "native")]
 // The placement ledger allocates per token, so allocation counts are taken without it.
 #![cfg(not(feature = "ledger"))]
 

@@ -139,8 +139,8 @@ fn factor_summary(a: &Tensor, n: usize) -> (Vec<f64>, Vec<f64>, usize) {
     (f64_data(&p).to_vec(), f64_data(&q).to_vec(), rank)
 }
 
-// Complete-pivoting LU is one kernel in both CPU builds, so these cases assert fixed values and
-// run unchanged in the `native` and `blas` profiles: both builds return the same P, Q and rank.
+// Complete-pivoting LU is one kernel, so these cases assert fixed values: every build
+// returns the same P, Q and rank.
 
 #[test]
 fn full_piv_lu_factorizes_singular_matrix_and_reveals_rank() {

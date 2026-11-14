@@ -24,7 +24,7 @@ compilation, or CUDA only when the workflow needs them.
 | Understanding direct, eager, and traced execution | [Execution Models](guides/execution-models.md) |
 | Column-major storage and row-major import/export | [Memory Order](guides/memory-order.md) |
 | CPU and CUDA behavior; NVIDIA library compatibility | [Devices and GPU](guides/devices-and-gpu.md#cuda-and-nvidia-library-compatibility) |
-| CPU thread pools, affinity, faer, and external BLAS behavior | [CPU Execution and Thread Pools](guides/cpu-execution.md) |
+| CPU thread pools, affinity, and faer behavior | [CPU Execution and Thread Pools](guides/cpu-execution.md) |
 | Static-shaped StableHLO and PJRT plugin loading | [XLA and PJRT](guides/xla.md) |
 | Runtime-dependent dimensions in traced graphs | [Dynamic and symbolic shapes](design/dynamic-symbolic-shapes.md) |
 | API documentation for every crate | [API Reference](api/index.md) |

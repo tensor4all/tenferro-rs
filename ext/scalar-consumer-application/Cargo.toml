@@ -9,35 +9,6 @@ description = "Final application role of the external-scalar consumer (not publi
 [lib]
 name = "tenferro_scalar_consumer_application"
 
-# The CPU backend is a compile-time choice; this consumer forwards it instead of
-# forcing `native`, so a `blas` workspace build does not collide with it.
-[features]
-default = ["native"]
-native = [
-    "tenferro-cpu/native",
-    "tenferro-ad/native",
-    "tenferro-linalg/native",
-    "tenferro-runtime/native",
-    "tenferro-df64-proof/native",
-    "tenferro-scalar-consumer-algorithm/native",
-]
-blas = [
-    "tenferro-cpu/blas",
-    "tenferro-ad/blas",
-    "tenferro-linalg/blas",
-    "tenferro-runtime/blas",
-    "tenferro-df64-proof/blas",
-    "tenferro-scalar-consumer-algorithm/blas",
-]
-blas-openblas = [
-    "tenferro-cpu/blas-openblas",
-    "tenferro-ad/blas-openblas",
-    "tenferro-linalg/blas-openblas",
-    "tenferro-runtime/blas-openblas",
-    "tenferro-df64-proof/blas-openblas",
-    "tenferro-scalar-consumer-algorithm/blas-openblas",
-]
-
 [dependencies]
 tenferro-df64-proof = { path = "../df64-proof", default-features = false }
 tenferro-tensor-core = { path = "../../crates/tenferro-tensor-core" }

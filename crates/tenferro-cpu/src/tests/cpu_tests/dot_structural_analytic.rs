@@ -533,40 +533,6 @@ fn test_dot_general_read_into_accum_covers_supported_scalar_dtypes() {
     assert!((actual.im - expected.im).abs() < 1.0e-5);
 }
 
-#[cfg(feature = "blas")]
-#[test]
-fn test_dot_general_read_blas_negative_stride_view_falls_back() {
-    let lhs_source =
-        TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-            .unwrap();
-    let lhs_view = lhs_source
-        .as_view()
-        .slice_axis_view(1, StridedSliceSpec::reverse())
-        .unwrap();
-    let rhs =
-        Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap();
-    let config = DotGeneralConfig {
-        lhs_contracting_dims: [1].as_slice().into(),
-        rhs_contracting_dims: [0].as_slice().into(),
-        lhs_batch_dims: [].as_slice().into(),
-        rhs_batch_dims: [].as_slice().into(),
-    };
-    let mut backend = crate::CpuEngine::serial();
-
-    let out = crate::test_support::on_engine(&mut backend, |session| {
-        session.dot_general_read(
-            TensorRead::from_view(TensorView::F64(lhs_view)),
-            TensorRead::from_tensor(&rhs),
-            &config,
-        )
-    })
-    .unwrap()
-    .unwrap();
-
-    assert_eq!(out.shape(), &[2, 2]);
-    assert_eq!(out.as_slice::<f64>().unwrap(), &[68.0, 92.0, 95.0, 128.0]);
-}
-
 #[test]
 fn test_dot_general_inner_product_returns_rank0_scalar() {
     let a = Tensor::from_typed::<f64>(

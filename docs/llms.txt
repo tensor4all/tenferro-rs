@@ -28,7 +28,7 @@ storage and provider rules for that drop-down are in
 
 - [README](https://github.com/tensor4all/tenferro-rs/blob/main/README.md): The canonical router — every user-facing artifact (guides, recipes, rustdoc, and this index) is reachable from it.
 - [API cheatsheet](https://tensor4all.org/tenferro-rs/skill-references/api-cheatsheet.md): Tier-by-tier method arities and extension-trait imports, including the zero-copy recipe for wrapping external faer/ndarray memory.
-- [Crate selection](https://tensor4all.org/tenferro-rs/skill-references/crate-selection.md): Which crates to add for each API tier, and CPU provider feature rules.
+- [Crate selection](https://tensor4all.org/tenferro-rs/skill-references/crate-selection.md): Which crates to add for each API tier; the CPU stack declares no backend feature.
 - [Performance idioms](https://tensor4all.org/tenferro-rs/skill-references/performance-idioms.md): Construct-once-reuse and compile-once/run-many execution patterns.
 - [Pitfalls](https://tensor4all.org/tenferro-rs/skill-references/pitfalls.md): Column-major input, einsum syntax, extension registration, and per-origin traps for ndarray/nalgebra/PyTorch arrivals.
 
@@ -36,7 +36,7 @@ storage and provider rules for that drop-down are in
 
 - [Getting Started](https://tensor4all.org/tenferro-rs/getting-started/): Walks through tenferro's tensor layer, execution model, and backend/device choices, including a first CPU program.
 - [API migration guide](https://tensor4all.org/tenferro-rs/getting-started/api-migration.html): Maps removed modules, free functions, fallible constructors, and changed signatures to the current trait-based API.
-- [Coming from ndarray / nalgebra / ndarray-linalg](https://tensor4all.org/tenferro-rs/getting-started/ndarray-nalgebra-mapping.html): For Rust users with ndarray or nalgebra priors: the column-major asymmetry, crate selection, explicit backends, faer vs BLAS providers, and zero-copy interop with existing buffers.
+- [Coming from ndarray / nalgebra / ndarray-linalg](https://tensor4all.org/tenferro-rs/getting-started/ndarray-nalgebra-mapping.html): For Rust users with ndarray or nalgebra priors: the column-major asymmetry, crate selection, explicit backends, the single faer CPU backend, and zero-copy interop with existing buffers.
 - [PyTorch and JAX Mapping](https://tensor4all.org/tenferro-rs/getting-started/pytorch-jax-mapping.html): Translates common `torch` and `jax.numpy` operations into tenferro's direct, eager, and traced APIs.
 - [Choosing a Tensor API](https://tensor4all.org/tenferro-rs/guides/choosing-an-api.html): Explains how to select the tensor API by value type, execution timing, and backend/device.
 
@@ -48,14 +48,14 @@ storage and provider rules for that drop-down are in
 
 - [Einsum](https://tensor4all.org/tenferro-rs/guides/einsum.html): WARNING — missing arrows and parenthesized ellipses are parse-time `Error::InvalidSubscripts` failures; use flat `...` ellipsis or `EinsumNotation`.
 - [Linear Algebra](https://tensor4all.org/tenferro-rs/guides/linear-algebra.html): Covers the `tenferro-linalg` operation crate and its direct, eager, and traced execution surfaces.
-- [External Linear Algebra Interop](https://tensor4all.org/tenferro-rs/guides/external-linalg-interop.html): Calling faer or BLAS/LAPACK directly on tenferro-owned storage: the direct-dependency contract, column-major leading dimensions, non-contiguous/non-host rejection, and provider thread control.
+- [External Linear Algebra Interop](https://tensor4all.org/tenferro-rs/guides/external-linalg-interop.html): Calling faer directly on tenferro-owned storage: the direct-dependency contract, column-major leading dimensions, non-contiguous/non-host rejection, and thread control.
 - [Autodiff](https://tensor4all.org/tenferro-rs/guides/autodiff.html): Describes eager `backward()` and functional or traced `grad`, `vjp`, and `jvp` workflows.
 - [Parallelism and Caching](https://tensor4all.org/tenferro-rs/guides/parallelism-and-caching.html): WARNING — backend/runtime instances own thread pools and caches; per-call construction throws them away.
 - [Memory Order](https://tensor4all.org/tenferro-rs/guides/memory-order.html): WARNING — buffers are column-major; row-major data passed to `from_vec_col_major` is silently reinterpreted as column-major (wrong values), never rejected.
 - [Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html): Documents explicit CPU/GPU placement, transfer boundaries, CUDA capability coverage, and the supported versus CI-tested CUDA, cuTENSOR, cuBLAS, cuSOLVER, and cuFFT compatibility matrix.
 - [CUDA engines and pinned transfers](https://tensor4all.org/tenferro-rs/guides/engines-and-transfers.html): One caller-held `CudaEngine` per device (stream, handles and caches), prepared runs replayed on that engine, explicit flush/synchronize boundaries, pinned pending host-device transfers with caller-owned buffers and explicit readiness, and the rules, costs and unsupported combinations.
 
-- [Troubleshooting](https://tensor4all.org/tenferro-rs/guides/troubleshooting.html): Covers feature selection, BLAS providers, CUDA setup, workspace traps, and common runtime failures.
+- [Troubleshooting](https://tensor4all.org/tenferro-rs/guides/troubleshooting.html): Covers CPU backend selection, CUDA setup, workspace traps, and common runtime failures.
 
 ## Specification
 

@@ -40,19 +40,15 @@ jobs:
           --event "${EVENT_NAME}"
           --base "${BASE_SHA}"
           --head "${HEAD_SHA}"
-      - name: Select backend profiles
+      - name: Select backend profile
         id: select
         env:
           RUN_WORKSPACE: ${{ steps.policy.outputs.run_rust }}
-          RUN_BLAS: ${{ steps.policy.outputs.run_blas }}
         run: |
           faer='{"backend":"cpu-faer","profile":"workspace-faer","rustflags":""}'
-          blas='{"backend":"cpu-blas","profile":"workspace-blas","rustflags":"-l dylib=openblas -l dylib=lapack"}'
           noop='{"backend":"not-required","profile":"","rustflags":""}'
           if [ "${RUN_WORKSPACE}" != true ]; then
             echo "backends=[${noop}]" >> "${GITHUB_OUTPUT}"
-          elif [ "${RUN_BLAS}" = true ]; then
-            echo "backends=[${faer},${blas}]" >> "${GITHUB_OUTPUT}"
           else
             echo "backends=[${faer}]" >> "${GITHUB_OUTPUT}"
           fi
@@ -139,16 +135,8 @@ jobs:
             }
           done
           echo "Verified restored Cargo dependency artifacts under ${profile_dir}."
-      - name: Install BLAS/LAPACK runtime libraries
-        if: matrix.cfg.backend == 'cpu-blas'
-        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev liblapack-dev
       - uses: taiki-e/install-action@nextest
         if: matrix.cfg.profile != ''
-      - name: Verify BLAS/LAPACK runtime libraries
-        if: matrix.cfg.backend == 'cpu-blas'
-        run: |
-          ldconfig -p | grep -E 'libopenblas\.so' >/dev/null
-          ldconfig -p | grep -E 'liblapack\.so' >/dev/null
       - name: Run workspace profile
         if: matrix.cfg.profile != ''
         run: python3 scripts/ci/run_profile.py "${{ matrix.cfg.profile }}"
@@ -285,12 +273,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
         with:
-          shared-key: macos-accelerate-v1
+          shared-key: macos-v1
       - uses: taiki-e/install-action@nextest
         if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
-      - name: Run macOS Accelerate and Apple-specific tests
+      - name: Run macOS and Apple-specific tests
         if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
-        run: python3 scripts/ci/run_profile.py macos-accelerate
+        run: python3 scripts/ci/run_profile.py macos
       - name: Report macOS disposition
         if: always()
         env:

@@ -186,7 +186,7 @@ pub trait LinalgBackend: Engine {
     /// `derivative_eps` is validated for API consistency, but concrete backend
     /// execution does not perform AD. `gauge` controls optional singular-vector
     /// post-processing. `driver` selects the cuSOLVER routine on the CUDA
-    /// backend; the default implementation ignores it because CPU providers
+    /// backend; the default implementation ignores it because the CPU provider
     /// have a single SVD kernel.
     ///
     /// # Examples
@@ -225,9 +225,7 @@ pub trait LinalgBackend: Engine {
     /// typed `tenferro_linalg::Error::UnsupportedDType` or
     /// `NonConvergence` source, [`tenferro_tensor::Error::BackendSource`] for
     /// provider calls, and [`tenferro_tensor::Error::RuntimeState`] for
-    /// placement failures. A CPU provider that was not compiled is reported
-    /// as [`tenferro_tensor::ValidationError::InvalidArgument`] on the
-    /// provider configuration.
+    /// placement failures.
     fn svd_with_options(
         &mut self,
         input: &Tensor,
@@ -371,7 +369,7 @@ pub trait LinalgBackend: Engine {
     /// This is the borrowed-input counterpart of
     /// [`LinalgBackend::svd_with_options`]. The default implementation runs
     /// [`LinalgBackend::svd_read`] and applies the gauge on the host; it
-    /// ignores `driver` because CPU providers have a single SVD kernel. The
+    /// ignores `driver` because the CPU provider has a single SVD kernel. The
     /// CUDA backend overrides it so the driver reaches cuSOLVER.
     ///
     /// # Examples
@@ -755,7 +753,7 @@ pub trait LinalgBackend: Engine {
     /// This is the borrowed-input counterpart of
     /// [`LinalgBackend::eigh_with_options`]. The default implementation runs
     /// [`LinalgBackend::eigh_read`] and applies the gauge on the host; it
-    /// ignores `driver` because CPU providers have a single eigh kernel. The
+    /// ignores `driver` because the CPU provider has a single eigh kernel. The
     /// CUDA backend overrides it so the driver reaches cuSOLVER.
     ///
     /// # Examples
@@ -1076,8 +1074,8 @@ pub trait LinalgBackend: Engine {
     /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
     /// the forward solve path, so it performs no per-call non-singularity check
     /// and issues no host round trip. An exactly singular input is left to the
-    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
-    /// still report their own exactly singular factor as `Error::Singular`.
+    /// caller's verification, as in `torch.linalg.solve`. A CPU backend may
+    /// still report its own exactly singular factor as `Error::Singular`.
     ///
     /// # Errors
     ///
@@ -1118,8 +1116,8 @@ pub trait LinalgBackend: Engine {
     /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
     /// the forward solve path, so it performs no per-call non-singularity check
     /// and issues no host round trip. An exactly singular input is left to the
-    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
-    /// still report their own exactly singular factor as `Error::Singular`.
+    /// caller's verification, as in `torch.linalg.solve`. A CPU backend may
+    /// still report its own exactly singular factor as `Error::Singular`.
     ///
     /// # Errors
     ///
@@ -1149,8 +1147,8 @@ pub trait LinalgBackend: Engine {
     /// The CUDA provider does not inspect the cuSOLVER `getrf` status flag on
     /// the forward solve path, so it performs no per-call non-singularity check
     /// and issues no host round trip. An exactly singular input is left to the
-    /// caller's verification, as in `torch.linalg.solve`. CPU providers may
-    /// still report their own exactly singular factor as `Error::Singular`.
+    /// caller's verification, as in `torch.linalg.solve`. A CPU backend may
+    /// still report its own exactly singular factor as `Error::Singular`.
     ///
     /// # Errors
     ///

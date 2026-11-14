@@ -6,11 +6,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[cfg(feature = "native")]
-type NumericalPlan<T> = EinsumPlan<T>;
-#[cfg(feature = "blas")]
-type NumericalPlan<T> = EinsumPlan<T, cpueinsum_blas::Blas>;
-
 #[derive(Default)]
 pub(crate) struct Cache(Mutex<CacheState>);
 #[derive(Default)]
@@ -92,14 +87,8 @@ use tenferro_tensor::{
     TypedTensorView,
 };
 
-#[cfg(feature = "native")]
 trait Scalar: TensorScalar + cpueinsum::Scalar {}
-#[cfg(feature = "native")]
 impl<T: TensorScalar + cpueinsum::Scalar> Scalar for T {}
-#[cfg(feature = "blas")]
-trait Scalar: TensorScalar + cpueinsum_blas::BlasScalar {}
-#[cfg(feature = "blas")]
-impl<T: TensorScalar + cpueinsum_blas::BlasScalar> Scalar for T {}
 
 pub(crate) fn execute(
     session: &mut dyn Engine,
@@ -109,7 +98,6 @@ pub(crate) fn execute(
     execute_cached(session, inputs, tree, None)
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) fn execute_cached(
     session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
@@ -152,25 +140,13 @@ pub(crate) fn execute_cached(
         })
     })
 }
-#[cfg(not(any(feature = "native", feature = "blas")))]
-pub(crate) fn execute_cached(
-    _session: &mut dyn Engine,
-    _inputs: &[TensorRead<'_>],
-    _tree: &ContractionTree,
-    _cache: Option<&Cache>,
-) -> Option<tenferro_tensor::Result<Tensor>> {
-    // No compiled CPU numerical backend: let the caller take its own route.
-    None
-}
 
-#[cfg(any(feature = "native", feature = "blas"))]
 struct Execution<'a, 'pool> {
     exec: &'a mut cpueinsum::Exec<'pool>,
     workspaces: &'a tenferro_cpu::ContractionWorkspaces,
     max_retained_bytes: usize,
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 fn run<T: Scalar>(
     execution: &mut Execution<'_, '_>,
     tree: &ContractionTree,
@@ -193,7 +169,6 @@ fn run<T: Scalar>(
     Ok(Tensor::from_typed(output))
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 fn run_into<T: Scalar>(
     execution: &mut Execution<'_, '_>,
     tree: &ContractionTree,
@@ -215,7 +190,7 @@ fn run_into<T: Scalar>(
             .map_err(|error| tenferro_tensor::Error::backend_source("CPU einsum view", error))
         })
         .collect::<tenferro_tensor::Result<Vec<_>>>()?;
-    let prepare = || -> tenferro_tensor::Result<NumericalPlan<T>> {
+    let prepare = || -> tenferro_tensor::Result<EinsumPlan<T>> {
         let labels: Vec<Vec<i64>> = tree
             .subscripts
             .inputs
@@ -243,15 +218,7 @@ fn run_into<T: Scalar>(
             .map_err(|error| map_lower_einsum_error("CPU einsum", error))?;
         let output_layout = Layout::new(shape, strides)
             .map_err(|error| map_lower_einsum_error("CPU einsum", error))?;
-        #[cfg(feature = "native")]
         let plan = EinsumPlan::<T>::new(&spec, &layouts, output_layout);
-        #[cfg(feature = "blas")]
-        let plan = EinsumPlan::<T, _>::with_backend(
-            cpueinsum_blas::Blas::default(),
-            &spec,
-            &layouts,
-            output_layout,
-        );
         plan.map_err(|error| map_lower_einsum_error("CPU einsum", error))
     };
     let plan = if let Some(cache) = cache {
@@ -260,7 +227,7 @@ fn run_into<T: Scalar>(
             tenferro_tensor::Error::runtime_state("CPU einsum cache", "poisoned metadata lock")
         })?;
         let matched = state.entry.as_ref().is_some_and(|e| {
-            e.plan.is::<NumericalPlan<T>>()
+            e.plan.is::<EinsumPlan<T>>()
                 && e.layouts.len() == views.len() + 1
                 && e.layouts.iter().zip(&views).all(|((dims, strides), v)| {
                     dims.as_slice() == v.dims() && strides.as_slice() == v.strides()
@@ -287,7 +254,7 @@ fn run_into<T: Scalar>(
             });
         }
         Arc::clone(&state.entry.as_ref().expect("prepared cache entry").plan)
-            .downcast::<NumericalPlan<T>>()
+            .downcast::<EinsumPlan<T>>()
             .map_err(|_| {
                 tenferro_tensor::Error::runtime_state(
                     "CPU einsum cache",
@@ -319,7 +286,6 @@ pub(crate) fn supports(session: &mut dyn Engine, inputs: &[TensorRead<'_>]) -> b
         && with_cpu_engine(session, |_| ()).is_some()
 }
 
-#[cfg(any(feature = "native", feature = "blas"))]
 pub(crate) fn execute_into(
     session: &mut dyn Engine,
     inputs: &[TensorRead<'_>],
@@ -375,19 +341,6 @@ pub(crate) fn execute_into(
         }
         dispatch!(F32 => f32, F64 => f64, C32 => tenferro_tensor::Complex<f32>, C64 => tenferro_tensor::Complex<f64>)
     })).ok_or_else(|| tenferro_tensor::Error::runtime_state("CPU einsum", "CPU engine required"))?
-}
-#[cfg(not(any(feature = "native", feature = "blas")))]
-pub(crate) fn execute_into(
-    _session: &mut dyn Engine,
-    _inputs: &[TensorRead<'_>],
-    _tree: &ContractionTree,
-    _cache: Option<&Cache>,
-    _out: TensorWrite<'_>,
-) -> tenferro_tensor::Result<()> {
-    Err(tenferro_tensor::Error::unsupported(
-        "CPU einsum",
-        "this build selects no CPU numerical backend",
-    ))
 }
 
 #[cfg(test)]

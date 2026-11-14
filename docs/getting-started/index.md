@@ -2,7 +2,7 @@
 
 For multi-socket hosts, containers, or schedulers with restricted cpusets, read
 [CPU Execution and Thread Pools](../guides/cpu-execution.md) before choosing the
-pool you hand to `CpuEngine` and before choosing an external BLAS provider.
+pool you hand to `CpuEngine`.
 
 tenferro supports tensor computation without autodiff, immediate execution with
 optional `backward()` on scalar losses, functional eager `grad`, `vjp`, and
@@ -73,46 +73,13 @@ tenferro-linalg = { path = "../crates/tenferro-linalg" }
 The first build still needs network access unless dependencies are already
 vendored or cached. The workspace pins git dependencies and uses crates.io
 packages even when the tenferro crates themselves are local path dependencies.
-The default `native` provider may take several minutes to compile the first
-time on a fresh machine; later incremental builds are much faster.
+The CPU stack may take several minutes to compile the first time on a fresh
+machine; later incremental builds are much faster.
 
-With default features, this compiles the `native` provider, so a `CpuEngine`
-uses faer. To use the LAPACK/BLAS CPU provider, enable
-`blas` and link a BLAS/LAPACK provider from the build environment:
-
-```toml
-[dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["blas"] }
-tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["blas"] }
-tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", default-features = false, features = ["blas"] }
-```
-
-CPU provider features are additive. At least one of `native` or `blas`
-must be enabled, and builds may enable both. The compiled provider is what every
-`CpuEngine` in the process uses: BLAS when `blas` is compiled, otherwise faer.
-External CPU providers may replace
-only a provider bundle slot, such as `dot_general`; they do not replace
-`native` or `blas`, so one complete CPU provider is still required for
-fallback and linalg coverage. The `blas` backend needs a BLAS/LAPACK
-provider. Link one from the system toolchain with `blas`, or enable exactly
-one explicit provider feature to select a source provider for BLAS, LAPACK, and
-strided einsum:
-
-```toml
-[dependencies]
-tenferro-runtime = { path = "/path/to/tenferro-rs/crates/tenferro-runtime", default-features = false, features = ["blas-openblas"] }
-tenferro-cpu = { path = "/path/to/tenferro-rs/crates/tenferro-cpu", default-features = false, features = ["blas-openblas"] }
-tenferro-linalg = { path = "/path/to/tenferro-rs/crates/tenferro-linalg", default-features = false, features = ["blas-openblas"] }
-```
-
-The explicit provider features are `blas-openblas`, `blas-accelerate`, and
-`blas-mkl`. Cargo features are additive, so tenferro rejects builds that enable
-more than one explicit BLAS provider.
-
-Provider build scripts may need environment variables when using system
-installations. OpenBLAS setups commonly use `OPENBLAS_LIB_DIR`; MKL setups
-commonly use `MKLROOT` or `MKL_LIB_DIR`; Accelerate is the macOS system
-framework provider.
+A `CpuEngine` always uses faer: the CPU stack declares no backend feature, so
+there is nothing to select and no system BLAS/LAPACK to install. External CPU
+providers may replace only a provider bundle slot, such as `dot_general`; they
+do not replace the CPU linalg path, which stays faer-backed.
 
 Add `tenferro-ad`, `tenferro-einsum`, `tenferro-linalg`, `tenferro-fft`, or
 `tenferro-gpu` when a workflow needs those layers. Enable `autodiff` on

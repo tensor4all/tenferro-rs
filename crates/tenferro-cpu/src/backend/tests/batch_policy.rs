@@ -154,15 +154,12 @@ fn forced_outer_binary_contraction_matches_sequential() {
     );
 }
 
-/// The forced `Outer` route is observable on the native alternatives: it must
-/// not stay on the coordinator-inline vendor loop.
+/// The forced `Outer` route is observable: the product must run through
+/// tcontract's faer driver rather than a coordinator-inline loop.
 #[test]
-fn forced_outer_binary_contraction_takes_the_native_route() {
+fn forced_outer_binary_contraction_takes_the_faer_route() {
     let _ = dot_with_strategy(4, CpuBatchStrategy::Outer);
-    assert_eq!(
-        crate::contraction::take_last_contraction_route(),
-        Some(crate::contraction::ContractionRoute::Native)
-    );
+    assert_eq!(crate::contraction::take_last_route_was_faer(), Some(true));
 }
 
 /// A session that is not a CPU execution session and forwards none.

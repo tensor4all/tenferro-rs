@@ -39,8 +39,8 @@ tenferro-linalg = { path = "../crates/tenferro-linalg" }
 tenferro-einsum = { path = "../crates/tenferro-einsum", features = ["autodiff"] }
 ```
 
-The first local build can spend several minutes compiling the default
-`native` stack. That is expected on a fresh machine.
+The first local build can spend several minutes compiling the faer CPU stack.
+That is expected on a fresh machine.
 
 Most direct tensor examples start by building a CPU engine and importing the
 concrete tensor types:

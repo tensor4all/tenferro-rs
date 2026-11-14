@@ -57,15 +57,11 @@ pub trait LinalgScalar: TensorScalar + private::Sealed {
 }
 
 pub(crate) mod private {
-    #[cfg(feature = "native")]
     use tcontract_exec::Exec;
-    #[cfg(feature = "native")]
     use tenferro_cpu::linalg_interop::BufferPool;
-    #[cfg(feature = "native")]
     use tenferro_tensor::{TypedTensor, TypedTensorView};
 
     /// `(U, S, Vᴴ)` of the borrowed SVD entry.
-    #[cfg(feature = "native")]
     pub type Svd<T> = (
         TypedTensor<T>,
         TypedTensor<<T as super::LinalgScalar>::RealScalar>,
@@ -88,7 +84,6 @@ pub(crate) mod private {
         /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
         /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
         /// a provider failure mapped by `map_error`.
-        #[cfg(feature = "native")]
         fn svd_on_exec(
             exec: &mut Exec<'_>,
             buffers: &mut BufferPool,
@@ -105,7 +100,6 @@ pub(crate) mod private {
         /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
         /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
         /// a provider failure mapped by `map_error`.
-        #[cfg(feature = "native")]
         fn svd_values_on_exec(
             exec: &mut Exec<'_>,
             buffers: &mut BufferPool,
@@ -121,7 +115,6 @@ pub(crate) mod private {
         /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
         /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
         /// a provider failure mapped by `map_error`.
-        #[cfg(feature = "native")]
         fn qr_on_exec(
             exec: &mut Exec<'_>,
             buffers: &mut BufferPool,
@@ -137,7 +130,6 @@ pub(crate) mod private {
         /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
         /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
         /// a provider failure mapped by `map_error`.
-        #[cfg(feature = "native")]
         #[allow(clippy::type_complexity)]
         fn eigh_on_exec(
             exec: &mut Exec<'_>,
@@ -157,7 +149,6 @@ pub(crate) mod private {
         /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
         /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
         /// a provider failure mapped by `map_error`.
-        #[cfg(feature = "native")]
         fn eigh_values_on_exec(
             exec: &mut Exec<'_>,
             buffers: &mut BufferPool,
@@ -173,7 +164,6 @@ pub(crate) mod private {
         /// `Error::Unsupported` for a negative stride, `Error::RuntimeState` for non-host storage,
         /// `ValidationError::InvalidArgument` for an overflowing count or out-of-range layout, and
         /// a provider failure mapped by `map_error`.
-        #[cfg(feature = "native")]
         fn eig_values_on_exec(
             exec: &mut Exec<'_>,
             buffers: &mut BufferPool,
@@ -186,32 +176,28 @@ pub(crate) mod private {
     macro_rules! impl_sealed {
         ($($scalar:ty),*) => {$(
             impl Sealed for $scalar {
-                #[cfg(feature = "native")]
                 fn svd_on_exec(
                     exec: &mut Exec<'_>,
                     buffers: &mut BufferPool,
                     view: &TypedTensorView<'_, Self>,
                     full: bool,
                 ) -> tenferro_tensor::Result<Svd<Self>> {
-                    crate::cpu::linalg::faer::svd_typed(exec, buffers, view, full)
+                    crate::cpu::linalg::faer_linalg::svd_typed(exec, buffers, view, full)
                 }
-                #[cfg(feature = "native")]
                 fn svd_values_on_exec(
                     exec: &mut Exec<'_>,
                     buffers: &mut BufferPool,
                     view: &TypedTensorView<'_, Self>,
                 ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::RealScalar>> {
-                    crate::cpu::linalg::faer::svd_values_typed(exec, buffers, view)
+                    crate::cpu::linalg::faer_linalg::svd_values_typed(exec, buffers, view)
                 }
-                #[cfg(feature = "native")]
                 fn qr_on_exec(
                     exec: &mut Exec<'_>,
                     buffers: &mut BufferPool,
                     view: &TypedTensorView<'_, Self>,
                 ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<Self>)> {
-                    crate::cpu::linalg::faer::qr_typed(exec, buffers, view)
+                    crate::cpu::linalg::faer_linalg::qr_typed(exec, buffers, view)
                 }
-                #[cfg(feature = "native")]
                 fn eigh_on_exec(
                     exec: &mut Exec<'_>,
                     buffers: &mut BufferPool,
@@ -220,23 +206,21 @@ pub(crate) mod private {
                     TypedTensor<<Self as super::LinalgScalar>::RealScalar>,
                     TypedTensor<Self>,
                 )> {
-                    crate::cpu::linalg::faer::eigh_typed(exec, buffers, view)
+                    crate::cpu::linalg::faer_linalg::eigh_typed(exec, buffers, view)
                 }
-                #[cfg(feature = "native")]
                 fn eigh_values_on_exec(
                     exec: &mut Exec<'_>,
                     buffers: &mut BufferPool,
                     view: &TypedTensorView<'_, Self>,
                 ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::RealScalar>> {
-                    crate::cpu::linalg::faer::eigh_values_typed(exec, buffers, view)
+                    crate::cpu::linalg::faer_linalg::eigh_values_typed(exec, buffers, view)
                 }
-                #[cfg(feature = "native")]
                 fn eig_values_on_exec(
                     exec: &mut Exec<'_>,
                     buffers: &mut BufferPool,
                     view: &TypedTensorView<'_, Self>,
                 ) -> tenferro_tensor::Result<TypedTensor<<Self as super::LinalgScalar>::Complex>> {
-                    crate::cpu::linalg::faer::eig_values_typed(exec, buffers, view)
+                    crate::cpu::linalg::faer_linalg::eig_values_typed(exec, buffers, view)
                 }
             }
         )*};

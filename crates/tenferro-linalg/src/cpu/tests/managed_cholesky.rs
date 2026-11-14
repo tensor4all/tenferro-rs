@@ -364,7 +364,6 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
 
 /// The managed route stages its factor in a pooled tensor, so the staging copy returns to the
 /// session pool when the op ends instead of freeing a per-call vector.
-#[cfg(feature = "native")]
 #[test]
 fn managed_cholesky_stages_its_factor_in_pooled_storage() {
     let domain = FakeDomain::new();

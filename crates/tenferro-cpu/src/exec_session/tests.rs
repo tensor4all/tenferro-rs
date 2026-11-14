@@ -99,7 +99,6 @@ fn linalg_resource_callback_and_result_stay_on_the_caller_without_send() {
     assert!(Rc::ptr_eq(&value, &result));
 }
 
-#[cfg(not(feature = "provider-inject"))]
 #[test]
 fn native_operation_starts_on_the_caller_and_fans_out_on_the_engine_pool() {
     let mut backend = crate::test_support::cpu_engine(2).unwrap();

@@ -1,7 +1,6 @@
 use std::ops::{Add, Mul, Sub};
 
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{HouseholderQr, LinalgOps, QrOptions};
 use tenferro_tensor::{Tensor, TensorScalar};
 
@@ -449,13 +448,6 @@ fn eager_borrowed_compact_qr_append_import_and_ad() {
 // the same compact reflectors, so no extra factorization is needed.
 // ---------------------------------------------------------------------------
 
-/// Every CPU linalg provider compiled into this build.
-fn full_q_providers() -> Vec<(&'static str, CpuEngine)> {
-    let name = tenferro_cpu::cpu_provider_id();
-    let backend = tenferro_cpu::CpuEngine::serial();
-    vec![(name, backend)]
-}
-
 /// A tall, full-column-rank sample whose complement is two-dimensional.
 fn tall_sample(m: usize, n: usize) -> Vec<f64> {
     (0..m * n)
@@ -471,62 +463,62 @@ fn tall_sample(m: usize, n: usize) -> Vec<f64> {
 fn full_q_columns_are_orthonormal_and_complete_the_thin_factor() {
     let (m, n) = (5_usize, 3_usize);
     let data = tall_sample(m, n);
-    for (provider, mut host) in full_q_providers() {
-        let input = Tensor::from_vec_col_major(vec![m, n], data.clone()).unwrap();
-        {
-            let state = input.householder_qr(&mut host).unwrap();
-            let full = state
-                .q_columns(0..m, QrOptions::default(), &mut host)
-                .unwrap();
-            assert_eq!(full.shape(), &[m, m], "{provider}: full-Q shape");
-            let full_data = full.as_slice::<f64>().unwrap();
+    let provider = tenferro_cpu::cpu_provider_id();
+    let mut host = tenferro_cpu::CpuEngine::serial();
+    let input = Tensor::from_vec_col_major(vec![m, n], data.clone()).unwrap();
+    {
+        let state = input.householder_qr(&mut host).unwrap();
+        let full = state
+            .q_columns(0..m, QrOptions::default(), &mut host)
+            .unwrap();
+        assert_eq!(full.shape(), &[m, m], "{provider}: full-Q shape");
+        let full_data = full.as_slice::<f64>().unwrap();
 
-            // `Qᵀ Q = I (m x m)`: the identity a thin factor cannot satisfy.
-            for left in 0..m {
-                for right in 0..m {
-                    let inner: f64 = (0..m)
-                        .map(|row| full_data[row + left * m] * full_data[row + right * m])
-                        .sum();
-                    let expected = if left == right { 1.0 } else { 0.0 };
-                    assert!(
-                        (inner - expected).abs() < 1.0e-10,
-                        "{provider}: column pair ({left}, {right}) inner product {inner}"
-                    );
-                }
+        // `Qᵀ Q = I (m x m)`: the identity a thin factor cannot satisfy.
+        for left in 0..m {
+            for right in 0..m {
+                let inner: f64 = (0..m)
+                    .map(|row| full_data[row + left * m] * full_data[row + right * m])
+                    .sum();
+                let expected = if left == right { 1.0 } else { 0.0 };
+                assert!(
+                    (inner - expected).abs() < 1.0e-10,
+                    "{provider}: column pair ({left}, {right}) inner product {inner}"
+                );
             }
+        }
 
-            // The leading columns still are the thin factor.
-            let thin = state
-                .q_columns(0..n, QrOptions::default(), &mut host)
-                .unwrap();
-            assert_eq!(thin.shape(), &[m, n]);
-            assert_close(thin.as_slice::<f64>().unwrap(), &full_data[..m * n]);
+        // The leading columns still are the thin factor.
+        let thin = state
+            .q_columns(0..n, QrOptions::default(), &mut host)
+            .unwrap();
+        assert_eq!(thin.shape(), &[m, n]);
+        assert_close(thin.as_slice::<f64>().unwrap(), &full_data[..m * n]);
 
-            // `Aᵀ Q[:, k..m] = 0`: the complement is the input's left nullspace.
-            for col in n..m {
-                for input_col in 0..n {
-                    let inner: f64 = (0..m)
-                        .map(|row| data[row + input_col * m] * full_data[row + col * m])
-                        .sum();
-                    assert!(
-                        inner.abs() < 1.0e-10,
-                        "{provider}: complement column {col} is not orthogonal to input column \
-                         {input_col}: {inner}"
-                    );
-                }
+        // `Aᵀ Q[:, k..m] = 0`: the complement is the input's left nullspace.
+        for col in n..m {
+            for input_col in 0..n {
+                let inner: f64 = (0..m)
+                    .map(|row| data[row + input_col * m] * full_data[row + col * m])
+                    .sum();
+                assert!(
+                    inner.abs() < 1.0e-10,
+                    "{provider}: complement column {col} is not orthogonal to input column \
+                     {input_col}: {inner}"
+                );
             }
+        }
 
-            // A complement-only range is reachable directly.
-            let complement = state
-                .q_columns(n..m, QrOptions::default(), &mut host)
-                .unwrap();
-            assert_eq!(complement.shape(), &[m, m - n]);
-            assert_close(
-                complement.as_slice::<f64>().unwrap(),
-                &full_data[n * m..m * m],
-            );
-        };
-    }
+        // A complement-only range is reachable directly.
+        let complement = state
+            .q_columns(n..m, QrOptions::default(), &mut host)
+            .unwrap();
+        assert_eq!(complement.shape(), &[m, m - n]);
+        assert_close(
+            complement.as_slice::<f64>().unwrap(),
+            &full_data[n * m..m * m],
+        );
+    };
 }
 
 #[test]
@@ -535,97 +527,97 @@ fn full_q_positive_diagonal_gauge_fixes_only_the_thin_columns() {
     // complement: the gauged and ungauged complement columns must be identical
     // while the leading columns may be re-phased.
     let (m, n) = (4_usize, 2_usize);
-    for (provider, mut host) in full_q_providers() {
-        let input = Tensor::from_vec_col_major(vec![m, n], tall_sample(m, n)).unwrap();
-        {
-            let state = input.householder_qr(&mut host).unwrap();
-            let raw = state
-                .q_columns(0..m, QrOptions::default(), &mut host)
-                .unwrap();
-            let gauged = state
-                .q_columns(
-                    0..m,
-                    QrOptions::default().gauge(tenferro_linalg::QrGauge::PositiveDiagonal),
-                    &mut host,
-                )
-                .unwrap();
-            assert_eq!(gauged.shape(), &[m, m]);
-            assert_close(
-                &gauged.as_slice::<f64>().unwrap()[n * m..],
-                &raw.as_slice::<f64>().unwrap()[n * m..],
-            );
+    let provider = tenferro_cpu::cpu_provider_id();
+    let mut host = tenferro_cpu::CpuEngine::serial();
+    let input = Tensor::from_vec_col_major(vec![m, n], tall_sample(m, n)).unwrap();
+    {
+        let state = input.householder_qr(&mut host).unwrap();
+        let raw = state
+            .q_columns(0..m, QrOptions::default(), &mut host)
+            .unwrap();
+        let gauged = state
+            .q_columns(
+                0..m,
+                QrOptions::default().gauge(tenferro_linalg::QrGauge::PositiveDiagonal),
+                &mut host,
+            )
+            .unwrap();
+        assert_eq!(gauged.shape(), &[m, m]);
+        assert_close(
+            &gauged.as_slice::<f64>().unwrap()[n * m..],
+            &raw.as_slice::<f64>().unwrap()[n * m..],
+        );
 
-            // The gauged full factor is still orthonormal.
-            let gauged_data = gauged.as_slice::<f64>().unwrap();
-            for col in 0..m {
-                let norm: f64 = (0..m).map(|row| gauged_data[row + col * m].powi(2)).sum();
-                assert!(
-                    (norm - 1.0).abs() < 1.0e-10,
-                    "{provider}: gauged column {col} norm {norm}"
-                );
-            }
-        };
-    }
+        // The gauged full factor is still orthonormal.
+        let gauged_data = gauged.as_slice::<f64>().unwrap();
+        for col in 0..m {
+            let norm: f64 = (0..m).map(|row| gauged_data[row + col * m].powi(2)).sum();
+            assert!(
+                (norm - 1.0).abs() < 1.0e-10,
+                "{provider}: gauged column {col} norm {norm}"
+            );
+        }
+    };
 }
 
 #[test]
 fn square_and_empty_full_q_ranges_stay_consistent() {
-    for (provider, mut host) in full_q_providers() {
-        // Square input: full Q and thin Q coincide (k == m).
-        let square = Tensor::from_vec_col_major(vec![3, 3], tall_sample(3, 3)).unwrap();
-        {
-            let state = square.householder_qr(&mut host).unwrap();
-            let full = state
-                .q_columns(0..3, QrOptions::default(), &mut host)
-                .unwrap();
-            assert_eq!(full.shape(), &[3, 3], "{provider}: square full-Q shape");
+    let provider = tenferro_cpu::cpu_provider_id();
+    let mut host = tenferro_cpu::CpuEngine::serial();
+    // Square input: full Q and thin Q coincide (k == m).
+    let square = Tensor::from_vec_col_major(vec![3, 3], tall_sample(3, 3)).unwrap();
+    {
+        let state = square.householder_qr(&mut host).unwrap();
+        let full = state
+            .q_columns(0..3, QrOptions::default(), &mut host)
+            .unwrap();
+        assert_eq!(full.shape(), &[3, 3], "{provider}: square full-Q shape");
 
-            // An empty range is still a valid request.
-            let empty = state
-                .q_columns(2..2, QrOptions::default(), &mut host)
-                .unwrap();
-            assert_eq!(empty.shape(), &[3, 0]);
-        };
+        // An empty range is still a valid request.
+        let empty = state
+            .q_columns(2..2, QrOptions::default(), &mut host)
+            .unwrap();
+        assert_eq!(empty.shape(), &[3, 0]);
+    };
 
-        // Wide input: k == m, so the full-Q width is m and there is no complement.
-        let wide = Tensor::from_vec_col_major(vec![2, 4], tall_sample(2, 4)).unwrap();
-        {
-            let state = wide.householder_qr(&mut host).unwrap();
-            let full = state
-                .q_columns(0..2, QrOptions::default(), &mut host)
-                .unwrap();
-            assert_eq!(full.shape(), &[2, 2], "{provider}: wide full-Q shape");
-        };
-    }
+    // Wide input: k == m, so the full-Q width is m and there is no complement.
+    let wide = Tensor::from_vec_col_major(vec![2, 4], tall_sample(2, 4)).unwrap();
+    {
+        let state = wide.householder_qr(&mut host).unwrap();
+        let full = state
+            .q_columns(0..2, QrOptions::default(), &mut host)
+            .unwrap();
+        assert_eq!(full.shape(), &[2, 2], "{provider}: wide full-Q shape");
+    };
 }
 
 #[test]
 fn q_column_ranges_past_the_full_q_width_are_rejected() {
     let (m, n) = (4_usize, 2_usize);
-    for (provider, mut host) in full_q_providers() {
-        let input = Tensor::from_vec_col_major(vec![m, n], tall_sample(m, n)).unwrap();
-        {
-            let state = input.householder_qr(&mut host).unwrap();
-            let error = state
-                .q_columns(0..m + 1, QrOptions::default(), &mut host)
-                .unwrap_err();
-            assert!(
-                format!("{error}").contains("range"),
-                "{provider}: expected a range validation error, got {error}"
-            );
-            // An inverted range is still a range error, not a silent empty
-            // result. `Range` is built explicitly because a literal `3..1`
-            // trips the reversed-empty-range lint.
-            let inverted = state
-                .q_columns(
-                    std::ops::Range { start: 3, end: 1 },
-                    QrOptions::default(),
-                    &mut host,
-                )
-                .unwrap_err();
-            assert!(format!("{inverted}").contains("range"));
-        };
-    }
+    let provider = tenferro_cpu::cpu_provider_id();
+    let mut host = tenferro_cpu::CpuEngine::serial();
+    let input = Tensor::from_vec_col_major(vec![m, n], tall_sample(m, n)).unwrap();
+    {
+        let state = input.householder_qr(&mut host).unwrap();
+        let error = state
+            .q_columns(0..m + 1, QrOptions::default(), &mut host)
+            .unwrap_err();
+        assert!(
+            format!("{error}").contains("range"),
+            "{provider}: expected a range validation error, got {error}"
+        );
+        // An inverted range is still a range error, not a silent empty
+        // result. `Range` is built explicitly because a literal `3..1`
+        // trips the reversed-empty-range lint.
+        let inverted = state
+            .q_columns(
+                std::ops::Range { start: 3, end: 1 },
+                QrOptions::default(),
+                &mut host,
+            )
+            .unwrap_err();
+        assert!(format!("{inverted}").contains("range"));
+    };
 }
 
 #[test]

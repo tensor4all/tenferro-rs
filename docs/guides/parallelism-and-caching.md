@@ -5,8 +5,8 @@ control CPU thread counts, avoid provider oversubscription, and release cached
 memory in long-running processes.
 
 The caller owns the pool, so thread count and affinity are pool properties. For
-how to build the pool, affinity/NUMA guidance, external BLAS safety, and the
-location of elementwise Rayon work, see
+how to build the pool, affinity/NUMA guidance, and the location of elementwise
+Rayon work, see
 [CPU Execution and Thread Pools](cpu-execution.md).
 
 For tensor memory layout and column-major buffers, see
@@ -18,10 +18,9 @@ one-thread alternatives, see [Dispatch and Engine Cost](dispatch-and-engine-cost
 
 ## CPU Backend Provider
 
-Provider choice, feature combinations, thread ownership, and the external
-TBLIS example are maintained in [Choosing A Backend](choosing-a-backend.md).
-Use that guide for the decision and capability matrix; this page keeps the
-runtime mechanics below for users who have already selected a provider.
+There is one CPU provider and no feature combination that changes it; thread
+ownership is described in [Choosing A Backend](choosing-a-backend.md). This page
+keeps the runtime mechanics below.
 
 ## CPU Thread Count
 
@@ -47,13 +46,10 @@ let threads = std::env::var("MY_APP_THREADS")?.parse()?;
 let engine = CpuEngine::new(Pool::builder().threads(threads).build()?);
 ```
 
-For `native`, the operation's placement token hands the engine's worker count
-to faer-backed kernels as a plain width (`Exec::external`). A serial engine
-uses sequential faer execution; a pooled engine uses faer's parallelism with
-that width, on the engine's pool. The external TBLIS provider example
-clamps TBLIS calls to one thread while it owns the call, then restores the
-previous TBLIS setting. The engine's worker count still applies to
-tenferro-owned CPU kernels and fallback paths.
+The operation's placement token hands the engine's worker count to faer-backed
+kernels as a plain width (`Exec::external`). A serial engine uses sequential
+faer execution; a pooled engine uses faer's parallelism with that width, on the
+engine's pool.
 
 ## CPU Operation Parallelism
 
@@ -62,17 +58,14 @@ is the `Pool` the caller passed to `CpuEngine::new`. Each operation mints one
 placement token (`threadteam::Exec`) from that pool. The operation starts on
 the calling thread and the token enters the pool only when an entry splits the
 work into more than one task. No ambient pool is ever an implicit fallback, and
-`CpuEngine::serial` never enters any pool. External BLAS/LAPACK
-workers remain provider-owned and may fan out independently.
+`CpuEngine::serial` never enters any pool.
 
 | Operation family | Threading behavior |
 | --- | --- |
 | Elementwise and analytic ops | Shared typed paths use `strided-basic`, ordinary dtype dispatch uses `strided-kernel`, and erased fused replay uses `strided-fused`; all take the operation's token as their last argument and run on the engine's pool within its budget. |
 | Reductions | sum/product erased replay and typed max/min reductions take the same token and never use an ambient pool. Upstream strided plan coverage determines whether a specific multi-axis reduction shape can actually partition work. |
 | View materialization, transpose/permute, broadcast, convert, and diagonal extraction | Strided copy/map kernels take the same token; layout fallback and linalg input materialization are included. |
-| `dot_general` through `native` | faer receives `Par::Team` only for a width above one on a team token (a multi-thread engine); a plain or serial token receives `Par::Seq`. Direct downstream faer calls use `CpuEngine::exec()?` and `token.team(..)` when `token.carries_team()`; tenferro hands out no `faer::Par`. |
-| GEMM and linalg through `blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
-| Supported `dot_general` contractions through an external TBLIS provider | The example provider clamps TBLIS to one thread per call; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider in preferred mode. |
+| `dot_general` | faer receives `Par::Team` only for a width above one on a team token (a multi-thread engine); a plain or serial token receives `Par::Seq`. Direct downstream faer calls use `CpuEngine::exec()?` and `token.team(..)` when `token.carries_team()`; tenferro hands out no `faer::Par`. |
 | Indexed gather/scatter and dynamic slice/update | These delegate to strided erased plans with the operation's token; upstream strided plan coverage determines whether a specific indexed plan can actually partition work. |
 | Slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run on the engine, and source comments mark the intentional sequential path. |
 
@@ -113,44 +106,12 @@ assert_eq!(compact.as_slice::<f64>()?, &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
 Canonicalization preserves placement; it does not silently upload host data or
 download device data.
 
-## BLAS And LAPACK Threads
+## CPU Library Threads
 
-For `blas`, the engine's pool width controls tenferro-native work, but
-the linked BLAS/LAPACK provider has its own thread controls. Set provider thread
-variables before process start when appropriate:
-
-```bash
-RAYON_NUM_THREADS=4 \
-OPENBLAS_NUM_THREADS=4 \
-OMP_NUM_THREADS=4 \
-MKL_NUM_THREADS=4 \
-VECLIB_MAXIMUM_THREADS=4 \
-./your-tenferro-app
-```
-
-Use the variables that match your actual provider. For example, OpenBLAS mainly
-uses `OPENBLAS_NUM_THREADS`; Intel MKL uses `MKL_NUM_THREADS`; Accelerate uses
-`VECLIB_MAXIMUM_THREADS`; OpenMP-backed providers usually also obey
-`OMP_NUM_THREADS`. For provider discovery at build time, non-standard OpenBLAS
-installs commonly need `OPENBLAS_LIB_DIR`; non-standard MKL installs commonly
-need `MKLROOT` or `MKL_LIB_DIR`.
-
-These variables limit vendor thread counts; they do not let tenferro verify or
-enforce vendor worker affinity. tenferro guarantees only the calling thread's
-mask, so a caller already pinned to one CPU also confines a newly created vendor
-team. Affinity is a property of the thread and pool you build, in both compiled
-configurations.
-
-There is one CPU resource contract for both compiled providers: tenferro passes
-`Sequential` or the selected pool with a thread budget to the lower numerical
-library (cpueinsum, tcontract, tlinalg, tlinalg-blas), and the lower library
-decides its own lanes within that budget. Vendor-internal parallelism is
-outside tenferro's resource contract.
-
-An adaptation that needs to clamp a vendor's mode to one thread
-for every finite domain budget. It must never select provider-controlled auto
-mode inside such a call; inability to guarantee that requires the conservative
-`GlobalOrUncontrolled` declaration.
+tenferro passes `Sequential` or the selected pool with a thread budget to the
+lower numerical library (cpueinsum, tcontract, tlinalg), and the lower library
+decides its own lanes within that budget. There is no vendor-internal thread
+pool to configure.
 
 ## Avoid Oversubscription
 
@@ -167,7 +128,6 @@ assert_eq!(engine.num_threads(), 1);
 ```
 <!-- end-snippet-source -->
 
-For BLAS/LAPACK providers, apply the same rule to provider thread variables.
 For benchmarks, pin all relevant thread counts and report them with the result.
 Bitwise-identical results are promised at a fixed thread count only, never across
 thread counts: see [Reproducibility](../spec/reproducibility.md).

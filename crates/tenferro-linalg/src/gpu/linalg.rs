@@ -2511,7 +2511,7 @@ where
 /// `n x n`, so when only the other core dimension is zero the surviving factor
 /// still owes a unitary matrix. The identity is the canonical choice — it keeps
 /// `U Uᴴ = I` and `Vᴴ V = I` true and reconstructs the (empty) input exactly —
-/// and matches the CPU providers, so one public call has one shape and one
+/// and matches the CPU provider, so one public call has one shape and one
 /// unitarity contract on every backend.
 ///
 /// The identity is materialized on the host and uploaded. Nothing is read back
@@ -3143,7 +3143,7 @@ where
         // shape, dtype, and dimensions up front) nor a rank-deficient factor
         // (a rank-deficient input is still a valid QR; the caller's own
         // verification decides whether to accept the factors). This matches
-        // the CPU providers and `torch.linalg.qr`.
+        // the CPU provider and `torch.linalg.qr`.
         Ok((q, work))
     })?;
 

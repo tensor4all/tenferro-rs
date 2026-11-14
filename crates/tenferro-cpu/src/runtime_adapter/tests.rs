@@ -79,7 +79,6 @@ fn public_cpu_runtime_registration_exposes_complete_preparation_capabilities() {
 
 // A build compiles exactly one CPU backend, so a single backend is registered
 // under the caller's engine IDs and reports the compiled provider identity.
-#[cfg(any(feature = "native", feature = "blas"))]
 #[test]
 fn public_cpu_runtime_registration_uses_the_compiled_provider_under_caller_engine_ids() {
     use tenferro_runtime::{EngineId, Runtime};

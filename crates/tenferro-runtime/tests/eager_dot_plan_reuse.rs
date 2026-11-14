@@ -159,14 +159,9 @@ fn repeated_tiny_typed_matmul_keeps_only_the_one_time_plan_build() {
     );
 }
 
-// The warm-slot-miss gates below hold for the native provider only: a miss rebuilds
-// the whole lower plan, and `cpueinsum-blas` planning allocates its own vendor
-// metadata on every build, so under `blas` only the `Arc` (#2314) is saved.
-#[cfg(feature = "native")]
 /// A GEMM shape as `(m, k, n)`.
 type Shape = (usize, usize, usize);
 
-#[cfg(feature = "native")]
 /// A left operand with no repeated value, so a wrong row or column shows up in
 /// the value check instead of hiding behind a constant.
 fn lhs(m: usize, k: usize) -> TypedTensor<f64> {
@@ -179,7 +174,6 @@ fn lhs(m: usize, k: usize) -> TypedTensor<f64> {
     TypedTensor::<f64>::from_vec_col_major(vec![m, k], data).unwrap()
 }
 
-#[cfg(feature = "native")]
 fn rhs(k: usize, n: usize) -> TypedTensor<f64> {
     let mut data = vec![0.0; k * n];
     for l in 0..n {
@@ -190,7 +184,6 @@ fn rhs(k: usize, n: usize) -> TypedTensor<f64> {
     TypedTensor::<f64>::from_vec_col_major(vec![k, n], data).unwrap()
 }
 
-#[cfg(feature = "native")]
 /// The column-major product of [`lhs`] and [`rhs`] for `shape`.
 fn expected((m, k, n): Shape) -> Vec<f64> {
     let lhs = lhs(m, k);
@@ -210,7 +203,6 @@ fn expected((m, k, n): Shape) -> Vec<f64> {
     out
 }
 
-#[cfg(feature = "native")]
 fn max_abs_error(out: &TypedTensor<f64>, expected: &[f64]) -> f64 {
     let actual = out.as_slice().unwrap();
     assert_eq!(actual.len(), expected.len(), "output length");
@@ -225,7 +217,6 @@ fn max_abs_error(out: &TypedTensor<f64>, expected: &[f64]) -> f64 {
         .fold(0.0, f64::max)
 }
 
-#[cfg(feature = "native")]
 /// Send `shapes` through one cache slot, warm it with two rounds, then measure
 /// one round: the round must allocate nothing while adding one miss per call.
 fn assert_warm_round_is_allocation_free(label: &str, shapes: &[Shape], expected_misses: u64) {
@@ -288,7 +279,6 @@ fn assert_warm_round_is_allocation_free(label: &str, shapes: &[Shape], expected_
     );
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn alternating_shapes_through_one_slot_reuse_their_plan_storage() {
     // Three alternating GEMM shapes: before #2314 this measured three
@@ -300,7 +290,6 @@ fn alternating_shapes_through_one_slot_reuse_their_plan_storage() {
     );
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn a_su2_permute_block_sequence_reuses_its_plan_storage() {
     // The per-block recoupling GEMMs a symmetric-tensor permute issues: distinct

@@ -3,37 +3,28 @@
 tenferro keeps its dense tensors in column-major host or backend storage and
 exposes that storage through stable borrow APIs. When an operation you need is
 not yet available, suitable, or fast enough through tenferro's operation APIs,
-you can call [faer] or BLAS/LAPACK directly on tenferro-owned storage from a
-downstream application. This page is the supported contract for that escape
-hatch.
+you can call [faer] directly on tenferro-owned storage from a downstream
+application. This page is the supported contract for that escape hatch. (A
+vendor BLAS/LAPACK call is no longer part of it: the CPU stack links one faer
+identity and re-exports no CBLAS or LAPACK bindings.)
 
-The contract is **direct dependencies** for BLAS/LAPACK: your application adds
-`cblas-sys` + `lapack` at the tested compatible versions listed below, and
-enables the matching CPU provider feature on the tenferro crates. For faer you
-have a choice. `tenferro-cpu` re-exports the build it links as
-`tenferro_cpu::faer` (behind `native`), so your code resolves the same `Par` and
-`Mat` types and one binary carries one faer. No faer value crosses a tenferro
-boundary, so a direct `faer` dependency is also safe; add one only when you want
-to control that build yourself, and then keep it on the version below. tenferro
-does not wrap these crates and does not add a hidden interop layer to learn.
+`tenferro-cpu` re-exports the faer build it links as `tenferro_cpu::faer`, so
+your code resolves the same `Par` and `Mat` types and one binary carries one
+faer. No faer value crosses a tenferro boundary, so a direct `faer` dependency is
+also safe; add one only when you want to control that build yourself, and then
+keep it on the version below. tenferro does not wrap faer and does not add a
+hidden interop layer to learn.
 
-The examples below are compiled and run in CI from
+The example below is compiled and run in CI from
 [`docs/tutorial-code`](https://github.com/tensor4all/tenferro-rs/tree/main/docs/tutorial-code)
 as a downstream consumer that uses only public tenferro APIs:
 
 ```console
-# faer example (no system dependencies)
 cargo run --manifest-path docs/tutorial-code/Cargo.toml --bin faer_interop
-
-# BLAS/LAPACK example with exactly one provider feature
-cargo run --manifest-path docs/tutorial-code/Cargo.toml --features blas-openblas --bin blas_interop
 ```
 
-Both binaries assert their numerical results, so a wrong layout or leading
-dimension fails the run. In CI the BLAS binary is additionally run against the
-system OpenBLAS (`blas` with the native library linked through
-`RUSTFLAGS`) so that native symbol linkage is verified without rebuilding
-OpenBLAS from source.
+The binary asserts its numerical results, so a wrong layout or leading dimension
+fails the run.
 
 For direct faer work that should remain parallel, use the engine's placement
 token. `CpuEngine::exec` lends the engine's provider bundle; a multi-thread
@@ -64,9 +55,9 @@ CPU/faer-specific and does not claim affinity for external BLAS/OpenMP workers.
 
 ## When to use this
 
-Use direct external calls when tenferro's own APIs do not cover the routine you
-need (an exotic LAPACK driver), when you already maintain a tuned system BLAS
-you want to reuse, or when you need faer's specific algorithms. Prefer
+Use direct faer calls when tenferro's own APIs do not cover the routine you need
+(a faer algorithm with no tenferro operation yet) or when you need faer's
+specific algorithms. Prefer
 tenferro's own operations otherwise: they manage provider selection, buffer
 pools, and thread budgets for you. This escape hatch is not a
 license to reimplement what `tenferro-linalg` already provides. On the host it
@@ -82,17 +73,11 @@ Depend directly on the same major versions the tenferro workspace pins
 
 | Crate | Tested version | Purpose |
 |---|---|---|
-| `faer` (`tenferro_cpu::faer`) | `t4a-faer` `0.33.0` | Pure-Rust column-major linear algebra; the fork the pinned `tlinalg` resolves, re-exported by `tenferro-cpu` under `native` |
-| `cblas-sys` | `0.1` | CBLAS entry points (`cblas_dgemm`, ...) |
-| `lapack` | `0.20` | Fortran LAPACK entry points (`dpotrf`, ...) |
+| `faer` (`tenferro_cpu::faer`) | `t4a-faer` `0.33.0` | Pure-Rust column-major linear algebra; the fork the pinned `tlinalg` resolves, re-exported by `tenferro-cpu` |
 
-`cblas-sys` is pre-1.0, so pin the exact tested minor (`0.1.x`) rather than
-expecting semver compatibility from `0.1` alone. `cblas-sys` and `lapack` stay
-normal direct dependencies on purpose: your application then controls the
-version, the provider link, and the threading environment exactly as if tenferro
-were not involved. `faer` is re-exported for convenience rather than required:
-tenferro hands out no faer value, so a direct dependency at another compatible
-version only costs a second faer build, not a type mismatch (#1939).
+`faer` is re-exported for convenience rather than required: tenferro hands out
+no faer value, so a direct dependency at another compatible version only costs a
+second faer build, not a type mismatch (#1939).
 
 The exception is the `threadteam` line, which is `0.5.1` here and appears in
 both crates' public types: `tenferro-cpu` re-exports `threadteam::Pool` as
@@ -112,46 +97,14 @@ the 0.4 and 0.5 `TeamExec` are different types, and neither a team nor a
 the tested `t4a-faer` version above when a `Par`, a team, or the engine's pool
 crosses the boundary.
 
-### Provider features
-
-For faer, the default `native` feature is enough; faer has no system
-dependency. For BLAS/LAPACK, enable `blas` plus **exactly one** provider
-feature on the tenferro crates:
-
-| Provider | tenferro feature | Library |
-|---|---|---|
-| OpenBLAS | `blas-openblas` | OpenBLAS (built or linked by the provider crates) |
-| Apple Accelerate | `blas-accelerate` | Accelerate framework |
-| Intel MKL | `blas-mkl` | Intel oneAPI MKL |
-
-```toml
-# The working downstream combination used by docs/tutorial-code (blas
-# already implies the cblas-sys + lapack direct dependencies).
-tenferro-cpu = { path = "crates/tenferro-cpu", default-features = false, features = ["blas", "blas-openblas"] }
-cblas-sys = "0.1"
-lapack = "0.20"
-openblas-src = "0.10"
-```
-
-`openblas-src` is listed (and referenced in the example) because the
-from-source provider builds the native library from its build script: its
-library target is empty, so it must be linked explicitly for cargo to forward
-the native library. tenferro-cpu does the same for `blas-src`/`lapack-src`
-internally. If you link a system OpenBLAS yourself instead (for example with
-`RUSTFLAGS='-l dylib=openblas -l dylib=lapack'`), you do not need the
-`blas-openblas` feature or `openblas-src` at all — just `blas`.
-
-The provider features are additive, but the native provider crates reject
-simultaneous selections at build time, so never enable two of them together.
-`blas` without a provider feature compiles tenferro but does not link any
-native library; you must supply the symbols yourself (for example CI links the
-system OpenBLAS with `RUSTFLAGS='-l dylib=openblas -l dylib=lapack'`).
+For faer there is no feature to enable and no system dependency: the CPU stack
+links exactly one faer build.
 
 ## Layout and leading dimensions
 
-tenferro dense tensors are compact column-major, exactly like Fortran, LAPACK,
-and CBLAS `CblasColMajor`: the leftmost dimension varies fastest in memory and
-the leading dimension of an `m x n` matrix is `m`. See
+tenferro dense tensors are compact column-major, exactly like Fortran and
+`faer`: the leftmost dimension varies fastest in memory and the leading
+dimension of an `m x n` matrix is `m`. See
 [Memory Order](memory-order.md) for the storage convention.
 
 Before the contiguous fast path, check both properties explicitly. The faer
@@ -351,125 +304,6 @@ ownership: the `MatRef`/`MatMut` borrows live as long as your slice borrow, and
 Rust's borrow checker prevents you from holding a `MatMut` while a tenferro
 `host_data()` borrow is still live.
 
-## BLAS and LAPACK: direct calls on host storage
-
-The BLAS example enables exactly one provider feature, passes tenferro host
-storage to CBLAS with `CblasColMajor` and correct leading dimensions, and
-writes into a tenferro-owned mutable output tensor:
-
-<!-- snippet-source: docs/tutorial-code/src/bin/blas_interop.rs#blas-dgemm -->
-```rust
-fn blas_dgemm_on_host_storage() -> tenferro_tensor::Result<()> {
-    // A (2x3) and B (3x2) are compact column-major host tensors. For
-    // CblasColMajor, the leading dimension of an m x n matrix is m.
-    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0])?;
-    let b =
-        TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![7.0, 9.0, 11.0, 8.0, 10.0, 12.0])?;
-    let mut c = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0; 4])?;
-    assert!(a.is_col_major_contiguous()? && b.is_col_major_contiguous()?);
-    assert!(c.is_col_major_contiguous()?);
-
-    let m = dim_i32(a.shape()[0], "m");
-    let k = dim_i32(a.shape()[1], "k");
-    let n = dim_i32(b.shape()[1], "n");
-    let lda = m; // A is m x k, column-major
-    let ldb = k; // B is k x n, column-major
-    let ldc = m; // C is m x n, column-major
-
-    // Snapshot the inputs so we can prove the call does not mutate them.
-    let a_before = a.as_slice()?.to_vec();
-    let b_before = b.as_slice()?.to_vec();
-
-    // SAFETY: a, b, c are live for the duration of the call, their slices are
-    // at least m*k, k*n, m*n elements, and the leading dimensions match the
-    // column-major layouts verified above. C is the only mutated buffer.
-    unsafe {
-        cblas_sys::cblas_dgemm(
-            CBLAS_LAYOUT::CblasColMajor,
-            CBLAS_TRANSPOSE::CblasNoTrans,
-            CBLAS_TRANSPOSE::CblasNoTrans,
-            m,
-            n,
-            k,
-            1.0,
-            a.as_slice()?.as_ptr(),
-            lda,
-            b.as_slice()?.as_ptr(),
-            ldb,
-            0.0,
-            c.host_data_mut()?.as_mut_ptr(),
-            ldc,
-        );
-    }
-
-    // Inputs are untouched; the output holds A * B in tenferro's storage.
-    assert_slice_close(a.as_slice()?, &a_before, "A unchanged");
-    assert_slice_close(b.as_slice()?, &b_before, "B unchanged");
-    // C = [[58,64],[139,154]] stored column-major.
-    assert_slice_close(c.as_slice()?, &[58.0, 139.0, 64.0, 154.0], "C=A*B");
-    Ok(())
-}
-```
-<!-- end-snippet-source -->
-
-LAPACK works the same way through the `lapack` crate; `dpotrf` factors in place
-into the mutable tenferro buffer:
-
-<!-- snippet-source: docs/tutorial-code/src/bin/blas_interop.rs#blas-potrf -->
-```rust
-fn lapack_potrf_on_host_storage() -> tenferro_tensor::Result<()> {
-    // A is a 2x2 SPD matrix, column-major [3,1,1,2]. dpotrf factors in place:
-    // the lower triangle of the buffer is replaced by L with A = L L^T.
-    let mut a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 1.0, 1.0, 2.0])?;
-    let original = a.as_slice()?.to_vec();
-    let n = dim_i32(a.shape()[0], "n");
-    let lda = n;
-    let mut info: i32 = 0;
-
-    // SAFETY: a holds a live n*n column-major buffer and info is a live output.
-    unsafe {
-        lapack::dpotrf(b'L', n, a.host_data_mut()?, lda, &mut info);
-    }
-    assert_eq!(info, 0, "dpotrf failed with info={info}");
-
-    // Reconstruct A = L L^T from the factor (L is unit-free, stored in the
-    // lower triangle; the upper triangle is left untouched).
-    let data = a.as_slice()?;
-    let (l00, l10, l11) = (data[0], data[1], data[3]);
-    assert_slice_close(
-        &[l00 * l00, l00 * l10, l00 * l10, l10 * l10 + l11 * l11],
-        &original,
-        "L L^T",
-    );
-    Ok(())
-}
-```
-<!-- end-snippet-source -->
-
-### LP64/ILP64, complex ABI, and provider thread control
-
-- **LP64/ILP64.** `cblas-sys` and `lapack` use the LP64 convention: dimensions
-  and leading dimensions are 32-bit `c_int` (`i32` in Rust). Convert sizes with
-  `i32::try_from` and handle overflow instead of casting blindly. There is no
-  ILP64 variant of these crates in the tested configuration.
-- **Complex ABI.** CBLAS complex entry points take interleaved real/imaginary
-  pairs. `cblas-sys` models a complex value as `[f64; 2]`
-  (`c_double_complex`); `num_complex::Complex<f64>` is layout-compatible, so a
-  `Complex64` slice can be passed where a `*const c_double_complex` is
-  expected after an explicit pointer cast. Unlike real entry points, complex
-  CBLAS entry points take `alpha` and `beta` **by pointer**. tenferro uses the
-  same `num_complex` types for its `C64` dtypes. Do not reinterpret a complex
-  slice as twice as many reals and hand that to a complex routine.
-- **Provider thread control.** Direct BLAS/LAPACK calls run on the provider's
-  own threads, controlled by process-wide environment variables
-  (`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`, and
-  often `OMP_NUM_THREADS`). These are read at process start; set them before
-  launching your application. Direct calls do not join tenferro's CPU execution
-  domain. Their threads inherit the calling thread's CPU mask, so a call made
-  from a tenferro worker starts inside that domain's CPU set, but tenferro
-  cannot control the provider's fan-out or an affinity policy the provider
-  installs itself.
-
 ## Threading and resource domains
 
 Tenferro operations on a `CpuEngine` run on the pool the caller built for it:
@@ -482,8 +316,6 @@ external calls deliberately sit outside that context:
   computes on: the engine uses only the pool the caller passed to
   `CpuEngine::new`. Use the engine's token (`Par::Team`, above) to run on the
   engine's team and within its budget.
-- A direct BLAS/LAPACK call runs on the provider's own threads as described
-  above.
 
 The consequence is that your application owns the coordination: if your outer
 loop already runs many tenferro calls in parallel, do not also fan out each
@@ -602,7 +434,7 @@ The example runs in the GPU CI lane (through `cuda_tutorial`) and on its own:
 
 ```console
 cargo run --manifest-path docs/tutorial-code/Cargo.toml \
-  --no-default-features --features cuda,native --bin cuda_vendor_interop
+  --no-default-features --features cuda --bin cuda_vendor_interop
 ```
 
 ### Dependency contract

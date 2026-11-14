@@ -1,5 +1,5 @@
-//! Unit tests of the lane carrier's one unsafe bridge. They avoid BLAS, faer and threads so
-//! they also run under Miri.
+//! Unit tests of the lane carrier's one unsafe bridge. They avoid the numerical
+//! library and threads so they also run under Miri.
 
 use cpueinsum::Exec;
 use tenferro_tensor::backend::Engine;

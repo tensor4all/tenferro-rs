@@ -362,7 +362,6 @@ fn refusals_happen_before_any_write() -> R<()> {
     Ok(())
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn einsum_in_a_lane_is_unsupported_and_leaves_the_destination() -> R<()> {
     use tenferro_cpu::linalg_interop::BufferPool;

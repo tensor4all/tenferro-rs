@@ -126,10 +126,6 @@ fn cpu_hot_kernels_delegate_to_erased_strided_replay() {
     assert!(include_str!("../blas1.rs").contains("strided_kernel::axpby_accum"));
 }
 
-// The shared native-participant fixture lives in the broad unit suite, which
-// `provider-inject` excludes (its symbols are registered by the integration
-// fixture instead).
-#[cfg(not(feature = "provider-inject"))]
 #[test]
 fn explicit_native_operation_uses_the_selected_rayon_budget() {
     let mut backend = crate::test_support::cpu_engine(2).unwrap();

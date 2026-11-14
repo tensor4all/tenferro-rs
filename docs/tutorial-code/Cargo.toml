@@ -6,48 +6,12 @@ license.workspace = true
 publish = false
 
 [features]
-default = ["native", "xla-pjrt", "doc-snippets"]
-native = [
-    "tenferro-ad/native",
-    "tenferro-cpu/native",
-    "tenferro-einsum/native",
-    "tenferro-linalg/native",
-    "dep:tenferro-tensor",
-]
-# blas selects tenferro's BLAS/LAPACK-backed operation path. The direct
-# cblas-sys and lapack dependencies are the downstream interop surface for
-# issue #1602: they make the native entry points callable from tutorial code.
-# The native provider library itself is supplied either by a provider feature
-# such as blas-openblas below, or by the build environment (e.g. CI links the
-# system OpenBLAS through RUSTFLAGS).
-blas = [
-    "tenferro-ad/blas",
-    "tenferro-cpu/blas",
-    "tenferro-einsum/blas",
-    "tenferro-linalg/blas",
-    "dep:tenferro-tensor",
-    "dep:cblas-sys",
-    "dep:lapack",
-]
-# Exactly one BLAS/LAPACK provider feature may be enabled; tenferro-cpu
-# rejects simultaneous native providers at build time. blas-openblas is the
-# provider used by the tutorial examples and by the docs CI lane.
-# openblas-src is referenced (not just depended on) because the from-source
-# provider builds the native library through its build script; an unreferenced
-# empty rlib would be pruned from the final link together with its native
-# library metadata.
-blas-openblas = [
-    "blas",
-    "tenferro-cpu/blas-openblas",
-    "tenferro-einsum/blas-openblas",
-    "dep:openblas-src",
-]
+default = ["xla-pjrt", "doc-snippets"]
 xla-pjrt = ["tenferro-xla/pjrt"]
-doc-snippets = ["dep:tenferro-fft", "dep:tenferro-gpu", "dep:tenferro-tensor", "dep:tenferro-ext-sparse", "dep:tenferro-ext-tropical", "tenferro-fft/cuda", "tenferro-gpu/cuda", "tenferro-ext-sparse/autodiff", "tenferro-ext-tropical/autodiff"]
+doc-snippets = ["dep:tenferro-fft", "dep:tenferro-gpu", "dep:tenferro-ext-sparse", "dep:tenferro-ext-tropical", "tenferro-fft/cuda", "tenferro-gpu/cuda", "tenferro-ext-sparse/autodiff", "tenferro-ext-tropical/autodiff"]
 cuda = [
     "dep:tenferro-fft",
     "dep:tenferro-gpu",
-    "dep:tenferro-tensor",
     "tenferro-fft/cuda",
     "tenferro-gpu/cuda",
     "tenferro-einsum/cuda",
@@ -66,11 +30,8 @@ tenferro-gpu = { path = "../../crates/tenferro-gpu", default-features = false, o
 tenferro-linalg = { path = "../../crates/tenferro-linalg", default-features = false, features = ["autodiff"] }
 tenferro-ops = { package = "tenferro-internal-ops", path = "../../crates/tenferro-internal-ops" }
 tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
-tenferro-tensor = { path = "../../crates/tenferro-tensor", optional = true }
+tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 tenferro-xla = { path = "../../crates/tenferro-xla", default-features = false }
-cblas-sys = { workspace = true, optional = true }
-lapack = { workspace = true, optional = true }
-openblas-src = { version = "0.10", optional = true }
 tenferro-ext-sparse = { package = "tenferro-ext-sparse", path = "../../ext/sparse", optional = true, features = ["autodiff"] }
 tenferro-ext-tropical = { package = "tenferro-ext-tropical", path = "../../ext/tropical", optional = true, features = ["autodiff"] }
 
@@ -81,12 +42,6 @@ path = "src/bin/typed_tensor_non_ad.rs"
 [[bin]]
 name = "faer_interop"
 path = "src/bin/faer_interop.rs"
-required-features = ["native"]
-
-[[bin]]
-name = "blas_interop"
-path = "src/bin/blas_interop.rs"
-required-features = ["blas"]
 
 [[bin]]
 name = "storage_element_access"

@@ -4,6 +4,10 @@
 
 **Status:** approved for implementation. Independent `reviewer-flash` design review returned **APPROVED** with zero blocking findings after the threshold, zero-rank, tie, and AD-dispatch contracts were made explicit.
 
+> **#2608:** the CPU-BLAS/LAPACK provider described below was deleted; a `CpuEngine` is
+> faer-backed, unconditionally. The BLAS half of every parity, gate and verification
+> requirement recorded here is history, not work anyone can run.
+
 ## Purpose
 
 Adaptive scientific algorithms need a numerically rank-revealing orthogonal

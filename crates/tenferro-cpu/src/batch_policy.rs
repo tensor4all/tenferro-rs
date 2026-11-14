@@ -41,13 +41,10 @@
 //! feeds those rules where the lower library reads the policy's model; a forced
 //! strategy ignores the model and never falls back.
 //!
-//! # The BLAS linalg lane
+//! # Forced strategies
 //!
-//! `tlinalg-blas` takes no `Exec` and has no tenferro lanes, so the BLAS linalg
-//! lane refuses a forced [`CpuBatchStrategy::Outer`],
-//! [`CpuBatchStrategy::Inner`] or `Split` before any write with a typed
-//! unsupported error. `Auto` and `Sequential` are accepted; the lane is already
-//! serial and the vendor call owns its own threading.
+//! A forced strategy is always honoured: the linalg entry resolves it against
+//! the lane budget the caller supplied and never quietly substitutes `Auto`.
 
 /// How the items of one batched operation are split over a thread budget.
 ///

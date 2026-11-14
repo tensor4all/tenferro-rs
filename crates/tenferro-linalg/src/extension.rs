@@ -1099,8 +1099,8 @@ fn linalg_session_supported<B: Engine + 'static>(
     let type_id = std::any::TypeId::of::<B>();
     if type_id == std::any::TypeId::of::<tenferro_cpu::CpuEngine>() {
         // Every CPU linalg kernel, including full-matrices SVD, runs in-session
-        // on both the faer and the BLAS provider, so the type-only seam can
-        // admit the whole family without inspecting the provider kind.
+        // on the single faer backend, so the type-only seam admits the whole
+        // family without inspecting a provider kind.
         return true;
     }
     #[cfg(feature = "cuda")]

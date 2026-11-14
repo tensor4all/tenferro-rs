@@ -89,7 +89,7 @@ def test_committed_surface_conforms() -> None:
 
 
 def test_reintroduced_shapes_fail_in_every_profile() -> None:
-    for profile in ("tenferro-ad.txt", "tenferro-ad+native-cuda.txt"):
+    for profile in ("tenferro-ad.txt", "tenferro-ad+cuda.txt"):
         for label, line in REINTRODUCED.items():
             errors = errors_after(add=[line], file=profile)
             assert errors, f"{label} in {profile} passed the conformance check:\n  {line}"
@@ -125,7 +125,7 @@ def test_missing_declared_signature_fails() -> None:
 
 def test_changed_declared_signature_fails() -> None:
     changed = BACKWARD_SIG.replace("(&mut self, ", f"(&mut self, {EXEC}, ")
-    errors = errors_after(add=[changed], remove=[BACKWARD_SIG], file="tenferro-ad+native-cuda.txt")
+    errors = errors_after(add=[changed], remove=[BACKWARD_SIG], file="tenferro-ad+cuda.txt")
     assert any("missing declared signature of `backward`" in e for e in errors), errors
     assert any("names an engine" in e for e in errors), errors
 

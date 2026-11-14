@@ -134,7 +134,7 @@ if [[ "$KIND" == "rust" || "$KIND" == "both" ]]; then
     criterion_args+=("${CRITERION_EXTRA_ARGS[@]}")
   fi
   run_one_thread \
-    cargo bench -p tenferro-tensor --bench pairwise_contraction -- \
+    cargo bench -p tenferro-cpu --bench pairwise_contraction -- \
     "${criterion_args[@]}"
 fi
 

@@ -21,7 +21,6 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       run_rust: ${{ steps.policy.outputs.run_rust }}
-      run_blas: ${{ steps.policy.outputs.run_blas }}
       run_docs: ${{ steps.policy.outputs.run_docs }}
       run_ci_config: ${{ steps.policy.outputs.run_ci_config }}
       classification: ${{ steps.policy.outputs.classification }}
@@ -148,33 +147,6 @@ jobs:
           if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
           if [ "${REQUIRED}" != true ]; then echo "clippy not required: ${REASON}"; fi
 
-  test-inject-blas:
-    name: cargo test (blas inject)
-    needs: policy
-    if: always()
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-        if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
-      - uses: dtolnay/rust-toolchain@stable
-        if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
-        with:
-          prefix-key: v1-rust-ubuntu24
-      - name: Run provider-inject tests and build checks
-        if: needs.policy.result == 'success' && needs.policy.outputs.run_blas == 'true'
-        run: python3 scripts/ci/run_profile.py blas-inject
-      - name: Report BLAS inject disposition
-        if: always()
-        env:
-          POLICY_RESULT: ${{ needs.policy.result }}
-          REQUIRED: ${{ needs.policy.outputs.run_blas }}
-          REASON: ${{ needs.policy.outputs.reason }}
-        run: |
-          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
-          if [ "${REQUIRED}" != true ]; then echo "BLAS inject tests not required: ${REASON}"; fi
-
   tensor-core-deps:
     name: tensor core dependency boundary
     needs: policy
@@ -265,12 +237,6 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends graphviz
           fi
-      - name: Install BLAS/LAPACK libraries for the interop tutorial binaries
-        if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
-        run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            libopenblas-dev liblapack-dev
       - name: Validate and build docs site
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
         run: python3 scripts/ci/run_profile.py docs

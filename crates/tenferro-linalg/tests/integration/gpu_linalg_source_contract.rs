@@ -61,7 +61,7 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let end_idx = remaining
         .find(end)
         .map(|offset| start_idx + offset)
-        .unwrap_or(source.len());
+        .unwrap_or_else(|| panic!("source should contain section end {end:?}"));
     &source[start_idx..end_idx]
 }
 
@@ -232,11 +232,7 @@ fn gpu_lu_outputs_are_not_rebuilt_by_host_roundtrip() {
 #[test]
 fn gpu_triangular_solve_batched_offsets_use_checked_arithmetic() {
     let source = linalg_source();
-    let triangular = source_section(
-        &source,
-        "fn triangular_solve_typed_with_op",
-        "fn solve_typed",
-    );
+    let triangular = source_section(&source, "fn triangular_solve_typed_with_op", "fn lu_typed");
 
     for needle in [
         "checked_mul_usize(op, \"triangular matrix stride\", n, n)",
@@ -278,7 +274,11 @@ fn gpu_linalg_batched_pointer_offsets_use_checked_arithmetic_contract() {
 #[test]
 fn gpu_zero_sized_lu_factor_parity_is_filled_on_device() {
     let source = linalg_source();
-    let zero_lu = source_section(&source, "fn zero_sized_lu_factor_pair", "fn raw_stream");
+    let zero_lu = source_section(
+        &source,
+        "fn zero_sized_lu_factor_pair",
+        "fn matrix_slice_config",
+    );
     let factor = source_section(
         &source,
         "fn lu_factor_typed",

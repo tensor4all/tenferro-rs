@@ -82,9 +82,7 @@ fn main() {
     let config = parse_args().unwrap_or_else(|error| panic!("{error}"));
     let (initial_host, blocks_host, accumulated_host) = generate_inputs(&config).unwrap();
     let record = match config.backend.as_str() {
-        "faer" | "blas" | "native" => {
-            run_cpu(&config, &initial_host, &blocks_host, &accumulated_host)
-        }
+        "faer" | "native" => run_cpu(&config, &initial_host, &blocks_host, &accumulated_host),
         "cuda" => run_cuda(&config, &initial_host, &blocks_host, &accumulated_host),
         other => Err(format!("unsupported backend {other:?}")),
     }

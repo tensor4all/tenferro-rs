@@ -141,7 +141,6 @@ python3 scripts/ci/run_profile.py --list
 python3 scripts/ci/run_profile.py fmt
 python3 scripts/ci/run_profile.py clippy
 python3 scripts/ci/run_profile.py workspace-faer
-python3 scripts/ci/run_profile.py workspace-blas
 python3 scripts/ci/run_profile.py docs
 ```
 

@@ -31,7 +31,6 @@
 //!
 //! | Feature | Enables |
 //! |---|---|
-//! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
 //! | `autodiff` | The eager layer (`EagerFftOps`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
 //!

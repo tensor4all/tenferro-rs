@@ -88,7 +88,6 @@
 //!
 //! | Feature | Enables |
 //! |---|---|
-//! | `native` (default) and the other CPU provider features | Forwarded to `tenferro-cpu`; see its documentation. |
 //! | `autodiff` | The eager layer (`EagerLinalgOps`) and AD rules. Adds the `tenferro-ad` dependency. |
 //! | `cuda` | CUDA execution through `tenferro-gpu`. |
 //!
@@ -113,12 +112,10 @@
 //! operand makes a few small allocations outside the pool per call.
 //!
 //! Only svd, svdvals, qr, eigh, eigvalsh and eigvals run in a lane; every other
-//! operation returns `Unsupported` there. Lanes exist on the `native` provider
-//! only (see the "Lanes and the vendor provider" section of
+//! operation returns `Unsupported` there (see the "Lanes" section of
 //! `docs/guides/cpu-execution.md`).
 //!
 //! ```rust
-//! # #[cfg(feature = "native")]
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine, Pool};
 //! use tenferro_linalg::LinalgOps;
@@ -136,8 +133,6 @@
 //! assert_eq!(out[1].as_ref().ok(), Some(&vec![2.0, 3.0]));
 //! # Ok(())
 //! # }
-//! # #[cfg(not(feature = "native"))]
-//! # fn main() {}
 //! ```
 // A misaligned pointer handed to a CUDA library is undefined behaviour and
 // fails only on some library versions: `cuDoubleComplex` is `double2`, which
@@ -187,14 +182,6 @@ pub use api::{
     SvdvalsOptions, TracedLinalgOps, TriangularSolveOptions,
 };
 pub use backend::LinalgBackend;
-// The CPU linalg route is compiled per backend; a build with neither is a
-// configuration error, named as such rather than as a missing internal type.
-#[cfg(not(any(feature = "native", feature = "blas")))]
-compile_error!(
-    "tenferro-linalg needs exactly one CPU backend: enable the `native` (default) \
-     or `blas` feature"
-);
-
 pub use eig_normalize::normalize_eig_vectors;
 pub use error::{Error, Result};
 pub use extension::{

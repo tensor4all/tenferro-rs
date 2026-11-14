@@ -1,7 +1,6 @@
 //! Direct faer work on tenferro-owned storage takes column-major slices and
 //! runs on the engine's own team, so tenferro hands out no faer value and a
 //! downstream crate cannot meet a build mismatch at a tenferro boundary (#1939).
-#![cfg(feature = "native")]
 
 use tenferro_cpu::faer::{linalg::matmul::matmul, Accum, Mat, MatRef, Par};
 use tenferro_tensor::TypedTensor;

@@ -69,14 +69,10 @@ between `fresh_backend_cache` and `single_exec_session` naturally shrinks.
 
 ## Reproduction
 
-Run with one CPU worker and one BLAS worker to avoid hiding fixed costs behind
-parallel scheduling noise:
+Run with one CPU worker to avoid hiding fixed costs behind parallel scheduling
+noise. The pool is the only thread control: the faer backend reads no vendor
+thread variable (#2608).
 
 ```bash
-RAYON_NUM_THREADS=1 \
-VECLIB_MAXIMUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 \
-OMP_NUM_THREADS=1 \
-MKL_NUM_THREADS=1 \
-cargo bench -p tenferro-tensor --bench dot_general_overhead
+cargo bench -p tenferro-cpu --bench dot_general_overhead
 ```

@@ -19,9 +19,8 @@
 //! generator repeats a length-2048 pattern, so the 384 columns of that fixture
 //! span at most 8 directions (they do span 8: `sv[8]/sv[0]` is roundoff-level).
 //!
-//! Timing caveat: the cost table is one thread of the default `native` (faer)
-//! provider. A `blas` build hands the kernels to the vendor library, whose own
-//! thread count the engine does not constrain.
+//! Timing caveat: the cost table is one thread of the faer backend, which is
+//! the only CPU backend a build links.
 
 use std::time::Instant;
 

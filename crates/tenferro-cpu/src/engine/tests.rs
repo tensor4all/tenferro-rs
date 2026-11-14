@@ -237,7 +237,6 @@ fn a_small_strided_operation_stays_on_the_calling_thread_without_a_pool_entry() 
     assert_eq!(std::thread::current().id(), caller);
 }
 
-#[cfg(feature = "native")]
 #[test]
 fn a_small_direct_faer_call_stays_on_the_calling_thread_without_a_pool_entry() {
     let mut engine = CpuEngine::new(pool(4));

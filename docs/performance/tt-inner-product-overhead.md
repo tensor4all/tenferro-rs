@@ -2,13 +2,21 @@
 
 Date: 2026-05-20
 
-> **Historical record (#2206).** These measurements were taken on the
+> **Historical record (#2206, #2608).** These measurements were taken on the
 > pre-#2206 CPU execution model, where a backend-owned context entered a Rayon
 > pool per operation. That context, its `install` entry and the benchmark that
 > measured it are gone: a `CpuEngine` now computes on the pool the caller built,
-> and a small operation never enters that pool. The numbers below are kept as
-> provenance for the design decision they supported, not as current tenferro
-> costs. For the current dispatch model see
+> and a small operation never enters that pool.
+>
+> **#2608 deleted every BLAS-comparison artifact this page uses.** The `blas`,
+> `blas-openblas`, `blas-accelerate` and `blas-mkl` features, the vendor
+> OpenBLAS/LAPACK provider and `tenferro-cpu/benches/openblas_direct_overhead.rs`
+> no longer exist, so the `--features blas-openblas` and `--bench
+> openblas_direct_overhead` commands quoted below cannot be run and the
+> "tenferro OpenBLAS" columns can no longer be reproduced. The CPU backend is
+> faer, unconditionally. The numbers are kept as provenance for the design
+> decision they supported, not as current tenferro costs, and not as a
+> comparison anyone can redo. For the current dispatch model see
 > [Dispatch and engine cost](../guides/dispatch-and-engine-cost.md).
 
 This note summarizes the investigation of small-bond-dimension Tensor Train
@@ -32,9 +40,10 @@ inner-product overhead in `tenferro-rs`, compared with ITensors.jl.
   - Measured the old CPU context `install` entry and the surrounding
     buffer-pool wrapper. Those results measured a tenferro-owned Rayon pool
     entry that no longer exists.
-- `tenferro-cpu/benches/openblas_direct_overhead.rs`
-  - Measures direct `cblas_zgemm` calls for the same small pairwise shapes.
-  - Requires the `blas` feature and is intended for `blas-openblas` runs.
+- `tenferro-cpu/benches/openblas_direct_overhead.rs` (removed with the vendor
+  provider, #2608)
+  - Measured direct `cblas_zgemm` calls for the same small pairwise shapes.
+  - Needed the `blas` feature and was intended for `blas-openblas` runs.
 - `scripts/bench-itensors-pairwise-contraction.jl`
   - Measures the matching ITensors.jl pairwise contractions.
 - `scripts/bench-pairwise-contraction.sh`
@@ -71,53 +80,16 @@ bash scripts/bench-pairwise-contraction.sh \
   --sample-size 10
 ```
 
-Run CPU install overhead benchmark:
-
-```bash
-RAYON_NUM_THREADS=1 \
-VECLIB_MAXIMUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 \
-OMP_NUM_THREADS=1 \
-MKL_NUM_THREADS=1 \
-cargo bench -p tenferro-cpu --bench cpu_install_overhead -- \
-  --warm-up-time 0.5 \
-  --measurement-time 1 \
-  --sample-size 20
-```
-
-Run OpenBLAS-backed tenferro pairwise benchmark:
-
-```bash
-RAYON_NUM_THREADS=1 \
-VECLIB_MAXIMUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 \
-OMP_NUM_THREADS=1 \
-MKL_NUM_THREADS=1 \
-cargo bench -p tenferro-cpu \
-  --no-default-features \
-  --features blas-openblas \
-  --bench pairwise_contraction -- \
-  --warm-up-time 0.5 \
-  --measurement-time 1 \
-  --sample-size 10
-```
-
-Run direct OpenBLAS microbenchmark:
-
-```bash
-RAYON_NUM_THREADS=1 \
-VECLIB_MAXIMUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 \
-OMP_NUM_THREADS=1 \
-MKL_NUM_THREADS=1 \
-cargo bench -p tenferro-cpu \
-  --no-default-features \
-  --features blas-openblas \
-  --bench openblas_direct_overhead -- \
-  --warm-up-time 0.5 \
-  --measurement-time 1 \
-  --sample-size 20
-```
+Two further runs produced columns below and can no longer be started. The CPU
+install-overhead benchmark (`--bench cpu_install_overhead`) went with the backend
+context in #2206, and the OpenBLAS-backed pairwise run and direct OpenBLAS
+microbenchmark (`--features blas-openblas`, `--bench openblas_direct_overhead`)
+went with the vendor provider and its benchmark in #2608. Both blocks were
+deleted rather than kept as commands that fail; the numbers they produced stay in
+the tables. Of the commands on this page, the two script runs above are the ones
+that still work: `--kind rust` drives `cargo bench -p tenferro-cpu --bench
+pairwise_contraction`, and `--kind julia` needs Julia and the `benchmarks/julia`
+environment instantiated first.
 
 ## Pairwise Result Summary
 
@@ -414,14 +386,12 @@ entry point without making normal eager contractions context-dependent.
 
 - `cargo fmt --all -- --check`
 - `cargo bench -p tenferro-cpu --bench pairwise_contraction --no-run`
-- `cargo bench -p tenferro-cpu --bench cpu_install_overhead --no-run`
-- `cargo bench -p tenferro-cpu --no-default-features --features blas-openblas --bench pairwise_contraction -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
-- `cargo bench -p tenferro-cpu --no-default-features --features blas-openblas --bench dot_general_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 10`
-- `cargo bench -p tenferro-cpu --no-default-features --features blas-openblas --bench openblas_direct_overhead -- --warm-up-time 0.5 --measurement-time 1 --sample-size 20`
-- `cargo bench -p tenferro-cpu --no-default-features --features blas-openblas --bench pairwise_contraction --no-run`
 - `cargo test -p tenferro-cpu --release dot_general -- --nocapture`
-- `cargo test -p tenferro-cpu --no-default-features --features blas-openblas --release dot_general`
-- `cargo test -p tenferro-cpu --no-default-features --features blas-openblas --release`
+- Also run at the time, and no longer startable: `cargo bench -p tenferro-cpu
+  --bench cpu_install_overhead --no-run` (target removed in #2206) and the four
+  `--no-default-features --features blas-openblas` `cargo bench`/`cargo test`
+  lines (feature and `openblas_direct_overhead` target removed in #2608). They
+  are recorded here as what was executed, not as commands to repeat.
 - `bash -n scripts/bench-pairwise-contraction.sh`
 - Julia `Pkg.instantiate()` and `Pkg.precompile()`
 - ITensors version check: `0.9.27`

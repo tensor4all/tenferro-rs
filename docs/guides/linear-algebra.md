@@ -130,11 +130,11 @@ Batched decompositions have two independent kinds of parallel work:
 For SVD, QR, Hermitian eigenvalue, and other batched linalg calls, the engine
 must choose the outer fan-out and the provider must respect the selected inner
 policy. A faer-backed CPU context can pass `Par::Seq` or `Par::Team` while
-preserving one domain budget. A BLAS/LAPACK provider may use its own worker
-pool, so its environment-controlled inner threads can oversubscribe an outer
-batch; see [Choosing A Backend](choosing-a-backend.md) before combining the
-two. Providers must report unsupported decomposition or dtype requests rather
-than silently changing the algorithm or execution backend.
+preserving one domain budget. The CPU backend owns no worker pool of its own, so
+the engine's pool is the only thread count that applies and no inner thread set
+can oversubscribe the outer batch; see [Choosing A Backend](choosing-a-backend.md)
+for the policy. Providers must report unsupported decomposition or dtype
+requests rather than silently changing the algorithm or execution backend.
 
 ## Concrete Solve
 

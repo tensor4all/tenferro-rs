@@ -90,7 +90,7 @@ For feature requests and design discussions, collect:
 - Current limitation or friction
 - Proposed behavior or API, if known
 - Affected crates or layers
-- Dependency, backend, CUDA, BLAS/LAPACK, AD, and cache implications
+- Dependency, backend, CUDA, AD, and cache implications
 - Non-goals and compatibility constraints
 - Acceptance criteria precise enough for an implementer to act on
 
@@ -136,7 +136,7 @@ Include:
 - Relevant current behavior
 - Proposed direction, if any
 - Affected areas or crates
-- Dependency, backend, CUDA, BLAS/LAPACK, AD, cache, and feature-flag impact
+- Dependency, backend, CUDA, AD, cache, and feature-flag impact
   when relevant
 - Non-goals
 - Acceptance criteria

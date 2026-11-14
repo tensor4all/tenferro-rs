@@ -322,7 +322,7 @@ def lane_steps(
                           "-p", "tenferro-xla", "--features", "pjrt"], env),
         ("CUDA tutorial build", ["cargo", "build", "-j", str(jobs), "--profile", "ci",
                                  "--manifest-path", "docs/tutorial-code/Cargo.toml",
-                                 "--no-default-features", "--features", "cuda,native",
+                                 "--no-default-features", "--features", "cuda",
                                  "--bin", "cuda_tutorial"], env),
         ("CUDA host lane", [*partition, "--kind", "cuda", "--lane", "host",
                             "--archive-file", str(cuda_archive)], host_env),

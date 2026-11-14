@@ -16,15 +16,9 @@ documentation = "https://docs.rs/tenferro-fft"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["autodiff", "native", "cuda"]
+features = ["autodiff", "cuda"]
 
 [features]
-default = ["native"]
-native = ["tenferro-ad?/native", "tenferro-cpu/native"]
-blas = ["tenferro-ad?/blas", "tenferro-cpu/blas"]
-blas-openblas = ["tenferro-ad?/blas-openblas", "tenferro-cpu/blas-openblas"]
-blas-accelerate = ["tenferro-ad?/blas-accelerate", "tenferro-cpu/blas-accelerate"]
-blas-mkl = ["tenferro-ad?/blas-mkl", "tenferro-cpu/blas-mkl"]
 autodiff = [
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",

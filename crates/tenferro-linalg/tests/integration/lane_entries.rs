@@ -9,8 +9,6 @@
 //! into the lane's pool, and draw every buffer from the lane's pool and no other. Every other
 //! linalg operation is `Unsupported` on a lane.
 
-#![cfg(feature = "native")]
-
 use std::error::Error as _;
 
 use num_complex::{Complex32, Complex64};

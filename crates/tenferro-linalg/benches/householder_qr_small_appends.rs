@@ -147,7 +147,7 @@ fn parse_args() -> Result<Config, String> {
         match args[index].as_str() {
             "--backend" => {
                 backend = Some(match value.as_str() {
-                    "faer" | "blas" | "native" => tenferro_cpu::cpu_provider_id(),
+                    "faer" => tenferro_cpu::cpu_provider_id(),
                     _ => return Err(format!("unknown backend {value:?}")),
                 })
             }

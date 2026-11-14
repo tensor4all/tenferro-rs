@@ -7,7 +7,6 @@
     "strict": false,
     "contexts": [
       "rustfmt",
-      "cargo test (blas inject)",
       "coverage",
       "docs-site",
       "CI gate (PR workspace tests)",

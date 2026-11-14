@@ -133,8 +133,7 @@ Complete this phase before changing manifests or making any other release edit.
    only to check that no user-visible merged PR was omitted.
 4. Record the tag commit SHA (`git rev-parse vX.Y.Z`) and the required CI job
    names (the workspace gate jobs that must pass before publication, e.g.
-   `workspace-faer`, `workspace-blas`, `extensions`, `docs`, `coverage`,
-   `ci-config`). Phase 3 reuses CI results only for exactly this SHA.
+   `workspace-faer`, `extensions`, `docs`, `coverage`, `ci-config`). Phase 3 reuses CI results only for exactly this SHA.
 
 ## Phase 3 — Publish From The Tag
 

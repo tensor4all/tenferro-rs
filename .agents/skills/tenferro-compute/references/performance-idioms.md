@@ -129,11 +129,9 @@ other compile-time metadata changes.
 
 Build the pool yourself with `tenferro_cpu::Pool::builder().threads(n)`
 and hand it to `CpuEngine::new`, or use `CpuEngine::serial()` for no pool at all.
-tenferro never builds threads and never enters an ambient pool. `native`
-follows the engine's pool; BLAS/LAPACK provider threads are configured with
-variables such as `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, or
-`VECLIB_MAXIMUM_THREADS`. Avoid outer parallel loops that oversubscribe the
-provider.
+tenferro never builds threads and never enters an ambient pool. Every CPU
+kernel follows the engine's pool, so the pool's width is the whole thread
+control. Avoid outer parallel loops that oversubscribe it.
 
 For long-running processes, use the documented engine/runtime cache stats and
 clear operations. Do not defeat cache ownership by constructing a fresh engine

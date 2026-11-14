@@ -1,6 +1,6 @@
 //! The public gauge of `eig` eigenvector columns.
 //!
-//! `eig` promises unit 2-norm columns, which the providers do not all deliver, so the
+//! `eig` promises unit 2-norm columns, which the numeric library does not deliver, so the
 //! backend seam normalizes them. A caller that drives `tlinalg` eig itself - a kernel that
 //! batches square blocks on a lane token, say - has to produce the same values and the same
 //! typed failure as `eig`; publishing the routine is what makes that possible without a copy

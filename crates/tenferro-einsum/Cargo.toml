@@ -17,39 +17,14 @@ documentation = "https://docs.rs/tenferro-einsum"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["autodiff", "native", "cuda"]
+features = ["autodiff", "cuda"]
 
 [features]
 # Test support, off by default (see `tenferro-cpu`): placement-ledger assertions.
 ledger = ["tenferro-cpu/ledger"]
-default = ["native"]
 autodiff = [
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
-]
-native = [
-    "tenferro-ad?/native",
-    "tenferro-cpu/native",
-]
-blas = [
-    "tenferro-ad?/blas",
-    "tenferro-cpu/blas",
-    "dep:cpueinsum-blas",
-]
-blas-openblas = [
-    "blas",
-    "tenferro-ad?/blas-openblas",
-    "tenferro-cpu/blas-openblas",
-]
-blas-accelerate = [
-    "blas",
-    "tenferro-ad?/blas-accelerate",
-    "tenferro-cpu/blas-accelerate",
-]
-blas-mkl = [
-    "blas",
-    "tenferro-ad?/blas-mkl",
-    "tenferro-cpu/blas-mkl",
 ]
 cuda = [
     "tenferro-ad?/cuda",
@@ -67,7 +42,6 @@ tenferro-tensor = { path = "../tenferro-tensor", version = "0.11.0", default-fea
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.11.0", default-features = false }
 tenferro-cpu-basic = { path = "../tenferro-cpu-basic", version = "0.11.0" }
 cpueinsum.workspace = true
-cpueinsum-blas = { workspace = true, optional = true }
 tenferro-gpu = { path = "../tenferro-gpu", version = "0.11.0", default-features = false, optional = true }
 computegraph.workspace = true
 lru.workspace = true

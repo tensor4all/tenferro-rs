@@ -2,9 +2,8 @@
 //!
 //! This target owns the process allocator, so it must stay a separate test
 //! binary. Counts are steady state: the session buffer pool is primed by
-//! warm-up calls first. Only Rust heap allocations are counted; the LAPACK/BLAS
-//! C scratch (and any vendor-internal allocation) is outside this counter and
-//! out of scope here.
+//! warm-up calls first. Only Rust heap allocations are counted; any C-side
+//! scratch inside the numeric library is outside this counter and out of scope.
 //!
 //! The provider hoists its workspace out of the batch loop, so the steady-state
 //! count must not grow per item. Each family pins a single-item and a batched
@@ -149,69 +148,23 @@ fn check_family(
 //     `Vec<Tensor>` mapping of it.
 // The two-thread lane adds one allocation per fanned-out lane: rayon's
 // `HeapJob` for the second lane's `tlinalg::batch::run` spawn.
-#[cfg(feature = "native")]
 const QR_CEILING_1T: (usize, usize) = (3, 3);
-#[cfg(feature = "native")]
 const QR_CEILING_2T: (usize, usize) = (3, 5);
-#[cfg(feature = "native")]
 const SVD_CEILING_1T: (usize, usize) = (3, 3);
-#[cfg(feature = "native")]
 const SVD_CEILING_2T: (usize, usize) = (3, 5);
-#[cfg(feature = "native")]
 const PACKED_LU_CEILING_1T: (usize, usize) = (3, 3);
-#[cfg(feature = "native")]
 const PACKED_LU_CEILING_2T: (usize, usize) = (3, 5);
-#[cfg(feature = "native")]
 const QR_BATCH_GROWTH_1T: usize = 0;
 // Measured: batch 1 = 3, batch 64 = 5. The two extra allocations are the
 // second lane's rayon `HeapJob`, created when Auto fans out from one lane to
 // two; they do not grow per item beyond the budget.
-#[cfg(feature = "native")]
 const QR_BATCH_GROWTH_2T: usize = 2;
-#[cfg(feature = "native")]
 const SVD_BATCH_GROWTH_1T: usize = 0;
 // Measured: batch 1 = 3, batch 64 = 5, the same second-lane spawn.
-#[cfg(feature = "native")]
 const SVD_BATCH_GROWTH_2T: usize = 2;
-#[cfg(feature = "native")]
 const PACKED_LU_BATCH_GROWTH_1T: usize = 0;
 // Measured: batch 1 = 3, batch 64 = 5, the same second-lane spawn.
-#[cfg(feature = "native")]
 const PACKED_LU_BATCH_GROWTH_2T: usize = 2;
-// Re-measured on `tlinalg-blas 0.3.1`: the LAPACK route already took its
-// scratch from the session pool, and the release's removed per-call
-// permutation/tau buffers do not appear on these three families' paths.
-#[cfg(feature = "blas")]
-const QR_CEILING_1T: (usize, usize) = (9, 9);
-#[cfg(feature = "blas")]
-const QR_CEILING_2T: (usize, usize) = (9, 9);
-#[cfg(feature = "blas")]
-const SVD_CEILING_1T: (usize, usize) = (13, 13);
-#[cfg(feature = "blas")]
-const SVD_CEILING_2T: (usize, usize) = (13, 13);
-// Measured on the pooled-lease route: batch 1 = 3, batch 64 = 3. The earlier
-// measurement (batch 1 = 7, batch 64 = 8) recorded a packed-LU output that never
-// returned its pooled storage, so the ceiling keeps the slack that finding left
-// while the growth budget below is back to zero.
-#[cfg(feature = "blas")]
-const PACKED_LU_CEILING_1T: (usize, usize) = (7, 8);
-#[cfg(feature = "blas")]
-const PACKED_LU_CEILING_2T: (usize, usize) = (7, 8);
-#[cfg(feature = "blas")]
-const QR_BATCH_GROWTH_1T: usize = 0;
-#[cfg(feature = "blas")]
-const QR_BATCH_GROWTH_2T: usize = 0;
-#[cfg(feature = "blas")]
-const SVD_BATCH_GROWTH_1T: usize = 0;
-#[cfg(feature = "blas")]
-const SVD_BATCH_GROWTH_2T: usize = 0;
-// Measured: batch 1 = 3, batch 64 = 3.
-#[cfg(feature = "blas")]
-const PACKED_LU_BATCH_GROWTH_1T: usize = 0;
-// Measured: batch 1 = 3, batch 64 = 3; the BLAS lane runs its batch loop on the
-// coordinator thread, so it has no second-lane spawn to pay for.
-#[cfg(feature = "blas")]
-const PACKED_LU_BATCH_GROWTH_2T: usize = 0;
 
 fn check_lane(
     threads: usize,

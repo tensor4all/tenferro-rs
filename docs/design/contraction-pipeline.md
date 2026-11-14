@@ -99,33 +99,16 @@ CPU execution is handled by `CpuBackend`:
   strided-kernel and strided-fused implementations plus dedicated CPU
   semantics, with automatic fusion retaining the enclosing context and pool,
 - `dot_general`, grouped GEMM, and N-ary concrete einsum delegate to cpueinsum
-  prepared plans, and CPU linalg delegates to tlinalg / tlinalg-blas,
+  prepared plans, and CPU linalg delegates to tlinalg,
 - the lower library runs inside the selected engine pool through
   `CpuExecutionContext`, with `Sequential` for one-thread contexts and the
   selected pool plus a thread budget otherwise,
-- vendor BLAS/LAPACK threading remains vendor-owned; tenferro guarantees only
-  the coordinator thread's mask.
+  tenferro guarantees the coordinator thread's CPU mask.
 
-Provider selection is compile-time (`native` or `blas`); there is no runtime
-provider bundle or override hook. Unsupported dtypes and shapes map to typed
-errors.
-
-On the `blas` provider the *plan* can still be tcontract's own. `cpueinsum-blas`
-prepares a vendor-first plan (the linked CBLAS for every problem its layout
-inference can shape into a GEMM, tcontract's plan as the fallback), which
-bypasses tcontract's per-dtype faer bound. A Complex64 product whose GEMM row
-role is one or two takes tcontract's plan instead of the vendor one on an
-Accelerate link, where Accelerate's Complex64 GEMM kernel pays a per
-right-operand-element read that a thin row role never amortises: 61 us against
-17.8 us at `1x141 * 141x282` and 81 us against 19.3 us at `2x141 * 141x282`,
-while Accelerate stays 4.1x faster at `256^3` and is kept for every real row
-role, every other dtype and any product tcontract does not fuse onto faer. That
-route changes the Complex64 accumulation order for the routed products, by
-2.2e-16 to 1.3e-15 of the output scale (every other cell is bit-identical),
-which is a deliberate numerical choice for this provider and dtype rather than
-a side effect, and it is
-compiled only for an Accelerate link so a reference BLAS keeps its kernel. See
-`docs/worklogs/2026-11-03-thin-c64-vendor-route.md`.
+There is no provider selection at all: the CPU stack links one faer-backed
+`cpueinsum`/`tcontract`/`tlinalg` set in every build, and no runtime provider
+bundle or override hook can replace it. Unsupported dtypes and shapes map to
+typed errors.
 
 ### Contraction plan cache and the eager slot
 
@@ -170,12 +153,11 @@ failed preparation returns the error before touching the entry, so only the
 miss counter moves. Requests without a retained slot (no slot, or one at or
 beyond the capacity) have no storage to reuse and still allocate. This is what
 keeps a caller that streams GEMMs of different shapes through one slot from
-paying an allocation per call once warm (#2314): with the native provider and
+paying an allocation per call once warm (#2314): with the CPU provider and
 f64, three alternating shapes and an eight-block recoupling sequence measured
 **3 -> 0** and **8 -> 0** allocations per warm round with the slot capacity
-forced to one. The rebuilt lower plan itself may still allocate: `cpueinsum-blas`
-planning builds vendor metadata on every miss, and large packed native plans
-allocate their own state.
+forced to one. The rebuilt lower plan itself may still allocate: large packed
+plans allocate their own state.
 
 ## CubeCL/CUDA Execution
 

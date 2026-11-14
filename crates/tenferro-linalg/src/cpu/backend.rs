@@ -161,32 +161,10 @@ macro_rules! preset_scalar {
         num_complex::Complex64
     };
 }
-trait CpuBackendLinalgAffinityExt {
-    /// Every BLAS linalg entry passes here, including the direct caller-output
-    /// path that does not allocate a fresh result.
-    fn with_linalg_pool_checked<R>(
-        &mut self,
-        op: impl FnOnce(&mut Exec<'_>, &mut BufferPool) -> tenferro_tensor::Result<R>,
-    ) -> tenferro_tensor::Result<R>;
-}
-
-impl CpuBackendLinalgAffinityExt for CpuEngine {
-    fn with_linalg_pool_checked<R>(
-        &mut self,
-        op: impl FnOnce(&mut Exec<'_>, &mut BufferPool) -> tenferro_tensor::Result<R>,
-    ) -> tenferro_tensor::Result<R> {
-        self.with_linalg_pool(move |exec, buffers| {
-            #[cfg(feature = "blas")]
-            super::tlinalg_blas::reject_forced_batch_strategy(exec)?;
-            op(exec, buffers)
-        })
-    }
-}
-
 impl LinalgBackend for CpuEngine {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         let domain = self.shared_allocation_domain().cloned();
-        self.with_linalg_pool_checked(move |exec, buffers| {
+        self.with_linalg_pool(move |exec, buffers| {
             if tensor_uses_backend_storage(input)
                 && let Some(domain) = domain.as_deref()
             {
@@ -214,7 +192,7 @@ impl LinalgBackend for CpuEngine {
             transpose_a,
             unit_diagonal,
         };
-        self.with_linalg_pool_checked(|exec, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             triangular_solve_entered(exec, buffers, a, b, options)
         })
     }
@@ -237,12 +215,11 @@ impl LinalgBackend for CpuEngine {
             transpose_a,
             unit_diagonal,
         };
-        self.with_linalg_pool_checked(move |exec, buffers| {
+        self.with_linalg_pool(move |exec, buffers| {
             // Both operands must be faer-eligible for the direct path: `a`
             // reaches faer as a strided `MatRef` and `b` is gathered straight
             // into the destructible right-hand side. If either is ineligible,
             // the scoped materializer below packs only what it must.
-            #[cfg(feature = "native")]
             if faer_strided_host_ok(&a) && faer_rhs_host_ok(&b) {
                 return triangular_solve_faer_view_entered(exec, buffers, a, b, options);
             }
@@ -256,121 +233,70 @@ impl LinalgBackend for CpuEngine {
 
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = &host_operand("lu", input)?;
-        self.with_linalg_pool_checked(|exec, buffers| lu_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| lu_entered(exec, buffers, input))
     }
 
     fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = &host_operand("lu_factor", input)?;
         {
-            #[cfg(feature = "native")]
             {
-                #[cfg(feature = "native")]
                 {
-                    self.with_linalg_pool_checked(|exec, buffers| match input.dtype() {
+                    self.with_linalg_pool(|exec, buffers| match input.dtype() {
                         DType::F32 => {
                             let t = input
                                 .as_typed::<f32>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
-                            linalg::faer::lu_factor(exec, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![
-                                    Tensor::from_typed::<f32>(lu),
-                                    Tensor::from_typed::<i32>(pivots),
-                                    Tensor::from_typed::<f32>(parity),
-                                ]
-                            })
+                            linalg::faer_linalg::lu_factor(exec, buffers, t).map(
+                                |(lu, pivots, parity)| {
+                                    vec![
+                                        Tensor::from_typed::<f32>(lu),
+                                        Tensor::from_typed::<i32>(pivots),
+                                        Tensor::from_typed::<f32>(parity),
+                                    ]
+                                },
+                            )
                         }
                         DType::F64 => {
                             let t = input
                                 .as_typed::<f64>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
-                            linalg::faer::lu_factor(exec, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![
-                                    Tensor::from_typed::<f64>(lu),
-                                    Tensor::from_typed::<i32>(pivots),
-                                    Tensor::from_typed::<f64>(parity),
-                                ]
-                            })
+                            linalg::faer_linalg::lu_factor(exec, buffers, t).map(
+                                |(lu, pivots, parity)| {
+                                    vec![
+                                        Tensor::from_typed::<f64>(lu),
+                                        Tensor::from_typed::<i32>(pivots),
+                                        Tensor::from_typed::<f64>(parity),
+                                    ]
+                                },
+                            )
                         }
                         DType::C32 => {
                             let t = input
                                 .as_typed::<Complex32>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
-                            linalg::faer::lu_factor(exec, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![
-                                    Tensor::from_typed::<Complex32>(lu),
-                                    Tensor::from_typed::<i32>(pivots),
-                                    Tensor::from_typed::<Complex32>(parity),
-                                ]
-                            })
+                            linalg::faer_linalg::lu_factor(exec, buffers, t).map(
+                                |(lu, pivots, parity)| {
+                                    vec![
+                                        Tensor::from_typed::<Complex32>(lu),
+                                        Tensor::from_typed::<i32>(pivots),
+                                        Tensor::from_typed::<Complex32>(parity),
+                                    ]
+                                },
+                            )
                         }
                         DType::C64 => {
                             let t = input
                                 .as_typed::<Complex64>()
                                 .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
-                            linalg::faer::lu_factor(exec, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![
-                                    Tensor::from_typed::<Complex64>(lu),
-                                    Tensor::from_typed::<i32>(pivots),
-                                    Tensor::from_typed::<Complex64>(parity),
-                                ]
-                            })
-                        }
-                        _ => Err(unsupported_dtype("lu_factor", input.dtype())),
-                    })
-                }
-            }
-            #[cfg(feature = "blas")]
-            {
-                #[cfg(feature = "blas")]
-                {
-                    self.with_linalg_pool_checked(|exec, buffers| match input.dtype() {
-                        DType::F32 => {
-                            let t = input
-                                .as_typed::<f32>()
-                                .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
-                            linalg::blas::lu_factor(exec, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![
-                                    Tensor::from_typed::<f32>(lu),
-                                    Tensor::from_typed::<i32>(pivots),
-                                    Tensor::from_typed::<f32>(parity),
-                                ]
-                            })
-                        }
-                        DType::F64 => {
-                            let t = input
-                                .as_typed::<f64>()
-                                .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
-                            linalg::blas::lu_factor(exec, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![
-                                    Tensor::from_typed::<f64>(lu),
-                                    Tensor::from_typed::<i32>(pivots),
-                                    Tensor::from_typed::<f64>(parity),
-                                ]
-                            })
-                        }
-                        DType::C32 => {
-                            let t = input
-                                .as_typed::<Complex32>()
-                                .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
-                            linalg::blas::lu_factor(exec, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![
-                                    Tensor::from_typed::<Complex32>(lu),
-                                    Tensor::from_typed::<i32>(pivots),
-                                    Tensor::from_typed::<Complex32>(parity),
-                                ]
-                            })
-                        }
-                        DType::C64 => {
-                            let t = input
-                                .as_typed::<Complex64>()
-                                .ok_or_else(|| unsupported_dtype("lu_factor", input.dtype()))?;
-                            linalg::blas::lu_factor(exec, buffers, t).map(|(lu, pivots, parity)| {
-                                vec![
-                                    Tensor::from_typed::<Complex64>(lu),
-                                    Tensor::from_typed::<i32>(pivots),
-                                    Tensor::from_typed::<Complex64>(parity),
-                                ]
-                            })
+                            linalg::faer_linalg::lu_factor(exec, buffers, t).map(
+                                |(lu, pivots, parity)| {
+                                    vec![
+                                        Tensor::from_typed::<Complex64>(lu),
+                                        Tensor::from_typed::<i32>(pivots),
+                                        Tensor::from_typed::<Complex64>(parity),
+                                    ]
+                                },
+                            )
                         }
                         _ => Err(unsupported_dtype("lu_factor", input.dtype())),
                     })
@@ -381,7 +307,7 @@ impl LinalgBackend for CpuEngine {
 
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = &host_operand("full_piv_lu", input)?;
-        self.with_linalg_pool_checked(|exec, buffers| full_piv_lu_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| full_piv_lu_entered(exec, buffers, input))
     }
 
     fn full_piv_lu_solve(
@@ -395,7 +321,7 @@ impl LinalgBackend for CpuEngine {
         ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
         validate_square_matrix("full_piv_lu_solve", a.shape())?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b.dtype(), b.shape()));
+            return self.with_linalg_pool(|_, _| zeros_like_tensor(b.dtype(), b.shape()));
         }
 
         // A vector right-hand side is solved as a one-column matrix: a metadata reshape of the
@@ -409,11 +335,11 @@ impl LinalgBackend for CpuEngine {
         };
 
         // The same complete-pivoting kernel as `full_piv_lu` in both CPU builds.
-        let result = self.with_linalg_pool_checked(|exec, buffers| {
+        let result = self.with_linalg_pool(|exec, buffers| {
             same_variant_pair!(
                 a,
                 &rhs,
-                |a, b| { linalg::faer::full_piv_lu_solve(exec, buffers, a, b, transpose_a) },
+                |a, b| { linalg::faer_linalg::full_piv_lu_solve(exec, buffers, a, b, transpose_a) },
                 unsupported_pair("full_piv_lu_solve", a, &rhs)
             )
         })?;
@@ -427,19 +353,18 @@ impl LinalgBackend for CpuEngine {
 
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = &host_operand("svd", input)?;
-        self.with_linalg_pool_checked(|exec, buffers| svd_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| svd_entered(exec, buffers, input))
     }
 
     fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = &host_operand("svd_full", input)?;
-        self.with_linalg_pool_checked(|exec, buffers| svd_full_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| svd_full_entered(exec, buffers, input))
     }
 
     fn svd_full_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = input.try_host("svd_full")?;
         ensure_supported_linalg_dtype("svd_full", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
                 return svd_full_faer_view_entered(exec, buffers, input);
             }
@@ -451,14 +376,13 @@ impl LinalgBackend for CpuEngine {
 
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         let input = &host_operand("svd_values", input)?;
-        self.with_linalg_pool_checked(|exec, buffers| svd_values_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| svd_values_entered(exec, buffers, input))
     }
 
     fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = input.try_host("svd")?;
         ensure_supported_linalg_dtype("svd", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
                 return svd_faer_view_entered(exec, buffers, input);
             }
@@ -471,8 +395,7 @@ impl LinalgBackend for CpuEngine {
     fn svd_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         let input = input.try_host("svd_values")?;
         ensure_supported_linalg_dtype("svd_values", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
                 return svd_values_faer_view_entered(exec, buffers, input);
             }
@@ -488,14 +411,13 @@ impl LinalgBackend for CpuEngine {
 
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = &host_operand("qr", input)?;
-        self.with_linalg_pool_checked(|exec, buffers| qr_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| qr_entered(exec, buffers, input))
     }
 
     fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = input.try_host("qr")?;
         ensure_supported_linalg_dtype("qr", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
                 return qr_faer_view_entered(exec, buffers, input);
             }
@@ -513,7 +435,7 @@ impl LinalgBackend for CpuEngine {
         validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
         let input = &host_operand("rank_revealing_qr", input)?;
         ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
-        self.with_linalg_pool_checked(|exec, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             rank_revealing_qr_entered(exec, buffers, input, options)
         })
     }
@@ -526,8 +448,7 @@ impl LinalgBackend for CpuEngine {
         validate_rank_revealing_qr_options("rank_revealing_qr", options)?;
         let input = input.try_host("rank_revealing_qr")?;
         ensure_supported_linalg_dtype("rank_revealing_qr", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
                 return rank_revealing_qr_faer_view_entered(exec, buffers, input, options);
             }
@@ -543,7 +464,7 @@ impl LinalgBackend for CpuEngine {
 
     fn householder_qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<CompactQrResult> {
         let input = &host_operand("householder_qr", input)?;
-        self.with_linalg_pool_checked(|exec, buffers| householder_qr_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| householder_qr_entered(exec, buffers, input))
     }
 
     fn householder_qr_from_factors(
@@ -553,7 +474,7 @@ impl LinalgBackend for CpuEngine {
     ) -> tenferro_tensor::Result<CompactQrResult> {
         let q = &host_operand("householder_qr_from_factors", q)?;
         let r = &host_operand("householder_qr_from_factors", r)?;
-        self.with_linalg_pool_checked(|exec, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             householder_qr_from_factors_entered(exec, buffers, q, r)
         })
     }
@@ -567,7 +488,7 @@ impl LinalgBackend for CpuEngine {
         let packed = &host_operand("householder_qr_append", packed)?;
         let coeff = &host_operand("householder_qr_append", coeff)?;
         let block = &host_operand("householder_qr_append", block)?;
-        self.with_linalg_pool_checked(|exec, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             householder_qr_append_entered(exec, buffers, packed, coeff, block)
         })
     }
@@ -580,7 +501,7 @@ impl LinalgBackend for CpuEngine {
     ) -> tenferro_tensor::Result<Tensor> {
         let packed = &host_operand("householder_qr_r", packed)?;
         let coeff = &host_operand("householder_qr_r", coeff)?;
-        self.with_linalg_pool_checked(|exec, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             householder_qr_r_entered(exec, buffers, packed, coeff, options)
         })
     }
@@ -594,21 +515,20 @@ impl LinalgBackend for CpuEngine {
     ) -> tenferro_tensor::Result<Tensor> {
         let packed = &host_operand("householder_qr_q_columns", packed)?;
         let coeff = &host_operand("householder_qr_q_columns", coeff)?;
-        self.with_linalg_pool_checked(|exec, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             householder_qr_q_columns_entered(exec, buffers, packed, coeff, columns, options)
         })
     }
 
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = &host_operand("eigh", input)?;
-        self.with_linalg_pool_checked(|exec, buffers| eigh_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| eigh_entered(exec, buffers, input))
     }
 
     fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = input.try_host("eigh")?;
         ensure_supported_linalg_dtype("eigh", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
                 return eigh_faer_view_entered(exec, buffers, input);
             }
@@ -621,8 +541,7 @@ impl LinalgBackend for CpuEngine {
     fn eigh_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         let input = input.try_host("eigh_values")?;
         ensure_supported_linalg_dtype("eigh_values", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
                 return eigh_values_faer_view_entered(exec, buffers, input);
             }
@@ -638,7 +557,7 @@ impl LinalgBackend for CpuEngine {
 
     fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         let domain = self.shared_allocation_domain().cloned();
-        self.with_linalg_pool_checked(move |exec, buffers| {
+        self.with_linalg_pool(move |exec, buffers| {
             if let Some(domain) = domain.as_deref()
                 && input.backend_family().is_some()
             {
@@ -646,7 +565,6 @@ impl LinalgBackend for CpuEngine {
             }
             let input = input.try_host("cholesky")?;
             ensure_supported_linalg_dtype("cholesky", input.dtype())?;
-            #[cfg(feature = "native")]
             if faer_strided_host_ok(&input) {
                 return cholesky_faer_view_entered(exec, buffers, input);
             }
@@ -659,8 +577,7 @@ impl LinalgBackend for CpuEngine {
     fn lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = input.try_host("lu")?;
         ensure_supported_linalg_dtype("lu", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
                 return lu_faer_view_entered(exec, buffers, input);
             }
@@ -673,7 +590,7 @@ impl LinalgBackend for CpuEngine {
     fn full_piv_lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = input.try_host("full_piv_lu")?;
         ensure_supported_linalg_dtype("full_piv_lu", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
                 return full_piv_lu_faer_view_entered(exec, buffers, input);
             }
@@ -690,10 +607,9 @@ impl LinalgBackend for CpuEngine {
     fn eig_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = input.try_host("eig")?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
-                return linalg::faer::eig(exec, buffers, &input);
+                return linalg::faer_linalg::eig(exec, buffers, &input);
             }
             with_owned_layout(exec, buffers, "eig", input, |input, buffers, exec| {
                 eig_entered(exec, buffers, input)
@@ -704,10 +620,9 @@ impl LinalgBackend for CpuEngine {
     fn eig_values_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         let input = input.try_host("eig_values")?;
         ensure_supported_linalg_dtype("eig_values", input.dtype())?;
-        self.with_linalg_pool_checked(move |exec, buffers| {
-            #[cfg(feature = "native")]
+        self.with_linalg_pool(move |exec, buffers| {
             if faer_strided_host_ok(&input) {
-                return linalg::faer::eig_values(exec, buffers, &input);
+                return linalg::faer_linalg::eig_values(exec, buffers, &input);
             }
             with_owned_layout(
                 exec,
@@ -721,19 +636,19 @@ impl LinalgBackend for CpuEngine {
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         let input = &host_operand("eigh_values", input)?;
-        self.with_linalg_pool_checked(|exec, buffers| eigh_values_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| eigh_values_entered(exec, buffers, input))
     }
 
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         let input = &host_operand("eig", input)?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
-        self.with_linalg_pool_checked(|exec, buffers| eig_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| eig_entered(exec, buffers, input))
     }
 
     fn eig_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         let input = &host_operand("eig_values", input)?;
         ensure_supported_linalg_dtype("eig_values", input.dtype())?;
-        self.with_linalg_pool_checked(|exec, buffers| eig_values_entered(exec, buffers, input))
+        self.with_linalg_pool(|exec, buffers| eig_values_entered(exec, buffers, input))
     }
 
     fn lu_solve_prepared(
@@ -758,7 +673,7 @@ impl LinalgBackend for CpuEngine {
             return Err(Error::dtype_mismatch(OP, DType::I32, pivots.dtype()));
         }
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return self.with_linalg_pool_checked(|_, _| zeros_like_tensor(b.dtype(), b.shape()));
+            return self.with_linalg_pool(|_, _| zeros_like_tensor(b.dtype(), b.shape()));
         }
 
         validate_lu_solve_prepared_shapes(
@@ -769,7 +684,7 @@ impl LinalgBackend for CpuEngine {
         validate_nonsingular_u(packed_lu_tensor)?;
         // One pooled RHS copy becomes the output; the provider kernel applies
         // the stored pivots and both triangular solves per matrix in place.
-        self.with_linalg_pool_checked(|exec, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             packed_lu::lu_solve_prepared_entered(
                 exec,
                 buffers,
@@ -789,7 +704,7 @@ impl LinalgBackend for CpuEngine {
         let a = &host_operand(OP, a)?;
         let b = &host_operand(OP, b)?;
         ensure_supported_linalg_pair(OP, a, b)?;
-        self.with_linalg_pool_checked(|exec, buffers| {
+        self.with_linalg_pool(|exec, buffers| {
             packed_lu::lu_factor_solve_entered(exec, buffers, a, b)
         })
     }
@@ -798,7 +713,7 @@ impl LinalgBackend for CpuEngine {
         let a = &host_operand("solve", a)?;
         let b = &host_operand("solve", b)?;
         ensure_supported_linalg_pair("solve", a, b)?;
-        self.with_linalg_pool_checked(|exec, buffers| solve_entered(exec, buffers, a, b))
+        self.with_linalg_pool(|exec, buffers| solve_entered(exec, buffers, a, b))
     }
 
     fn solve_read(
@@ -812,7 +727,7 @@ impl LinalgBackend for CpuEngine {
         let direct = !has_zero_dim(a.shape())
             && !has_zero_dim(b.shape())
             && solve_shape_direct_eligible(a.shape(), b.shape());
-        self.with_linalg_pool_checked(move |exec, buffers| {
+        self.with_linalg_pool(move |exec, buffers| {
             if direct {
                 solve_from_views_entered(exec, buffers, a, b)
             } else {
@@ -850,7 +765,7 @@ impl LinalgBackend for CpuEngine {
             );
         }
 
-        self.with_linalg_pool_checked(move |exec, buffers| {
+        self.with_linalg_pool(move |exec, buffers| {
             solve_read_into_entered(exec, buffers, a, b, out)
         })
     }
@@ -931,19 +846,9 @@ macro_rules! impl_managed_cholesky_scalar {
                 n: usize,
             ) -> tenferro_tensor::Result<TypedTensor<Self>> {
                 {
-                    #[cfg(feature = "native")]
                     {
-                        #[cfg(feature = "native")]
                         {
-                            linalg::faer::cholesky_compact_data(exec, buffers, data, n)
-                        }
-                    }
-                    #[cfg(feature = "blas")]
-                    {
-                        #[cfg(feature = "blas")]
-                        {
-                            let _ = &exec;
-                            linalg::blas::cholesky_compact_data(buffers, data, n)
+                            linalg::faer_linalg::cholesky_compact_data(exec, buffers, data, n)
                         }
                     }
                 }
@@ -1166,39 +1071,14 @@ fn triangular_solve_entered(
     options: TriangularSolveOptions,
 ) -> tenferro_tensor::Result<Tensor> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 same_variant_pair!(
                     a,
                     b,
                     |a, b| {
-                        linalg::faer::triangular_solve(
+                        linalg::faer_linalg::triangular_solve(
                             exec,
-                            buffers,
-                            a,
-                            b,
-                            options.left_side,
-                            options.lower,
-                            options.transpose_a,
-                            options.unit_diagonal,
-                        )
-                    },
-                    unsupported_pair("triangular_solve", a, b)
-                )
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                same_variant_pair!(
-                    a,
-                    b,
-                    |a, b| {
-                        linalg::blas::triangular_solve(
                             buffers,
                             a,
                             b,
@@ -1237,27 +1117,12 @@ fn solve_entered(
     };
 
     let result = {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 same_variant_pair!(
                     a,
                     &rhs,
-                    |a, b| { linalg::faer::solve(exec, buffers, a, b, false) },
-                    unsupported_pair("solve", a, &rhs)
-                )
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                same_variant_pair!(
-                    a,
-                    &rhs,
-                    |a, b| { linalg::blas::solve(buffers, a, b, false) },
+                    |a, b| { linalg::faer_linalg::solve(exec, buffers, a, b, false) },
                     unsupported_pair("solve", a, &rhs)
                 )
             }
@@ -1280,55 +1145,23 @@ fn solve_from_views_entered(
     let a = a.into_dynamic();
     let b = b.into_dynamic();
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match (a, b) {
                     (TensorView::F32(a), TensorView::F32(b)) => {
-                        linalg::faer::solve_from_views(exec, buffers, a, b, false)
+                        linalg::faer_linalg::solve_from_views(exec, buffers, a, b, false)
                             .map(Tensor::from_typed::<f32>)
                     }
                     (TensorView::F64(a), TensorView::F64(b)) => {
-                        linalg::faer::solve_from_views(exec, buffers, a, b, false)
+                        linalg::faer_linalg::solve_from_views(exec, buffers, a, b, false)
                             .map(Tensor::from_typed::<f64>)
                     }
                     (TensorView::C32(a), TensorView::C32(b)) => {
-                        linalg::faer::solve_from_views(exec, buffers, a, b, false)
+                        linalg::faer_linalg::solve_from_views(exec, buffers, a, b, false)
                             .map(Tensor::from_typed::<Complex32>)
                     }
                     (TensorView::C64(a), TensorView::C64(b)) => {
-                        linalg::faer::solve_from_views(exec, buffers, a, b, false)
-                            .map(Tensor::from_typed::<Complex64>)
-                    }
-                    _ => Err(Error::invalid_argument(
-                        "solve",
-                        "inputs",
-                        "solve inputs must have the same dtype",
-                    )),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match (a, b) {
-                    (TensorView::F32(a), TensorView::F32(b)) => {
-                        linalg::blas::solve_from_views(buffers, a, b, false)
-                            .map(Tensor::from_typed::<f32>)
-                    }
-                    (TensorView::F64(a), TensorView::F64(b)) => {
-                        linalg::blas::solve_from_views(buffers, a, b, false)
-                            .map(Tensor::from_typed::<f64>)
-                    }
-                    (TensorView::C32(a), TensorView::C32(b)) => {
-                        linalg::blas::solve_from_views(buffers, a, b, false)
-                            .map(Tensor::from_typed::<Complex32>)
-                    }
-                    (TensorView::C64(a), TensorView::C64(b)) => {
-                        linalg::blas::solve_from_views(buffers, a, b, false)
+                        linalg::faer_linalg::solve_from_views(exec, buffers, a, b, false)
                             .map(Tensor::from_typed::<Complex64>)
                     }
                     _ => Err(Error::invalid_argument(
@@ -1353,48 +1186,20 @@ fn solve_read_into_entered(
     let b = b.into_dynamic();
     let out = out.into_dynamic();
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match (a, b, out) {
                     (TensorView::F32(a), TensorView::F32(b), TensorViewMut::F32(mut out)) => {
-                        linalg::faer::solve_into(exec, buffers, a, b, &mut out, false)
+                        linalg::faer_linalg::solve_into(exec, buffers, a, b, &mut out, false)
                     }
                     (TensorView::F64(a), TensorView::F64(b), TensorViewMut::F64(mut out)) => {
-                        linalg::faer::solve_into(exec, buffers, a, b, &mut out, false)
+                        linalg::faer_linalg::solve_into(exec, buffers, a, b, &mut out, false)
                     }
                     (TensorView::C32(a), TensorView::C32(b), TensorViewMut::C32(mut out)) => {
-                        linalg::faer::solve_into(exec, buffers, a, b, &mut out, false)
+                        linalg::faer_linalg::solve_into(exec, buffers, a, b, &mut out, false)
                     }
                     (TensorView::C64(a), TensorView::C64(b), TensorViewMut::C64(mut out)) => {
-                        linalg::faer::solve_into(exec, buffers, a, b, &mut out, false)
-                    }
-                    _ => Err(Error::invalid_argument(
-                        "solve_read_into",
-                        "out",
-                        "destination dtype does not match the solve inputs",
-                    )),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match (a, b, out) {
-                    (TensorView::F32(a), TensorView::F32(b), TensorViewMut::F32(mut out)) => {
-                        linalg::blas::solve_into(buffers, a, b, &mut out, false)
-                    }
-                    (TensorView::F64(a), TensorView::F64(b), TensorViewMut::F64(mut out)) => {
-                        linalg::blas::solve_into(buffers, a, b, &mut out, false)
-                    }
-                    (TensorView::C32(a), TensorView::C32(b), TensorViewMut::C32(mut out)) => {
-                        linalg::blas::solve_into(buffers, a, b, &mut out, false)
-                    }
-                    (TensorView::C64(a), TensorView::C64(b), TensorViewMut::C64(mut out)) => {
-                        linalg::blas::solve_into(buffers, a, b, &mut out, false)
+                        linalg::faer_linalg::solve_into(exec, buffers, a, b, &mut out, false)
                     }
                     _ => Err(Error::invalid_argument(
                         "solve_read_into",
@@ -1413,12 +1218,10 @@ fn cholesky_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match input.dtype() {
-                    DType::F32 => linalg::faer::cholesky(
+                    DType::F32 => linalg::faer_linalg::cholesky(
                         exec,
                         buffers,
                         input
@@ -1426,7 +1229,7 @@ fn cholesky_entered(
                             .ok_or_else(|| unsupported_dtype("cholesky", input.dtype()))?,
                     )
                     .map(Tensor::from_typed::<f32>),
-                    DType::F64 => linalg::faer::cholesky(
+                    DType::F64 => linalg::faer_linalg::cholesky(
                         exec,
                         buffers,
                         input
@@ -1434,7 +1237,7 @@ fn cholesky_entered(
                             .ok_or_else(|| unsupported_dtype("cholesky", input.dtype()))?,
                     )
                     .map(Tensor::from_typed::<f64>),
-                    DType::C32 => linalg::faer::cholesky(
+                    DType::C32 => linalg::faer_linalg::cholesky(
                         exec,
                         buffers,
                         input
@@ -1442,46 +1245,8 @@ fn cholesky_entered(
                             .ok_or_else(|| unsupported_dtype("cholesky", input.dtype()))?,
                     )
                     .map(Tensor::from_typed::<Complex32>),
-                    DType::C64 => linalg::faer::cholesky(
+                    DType::C64 => linalg::faer_linalg::cholesky(
                         exec,
-                        buffers,
-                        input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("cholesky", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<Complex64>),
-                    _ => Err(unsupported_dtype("cholesky", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => linalg::blas::cholesky(
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("cholesky", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f32>),
-                    DType::F64 => linalg::blas::cholesky(
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("cholesky", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f64>),
-                    DType::C32 => linalg::blas::cholesky(
-                        buffers,
-                        input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("cholesky", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<Complex32>),
-                    DType::C64 => linalg::blas::cholesky(
                         buffers,
                         input
                             .as_typed::<Complex64>()
@@ -1501,12 +1266,10 @@ fn lu_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match input.dtype() {
-                    DType::F32 => linalg::faer::lu(
+                    DType::F32 => linalg::faer_linalg::lu(
                         exec,
                         buffers,
                         input
@@ -1514,7 +1277,7 @@ fn lu_entered(
                             .ok_or_else(|| unsupported_dtype("lu", input.dtype()))?,
                     )
                     .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-                    DType::F64 => linalg::faer::lu(
+                    DType::F64 => linalg::faer_linalg::lu(
                         exec,
                         buffers,
                         input
@@ -1522,7 +1285,7 @@ fn lu_entered(
                             .ok_or_else(|| unsupported_dtype("lu", input.dtype()))?,
                     )
                     .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-                    DType::C32 => linalg::faer::lu(
+                    DType::C32 => linalg::faer_linalg::lu(
                         exec,
                         buffers,
                         input
@@ -1535,56 +1298,8 @@ fn lu_entered(
                             .map(Tensor::from_typed::<Complex32>)
                             .collect()
                     }),
-                    DType::C64 => linalg::faer::lu(
+                    DType::C64 => linalg::faer_linalg::lu(
                         exec,
-                        buffers,
-                        input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("lu", input.dtype()))?,
-                    )
-                    .map(|outputs| {
-                        outputs
-                            .into_iter()
-                            .map(Tensor::from_typed::<Complex64>)
-                            .collect()
-                    }),
-                    _ => Err(unsupported_dtype("lu", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => linalg::blas::lu(
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("lu", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-                    DType::F64 => linalg::blas::lu(
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("lu", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-                    DType::C32 => linalg::blas::lu(
-                        buffers,
-                        input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("lu", input.dtype()))?,
-                    )
-                    .map(|outputs| {
-                        outputs
-                            .into_iter()
-                            .map(Tensor::from_typed::<Complex32>)
-                            .collect()
-                    }),
-                    DType::C64 => linalg::blas::lu(
                         buffers,
                         input
                             .as_typed::<Complex64>()
@@ -1612,7 +1327,7 @@ fn full_piv_lu_entered(
     // rank-revealing complete-pivot LU (`?getc2` errors on singular input, perturbs small
     // pivots and breaks ties toward the last maximum), and the factorization is level-2 work.
     match input.dtype() {
-        DType::F32 => linalg::faer::full_piv_lu(
+        DType::F32 => linalg::faer_linalg::full_piv_lu(
             exec,
             buffers,
             input
@@ -1620,7 +1335,7 @@ fn full_piv_lu_entered(
                 .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
         )
         .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-        DType::F64 => linalg::faer::full_piv_lu(
+        DType::F64 => linalg::faer_linalg::full_piv_lu(
             exec,
             buffers,
             input
@@ -1628,7 +1343,7 @@ fn full_piv_lu_entered(
                 .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
         )
         .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-        DType::C32 => linalg::faer::full_piv_lu(
+        DType::C32 => linalg::faer_linalg::full_piv_lu(
             exec,
             buffers,
             input
@@ -1636,7 +1351,7 @@ fn full_piv_lu_entered(
                 .ok_or_else(|| unsupported_dtype("full_piv_lu", input.dtype()))?,
         )
         .and_then(full_piv_lu_c32_outputs_to_public_tensors),
-        DType::C64 => linalg::faer::full_piv_lu(
+        DType::C64 => linalg::faer_linalg::full_piv_lu(
             exec,
             buffers,
             input
@@ -1654,12 +1369,10 @@ fn svd_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match input.dtype() {
-                    DType::F32 => linalg::faer::svd(
+                    DType::F32 => linalg::faer_linalg::svd(
                         exec,
                         buffers,
                         input
@@ -1667,7 +1380,7 @@ fn svd_entered(
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
                     .map(svd_erased),
-                    DType::F64 => linalg::faer::svd(
+                    DType::F64 => linalg::faer_linalg::svd(
                         exec,
                         buffers,
                         input
@@ -1675,7 +1388,7 @@ fn svd_entered(
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
                     .map(svd_erased),
-                    DType::C32 => linalg::faer::svd(
+                    DType::C32 => linalg::faer_linalg::svd(
                         exec,
                         buffers,
                         input
@@ -1683,7 +1396,7 @@ fn svd_entered(
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
                     .map(svd_erased),
-                    DType::C64 => linalg::faer::svd(
+                    DType::C64 => linalg::faer_linalg::svd(
                         exec,
                         buffers,
                         input
@@ -1691,42 +1404,6 @@ fn svd_entered(
                             .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
                     )
                     .map(svd_erased),
-                    _ => Err(unsupported_dtype("svd", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => linalg::blas::svd(
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
-                    )
-                    .map(svd_erased),
-                    DType::F64 => linalg::blas::svd(
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?,
-                    )
-                    .map(svd_erased),
-                    DType::C32 => {
-                        let t = input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?;
-                        linalg::blas::svd(buffers, t).map(svd_erased)
-                    }
-                    DType::C64 => {
-                        let t = input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("svd", input.dtype()))?;
-                        linalg::blas::svd(buffers, t).map(svd_erased)
-                    }
                     _ => Err(unsupported_dtype("svd", input.dtype())),
                 }
             }
@@ -1740,12 +1417,10 @@ fn svd_full_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match input.dtype() {
-                    DType::F32 => linalg::faer::svd_full(
+                    DType::F32 => linalg::faer_linalg::svd_full(
                         exec,
                         buffers,
                         input
@@ -1753,7 +1428,7 @@ fn svd_full_entered(
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
                     .map(svd_erased),
-                    DType::F64 => linalg::faer::svd_full(
+                    DType::F64 => linalg::faer_linalg::svd_full(
                         exec,
                         buffers,
                         input
@@ -1761,7 +1436,7 @@ fn svd_full_entered(
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
                     .map(svd_erased),
-                    DType::C32 => linalg::faer::svd_full(
+                    DType::C32 => linalg::faer_linalg::svd_full(
                         exec,
                         buffers,
                         input
@@ -1769,7 +1444,7 @@ fn svd_full_entered(
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
                     .map(svd_erased),
-                    DType::C64 => linalg::faer::svd_full(
+                    DType::C64 => linalg::faer_linalg::svd_full(
                         exec,
                         buffers,
                         input
@@ -1777,42 +1452,6 @@ fn svd_full_entered(
                             .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
                     )
                     .map(svd_erased),
-                    _ => Err(unsupported_dtype("svd_full", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => linalg::blas::svd_full(
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
-                    )
-                    .map(svd_erased),
-                    DType::F64 => linalg::blas::svd_full(
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?,
-                    )
-                    .map(svd_erased),
-                    DType::C32 => {
-                        let t = input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?;
-                        linalg::blas::svd_full(buffers, t).map(svd_erased)
-                    }
-                    DType::C64 => {
-                        let t = input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("svd_full", input.dtype()))?;
-                        linalg::blas::svd_full(buffers, t).map(svd_erased)
-                    }
                     _ => Err(unsupported_dtype("svd_full", input.dtype())),
                 }
             }
@@ -1826,73 +1465,37 @@ fn svd_values_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => {
                         let t = input
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("svd_values", input.dtype()))?;
-                        linalg::faer::svd_values(exec, buffers, t).map(Tensor::from_typed::<f32>)
+                        linalg::faer_linalg::svd_values(exec, buffers, t)
+                            .map(Tensor::from_typed::<f32>)
                     }
                     DType::F64 => {
                         let t = input
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("svd_values", input.dtype()))?;
-                        linalg::faer::svd_values(exec, buffers, t).map(Tensor::from_typed::<f64>)
+                        linalg::faer_linalg::svd_values(exec, buffers, t)
+                            .map(Tensor::from_typed::<f64>)
                     }
                     DType::C32 => {
                         let t = input
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("svd_values", input.dtype()))?;
-                        linalg::faer::svd_values(exec, buffers, t).map(Tensor::from_typed::<f32>)
+                        linalg::faer_linalg::svd_values(exec, buffers, t)
+                            .map(Tensor::from_typed::<f32>)
                     }
                     DType::C64 => {
                         let t = input
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("svd_values", input.dtype()))?;
-                        linalg::faer::svd_values(exec, buffers, t).map(Tensor::from_typed::<f64>)
+                        linalg::faer_linalg::svd_values(exec, buffers, t)
+                            .map(Tensor::from_typed::<f64>)
                     }
-                    _ => Err(unsupported_dtype("svd_values", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => linalg::blas::svd_values(
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("svd_values", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f32>),
-                    DType::F64 => linalg::blas::svd_values(
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("svd_values", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f64>),
-                    DType::C32 => linalg::blas::svd_values(
-                        buffers,
-                        input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("svd_values", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f32>),
-                    DType::C64 => linalg::blas::svd_values(
-                        buffers,
-                        input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("svd_values", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f64>),
                     _ => Err(unsupported_dtype("svd_values", input.dtype())),
                 }
             }
@@ -1906,12 +1509,10 @@ fn qr_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match input.dtype() {
-                    DType::F32 => linalg::faer::qr(
+                    DType::F32 => linalg::faer_linalg::qr(
                         exec,
                         buffers,
                         input
@@ -1919,7 +1520,7 @@ fn qr_entered(
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
                     .map(pair_erased),
-                    DType::F64 => linalg::faer::qr(
+                    DType::F64 => linalg::faer_linalg::qr(
                         exec,
                         buffers,
                         input
@@ -1927,7 +1528,7 @@ fn qr_entered(
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
                     .map(pair_erased),
-                    DType::C32 => linalg::faer::qr(
+                    DType::C32 => linalg::faer_linalg::qr(
                         exec,
                         buffers,
                         input
@@ -1935,7 +1536,7 @@ fn qr_entered(
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
                     .map(pair_erased),
-                    DType::C64 => linalg::faer::qr(
+                    DType::C64 => linalg::faer_linalg::qr(
                         exec,
                         buffers,
                         input
@@ -1943,44 +1544,6 @@ fn qr_entered(
                             .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
                     )
                     .map(pair_erased),
-                    _ => Err(unsupported_dtype("qr", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => linalg::blas::qr(
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed).collect()),
-                    DType::F64 => linalg::blas::qr(
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed).collect()),
-                    DType::C32 => linalg::blas::qr(
-                        buffers,
-                        input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed).collect()),
-                    DType::C64 => linalg::blas::qr(
-                        buffers,
-                        input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("qr", input.dtype()))?,
-                    )
-                    .map(|outputs| outputs.into_iter().map(Tensor::from_typed).collect()),
                     _ => Err(unsupported_dtype("qr", input.dtype())),
                 }
             }
@@ -2007,13 +1570,11 @@ fn rank_revealing_qr_entered(
         }};
     }
     let mut outputs = {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => map_result!(
-                        linalg::faer::rank_revealing_qr(
+                        linalg::faer_linalg::rank_revealing_qr(
                             exec,
                             buffers,
                             input.as_typed::<f32>().ok_or_else(|| unsupported_dtype(
@@ -2025,7 +1586,7 @@ fn rank_revealing_qr_entered(
                         F32
                     ),
                     DType::F64 => map_result!(
-                        linalg::faer::rank_revealing_qr(
+                        linalg::faer_linalg::rank_revealing_qr(
                             exec,
                             buffers,
                             input.as_typed::<f64>().ok_or_else(|| unsupported_dtype(
@@ -2038,7 +1599,7 @@ fn rank_revealing_qr_entered(
                     ),
                     DType::C32 => {
                         map_result!(
-                            linalg::faer::rank_revealing_qr(
+                            linalg::faer_linalg::rank_revealing_qr(
                                 exec,
                                 buffers,
                                 input.as_typed::<Complex32>().ok_or_else(|| {
@@ -2051,7 +1612,7 @@ fn rank_revealing_qr_entered(
                     }
                     DType::C64 => {
                         map_result!(
-                            linalg::faer::rank_revealing_qr(
+                            linalg::faer_linalg::rank_revealing_qr(
                                 exec,
                                 buffers,
                                 input.as_typed::<Complex64>().ok_or_else(|| {
@@ -2061,40 +1622,6 @@ fn rank_revealing_qr_entered(
                             ),
                             C64
                         )
-                    }
-                    _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => {
-                        let t = input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("rank_revealing_qr", input.dtype()))?;
-                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), F32)
-                    }
-                    DType::F64 => {
-                        let t = input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("rank_revealing_qr", input.dtype()))?;
-                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), F64)
-                    }
-                    DType::C32 => {
-                        let t = input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("rank_revealing_qr", input.dtype()))?;
-                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), C32)
-                    }
-                    DType::C64 => {
-                        let t = input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("rank_revealing_qr", input.dtype()))?;
-                        map_result!(linalg::blas::rank_revealing_qr(buffers, t, options), C64)
                     }
                     _ => Err(unsupported_dtype("rank_revealing_qr", input.dtype())),
                 }
@@ -2111,57 +1638,12 @@ fn householder_qr_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<CompactQrResult> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 macro_rules! factor {
                     ($tensor:expr, $variant:ident) => {{
                         let (packed, coeff) =
-                            linalg::faer::compact_factor_2d(exec, buffers, $tensor)?;
-                        Ok(CompactQrResult {
-                            packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
-                            coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
-                        })
-                    }};
-                }
-                match input.dtype() {
-                    DType::F32 => factor!(
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("householder_qr", input.dtype()))?,
-                        F32
-                    ),
-                    DType::F64 => factor!(
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("householder_qr", input.dtype()))?,
-                        F64
-                    ),
-                    DType::C32 => factor!(
-                        input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("householder_qr", input.dtype()))?,
-                        C32
-                    ),
-                    DType::C64 => factor!(
-                        input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("householder_qr", input.dtype()))?,
-                        C64
-                    ),
-                    _ => Err(unsupported_dtype("householder_qr", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                macro_rules! factor {
-                    ($tensor:expr, $variant:ident) => {{
-                        let (packed, coeff) = linalg::blas::householder_qr(buffers, $tensor)?;
+                            linalg::faer_linalg::compact_factor_2d(exec, buffers, $tensor)?;
                         Ok(CompactQrResult {
                             packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
                             coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
@@ -2213,13 +1695,12 @@ fn householder_qr_from_factors_entered(
             r.dtype(),
         ));
     }
-    #[cfg(feature = "native")]
     {
-        #[cfg(feature = "native")]
         {
             macro_rules! import {
                 ($q:expr, $r:expr, $variant:ident) => {{
-                    let (packed, coeff) = linalg::faer::from_factors_2d(exec, buffers, $q, $r)?;
+                    let (packed, coeff) =
+                        linalg::faer_linalg::from_factors_2d(exec, buffers, $q, $r)?;
                     return Ok(CompactQrResult {
                         packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
                         coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
@@ -2247,38 +1728,6 @@ fn householder_qr_from_factors_entered(
             }
         }
     }
-    #[cfg(feature = "blas")]
-    {
-        let _ = &exec;
-        macro_rules! import {
-            ($q:expr, $r:expr, $variant:ident) => {{
-                let (packed, coeff) = linalg::blas::householder_qr_from_factors(buffers, $q, $r)?;
-                Ok(CompactQrResult {
-                    packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
-                    coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
-                })
-            }};
-        }
-        match (q.dtype(), r.dtype()) {
-            (DType::F32, DType::F32) => {
-                let (q, r) = qr_import_operands::<f32>(q, r)?;
-                import!(q, r, F32)
-            }
-            (DType::F64, DType::F64) => {
-                let (q, r) = qr_import_operands::<f64>(q, r)?;
-                import!(q, r, F64)
-            }
-            (DType::C32, DType::C32) => {
-                let (q, r) = qr_import_operands::<Complex32>(q, r)?;
-                import!(q, r, C32)
-            }
-            (DType::C64, DType::C64) => {
-                let (q, r) = qr_import_operands::<Complex64>(q, r)?;
-                import!(q, r, C64)
-            }
-            _ => Err(unsupported_dtype("householder_qr_from_factors", q.dtype())),
-        }
-    }
 }
 
 fn householder_qr_append_entered(
@@ -2295,14 +1744,12 @@ fn householder_qr_append_entered(
             block.dtype(),
         ));
     }
-    #[cfg(feature = "native")]
     {
-        #[cfg(feature = "native")]
         {
             macro_rules! append {
                 ($packed:expr, $coeff:expr, $block:expr, $variant:ident) => {{
                     let (packed, coeff) =
-                        linalg::faer::append_2d(exec, buffers, $packed, $coeff, $block)?;
+                        linalg::faer_linalg::append_2d(exec, buffers, $packed, $coeff, $block)?;
                     return Ok(CompactQrResult {
                         packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
                         coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
@@ -2334,43 +1781,6 @@ fn householder_qr_append_entered(
             }
         }
     }
-    #[cfg(feature = "blas")]
-    {
-        let _ = &exec;
-        macro_rules! append {
-            ($packed:expr, $coeff:expr, $block:expr, $variant:ident) => {{
-                let (packed, coeff) =
-                    linalg::blas::householder_qr_append(buffers, $packed, $coeff, $block)?;
-                Ok(CompactQrResult {
-                    packed: Tensor::from_typed::<preset_scalar!($variant)>(packed),
-                    coeff: Tensor::from_typed::<preset_scalar!($variant)>(coeff),
-                })
-            }};
-        }
-        match (packed.dtype(), coeff.dtype(), block.dtype()) {
-            (DType::F32, DType::F32, DType::F32) => {
-                let (p, c, b) = append_operands::<f32>(packed, coeff, block)?;
-
-                append!(p, c, b, F32)
-            }
-            (DType::F64, DType::F64, DType::F64) => {
-                let (p, c, b) = append_operands::<f64>(packed, coeff, block)?;
-
-                append!(p, c, b, F64)
-            }
-            (DType::C32, DType::C32, DType::C32) => {
-                let (p, c, b) = append_operands::<Complex32>(packed, coeff, block)?;
-
-                append!(p, c, b, C32)
-            }
-            (DType::C64, DType::C64, DType::C64) => {
-                let (p, c, b) = append_operands::<Complex64>(packed, coeff, block)?;
-
-                append!(p, c, b, C64)
-            }
-            _ => Err(unsupported_dtype("householder_qr_append", packed.dtype())),
-        }
-    }
 }
 
 fn householder_qr_r_entered(
@@ -2381,36 +1791,16 @@ fn householder_qr_r_entered(
     options: crate::QrOptions,
 ) -> tenferro_tensor::Result<Tensor> {
     let positive = options.gauge == crate::QrGauge::PositiveDiagonal;
-    #[cfg(feature = "native")]
-    {
-        #[cfg(feature = "native")]
-        return same_variant_pair!(
-            packed,
-            coeff,
-            |p, c| linalg::faer::raw_r_2d(buffers, p, c, positive),
-            Err(Error::dtype_mismatch(
-                "householder_qr_r",
-                packed.dtype(),
-                coeff.dtype(),
-            ))
-        );
-    }
-    #[cfg(feature = "blas")]
-    {
-        // The LAPACK reflector state has no pooled R destination; its extraction builds the
-        // response vector itself.
-        let _ = buffers;
-        same_variant_pair!(
-            packed,
-            coeff,
-            |p, c| linalg::blas::householder_qr_r(p, c, positive),
-            Err(Error::dtype_mismatch(
-                "householder_qr_r",
-                packed.dtype(),
-                coeff.dtype(),
-            ))
-        )
-    }
+    same_variant_pair!(
+        packed,
+        coeff,
+        |p, c| linalg::faer_linalg::raw_r_2d(buffers, p, c, positive),
+        Err(Error::dtype_mismatch(
+            "householder_qr_r",
+            packed.dtype(),
+            coeff.dtype(),
+        ))
+    )
 }
 
 fn householder_qr_q_columns_entered(
@@ -2422,107 +1812,64 @@ fn householder_qr_q_columns_entered(
     options: crate::QrOptions,
 ) -> tenferro_tensor::Result<Tensor> {
     let positive = options.gauge == crate::QrGauge::PositiveDiagonal;
-    #[cfg(feature = "native")]
-    {
-        #[cfg(feature = "native")]
-        return match (packed.dtype(), coeff.dtype()) {
-            (DType::F32, DType::F32) => {
-                let (p, c) = q_columns_operands::<f32>(packed, coeff)?;
-                linalg::faer::q_columns_2d(
-                    _context,
-                    buffers,
-                    p,
-                    c,
-                    columns.start,
-                    columns.end,
-                    positive,
-                )
-                .map(Tensor::from_typed::<f32>)
-            }
-            (DType::F64, DType::F64) => {
-                let (p, c) = q_columns_operands::<f64>(packed, coeff)?;
-                linalg::faer::q_columns_2d(
-                    _context,
-                    buffers,
-                    p,
-                    c,
-                    columns.start,
-                    columns.end,
-                    positive,
-                )
-                .map(Tensor::from_typed::<f64>)
-            }
-            (DType::C32, DType::C32) => {
-                let (p, c) = q_columns_operands::<Complex32>(packed, coeff)?;
-                linalg::faer::q_columns_2d(
-                    _context,
-                    buffers,
-                    p,
-                    c,
-                    columns.start,
-                    columns.end,
-                    positive,
-                )
-                .map(Tensor::from_typed::<Complex32>)
-            }
-            (DType::C64, DType::C64) => {
-                let (p, c) = q_columns_operands::<Complex64>(packed, coeff)?;
-                linalg::faer::q_columns_2d(
-                    _context,
-                    buffers,
-                    p,
-                    c,
-                    columns.start,
-                    columns.end,
-                    positive,
-                )
-                .map(Tensor::from_typed::<Complex64>)
-            }
-            _ => Err(Error::dtype_mismatch(
-                "householder_qr_q_columns",
-                packed.dtype(),
-                coeff.dtype(),
-            )),
-        };
-    }
-    #[cfg(feature = "blas")]
-    {
-        macro_rules! columns {
-            ($packed:expr, $coeff:expr, $variant:ident) => {
-                linalg::blas::householder_qr_q_columns(
-                    buffers,
-                    $packed,
-                    $coeff,
-                    columns.start,
-                    columns.end,
-                    positive,
-                )
-                .map(Tensor::from_typed::<preset_scalar!($variant)>)
-            };
+    match (packed.dtype(), coeff.dtype()) {
+        (DType::F32, DType::F32) => {
+            let (p, c) = q_columns_operands::<f32>(packed, coeff)?;
+            linalg::faer_linalg::q_columns_2d(
+                _context,
+                buffers,
+                p,
+                c,
+                columns.start,
+                columns.end,
+                positive,
+            )
+            .map(Tensor::from_typed::<f32>)
         }
-        match (packed.dtype(), coeff.dtype()) {
-            (DType::F32, DType::F32) => {
-                let (p, c) = q_columns_operands::<f32>(packed, coeff)?;
-                columns!(p, c, F32)
-            }
-            (DType::F64, DType::F64) => {
-                let (p, c) = q_columns_operands::<f64>(packed, coeff)?;
-                columns!(p, c, F64)
-            }
-            (DType::C32, DType::C32) => {
-                let (p, c) = q_columns_operands::<Complex32>(packed, coeff)?;
-                columns!(p, c, C32)
-            }
-            (DType::C64, DType::C64) => {
-                let (p, c) = q_columns_operands::<Complex64>(packed, coeff)?;
-                columns!(p, c, C64)
-            }
-            _ => Err(Error::dtype_mismatch(
-                "householder_qr_q_columns",
-                packed.dtype(),
-                coeff.dtype(),
-            )),
+        (DType::F64, DType::F64) => {
+            let (p, c) = q_columns_operands::<f64>(packed, coeff)?;
+            linalg::faer_linalg::q_columns_2d(
+                _context,
+                buffers,
+                p,
+                c,
+                columns.start,
+                columns.end,
+                positive,
+            )
+            .map(Tensor::from_typed::<f64>)
         }
+        (DType::C32, DType::C32) => {
+            let (p, c) = q_columns_operands::<Complex32>(packed, coeff)?;
+            linalg::faer_linalg::q_columns_2d(
+                _context,
+                buffers,
+                p,
+                c,
+                columns.start,
+                columns.end,
+                positive,
+            )
+            .map(Tensor::from_typed::<Complex32>)
+        }
+        (DType::C64, DType::C64) => {
+            let (p, c) = q_columns_operands::<Complex64>(packed, coeff)?;
+            linalg::faer_linalg::q_columns_2d(
+                _context,
+                buffers,
+                p,
+                c,
+                columns.start,
+                columns.end,
+                positive,
+            )
+            .map(Tensor::from_typed::<Complex64>)
+        }
+        _ => Err(Error::dtype_mismatch(
+            "householder_qr_q_columns",
+            packed.dtype(),
+            coeff.dtype(),
+        )),
     }
 }
 
@@ -2532,12 +1879,10 @@ fn eigh_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match input.dtype() {
-                    DType::F32 => linalg::faer::eigh(
+                    DType::F32 => linalg::faer_linalg::eigh(
                         exec,
                         buffers,
                         input
@@ -2545,7 +1890,7 @@ fn eigh_entered(
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
                     .map(pair_erased),
-                    DType::F64 => linalg::faer::eigh(
+                    DType::F64 => linalg::faer_linalg::eigh(
                         exec,
                         buffers,
                         input
@@ -2553,7 +1898,7 @@ fn eigh_entered(
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
                     .map(pair_erased),
-                    DType::C32 => linalg::faer::eigh(
+                    DType::C32 => linalg::faer_linalg::eigh(
                         exec,
                         buffers,
                         input
@@ -2561,7 +1906,7 @@ fn eigh_entered(
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
                     .map(pair_erased),
-                    DType::C64 => linalg::faer::eigh(
+                    DType::C64 => linalg::faer_linalg::eigh(
                         exec,
                         buffers,
                         input
@@ -2569,42 +1914,6 @@ fn eigh_entered(
                             .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
                     )
                     .map(pair_erased),
-                    _ => Err(unsupported_dtype("eigh", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => linalg::blas::eigh(
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
-                    )
-                    .map(pair_erased),
-                    DType::F64 => linalg::blas::eigh(
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?,
-                    )
-                    .map(pair_erased),
-                    DType::C32 => {
-                        let t = input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?;
-                        linalg::blas::eigh(buffers, t).map(pair_erased)
-                    }
-                    DType::C64 => {
-                        let t = input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("eigh", input.dtype()))?;
-                        linalg::blas::eigh(buffers, t).map(pair_erased)
-                    }
                     _ => Err(unsupported_dtype("eigh", input.dtype())),
                 }
             }
@@ -2618,73 +1927,37 @@ fn eigh_values_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
                 match input.dtype() {
                     DType::F32 => {
                         let t = input
                             .as_typed::<f32>()
                             .ok_or_else(|| unsupported_dtype("eigh_values", input.dtype()))?;
-                        linalg::faer::eigh_values(exec, buffers, t).map(Tensor::from_typed::<f32>)
+                        linalg::faer_linalg::eigh_values(exec, buffers, t)
+                            .map(Tensor::from_typed::<f32>)
                     }
                     DType::F64 => {
                         let t = input
                             .as_typed::<f64>()
                             .ok_or_else(|| unsupported_dtype("eigh_values", input.dtype()))?;
-                        linalg::faer::eigh_values(exec, buffers, t).map(Tensor::from_typed::<f64>)
+                        linalg::faer_linalg::eigh_values(exec, buffers, t)
+                            .map(Tensor::from_typed::<f64>)
                     }
                     DType::C32 => {
                         let t = input
                             .as_typed::<Complex32>()
                             .ok_or_else(|| unsupported_dtype("eigh_values", input.dtype()))?;
-                        linalg::faer::eigh_values(exec, buffers, t).map(Tensor::from_typed::<f32>)
+                        linalg::faer_linalg::eigh_values(exec, buffers, t)
+                            .map(Tensor::from_typed::<f32>)
                     }
                     DType::C64 => {
                         let t = input
                             .as_typed::<Complex64>()
                             .ok_or_else(|| unsupported_dtype("eigh_values", input.dtype()))?;
-                        linalg::faer::eigh_values(exec, buffers, t).map(Tensor::from_typed::<f64>)
+                        linalg::faer_linalg::eigh_values(exec, buffers, t)
+                            .map(Tensor::from_typed::<f64>)
                     }
-                    _ => Err(unsupported_dtype("eigh_values", input.dtype())),
-                }
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                match input.dtype() {
-                    DType::F32 => linalg::blas::eigh_values(
-                        buffers,
-                        input
-                            .as_typed::<f32>()
-                            .ok_or_else(|| unsupported_dtype("eigh_values", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f32>),
-                    DType::F64 => linalg::blas::eigh_values(
-                        buffers,
-                        input
-                            .as_typed::<f64>()
-                            .ok_or_else(|| unsupported_dtype("eigh_values", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f64>),
-                    DType::C32 => linalg::blas::eigh_values(
-                        buffers,
-                        input
-                            .as_typed::<Complex32>()
-                            .ok_or_else(|| unsupported_dtype("eigh_values", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f32>),
-                    DType::C64 => linalg::blas::eigh_values(
-                        buffers,
-                        input
-                            .as_typed::<Complex64>()
-                            .ok_or_else(|| unsupported_dtype("eigh_values", input.dtype()))?,
-                    )
-                    .map(Tensor::from_typed::<f64>),
                     _ => Err(unsupported_dtype("eigh_values", input.dtype())),
                 }
             }
@@ -2698,19 +1971,9 @@ fn eig_values_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Tensor> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
-                linalg::faer::eig_values(exec, buffers, input)
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                linalg::blas::eig_values(buffers, input)
+                linalg::faer_linalg::eig_values(exec, buffers, input)
             }
         }
     }
@@ -2722,19 +1985,9 @@ fn eig_entered(
     input: &HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     {
-        #[cfg(feature = "native")]
         {
-            #[cfg(feature = "native")]
             {
-                linalg::faer::eig(exec, buffers, input)
-            }
-        }
-        #[cfg(feature = "blas")]
-        {
-            #[cfg(feature = "blas")]
-            {
-                let _ = &exec;
-                linalg::blas::eig(buffers, input)
+                linalg::faer_linalg::eig(exec, buffers, input)
             }
         }
     }
@@ -2742,10 +1995,10 @@ fn eig_entered(
 
 fn faer_strided_host_ok(input: &HostOperand<'_>) -> bool {
     match input {
-        TensorView::F32(view) => linalg::faer::faer_strided_ok(view),
-        TensorView::F64(view) => linalg::faer::faer_strided_ok(view),
-        TensorView::C32(view) => linalg::faer::faer_strided_ok(view),
-        TensorView::C64(view) => linalg::faer::faer_strided_ok(view),
+        TensorView::F32(view) => linalg::faer_linalg::faer_strided_ok(view),
+        TensorView::F64(view) => linalg::faer_linalg::faer_strided_ok(view),
+        TensorView::C32(view) => linalg::faer_linalg::faer_strided_ok(view),
+        TensorView::C64(view) => linalg::faer_linalg::faer_strided_ok(view),
         // faer does not compute on the integer and boolean tags here.
         TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => false,
     }
@@ -2756,7 +2009,6 @@ fn faer_strided_host_ok(input: &HostOperand<'_>) -> bool {
 /// The RHS is copied element by element, so strides may be arbitrary; only the
 /// matrix rank every provider requires and a supported dtype matter (the host
 /// type already rules out a backend buffer).
-#[cfg(feature = "native")]
 fn faer_rhs_host_ok(input: &HostOperand<'_>) -> bool {
     input.shape().len() == 2
         && matches!(
@@ -2765,7 +2017,6 @@ fn faer_rhs_host_ok(input: &HostOperand<'_>) -> bool {
         )
 }
 
-#[cfg(feature = "native")]
 fn rank_revealing_qr_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -2774,7 +2025,7 @@ fn rank_revealing_qr_faer_view_entered(
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     macro_rules! factor {
         ($view:expr, $scalar:ty) => {
-            linalg::faer::rank_revealing_qr(exec, buffers, &$view, options).map(|result| {
+            linalg::faer_linalg::rank_revealing_qr(exec, buffers, &$view, options).map(|result| {
                 vec![
                     Tensor::from_typed::<$scalar>(result.q),
                     Tensor::from_typed::<$scalar>(result.r),
@@ -2795,7 +2046,6 @@ fn rank_revealing_qr_faer_view_entered(
     Ok(outputs)
 }
 
-#[cfg(feature = "native")]
 fn triangular_solve_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -2811,7 +2061,7 @@ fn triangular_solve_faer_view_entered(
     } = options;
     macro_rules! solve {
         ($a:expr, $b:expr, $scalar:ty) => {
-            linalg::faer::triangular_solve(
+            linalg::faer_linalg::triangular_solve(
                 exec,
                 buffers,
                 &$a,
@@ -2837,37 +2087,42 @@ fn triangular_solve_faer_view_entered(
     }
 }
 
-#[cfg(feature = "native")]
 fn svd_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::svd(exec, buffers, &view).map(svd_erased),
-        TensorView::F64(view) => linalg::faer::svd(exec, buffers, &view).map(svd_erased),
-        TensorView::C32(view) => linalg::faer::svd(exec, buffers, &view).map(svd_erased),
-        TensorView::C64(view) => linalg::faer::svd(exec, buffers, &view).map(svd_erased),
+        TensorView::F32(view) => linalg::faer_linalg::svd(exec, buffers, &view).map(svd_erased),
+        TensorView::F64(view) => linalg::faer_linalg::svd(exec, buffers, &view).map(svd_erased),
+        TensorView::C32(view) => linalg::faer_linalg::svd(exec, buffers, &view).map(svd_erased),
+        TensorView::C64(view) => linalg::faer_linalg::svd(exec, buffers, &view).map(svd_erased),
         unsupported => Err(unsupported_dtype("svd", unsupported.dtype())),
     }
 }
 
-#[cfg(feature = "native")]
 fn svd_full_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::svd_full(exec, buffers, &view).map(svd_erased),
-        TensorView::F64(view) => linalg::faer::svd_full(exec, buffers, &view).map(svd_erased),
-        TensorView::C32(view) => linalg::faer::svd_full(exec, buffers, &view).map(svd_erased),
-        TensorView::C64(view) => linalg::faer::svd_full(exec, buffers, &view).map(svd_erased),
+        TensorView::F32(view) => {
+            linalg::faer_linalg::svd_full(exec, buffers, &view).map(svd_erased)
+        }
+        TensorView::F64(view) => {
+            linalg::faer_linalg::svd_full(exec, buffers, &view).map(svd_erased)
+        }
+        TensorView::C32(view) => {
+            linalg::faer_linalg::svd_full(exec, buffers, &view).map(svd_erased)
+        }
+        TensorView::C64(view) => {
+            linalg::faer_linalg::svd_full(exec, buffers, &view).map(svd_erased)
+        }
         unsupported => Err(unsupported_dtype("svd_full", unsupported.dtype())),
     }
 }
 
-#[cfg(feature = "native")]
 fn svd_values_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -2875,52 +2130,49 @@ fn svd_values_faer_view_entered(
 ) -> tenferro_tensor::Result<Tensor> {
     match input {
         TensorView::F32(view) => {
-            linalg::faer::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
+            linalg::faer_linalg::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::F64(view) => {
-            linalg::faer::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
+            linalg::faer_linalg::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         TensorView::C32(view) => {
-            linalg::faer::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
+            linalg::faer_linalg::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::C64(view) => {
-            linalg::faer::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
+            linalg::faer_linalg::svd_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         unsupported => Err(unsupported_dtype("svd_values", unsupported.dtype())),
     }
 }
 
-#[cfg(feature = "native")]
 fn qr_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::qr(exec, buffers, &view).map(pair_erased),
-        TensorView::F64(view) => linalg::faer::qr(exec, buffers, &view).map(pair_erased),
-        TensorView::C32(view) => linalg::faer::qr(exec, buffers, &view).map(pair_erased),
-        TensorView::C64(view) => linalg::faer::qr(exec, buffers, &view).map(pair_erased),
+        TensorView::F32(view) => linalg::faer_linalg::qr(exec, buffers, &view).map(pair_erased),
+        TensorView::F64(view) => linalg::faer_linalg::qr(exec, buffers, &view).map(pair_erased),
+        TensorView::C32(view) => linalg::faer_linalg::qr(exec, buffers, &view).map(pair_erased),
+        TensorView::C64(view) => linalg::faer_linalg::qr(exec, buffers, &view).map(pair_erased),
         unsupported => Err(unsupported_dtype("qr", unsupported.dtype())),
     }
 }
 
-#[cfg(feature = "native")]
 fn eigh_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::eigh(exec, buffers, &view).map(pair_erased),
-        TensorView::F64(view) => linalg::faer::eigh(exec, buffers, &view).map(pair_erased),
-        TensorView::C32(view) => linalg::faer::eigh(exec, buffers, &view).map(pair_erased),
-        TensorView::C64(view) => linalg::faer::eigh(exec, buffers, &view).map(pair_erased),
+        TensorView::F32(view) => linalg::faer_linalg::eigh(exec, buffers, &view).map(pair_erased),
+        TensorView::F64(view) => linalg::faer_linalg::eigh(exec, buffers, &view).map(pair_erased),
+        TensorView::C32(view) => linalg::faer_linalg::eigh(exec, buffers, &view).map(pair_erased),
+        TensorView::C64(view) => linalg::faer_linalg::eigh(exec, buffers, &view).map(pair_erased),
         unsupported => Err(unsupported_dtype("eigh", unsupported.dtype())),
     }
 }
 
-#[cfg(feature = "native")]
 fn eigh_values_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -2928,22 +2180,21 @@ fn eigh_values_faer_view_entered(
 ) -> tenferro_tensor::Result<Tensor> {
     match input {
         TensorView::F32(view) => {
-            linalg::faer::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
+            linalg::faer_linalg::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::F64(view) => {
-            linalg::faer::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
+            linalg::faer_linalg::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         TensorView::C32(view) => {
-            linalg::faer::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
+            linalg::faer_linalg::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::C64(view) => {
-            linalg::faer::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
+            linalg::faer_linalg::eigh_values(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         unsupported => Err(unsupported_dtype("eigh_values", unsupported.dtype())),
     }
 }
 
-#[cfg(feature = "native")]
 fn cholesky_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
@@ -2951,39 +2202,38 @@ fn cholesky_faer_view_entered(
 ) -> tenferro_tensor::Result<Tensor> {
     match input {
         TensorView::F32(view) => {
-            linalg::faer::cholesky(exec, buffers, &view).map(Tensor::from_typed::<f32>)
+            linalg::faer_linalg::cholesky(exec, buffers, &view).map(Tensor::from_typed::<f32>)
         }
         TensorView::F64(view) => {
-            linalg::faer::cholesky(exec, buffers, &view).map(Tensor::from_typed::<f64>)
+            linalg::faer_linalg::cholesky(exec, buffers, &view).map(Tensor::from_typed::<f64>)
         }
         TensorView::C32(view) => {
-            linalg::faer::cholesky(exec, buffers, &view).map(Tensor::from_typed::<Complex32>)
+            linalg::faer_linalg::cholesky(exec, buffers, &view).map(Tensor::from_typed::<Complex32>)
         }
         TensorView::C64(view) => {
-            linalg::faer::cholesky(exec, buffers, &view).map(Tensor::from_typed::<Complex64>)
+            linalg::faer_linalg::cholesky(exec, buffers, &view).map(Tensor::from_typed::<Complex64>)
         }
         unsupported => Err(unsupported_dtype("cholesky", unsupported.dtype())),
     }
 }
 
-#[cfg(feature = "native")]
 fn lu_faer_view_entered(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::lu(exec, buffers, &view)
+        TensorView::F32(view) => linalg::faer_linalg::lu(exec, buffers, &view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-        TensorView::F64(view) => linalg::faer::lu(exec, buffers, &view)
+        TensorView::F64(view) => linalg::faer_linalg::lu(exec, buffers, &view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-        TensorView::C32(view) => linalg::faer::lu(exec, buffers, &view).map(|outputs| {
+        TensorView::C32(view) => linalg::faer_linalg::lu(exec, buffers, &view).map(|outputs| {
             outputs
                 .into_iter()
                 .map(Tensor::from_typed::<Complex32>)
                 .collect()
         }),
-        TensorView::C64(view) => linalg::faer::lu(exec, buffers, &view).map(|outputs| {
+        TensorView::C64(view) => linalg::faer_linalg::lu(exec, buffers, &view).map(|outputs| {
             outputs
                 .into_iter()
                 .map(Tensor::from_typed::<Complex64>)
@@ -2999,22 +2249,26 @@ fn full_piv_lu_faer_view_entered(
     input: HostOperand<'_>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     match input {
-        TensorView::F32(view) => linalg::faer::full_piv_lu(exec, buffers, &view)
+        TensorView::F32(view) => linalg::faer_linalg::full_piv_lu(exec, buffers, &view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f32>).collect()),
-        TensorView::F64(view) => linalg::faer::full_piv_lu(exec, buffers, &view)
+        TensorView::F64(view) => linalg::faer_linalg::full_piv_lu(exec, buffers, &view)
             .map(|outputs| outputs.into_iter().map(Tensor::from_typed::<f64>).collect()),
-        TensorView::C32(view) => linalg::faer::full_piv_lu(exec, buffers, &view).map(|outputs| {
-            outputs
-                .into_iter()
-                .map(Tensor::from_typed::<Complex32>)
-                .collect()
-        }),
-        TensorView::C64(view) => linalg::faer::full_piv_lu(exec, buffers, &view).map(|outputs| {
-            outputs
-                .into_iter()
-                .map(Tensor::from_typed::<Complex64>)
-                .collect()
-        }),
+        TensorView::C32(view) => {
+            linalg::faer_linalg::full_piv_lu(exec, buffers, &view).map(|outputs| {
+                outputs
+                    .into_iter()
+                    .map(Tensor::from_typed::<Complex32>)
+                    .collect()
+            })
+        }
+        TensorView::C64(view) => {
+            linalg::faer_linalg::full_piv_lu(exec, buffers, &view).map(|outputs| {
+                outputs
+                    .into_iter()
+                    .map(Tensor::from_typed::<Complex64>)
+                    .collect()
+            })
+        }
         unsupported => Err(unsupported_dtype("full_piv_lu", unsupported.dtype())),
     }
 }

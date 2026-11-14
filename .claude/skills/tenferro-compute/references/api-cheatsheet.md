@@ -206,9 +206,8 @@ engine's thread budget into lanes, each with its own caller-owned
 `tenferro_cpu::linalg_interop::BufferPool`, and hands each lane to the closure
 as an ordinary `&mut dyn Engine`. Inside a lane, call the ordinary grammar
 (`view.svd(lane)`, `view.svd_with(&opts, lane)`); results come back in lane
-order as `Result<Vec<R>>`. On the `native` provider only `svd`, `svdvals`,
-`qr`, `eigh`, `eigvalsh` and `eigvals` run in a lane; every other operation on
-a lane engine, and every operation under the `blas` provider, returns
+order as `Result<Vec<R>>`. Only `svd`, `svdvals`, `qr`, `eigh`, `eigvalsh` and
+`eigvals` run in a lane; every other operation on a lane engine returns
 `Unsupported`. Keep the pools across calls: a lane draws every output,
 workspace and gather buffer from its pool. A negative-stride input is gathered
 once into the lane's pool; zero steady-state allocation is promised only for

@@ -66,17 +66,14 @@ the normalizations) keeps this as its specification and reference.
 
 ### CPU Status
 
-The CPU backend is the main complete backend. Exactly one CPU provider feature
-must be enabled:
-
-- `native` (the default) for faer-backed GEMM/linalg plus cpueinsum/tcontract,
-- `blas` for the same stack with the `cpueinsum-blas`/`tlinalg-blas` adapters.
+The CPU backend is the main complete backend. It needs no provider feature:
+every build links faer-backed GEMM/linalg plus cpueinsum/tcontract.
 
 Elementwise, reductions, structural operations, indexing, `dot_general`, and
 the standard linalg extension are implemented on CPU for the supported dtype
 subset of each op. CPU `dot_general`, grouped GEMM, and N-ary concrete einsum
-delegate to cpueinsum; CPU linalg delegates to tlinalg / tlinalg-blas. There is
-no runtime provider-override hook.
+delegate to cpueinsum; CPU linalg delegates to tlinalg. There is no runtime
+provider-override hook.
 
 ### CUDA/CubeCL Status
 

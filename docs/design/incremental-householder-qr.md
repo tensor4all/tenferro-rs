@@ -6,6 +6,10 @@
 **Correct-to-merge** after the Round-2 findings were fixed; see the
 [design work log](../worklogs/2026-09-01-incremental-householder-qr-design.md).
 
+> **#2608:** the CPU-BLAS/LAPACK provider described below was deleted; a `CpuEngine` is
+> faer-backed, unconditionally. The BLAS half of every parity, gate and verification
+> requirement recorded here is history, not work anyone can run.
+
 ## Purpose
 
 Adaptive algorithms need to append column blocks without refactorizing the

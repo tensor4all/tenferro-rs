@@ -17,28 +17,12 @@ documentation = "https://docs.rs/tenferro-ad"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["native", "cuda"]
+features = ["cuda"]
 
 [lib]
 name = "tenferro_ad"
 
 [features]
-default = ["native"]
-native = [
-    "tenferro-cpu/native",
-]
-blas = [
-    "tenferro-cpu/blas",
-]
-blas-openblas = [
-    "tenferro-cpu/blas-openblas",
-]
-blas-accelerate = [
-    "tenferro-cpu/blas-accelerate",
-]
-blas-mkl = [
-    "tenferro-cpu/blas-mkl",
-]
 cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
 
 [dependencies]

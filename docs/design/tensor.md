@@ -15,7 +15,7 @@ along a backend boundary.
 
 It owns no tensor container, must not expose a public `TypedTensor` alias,
 must not refer back to tensor-owned types, and must not depend on backend
-buffers, CUDA, BLAS/LAPACK providers, execution traits, runtime caches, or AD.
+buffers, CUDA, vendor numeric libraries, execution traits, runtime caches, or AD.
 
 `tenferro-tensor` owns runtime/backend-capable tensor values:
 

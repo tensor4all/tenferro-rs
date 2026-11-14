@@ -23,7 +23,6 @@ _CLIPPY_FLAGS = (
 _STORAGE_OWNERSHIP_CHECKER = (
     "python3 scripts/check-storage-ownership-contracts.py"
 )
-_TRYBUILD_CARGO_WRAPPER = str(Path(__file__).with_name("trybuild-cargo.py").resolve())
 
 PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     "fmt": (
@@ -55,40 +54,11 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "--against-target contribution_reuse --against-sets 2 "
         "--set-type-names ExtendedSet,ExtendedTag,ApplicationSet,ApplicationTag",
     ),
-    "workspace-blas": (
-        # Direct invocation preserves our CARGO wrapper in nextest test processes.
-        f"cargo-nextest nextest run --workspace {_NEXTEST_PROFILE} --no-default-features "
-        "--features blas --no-fail-fast",
-        f"cargo test --doc --workspace {_CARGO_TEST_PROFILE} --no-default-features "
-        "--features blas",
-        # Downstream BLAS interop example (issue #1602): links the system
-        # OpenBLAS/LAPACK through the profile RUSTFLAGS, so native symbol
-        # linkage is verified, not just compilation.
-        f"cargo run -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
-        "--features blas --bin blas_interop",
-    ),
-    "macos-accelerate": (
-        # The WebGPU/Metal lane retired with the CUDA cutover (#2208), so macOS runs these
-        # crates' tests with Accelerate BLAS instead of the four Apple/Metal targets.
+    "macos": (
+        # The WebGPU/Metal lane retired with the CUDA cutover (#2208); macOS still runs these
+        # crates' tests on a second architecture and libc.
         "cargo nextest run -p tenferro-gpu -p tenferro-fft -p tenferro-linalg "
-        f"{_NEXTEST_PROFILE} --no-default-features "
-        "--features blas-accelerate,tenferro-linalg/autodiff --no-fail-fast",
-    ),
-    "blas-inject": (
-        # Provider registration is process-global (LP64 vs ILP64), so each fixture group runs
-        # in its own test process.
-        f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
-        '--features "blas,provider-inject" --test integration inject_tests',
-        f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
-        '--features "blas,provider-inject" --test integration inject_dual_abi_tests',
-        f"cargo test -p tenferro-linalg {_CARGO_TEST_PROFILE} --no-default-features "
-        '--features "blas,provider-inject" --test integration inject_tests',
-        f"cargo test -p tenferro-linalg {_CARGO_TEST_PROFILE} --no-default-features "
-        '--features "blas,provider-inject" --test integration inject_dual_abi_tests',
-        # The unit suites register no provider, so their first LAPACK call aborts; under
-        # provider-inject they only have to compile.
-        f"cargo check -p tenferro-cpu -p tenferro-linalg {_CARGO_TEST_PROFILE} "
-        '--no-default-features --features "blas,provider-inject" --all-targets',
+        f"{_NEXTEST_PROFILE} --features tenferro-linalg/autodiff --no-fail-fast",
     ),
     "extensions": (
         f"cargo test --manifest-path ext/tropical/Cargo.toml {_CARGO_TEST_PROFILE} "
@@ -107,20 +77,16 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "python3 scripts/check-guide-dependency-snippets.py",
         "python3 scripts/check-operation-categories.py --fail-on-findings",
         "python3 scripts/check-public-boundary-inventory.py",
-        # Downstream external-linalg interop examples (issue #1602): compiled
-        # and run as a consumer that uses only public tenferro APIs. The BLAS
-        # binary links the system OpenBLAS/LAPACK installed by the docs CI job
-        # (the RUSTFLAGS are scoped to this one command).
+        # Downstream external-linalg interop example (issue #1602): compiled and
+        # run as a consumer that uses only public tenferro APIs.
         f"cargo run -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
-        "--features native --bin faer_interop",
-        f"RUSTFLAGS='-l dylib=openblas -l dylib=lapack' cargo run -p tenferro-tutorial-code "
-        f"{_CARGO_TEST_PROFILE} --no-default-features --features blas --bin blas_interop",
+        "--bin faer_interop",
         # Issue #1724: compile the source-backed raw CUDA examples on GPU-less
         # docs CI; hardware execution remains in the CUDA test lane. The custom
         # NVRTC-launch tutorial retired with the CubeCL session (#2208), so the
         # surviving vendor-interop binary is the one checked here.
         f"cargo check -p tenferro-tutorial-code {_CARGO_TEST_PROFILE} --no-default-features "
-        "--features cuda,native --bin cuda_vendor_interop",
+        "--features cuda --bin cuda_vendor_interop",
         "bash scripts/build_docs_site.sh",
     ),
     "coverage": (
@@ -164,8 +130,6 @@ FULL_PROFILE = (
     "fmt",
     "clippy",
     "workspace-faer",
-    "workspace-blas",
-    "blas-inject",
     "extensions",
     "docs",
     "coverage",
@@ -252,11 +216,6 @@ def run_profiles(
                 continue
             environment = environment_base.copy()
             environment["PYTHON"] = sys.executable
-            if profile == "workspace-blas":
-                rustflags = "-l dylib=openblas -l dylib=lapack"
-                environment["RUSTFLAGS"] = rustflags
-                environment["TENFERRO_TRYBUILD_RUSTFLAGS"] = rustflags
-                environment["CARGO"] = _TRYBUILD_CARGO_WRAPPER
             execution_command = _command_for_execution(command)
             try:
                 # Commands are repository constants, not caller-provided shell text.

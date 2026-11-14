@@ -557,22 +557,13 @@ impl CpuEngine {
     }
 }
 
-/// The engine's GEMM entries, and on a `blas` build the only GEMM entries.
+/// The engine's GEMM entries.
 ///
-/// On the `native` provider these run on the engine's pool within its budget. A caller that wants
-/// independent GEMMs on lanes of one context forks the bundle that
-/// [`CpuEngine::with_exec`] lends and runs a cpueinsum plan per lane; that per-context entry exists
-/// only on the native provider.
-///
-/// On the `blas` provider a call takes the whole engine and the vendor library's own threads:
-/// **the context budget is not honoured by that provider**, because the vendor step ignores the
-/// placement token and sizes itself from the library's process-wide thread setting
-/// (`OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS`). Lanes must not call
-/// into the vendor provider concurrently unless the linked library is known to tolerate it; two
-/// lanes asking for different widths cannot both be honoured by one global setting. tenferro does
-/// not offer a wrapper that sets that global per lane to simulate per-lane widths, because it would
-/// hide who owns the setting instead of answering it. See the "Lanes and the vendor provider"
-/// section of `docs/guides/cpu-execution.md`.
+/// These run on the engine's pool within its budget: `threadteam` owns every CPU thread a call
+/// starts, and no external library sizes itself from a process-wide thread setting. A caller that
+/// wants independent GEMMs on lanes of one context forks the bundle that
+/// [`CpuEngine::with_exec`] lends and runs a cpueinsum plan per lane. See the "Lanes" section of
+/// `docs/guides/cpu-execution.md`.
 ///
 /// # Examples
 ///
@@ -763,10 +754,9 @@ impl SessionCachedDot for CpuEngine {
             lhs.dtype(),
             DType::F32 | DType::F64 | DType::C32 | DType::C64
         ) {
-            return self.run_contraction(|exec, buffers, plans| {
+            return self.run_contraction(|exec, _buffers, plans| {
                 crate::contraction::dot_into(
                     exec,
-                    buffers,
                     plans,
                     cache_slot,
                     lhs,

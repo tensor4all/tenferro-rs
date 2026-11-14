@@ -30,7 +30,7 @@ DOCUMENTATION_REQUIREMENT_HOMES = (
     (
         "whether thread counts are per-runtime, per-domain, per-provider, or global;",
         "docs/guides/choosing-a-backend.md",
-        "## CPU Provider Choice",
+        "## CPU Provider",
     ),
     (
         "what `Managed` and `ExternalManaged` guarantee;",
@@ -38,9 +38,9 @@ DOCUMENTATION_REQUIREMENT_HOMES = (
         "## Ownership Contracts",
     ),
     (
-        "how faer differs from general BLAS/LAPACK;",
+        "why the CPU provider is not selectable;",
         "docs/guides/choosing-a-backend.md",
-        "## CPU Provider Choice",
+        "## CPU Provider",
     ),
     (
         "when synchronization occurs;",
@@ -63,9 +63,9 @@ DOCUMENTATION_REQUIREMENT_HOMES = (
         "## Batch And Inner Parallelism",
     ),
     (
-        "different policy select or implement providers;",
+        "a user who needs a different policy chooses the pool;",
         "docs/guides/choosing-a-backend.md",
-        "## CPU Provider Choice",
+        "## CPU Provider",
     ),
 )
 
@@ -184,10 +184,16 @@ def test_architecture_svg_lists_cpu_crate_xla_boundary_and_background() -> None:
     assert "PJRT plugin" in text
     assert "tenferro-xla bridge" in text
     assert "CPU backend" in text
-    assert text.index("tenferro-cpu") < text.index("faer | BLAS/LAPACK")
+    # The CPU box names the one unconditional backend (#2608); a `faer | BLAS/LAPACK`
+    # choice, an OpenBLAS/MKL/Accelerate provider or a `native` build qualifier would
+    # document a layer no build compiles.
+    cpu_box = text[text.index(">tenferro-cpu<") : text.index(">tenferro-gpu<")]
+    assert "faer · tlinalg · cpueinsum" in cpu_box
+    for stale in ("BLAS/LAPACK", "OpenBLAS", "MKL", "Accelerate", "native"):
+        assert stale not in text
 
-    tensor_section = text[text.index("tenferro-tensor") : text.index("tenferro-cpu")]
-    assert "faer | BLAS/LAPACK" not in tensor_section
+    tensor_box = text[text.index(">tenferro-tensor<") : text.index(">tenferro-cpu<")]
+    assert "faer" not in tensor_box
 
     assert '<line x1="460" y1="390" x2="460" y2="412" class="dep"/>' in text
 

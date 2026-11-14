@@ -3,7 +3,7 @@
 
 - Baseline revision: `0457a2ed0aeea21b14f4297f7f4731e09b3a0507`
 - Generation provenance: `source-derived from the current checkout; overlay/source digest is the freshness key`
-- Overlay/source digest: `52dab6e3a4f7ae674ae419f313c9cdc06d70a4d0f2e34b1bcbb15ff2e0397d0c`
+- Overlay/source digest: `3b31c89ae1eb0c4d18a53b3cd12e5e38a712aa68bdbd5231682a03a2332119db`
 
 | Family | Operation | Category | Surfaces (disposition) | Case contracts |
 |---|---|---|---|---|

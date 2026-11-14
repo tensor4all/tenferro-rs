@@ -20,12 +20,9 @@
 
 use tenferro_tensor::{DType, ErrorKind};
 
-#[cfg(any(feature = "native", feature = "blas"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "native", feature = "blas"))))]
 pub use crate::cpu::tlinalg_error::map_error;
 
 /// Typed diagnostics for provider status and workspace contracts.
-#[cfg(any(feature = "blas", feature = "cuda", feature = "native"))]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BackendError {
     #[cfg(feature = "cuda")]
@@ -35,7 +32,6 @@ pub(crate) enum BackendError {
         call: &'static str,
         status: i32,
     },
-    #[cfg(any(feature = "blas", feature = "native"))]
     #[error("{library} routine {routine} returned an invalid workspace: {detail}")]
     InvalidWorkspace {
         library: &'static str,
@@ -160,9 +156,7 @@ pub(crate) fn backend_status(
 
 /// Preserve an invalid provider workspace response as a typed backend source.
 ///
-/// Available on both CPU provider routes: the shape is provider-independent, and the extracted
-/// LAPACK implementation reports it through the same adapter as the faer one.
-#[cfg(any(feature = "blas", feature = "native"))]
+/// The shape is provider-independent: the extracted provider reports it through this adapter.
 pub(crate) fn invalid_workspace(
     op: &'static str,
     library: &'static str,
@@ -179,7 +173,7 @@ pub(crate) fn invalid_workspace(
     )
 }
 
-#[cfg(all(test, any(feature = "blas", feature = "cuda", feature = "native")))]
+#[cfg(test)]
 mod tests {
     use std::error::Error as _;
 
@@ -201,7 +195,6 @@ mod tests {
         ));
     }
 
-    #[cfg(any(feature = "blas", feature = "native"))]
     #[test]
     fn invalid_workspace_keeps_typed_backend_source() {
         let error = invalid_workspace("eigh", "LAPACK", "dsyevd", "query was zero");
