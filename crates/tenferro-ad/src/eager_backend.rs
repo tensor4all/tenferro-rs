@@ -80,6 +80,7 @@ pub(crate) fn unregisterable_engine_error(engine_id: &EngineId) -> crate::Error 
 #[derive(Debug)]
 pub struct RecordingEngine {
     materializations: Arc<AtomicUsize>,
+    cast_read_views: Arc<AtomicUsize>,
     inner: CpuEngine,
 }
 
@@ -87,8 +88,17 @@ pub struct RecordingEngine {
 impl RecordingEngine {
     /// A CPU engine that counts `to_contiguous_read` materializations.
     pub(crate) fn new(materializations: Arc<AtomicUsize>) -> Self {
+        Self::new_counting(materializations, Arc::new(AtomicUsize::new(0)))
+    }
+
+    /// The same engine, also counting `cast_read` calls that receive a borrowed view.
+    pub(crate) fn new_counting(
+        materializations: Arc<AtomicUsize>,
+        cast_read_views: Arc<AtomicUsize>,
+    ) -> Self {
         Self {
             materializations,
+            cast_read_views,
             inner: CpuEngine::serial(),
         }
     }
@@ -203,6 +213,15 @@ impl TensorStructural for RecordingEngine {
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()> {
         self.inner.copy_read_into(src, dst)
+    }
+
+    // #2223: the traced and eager `Convert` both reach this hook. Counting the views it
+    // receives is how a test shows the read entry, not a staging entry, served the operand.
+    fn cast_read(&mut self, input: TensorRead<'_>, to: DType) -> TensorResult<Tensor> {
+        if input.as_tensor().is_none() {
+            self.cast_read_views.fetch_add(1, Ordering::Relaxed);
+        }
+        self.inner.cast_read(input, to)
     }
 
     delegate_recording_backend_methods! {

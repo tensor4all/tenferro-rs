@@ -312,6 +312,17 @@ catalogue entry only for a compact offset-zero operand and otherwise use the
 revision-11 view entry, so a triangular mask of a strided view needs no staging
 copy.
 
+`cast_read` is the read form of the explicit dtype projection, and `convert_read`
+is the checked form: it validates the pair against the promotion lattice and
+then calls `cast_read`, so the checked/explicit distinction costs no second
+kernel. The CPU engine reads a view's own layout for both. The CUDA engine takes
+one staging copy for a borrowed view, because the `Convert` ABI entry addresses
+one flat span and no layout; a layout-taking entry is a `t4a-cuda-kernels` change
+plus a pin bump, not a local one. Nothing materializes on the host and nothing
+transfers implicitly. The `Convert` execution path (traced dispatch, the eager
+executor, the eager promotion path and the erased core body) passes the operand's
+`TensorRead` through, so a metadata view folds into it.
+
 Its indexing read entries (`gather_read`, `scatter_read`, `dynamic_slice_read`
 and `dynamic_update_slice_read`) take an index or starts operand of `I32`,
 `I64`, `F32` or `F64`, and a float index is rejected unless every element is an

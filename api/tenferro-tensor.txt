@@ -176,7 +176,9 @@ pub fn tenferro_tensor::backend::TensorReduction::reduce_sum_read(&mut self, ten
 pub trait tenferro_tensor::backend::TensorStructural
 pub fn tenferro_tensor::backend::TensorStructural::broadcast_in_dim_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize], &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_tensor::backend::TensorStructural::cast(&mut self, &tenferro_tensor::types::Tensor, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_tensor::backend::TensorStructural::cast_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_tensor::backend::TensorStructural::convert(&mut self, &tenferro_tensor::types::Tensor, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_tensor::backend::TensorStructural::convert_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_tensor::backend::TensorStructural::copy_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
 pub fn tenferro_tensor::backend::TensorStructural::embed_diagonal(&mut self, &tenferro_tensor::types::Tensor, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_tensor::backend::TensorStructural::embed_diagonal_read(&mut self, tenferro_tensor::types::TensorRead<'_>, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
@@ -3704,7 +3706,9 @@ pub fn num_complex::Complex64::typed_tensor_into_tensor(tenferro_tensor::types::
 pub trait tenferro_tensor::TensorStructural
 pub fn tenferro_tensor::TensorStructural::broadcast_in_dim_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize], &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_tensor::TensorStructural::cast(&mut self, &tenferro_tensor::types::Tensor, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_tensor::TensorStructural::cast_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_tensor::TensorStructural::convert(&mut self, &tenferro_tensor::types::Tensor, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_tensor::TensorStructural::convert_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_tensor::TensorStructural::copy_read_into(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
 pub fn tenferro_tensor::TensorStructural::embed_diagonal(&mut self, &tenferro_tensor::types::Tensor, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
 pub fn tenferro_tensor::TensorStructural::embed_diagonal_read(&mut self, tenferro_tensor::types::TensorRead<'_>, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>

@@ -83,8 +83,8 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     assert_eq!(data(&result[0]), vec![2., 6., 10., 4., 8., 12.]);
     assert_eq!(
         copies.swap(0, Ordering::Relaxed),
-        1,
-        "only the promoted input needs conversion storage"
+        0,
+        "the checked read entry promotes the input without staging it"
     );
 
     // A structural read entry consumes the borrowed view, so the eager caller
@@ -105,9 +105,8 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
         "tril reads the borrowed operand instead of staging it"
     );
 
-    // A value-changing operation still needs owned compact storage: the
-    // dispatch stages the view before the owned `cast` entry, and that copy
-    // must stay visible to this counter.
+    // A value-changing operation reads the borrowed view in place too: `cast_read`
+    // converts the operand where it lies, so this counter stays at zero (#2223).
     let result = {
         let session: &mut dyn tenferro_tensor::Engine = &mut backend;
         execute(
@@ -123,8 +122,8 @@ fn eager_read_dispatch_only_materializes_when_the_operation_requires_it() {
     assert_eq!(result[0].dtype(), DType::F32);
     assert_eq!(
         copies.swap(0, Ordering::Relaxed),
-        1,
-        "a conversion still stages its borrowed operand"
+        0,
+        "a conversion reads its borrowed operand in place"
     );
 
     // Default read hooks reject views; never conceal unsupported capabilities
@@ -829,8 +828,8 @@ fn eager_promoting_read_entries_convert_only_the_mismatched_operand() {
     let (got, copies) = promoted(&concat, &[view(&left), view(&right32)]);
     assert_eq!(got[0].dtype(), DType::F64);
     assert_eq!(
-        copies, 1,
-        "only the F32 concatenate operand needs conversion storage"
+        copies, 0,
+        "the checked read entry converts the F32 operand without staging it"
     );
     assert_eq!(data(&got[0]), data(&want[0]));
 
@@ -854,8 +853,8 @@ fn eager_promoting_read_entries_convert_only_the_mismatched_operand() {
     );
     assert_eq!(got[0].dtype(), DType::F64);
     assert_eq!(
-        copies, 1,
-        "only the F32 scatter updates need conversion storage"
+        copies, 0,
+        "the checked read entry converts the F32 updates without staging them"
     );
     assert_eq!(data(&got[0]), data(&want[0]));
 
@@ -876,8 +875,8 @@ fn eager_promoting_read_entries_convert_only_the_mismatched_operand() {
     );
     assert_eq!(got[0].dtype(), DType::F64);
     assert_eq!(
-        copies, 1,
-        "only the F32 dynamic-update update needs conversion storage"
+        copies, 0,
+        "the checked read entry converts the F32 update without staging it"
     );
     assert_eq!(data(&got[0]), data(&want[0]));
 
@@ -1161,4 +1160,47 @@ impl ExtensionOp for TestExtension {
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
+}
+
+/// #2223 T5: the eager `Convert` reaches `cast_read` with a borrowed view, not a staged copy.
+#[test]
+fn eager_convert_reaches_the_read_hook_with_a_view() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::exec_standard_op_on_tensor_reads_in_session;
+    use crate::eager_backend::RecordingEngine;
+    use tenferro_tensor::TensorRead;
+
+    let input = f64t(vec![2], vec![1.5, 2.5]);
+    let read = TensorRead::from_view(
+        TensorRead::from_tensor(&input)
+            .tensor_view()
+            .expect("a preset dtype always has the requested representation"),
+    );
+    let materializations = Arc::new(AtomicUsize::new(0));
+    let cast_read_views = Arc::new(AtomicUsize::new(0));
+    let mut backend =
+        RecordingEngine::new_counting(Arc::clone(&materializations), Arc::clone(&cast_read_views));
+
+    let outputs = exec_standard_op_on_tensor_reads_in_session(
+        &StdTensorOp::Convert {
+            from: DType::F64,
+            to: DType::F32,
+        },
+        &[read],
+        &mut backend,
+    )
+    .expect("the eager Convert consumes a view");
+
+    assert_eq!(outputs[0].as_slice::<f32>().unwrap(), &[1.5, 2.5]);
+    assert_eq!(
+        cast_read_views.load(Ordering::Relaxed),
+        1,
+        "the Convert must reach cast_read with a view"
+    );
+    assert_eq!(
+        materializations.load(Ordering::Relaxed),
+        0,
+        "the Convert must not stage its operand"
+    );
 }
