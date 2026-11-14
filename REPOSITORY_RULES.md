@@ -621,6 +621,16 @@ inline `#[cfg(test)]` restriction from it.
   `TypedTensor::host_data_mut()` return `Result` and report backend buffers as
   runtime-state failures. Any infallible host-inspection API returning a
   borrowed slice must document an explicit panic boundary before exposure.
+- **Shared allocation domains are the exception to the download-first rule.**
+  An allocation whose provider answers `BackendStorage::shared_host_slice`
+  lives at one address the CPU and the device both address, so a CPU op may read
+  it in place: the provider waits for its pending device writes before handing
+  out the borrow, nothing is copied, and no transfer is counted. Exclusive CPU
+  writes still go through `BackendStorage::map_write` and the ownership
+  kernel's exclusive capability. Device-local buffers and allocations of
+  another provider keep the runtime-state refusal above; a provider's own
+  failure surfaces as `Error::HostAccess`, not as a silent CPU fallback.
+  (tenferro-rs#2402, `tensor4all-meta` `docs/design/metal-backend.md` §4.3–§5.)
 - Execution pipeline internals may handle placement for documented cases:
   `Constant` ops may auto-upload through `upload_host_tensor()`, and
   host-dependent ops such as `ShapeOf` or `DynamicTruncate` may read metadata

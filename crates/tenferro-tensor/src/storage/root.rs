@@ -434,6 +434,19 @@ unsafe impl<T: TensorScalar> BackendAllocation for HostAllocation<T> {
     }
 }
 
+impl<T: 'static> BackendStorageAllocation<T> {
+    /// Borrow the provider buffer this root retains.
+    ///
+    /// The reference is bounded by the root borrow the caller already holds, so
+    /// a caller that holds `&'a dyn BackendAllocation` can keep the borrow for
+    /// its own lifetime.
+    pub(crate) fn buffer(&self) -> &crate::StorageBuffer<T> {
+        // SAFETY: provider buffers are not resized after root import, and the
+        // returned reference is bounded by the shared root borrow.
+        unsafe { &*self.data.get() }
+    }
+}
+
 impl<T: Send + Sync + 'static> std::fmt::Debug for BackendStorageAllocation<T> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter

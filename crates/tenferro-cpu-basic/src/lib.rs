@@ -144,10 +144,45 @@ pub fn typed_host_data<'a, T: TensorScalar>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> Result<&'a [T]> {
-    if tensor.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
+    if let Some(buffer) = tensor.backend_buffer() {
+        let expected =
+            tenferro_tensor::validate::checked_shape_product(op, "shape", tensor.shape())?;
+        return shared_read_slice(op, expected, buffer.shared_host_slice());
     }
     tensor.host_data()
+}
+
+/// Admit one backend allocation the CPU can read, or keep the CPU refusal.
+///
+/// A shared allocation domain hands out allocations the CPU can read at the
+/// same address as the device, so the provider's borrow (`shared_host_slice`,
+/// which waits for pending device writes) is the admission. Every other
+/// backend payload keeps the historical "download to host" refusal, and a
+/// provider's own typed failure survives as [`Error::host_access`].
+#[doc(hidden)]
+pub fn shared_read_slice<'a, T>(
+    op: &'static str,
+    expected: usize,
+    slice: std::result::Result<&'a [T], tenferro_tensor::HostAccessError>,
+) -> Result<&'a [T]> {
+    let slice = admit_shared_slice(op, slice)?;
+    slice
+        .get(..expected)
+        .ok_or_else(|| Error::validation(op, tenferro_tensor::ValidationError::ViewOutOfBounds))
+}
+
+/// Turn the provider's borrow into a slice, keeping every non-admission a typed refusal.
+fn admit_shared_slice<'a, T>(
+    op: &'static str,
+    slice: std::result::Result<&'a [T], tenferro_tensor::HostAccessError>,
+) -> Result<&'a [T]> {
+    match slice {
+        Ok(slice) => Ok(slice),
+        Err(tenferro_tensor::HostAccessError::Unsupported { .. }) => {
+            Err(cpu_backend_buffer_error(op))
+        }
+        Err(error) => Err(Error::host_access(op, error)),
+    }
 }
 
 #[doc(hidden)]
@@ -155,14 +190,27 @@ pub fn typed_view<'a, T: Copy + TensorScalar>(
     op: &'static str,
     tensor: &'a TypedTensor<T>,
 ) -> Result<StridedView<'a, T>> {
-    if tensor.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    let data = tensor.host_data()?;
+    let data = typed_host_data(op, tensor)?;
     // The tensor caches its compact layout, so the view borrows both metadata
     // vectors instead of allocating a pair per call.
     StridedView::new(data, tensor.shape(), tensor.strides(), 0)
         .map_err(|err| Error::backend_source(op, err))
+}
+
+/// Admit one borrowed view the CPU can read, keeping its strides and offset.
+///
+/// The allocation, not the view, bounds the borrow: a sliced or strided view
+/// reaches outside its own `n_elements`, so the extent check belongs to the
+/// caller's `StridedView::new`, as it already does for a host view.
+#[doc(hidden)]
+pub fn shared_view_read_slice<'a, T>(
+    op: &'static str,
+    buffer: &'a dyn tenferro_tensor::BackendStorage<T>,
+) -> Result<&'a [T]>
+where
+    T: 'static,
+{
+    admit_shared_slice(op, buffer.shared_host_slice())
 }
 
 #[doc(hidden)]
@@ -170,16 +218,12 @@ pub fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
     op: &'static str,
     view: &TypedTensorView<'a, T, R>,
 ) -> Result<StridedView<'a, T>> {
-    if view.backend_buffer().is_some() {
-        return Err(cpu_backend_buffer_error(op));
-    }
-    StridedView::new(
-        view.host_storage()?,
-        view.shape(),
-        view.strides(),
-        view.offset(),
-    )
-    .map_err(|err| Error::backend_source(op, err))
+    let data = match view.shared_backend_storage() {
+        Some(buffer) => shared_view_read_slice(op, buffer)?,
+        None => view.host_storage()?,
+    };
+    StridedView::new(data, view.shape(), view.strides(), view.offset())
+        .map_err(|err| Error::backend_source(op, err))
 }
 
 /// Construct an erased read-only strided view over initialized typed storage.
