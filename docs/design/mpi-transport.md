@@ -27,36 +27,40 @@ transport.
 
 ## Crate layout
 
-| Crate | Published | `mpi` binding | Why split |
-| ----- | --------- | ------------- | --------- |
-| `tenferro-mpi` | yes | crates.io `mpi = "=0.8.1"` | the default surface has no git dependency |
-| `tenferro-mpi-rt` | no | `mpi` from `tensor4all/rsmpi-rt` at a pinned rev | rsmpi-rt loads MPI at run time via MPIABI, and a git dependency cannot be published on crates.io |
+`tenferro-mpi` is a workspace member with `default = []`; exactly one of two
+binding features is selected when a caller wants transport. Both features build the
+published `rsmpi-rt 0.8.2` package, whose library target is still `mpi`; the
+dependency is aliased back to `mpi` so the adapter and its callers share one type
+identity.
 
-`tenferro-mpi-rt` depends on `tenferro-mpi` with `default-features = false,
-features = ["engine"]`, so the protocol, error type and `Transport` set exist once and
-are compiled into both crates. `engine` builds no MPI binding at all.
+| Feature | crates.io dependency | Build requirement |
+| ------- | -------------------- | ----------------- |
+| `system` | `rsmpi-rt 0.8.2` with `mpi-sys-backend` → `rsmpi-sys 0.2.4` (library `mpi_sys`) | system MPI headers, a C compiler and libclang |
+| `runtime` | `rsmpi-rt 0.8.2` with `mpi-rt-sys-backend` → `mpi-rt-sys 0.1.0` | no headers or libclang; `MPI_RT_LIB` and MPIwrapper at run time |
 
-Both crates are **excluded** standalone workspaces, like `ext/sparse` and
-`ext/tropical`: adding them to the root workspace would force system MPI headers,
-libclang and an MPI launcher into every existing lane. Their `Cargo.lock` is their own,
-and the root `cargo clippy`/`cargo test` lanes never see them.
+`system` and `runtime` are mutually exclusive (a `compile_error!` rejects both).
+`engine` compiles the protocol, error type and `Transport` set with no MPI binding.
+
+The crate is a **workspace member**. Its default features select no system library,
+so the root `cargo clippy`/`cargo test` lanes build it without MPI headers, libclang
+or an MPI launcher; the dedicated `mpi-adapter` CI job enables `system` and installs
+the MPI toolchain, and the runtime lane is local (it needs MPIwrapper). The crate no
+longer carries its own `Cargo.lock`; the root lock and `cargo metadata` cover it.
 
 ### One `mpi` identity per graph
 
 Every `mpi` crate is a distinct type identity: two of them in one process produce
-`Process`/`Communicator` types that cannot meet. The adapter therefore re-exports the
-binding it was built against (`tenferro_mpi::mpi`, `tenferro_mpi_rt::mpi`), and a
-caller must take its communicator and process handles from that re-export.
+`Process`/`Communicator` types that cannot meet. Both backends therefore name the
+same published `rsmpi-rt` package, and the adapter re-exports it as
+`tenferro_mpi::mpi`; a caller must take its communicator and process handles from
+that re-export.
 
-`mpi-sys` declares `links = "mpi"`, in the crates.io form and in the rsmpi-rt fork
-alike, so a graph can contain at most one `mpi-sys`: enabling rsmpi-rt's
-`mpi-sys-backend` in the same graph as `tenferro-mpi` cannot link. `mpi-rt-sys` (the
-MPIABI loader) declares no link identity, so the constraint there is not Cargo's but the
-`mpi` type identity: `tenferro-mpi-rt` names only the rsmpi-rt `mpi`, and
-`tenferro-mpi` compiles its binding only under `upstream`, which keeps one `mpi` in each
-graph. `scripts/check-mpi-features.sh` asserts the outcome (exactly one `mpi` in the
-default graph, `mpi-rt-sys` and no `mpi-sys` in the runtime graph) rather than the
-reasoning.
+`rsmpi-sys` declares `links = "mpi"`, while `mpi-rt-sys` (the MPIABI loader)
+declares no link identity. Enabling both backend features would put both sys crates
+in one graph, which the `compile_error!` rejects. `scripts/check-mpi-features.sh`
+asserts the outcome: one `rsmpi-rt 0.8.2` and one `rsmpi-sys 0.2.4` in the `system`
+graph, one `rsmpi-rt` and one `mpi-rt-sys 0.1.0` in the `runtime` graph, and no MPI
+package at all in the default and `engine` graphs.
 
 ## Wire format v1
 
@@ -176,7 +180,7 @@ Locally refused before any message: negative tag (`InvalidTag`), blocking self-s
   allocates its result buffer, and a `bool` payload allocates a byte scratch on either
   side because a byte that is not 0 or 1 must never be written into a `bool`
   destination.
-- `ext/mpi-rt` needs MPIwrapper: build it once (`cmake` against the system MPI), set
-  `MPI_RT_LIB`, and run `scripts/run-mpi.sh rt`. It has no hosted CI lane because that
-  toolchain (CMake plus a Fortran compiler) is more than the adapter's own build; the
-  local evidence is recorded in the work log.
+- The runtime backend needs MPIwrapper: build it once (`cmake` against the system
+  MPI), set `MPI_RT_LIB`, and run `scripts/run-mpi.sh rt`. It has no hosted CI lane
+  because that toolchain (CMake plus a Fortran compiler) is more than the adapter's
+  own build; the local evidence is recorded in the work log.

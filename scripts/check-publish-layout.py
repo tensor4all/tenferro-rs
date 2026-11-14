@@ -41,6 +41,10 @@ IMPLEMENTATION_CRATE_ORDER = [
 TENFERRO_CRATES = (
     USER_CRATE_ORDER + EXTENSION_CRATE_ORDER + IMPLEMENTATION_CRATE_ORDER
 )
+# Optional adapters are members with `publish = true`, but they version and publish
+# on their own line (tenferro-mpi 0.1.x) instead of the tenferro release order, so
+# they are expected in the workspace and excluded from Phase 3.
+OPTIONAL_ADAPTER_CRATES = {"tenferro-mpi"}
 VALID_CATEGORIES = {
     "algorithms",
     "api-bindings",
@@ -173,7 +177,7 @@ def check_release_order(
     order = phase3_publication_order(release_text, errors)
     if order is None:
         return
-    expected = publishable_crates(metadata)
+    expected = publishable_crates(metadata) - OPTIONAL_ADAPTER_CRATES
     if len(order) != len(set(order)):
         errors.append("release publish order must not contain duplicate crates")
     missing = sorted(expected - set(order))
@@ -279,7 +283,7 @@ def check_workspace_members(metadata: dict, root_text: str, errors: list[str]) -
         errors.append("workspace must not include a root tenferro facade crate")
 
     workspace_crates = publishable_crates(metadata)
-    expected_crates = set(TENFERRO_CRATES)
+    expected_crates = set(TENFERRO_CRATES) | OPTIONAL_ADAPTER_CRATES
     missing_crates = sorted(expected_crates - workspace_crates)
     unexpected_crates = sorted(workspace_crates - expected_crates)
     if missing_crates:
@@ -298,6 +302,20 @@ def check_workspace_members(metadata: dict, root_text: str, errors: list[str]) -
             errors.append(
                 f"{crate} manifest must be {rel(expected)}, found {rel(manifest_path)}"
             )
+
+    for crate in sorted(OPTIONAL_ADAPTER_CRATES):
+        package = packages.get(crate)
+        if package is None:
+            errors.append(f"workspace missing package {crate!r}")
+            continue
+        manifest_path = Path(package["manifest_path"])
+        expected = ROOT / "crates" / crate / "Cargo.toml"
+        if manifest_path != expected:
+            errors.append(
+                f"{crate} manifest must be {rel(expected)}, found {rel(manifest_path)}"
+            )
+        if package.get("publish") == []:
+            errors.append(f"optional adapter {crate!r} must remain publishable")
 
     workspace_section = section(root_text, "workspace")
     if '"crates/tenferro-tensor"' not in workspace_section:

@@ -159,10 +159,11 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           components: clippy, rustfmt
-      # The adapter is an excluded standalone workspace (#2612): its binding needs
-      # MPI headers and libclang at build time, which no other lane may pay for. The
-      # gate is `run_rust`, the output this workflow's `policy` job actually declares;
-      # gating on an undeclared output skips every step and reports a green job.
+      # `tenferro-mpi` is a workspace member with `default = []`; only this lane
+      # enables `system`, whose binding needs MPI headers and libclang at build
+      # time. The gate is `run_rust`, the output this workflow's `policy` job
+      # actually declares; gating on an undeclared output skips every step and
+      # reports a green job.
       - name: Install MPI and libclang
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: |
@@ -174,7 +175,7 @@ jobs:
         with:
           prefix-key: v1-rust-ubuntu24
           workspaces: |
-            ext/mpi
+            crates/tenferro-mpi
       - name: Run the upstream MPI lane
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: python3 scripts/ci/run_profile.py mpi-upstream
@@ -204,7 +205,8 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           prefix-key: v1-hdf5-ubuntu24
-          workspaces: ext/hdf5
+          workspaces: |
+            crates/tenferro-hdf5
       - name: Install libhdf5 and h5py
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: |
@@ -213,17 +215,17 @@ jobs:
           python3 -c "import h5py; print('h5py', h5py.__version__, 'libhdf5', h5py.version.hdf5_version)"
       - name: Run rustfmt
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
-        run: cargo fmt --manifest-path ext/hdf5/Cargo.toml --all --check
+        run: cargo fmt -p tenferro-hdf5 -- --check
       - name: Run clippy
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: >-
-          cargo clippy --manifest-path ext/hdf5/Cargo.toml --all-targets --
+          cargo clippy -p tenferro-hdf5 --features hdf5 --all-targets --
           -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
       - name: Run tests and doctests
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         env:
           TENFERRO_HDF5_INTEROP: "1"
-        run: cargo test --manifest-path ext/hdf5/Cargo.toml --locked
+        run: cargo test -p tenferro-hdf5 --features hdf5 --locked
       - name: Report hdf5 adapter disposition
         if: always()
         env:

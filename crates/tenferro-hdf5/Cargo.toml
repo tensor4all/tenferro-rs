@@ -1,0 +1,45 @@
+[package]
+name = "tenferro-hdf5"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+description = "Thin HDF5 payload adapter for tenferro tensors."
+# hdf5-rt is git-only until it is published on crates.io.
+publish = false
+
+[lib]
+name = "tenferro_hdf5"
+path = "src/lib.rs"
+
+# A workspace member. `default = []` keeps the HDF5 binding out of the root
+# `cargo test --workspace` graph; `--features hdf5` is the adapter lane.
+[features]
+default = []
+hdf5 = ["dep:hdf5-rt", "dep:num-complex", "dep:tenferro-tensor", "dep:thiserror"]
+
+[dependencies]
+hdf5-rt = { git = "https://github.com/tensor4all/hdf5-rt", rev = "6d15b680dcf695f57ce11a9dd4c8c80e72d449e5", features = ["complex"], optional = true }
+num-complex = { version = "0.4", optional = true }
+tenferro-tensor = { path = "../tenferro-tensor", default-features = false, optional = true }
+thiserror = { version = "2", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+# The tests open a real libhdf5 at run time, so they only build in the adapter lane.
+[[test]]
+name = "allocations"
+required-features = ["hdf5"]
+
+[[test]]
+name = "interop"
+required-features = ["hdf5"]
+
+[[test]]
+name = "negative"
+required-features = ["hdf5"]
+
+[[test]]
+name = "roundtrip"
+required-features = ["hdf5"]
