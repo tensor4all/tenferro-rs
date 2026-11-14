@@ -565,7 +565,7 @@ checking where it lives.
   belongs behind the backend/FFI seam, not in graph or rule code.
 - **Document each block.** Keep the validation invariant next to the `unsafe`
   block (`// SAFETY:`) and test the boundary conditions. New FFI binding files
-  should follow the existing `cusolver.rs` / `lapack_linalg/*` patterns.
+  should follow the existing `cusolver.rs` / `cuda/ffi` patterns.
 
 ## File Organization
 

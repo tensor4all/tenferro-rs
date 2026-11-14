@@ -73,7 +73,7 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let end_idx = remaining
         .find(end)
         .map(|offset| start_idx + offset)
-        .unwrap_or(source.len());
+        .unwrap_or_else(|| panic!("source should contain section end {end:?}"));
     &source[start_idx..end_idx]
 }
 
@@ -448,7 +448,7 @@ fn cpu_linalg_materialization_requires_the_operations_exec_bundle() {
     let interop = source_section(
         &cpu_lib,
         "pub mod linalg_interop",
-        "pub(crate) fn cpu_backend_buffer_error",
+        "pub(crate) fn cpu_negative_integer_exponent",
     );
     assert!(
         !interop.contains("pub fn materialize_tensor_read")

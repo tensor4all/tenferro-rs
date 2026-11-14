@@ -521,7 +521,11 @@ cannot drift back. The three pages that embed it (`README.md`, `docs/index.md`,
    and the unused-dependency warning it would fix is pre-existing. Reverted.
 2. **`all-features = true` in `tenferro-cpu`/`tenferro-runtime` docs.rs metadata** instead of
    deleting the `features` key. `scripts/check-publish-layout.py` requires exactly one of
-   `all-features`/`features`; a featureless crate has no list to name.
+   `all-features`/`features`, and neither crate has a docs.rs row of its own. For
+   `tenferro-runtime` this is the whole build; for `tenferro-cpu` it also enables `ledger` and
+   `route-report`, which gate `#[doc(hidden)]` host-check hooks, so its documented surface stays
+   the one `api/tenferro-cpu.txt` snapshots. (An earlier edit of this plan called both crates
+   featureless; the review of #2609 caught that `tenferro-cpu` keeps those two.)
 3. **`scripts/check-tensor-core-deps.sh` keeps `cblas-sys` and `lapack`** in its forbidden list.
    They are unreachable now, and keeping them keeps the negative rule mechanically enforced.
 4. **`docs/design/execution-engine-provider-architecture.md` keeps its vendor-BLAS analysis**,
@@ -529,6 +533,26 @@ cannot drift back. The three pages that embed it (`README.md`, `docs/index.md`,
    record of why the provider was removed.
 5. **The macOS profile is renamed `macos`** (and its cache key `macos-v1`) rather than kept as
    `macos-accelerate` with the vendor feature removed.
+
+### Second review round (partial local-diff, head `6336e10b`)
+
+Four blocking findings, all verified and fixed — full disposition in the worklog's
+"Second review round" section. In short: `docs/oracle/tensor-ad-oracles-support.md`
+still ran `--features autodiff,native`; `docs/performance/tt-inner-product-overhead.md`
+still documented the deleted bench and `blas-openblas`; the `source_section` end
+marker in `linalg_internal_path_contract.rs` was stale and the helper's silent
+file-end fallback turned the assertion vacuous; and "`tenferro-cpu` declares no
+features at all" was false.
+
+The third one is a plan defect, not an implementation slip: §6.2 said to flatten
+the provider loops and stop there. Nothing in the plan required the contract-test
+*machinery* to fail loudly when a marker goes stale, so three more markers were
+already stale and passing. The fix is the helper, and the lesson for §6.2 is that a
+source-contract helper must panic on a missing boundary.
+
+The fourth was verification, not judgement: I checked `Cargo.toml` for a `[features]`
+table during the first pass and concluded "none" from the *absence of a `default`
+key*, then wrote the stronger claim. `cargo metadata --no-deps` would have shown it.
 
 ### Final verification
 

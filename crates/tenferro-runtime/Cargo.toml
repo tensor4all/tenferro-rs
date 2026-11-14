@@ -17,7 +17,7 @@ documentation = "https://docs.rs/tenferro-runtime"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-# One backend, no features: docs.rs builds the same surface every dependent gets.
+# No backend selection and no features at all: every build is the default build.
 all-features = true
 
 [lib]

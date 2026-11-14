@@ -25,8 +25,12 @@ this table together.
 | `tenferro-linalg+autodiff-cuda.txt` | `tenferro-linalg` | `autodiff,cuda` |
 | `tenferro-fft+autodiff-cuda.txt` | `tenferro-fft` | `autodiff,cuda` |
 
-The second combination of a crate is its docs.rs feature set. `tenferro-cpu` and
-`tenferro-runtime` have one file each, because they declare no features at all.
+The second combination of a crate is its docs.rs feature set. `tenferro-runtime`
+declares no features at all, and `tenferro-cpu` only `ledger` and `route-report` —
+off by default, gating `#[doc(hidden)]` host-check hooks that `cargo public-api`
+does not document — so both have one file each and their docs.rs build documents
+the same surface as the default one. Add a row here when a crate gains a feature
+that changes a *documented* item.
 
 `allowlist.txt` is not a snapshot: it lists, symbol by symbol, the approved
 external types and owner-scoped bridges of exception E06 (see the core

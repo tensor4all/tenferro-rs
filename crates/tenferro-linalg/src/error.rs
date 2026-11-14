@@ -173,7 +173,7 @@ pub(crate) fn invalid_workspace(
     )
 }
 
-#[cfg(all(test, feature = "cuda"))]
+#[cfg(test)]
 mod tests {
     use std::error::Error as _;
 

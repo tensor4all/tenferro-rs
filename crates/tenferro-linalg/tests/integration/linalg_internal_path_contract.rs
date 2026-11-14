@@ -13,7 +13,7 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     let end_idx = remaining
         .find(end)
         .map(|offset| start_idx + offset)
-        .unwrap_or(source.len());
+        .unwrap_or_else(|| panic!("source should contain section end {end:?}"));
     &source[start_idx..end_idx]
 }
 
@@ -86,7 +86,7 @@ fn norm_fro_and_p2_norm_use_fused_backend_hook_without_generic_pow() {
     let concrete_p_norm = source_section(
         &concrete_source,
         "fn p_norm<B: LinalgBackend + ?Sized>",
-        "fn count_nonzero<B: LinalgBackend>",
+        "fn count_nonzero<B: LinalgBackend + ?Sized>",
     );
     assert!(
         concrete_frobenius.contains("backend.reduce_sum_squares_read")
@@ -598,10 +598,11 @@ fn cpu_solve_read_into_reaches_direct_write_for_eligible_outputs() {
     let guarded_fallback = source_section(
         solve_read_into,
         "if has_zero_dim(a.shape())",
-        "}\n\n        self.with_linalg_pool_checked(",
+        "}\n\n        self.with_linalg_pool(",
     );
     assert!(
-        guarded_fallback.contains("solve_read_into_default("),
+        guarded_fallback.contains("solve_read_into_direct_eligible")
+            && guarded_fallback.contains("solve_read_into_default("),
         "the allocate+copy fallback must be the guarded ineligible branch, not the main path"
     );
 }

@@ -185,7 +185,7 @@ across small/medium square, tall, wide, and batched-small shapes.
 #### Forward (decomposition correctness)
 
 Due to phase/sign freedom, tests verify **reconstruction and properties**, not decomposition outputs directly.
-BLAS/LAPACK do not specify sign/phase conventions, so reference data cannot be used.
+LAPACK and faer do not agree on sign/phase conventions, so reference data cannot be used.
 
 | Operation | Reconstruction test | Property test |
 |-----------|-------------------|---------------|

@@ -22,11 +22,14 @@ contexts with `blas inject` gone. No admin-rights refusal occurred.
 
 ## Decisions
 
-- **`tenferro-cpu` and `tenferro-runtime` declare no features at all.** Their `default` feature was
-  the provider selector, so it goes with it. `docs.rs` metadata for both now sets
-  `all-features = true` (the same build every dependent gets) because
-  `scripts/check-publish-layout.py` requires exactly one of `all-features`/`features` and there is
-  no feature list to name.
+- **`tenferro-cpu` and `tenferro-runtime` lose their `default` feature.** It *was* the provider
+  selector, so it goes with it. `tenferro-runtime` ends up with no features at all;
+  `tenferro-cpu` keeps `ledger` and `route-report`, the off-by-default test and host-check
+  hooks, which gate `#[doc(hidden)]` items and change no numerical path. `docs.rs` metadata for
+  both sets `all-features = true` because `scripts/check-publish-layout.py` requires exactly one
+  of `all-features`/`features`: for `tenferro-runtime` that is the whole build, and for
+  `tenferro-cpu` it documents the same surface as the default build, because
+  `cargo public-api` omits `#[doc(hidden)]` items.
 - **`faer` and `tlinalg` become non-optional in `tenferro-linalg`**, and `tcontract-exec` gains
   `features = ["faer"]`. One faer identity, one linalg provider.
 - **The API snapshots keep their content and change their names.** Dropping `native` from the five
@@ -107,6 +110,71 @@ Not run, with the reason:
   `--features cuda,native` in `docs/guides/external-linalg-interop.md`, a feature that no longer
   exists — documentation commands are outside the plan's grep gates, which is why it survived the
   first pass.
+
+## Second review round (partial local-diff review at `6336e10b`)
+
+`ollama-cloud/glm-5.3-flash` reviewed the diff locally (the GitHub diff endpoint
+returns 406 above 20,000 lines) and returned four blocking findings plus minor
+stale prose. All were verified against the source and fixed:
+
+1. **BLOCKER — `docs/oracle/tensor-ad-oracles-support.md:99`** ran
+   `--features autodiff,native` for the incremental-Householder-QR oracle replay.
+   Same class as the first round's `external-linalg-interop.md`: a copy-pasteable
+   command naming a deleted feature, in a page in the published nav, outside every
+   grep gate. Fixed → `--features autodiff`, and `cargo tree -p tenferro-linalg
+   --features autodiff` resolves.
+2. **BLOCKER — `docs/performance/tt-inner-product-overhead.md`** described
+   `benches/openblas_direct_overhead.rs` and gave ~7 runnable
+   `--features blas-openblas` / `--bench openblas_direct_overhead` commands. Its
+   banner covered #2206 only. Fixed → the banner now also records #2608 (features
+   and bench target gone, "tenferro OpenBLAS" columns no longer reproducible), the
+   two dead command blocks became one sentence, the verification list keeps the
+   commands as *what was run* rather than as instructions, and the benchmark entry
+   is past tense with a "(removed … #2608)" marker. The faer command that still
+   works stays runnable.
+3. **BLOCKER — a stale `source_section` end marker made a source contract vacuous.**
+   `linalg_internal_path_contract.rs:601` ended its slice at
+   `self.with_linalg_pool_checked(`, deleted with the no-op wrapper. `source_section`
+   silently fell back to the end of the file, so the "guarded ineligible branch"
+   assertion covered the whole rest of `backend.rs` and still passed.
+   Fixed at both levels: the marker is now `"}\n\n        self.with_linalg_pool("` and
+   the assertion also requires `solve_read_into_direct_eligible` in the slice; and
+   **`source_section` in all three contract files now panics on a missing end
+   marker** instead of widening the slice. That strictness immediately found three
+   more stale markers nobody had noticed — `cpu_linalg_source_contract.rs`
+   (`cpu_backend_buffer_error` → `cpu_negative_integer_exponent`),
+   `gpu_linalg_source_contract.rs` (`fn solve_typed` → `fn lu_typed`;
+   `fn raw_stream` → `fn matrix_slice_config`) and
+   `linalg_internal_path_contract.rs` (`fn count_nonzero<B: LinalgBackend>` →
+   `… + ?Sized>`). Four vacuous assertions repaired by one helper change.
+4. **BLOCKER — "`tenferro-cpu` declares no features at all" was false.**
+   `ledger` and `route-report` remain. Corrected in `CHANGELOG.md`,
+   `crates/tenferro-cpu/src/lib.rs`, `api/README.md`, `crates/tenferro-cpu/Cargo.toml`,
+   this worklog and `IMPLEMENTATION-PLAN.md`, and the docs.rs/API-snapshot relation
+   is now stated and **verified**: `cargo public-api -p tenferro-cpu -ss --features
+   ledger,route-report` is byte-identical to `api/tenferro-cpu.txt`, because both
+   features gate `#[doc(hidden)]` items (`take_ledger_*`, `take_last_plan_route`)
+   and `cargo public-api` omits those. So no second snapshot row is needed, and
+   `all-features = true` documents exactly the snapshotted surface.
+
+Also fixed from the same review: `error.rs`'s `mod tests` was gated on
+`feature = "cuda"`, so `invalid_workspace_keeps_typed_backend_source` ran in no
+default lane although `invalid_workspace` is now unconditional and reaches the faer
+route (`cpu/tlinalg_error.rs:87`); it is `#[cfg(test)]` again and the run count went
+3575 → 3576. Stale prose: `docs/guides/eager-operations.md` ("default `native`
+stack"), `REPOSITORY_RULES.md:568` (`lapack_linalg/*` → `cusolver.rs`/`cuda/ffi`),
+`full_svd_read.rs` ("The LAPACK provider packs all three"),
+`docs/design/{dot-general-overhead,testing,tensor,scalar-composition,tensor-session-redesign-1938}.md`,
+and `#2608` banners on the three design records that still present CPU-BLAS as
+current (`incremental-householder-qr.md`, `rank-revealing-qr.md`,
+`incremental-householder-qr-performance-gate.md`).
+
+Deliberately not changed: `docs/testing/storage-traversal-performance.md:87-90`. Its
+`thread_environment` block is a captured measurement record, and
+`scripts/verify-storage-traversal-performance.py:14` lists those five variables as
+required environment keys; dropping them means recapturing the baseline and editing
+the capture/verify pair. The vendor entries are inert now, not wrong, so that is a
+separate change with its own measurement cost.
 
 ## What the gate holes were, so the next removal does not repeat them
 

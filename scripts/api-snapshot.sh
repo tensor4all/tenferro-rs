@@ -36,8 +36,9 @@ esac
 # emits no JSON; its exported macros are reviewed through the crates using them.
 # Format: <crate> <file-suffix> <features ("-" for the default set)>.
 # The second row of a crate is its docs.rs feature set, which is the combination
-# that widens the public surface; a crate with one row declares no default
-# feature set at all.
+# that widens the documented public surface; a crate with one row has no default
+# feature set, so its default build and its docs.rs build document the same
+# surface (tenferro-cpu's `ledger`/`route-report` only gate `#[doc(hidden)]` items).
 COMBOS=(
     "tenferro-tensor-core default -"
     "tenferro-tensor default -"

@@ -242,12 +242,10 @@ fn owned_and_borrowed_full_svd_agree_for_every_dtype_and_shape() {
 
 #[test]
 fn full_svd_read_consumes_strided_offset_and_reversed_views_unchanged() {
-    // Three borrowed layouts with one eligibility story each: the transposed
-    // view reaches faer directly, the offset slice keeps positive strides and
-    // also reaches faer, and the reversed view has negative strides so the
-    // provider must pack it first. The LAPACK provider packs all three. Every
-    // combination must agree with the owned path and leave the source bytes
-    // untouched.
+    // Three borrowed layouts: the transposed view and the offset slice keep
+    // positive strides and reach faer directly, and the reversed view has
+    // negative strides so the provider packs it first. Every combination must
+    // agree with the owned path and leave the source bytes untouched.
     let mut host = tenferro_cpu::CpuEngine::serial();
     let base = TypedTensor::<f64>::from_vec_col_major(vec![3, 4], sample_real(3, 4)).unwrap();
     let original = base.host_data().unwrap().to_vec();

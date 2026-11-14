@@ -1,8 +1,10 @@
 //! CPU execution engine and kernels.
 //!
 //! There is one CPU backend: faer-backed `tlinalg` for linalg and
-//! `cpueinsum`/`tcontract` for contraction, linked unconditionally. The crate
-//! declares no features.
+//! `cpueinsum`/`tcontract` for contraction, linked unconditionally. The crate has
+//! no backend feature; its only two features, `ledger` and `route-report`, are
+//! off by default, gate host-check hooks that are `#[doc(hidden)]`, and change no
+//! numerical path.
 //!
 //! A [`CpuEngine`] owns one [`Pool`] built by the caller (or none) and the
 //! workspace its operations write. Every operation takes the engine as `&mut`:

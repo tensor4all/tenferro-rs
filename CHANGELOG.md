@@ -160,8 +160,11 @@ layer, generated from a per-family registry. The operation list, options,
     `tenferro-gpu`, `tenferro-xla` or `docs/tutorial-code`. A stale dependency
     line fails with "feature does not exist"; delete the feature and the
     `default-features = false` that went with it. There is no back-compat alias.
-  - `tenferro-cpu` and `tenferro-runtime` no longer declare a `default` feature.
-    `tenferro-cpu` declares no features at all.
+  - `tenferro-cpu` and `tenferro-runtime` no longer declare a `default` feature,
+    because `default` *was* the provider selector. `tenferro-runtime` declares no
+    features at all. `tenferro-cpu` keeps only `ledger` and `route-report`: test
+    and host-check hooks, off by default, whose items are `#[doc(hidden)]` and
+    change no numerical path.
   - The provider crates `cblas-sys`, `cblas-inject`, `blas-src`,
     `lapack`, `lapack-src` and `lapack-inject` are no longer workspace
     dependencies, so `Cargo.lock` no longer contains `openblas-src`,
