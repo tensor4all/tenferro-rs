@@ -29,6 +29,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "cargo fmt --all --check",
         "cargo fmt --manifest-path ext/tropical/Cargo.toml --all --check",
         "cargo fmt --manifest-path ext/sparse/Cargo.toml --all --check",
+        "cargo fmt --manifest-path ext/mpi/Cargo.toml --all --check",
+        "cargo fmt --manifest-path ext/mpi-rt/Cargo.toml --all --check",
     ),
     "clippy": (
         f"cargo clippy --workspace --all-targets -- {_CLIPPY_FLAGS}",
@@ -59,6 +61,32 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         # crates' tests on a second architecture and libc.
         "cargo nextest run -p tenferro-gpu -p tenferro-fft -p tenferro-linalg "
         f"{_NEXTEST_PROFILE} --features tenferro-linalg/autodiff --no-fail-fast",
+    ),
+    # #2612: the MPI transport adapter. Two lanes because the two backends have
+    # different build requirements: `upstream` needs system MPI headers and libclang,
+    # while `runtime` links rsmpi-rt and needs MPIwrapper at run time through
+    # MPI_RT_LIB. The scenarios are `harness = false` and need a real launcher, so
+    # scripts/run-mpi.sh supplies `mpiexec -n 2`; a bare `cargo test` covers only the
+    # single-process checks.
+    "mpi-upstream": (
+        "cargo fmt --manifest-path ext/mpi/Cargo.toml --all --check",
+        f"cargo clippy --manifest-path ext/mpi/Cargo.toml --all-targets -- {_CLIPPY_FLAGS}",
+        # `cargo test` runs the unit tests, the two scenario targets (which skip on one
+        # rank) and the doctests.
+        "cargo test --manifest-path ext/mpi/Cargo.toml -j 4",
+        "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path ext/mpi/Cargo.toml -j 4 --no-deps",
+        "scripts/check-mpi-features.sh ext/mpi",
+        "scripts/run-mpi.sh upstream",
+    ),
+    "mpi-runtime": (
+        "cargo fmt --manifest-path ext/mpi-rt/Cargo.toml --all --check",
+        f"cargo clippy --manifest-path ext/mpi-rt/Cargo.toml --all-targets -- {_CLIPPY_FLAGS}",
+        # `-j 4` with the whole target set: the doctests are the only check that the
+        # runtime crate's examples compile against its own `mpi` identity.
+        "cargo test --manifest-path ext/mpi-rt/Cargo.toml -j 4",
+        "RUSTDOCFLAGS='-D warnings' cargo doc --manifest-path ext/mpi-rt/Cargo.toml -j 4 --no-deps",
+        "scripts/check-mpi-features.sh ext/mpi-rt",
+        "scripts/run-mpi.sh rt",
     ),
     "extensions": (
         f"cargo test --manifest-path ext/tropical/Cargo.toml {_CARGO_TEST_PROFILE} "

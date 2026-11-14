@@ -1,0 +1,33 @@
+[package]
+name = "tenferro-mpi-rt"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+# Unpublished: rsmpi-rt is git-only, and crates.io rejects a git dependency.
+publish = false
+description = "rsmpi-rt (MPItrampoline runtime loading) backend for tenferro-mpi."
+
+# Standalone manifest, excluded from the root workspace (same pattern as ext/sparse).
+[workspace]
+resolver = "2"
+
+[dependencies]
+tenferro-tensor = { path = "../../crates/tenferro-tensor", default-features = false }
+# `default-features = false` keeps the crates.io `mpi`/`mpi-sys` identity out of this graph:
+# `mpi-sys` declares `links = "mpi"` in both the crates.io and the rsmpi-rt form, so two
+# of them can never be linked together, and one `mpi` type identity per graph is what the
+# `engine` feature of `tenferro-mpi` is for.
+tenferro-mpi = { path = "../mpi", default-features = false, features = ["engine"] }
+mpi = { git = "https://github.com/tensor4all/rsmpi-rt", rev = "6db6a2d6f96115b17c9a925e53ce719797c15dbb", default-features = false, features = ["mpi-rt-sys-backend"] }
+
+[[test]]
+name = "mpi_p2p_rt"
+harness = false
+
+# Match workspace [profile.ci] used by scripts/ci/run_profile.py.
+[profile.ci]
+inherits = "test"
+debug = 0
+incremental = false
+strip = "symbols"

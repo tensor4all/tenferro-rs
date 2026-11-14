@@ -23,7 +23,12 @@ members = [
     "ext/scalar-consumer-algorithm",
     "ext/scalar-consumer-application",
 ]
-exclude = ["ext/sparse", "ext/tropical"]
+exclude = [
+    "ext/mpi",
+    "ext/mpi-rt",
+    "ext/sparse",
+    "ext/tropical",
+]
 default-members = [
     "crates/tenferro-tensor",
 ]
