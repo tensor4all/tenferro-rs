@@ -79,9 +79,13 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "scripts/run-mpi.sh upstream",
     ),
     "mpi-runtime": (
+        # The crate-level and entry-point doctests call `mpi::initialize`, so this lane
+        # has the same MPIwrapper precondition as `scripts/run-mpi.sh rt`; without it
+        # the doctests fail rather than skip.
+        "test -n \"${MPI_RT_LIB:-}\" || { echo 'MPI_RT_LIB is required for the MPI runtime lane; build MPIwrapper first (see crates/tenferro-mpi/README.md)' >&2; exit 2; }",
         f"cargo clippy -p tenferro-mpi --features runtime --all-targets -- {_CLIPPY_FLAGS}",
-        # `-j 4` with the whole target set: the doctests are the only check that the
-        # runtime feature's examples compile against its own `mpi` identity.
+        # The whole target set: the doctests exercise the runtime feature's own `mpi`
+        # identity, and `mpi_p2p_runtime` runs the two-rank scenarios.
         "cargo test -p tenferro-mpi --features runtime -j 4",
         "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-mpi --features runtime -j 4 --no-deps",
         "scripts/check-mpi-features.sh tenferro-mpi",

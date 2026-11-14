@@ -38,8 +38,9 @@ identity.
 | `system` | `rsmpi-rt 0.8.2` with `mpi-sys-backend` → `rsmpi-sys 0.2.4` (library `mpi_sys`) | system MPI headers, a C compiler and libclang |
 | `runtime` | `rsmpi-rt 0.8.2` with `mpi-rt-sys-backend` → `mpi-rt-sys 0.1.0` | no headers or libclang; `MPI_RT_LIB` and MPIwrapper at run time |
 
-`system` and `runtime` are mutually exclusive (a `compile_error!` rejects both).
-`engine` compiles the protocol, error type and `Transport` set with no MPI binding.
+`system` and `runtime` are mutually exclusive; rsmpi-rt itself rejects enabling both
+backend features at once. `engine` compiles the protocol, error type and `Transport`
+set with no MPI binding.
 
 The crate is a **workspace member**. Its default features select no system library,
 so the root `cargo clippy`/`cargo test` lanes build it without MPI headers, libclang
@@ -57,10 +58,10 @@ that re-export.
 
 `rsmpi-sys` declares `links = "mpi"`, while `mpi-rt-sys` (the MPIABI loader)
 declares no link identity. Enabling both backend features would put both sys crates
-in one graph, which the `compile_error!` rejects. `scripts/check-mpi-features.sh`
-asserts the outcome: one `rsmpi-rt 0.8.2` and one `rsmpi-sys 0.2.4` in the `system`
-graph, one `rsmpi-rt` and one `mpi-rt-sys 0.1.0` in the `runtime` graph, and no MPI
-package at all in the default and `engine` graphs.
+in one graph, which rsmpi-rt rejects before the adapter is compiled.
+`scripts/check-mpi-features.sh` asserts the outcome: one `rsmpi-rt 0.8.2` and one
+`rsmpi-sys 0.2.4` in the `system` graph, one `rsmpi-rt` and one `mpi-rt-sys 0.1.0`
+in the `runtime` graph, and no MPI package at all in the default and `engine` graphs.
 
 ## Wire format v1
 

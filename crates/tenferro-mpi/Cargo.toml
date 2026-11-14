@@ -16,7 +16,6 @@ include = [
     "src/**/*.rs",
     "examples/**/*.rs",
     "tests/**/*.rs",
-    "scripts/*.sh",
     "Cargo.toml",
     "README.md",
 ]

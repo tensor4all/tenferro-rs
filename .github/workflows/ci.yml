@@ -169,13 +169,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends openmpi-bin libopenmpi-dev libclang-dev
-      - name: Cache the adapter target dirs
+      - name: Cache the root workspace target dir
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust-ubuntu24
-          workspaces: |
-            crates/tenferro-mpi
+          # tenferro-mpi is a member of the root workspace, not a standalone one.
+          workspaces: .
       - name: Run the upstream MPI lane
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: python3 scripts/ci/run_profile.py mpi-upstream
@@ -205,8 +205,8 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           prefix-key: v1-hdf5-ubuntu24
-          workspaces: |
-            crates/tenferro-hdf5
+          # tenferro-hdf5 is a member of the root workspace, not a standalone one.
+          workspaces: .
       - name: Install libhdf5 and h5py
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: |

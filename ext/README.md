@@ -22,8 +22,8 @@ feature.
 | `crates/tenferro-hdf5` | `tenferro-hdf5` | `[]` | `hdf5` (git `hdf5-rt`, needs a runtime `libhdf5` for tests) | `false` |
 
 Both MPI backends build the published `rsmpi-rt 0.8.2` package (library target
-`mpi`). `system` and `runtime` are mutually exclusive; enabling both fails with a
-`compile_error!`. `engine` compiles the MPI protocol with no binding.
+`mpi`). `system` and `runtime` are mutually exclusive; rsmpi-rt rejects enabling both
+backend features at once. `engine` compiles the MPI protocol with no binding.
 
 Root lanes therefore need neither MPI nor HDF5:
 
@@ -36,7 +36,7 @@ The dedicated lanes are explicit:
 
 ```bash
 cargo test -p tenferro-mpi --features system        # host with MPI + libclang
-cargo test -p tenferro-mpi --features runtime       # host with MPIwrapper; skips without MPI_RT_LIB
+cargo test -p tenferro-mpi --features runtime       # requires MPIwrapper (MPI_RT_LIB); doctests initialize MPI
 cargo test -p tenferro-hdf5 --features hdf5         # host with runtime libhdf5
 scripts/check-mpi-features.sh tenferro-mpi
 scripts/run-mpi.sh upstream                         # mpiexec -n 2 scenarios

@@ -8,8 +8,8 @@
   adapters expose their backends as opt-in features instead of being excluded from
   the workspace.
 - `tenferro-mpi` has `default = []` with mutually exclusive `system` and `runtime`
-  features and a `compile_error!` if both are selected. `engine` remains the
-  protocol-only feature. `tenferro-hdf5` has `default = []` and a single `hdf5`
+  features; rsmpi-rt itself rejects enabling both backend features at once. `engine`
+  remains the protocol-only feature. `tenferro-hdf5` has `default = []` and a single `hdf5`
   feature, with `publish = false` until `hdf5-rt` is on crates.io.
 - The proof and consumer crates moved to `ext/experiments/`; `ext/sparse` and
   `ext/tropical` remain standalone extension workspaces so their independent
@@ -34,10 +34,11 @@
 - `tenferro-mpi --features system` compiles and its single-process tests and
   doctests run on this Mac with Homebrew Open MPI; the two-rank scenarios run under
   `scripts/run-mpi.sh upstream`.
-- `tenferro-mpi --features runtime` compiles and the scenario binary skips without
-  `MPI_RT_LIB`. The runtime doctests need MPIwrapper, which is not installed on this
-  host, so they are compile-checked only there. The same limitation is recorded for
-  the local runtime lane.
+- `tenferro-mpi --features runtime` compiles and its unit/integration targets pass;
+  the `mpi_p2p_runtime` binary skips when `MPI_RT_LIB` is unset. The runtime doctests
+  call `mpi::initialize` and fail without MPIwrapper, so the `mpi-runtime` profile
+  now requires `MPI_RT_LIB` before running; this host (no MPIwrapper) did not execute
+  that lane. The `system` lane runs the same doctest bodies against the same API.
 - `tenferro-hdf5 --features hdf5` builds without HDF5 headers; the test suite needs
   a runtime `libhdf5`, which Homebrew provides on this host.
 - `cargo publish --dry-run -p tenferro-mpi` is the publication gate; the branch does

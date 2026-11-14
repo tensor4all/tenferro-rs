@@ -40,14 +40,15 @@ cmake --build MPIwrapper/build && cmake --install MPIwrapper/build
 export MPI_RT_LIB=$HOME/.local/lib/libmpiwrapper.so
 ```
 
-`system` and `runtime` are mutually exclusive; `engine` compiles the protocol with no
-binding for a caller that supplies its own backend implementation.
+`system` and `runtime` are mutually exclusive: rsmpi-rt rejects enabling both backend
+features at once. `engine` compiles the protocol with no binding for a caller that
+supplies its own backend implementation.
 
 The adapter borrows the caller's communicator: it never initializes or finalizes MPI,
 never duplicates a communicator and never moves data between host and device. A
 `Gpu` tensor does not implement `Transport`, so an accidental device transfer is a
 compile error. The wire format, the failure protocol and the limits are specified in
-[`docs/design/mpi-transport.md`](../../docs/design/mpi-transport.md).
+[`docs/design/mpi-transport.md`](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/mpi-transport.md).
 
 Run the two-rank scenarios with `scripts/run-mpi.sh upstream` (or `rt` for the
 runtime backend); a plain `cargo test` runs only the single-process checks.

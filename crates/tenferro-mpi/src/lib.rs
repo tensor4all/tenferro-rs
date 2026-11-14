@@ -58,8 +58,8 @@
 //!   [`mpi-rt-sys`](https://crates.io/crates/mpi-rt-sys) 0.1.0), which loads MPI at
 //!   run time and needs no headers or libclang.
 //!
-//! The two are mutually exclusive (a `compile_error!` rejects both). `engine`
-//! compiles the protocol with no binding at all.
+//! The two backends are mutually exclusive; rsmpi-rt itself rejects enabling both
+//! backend features at once. `engine` compiles the protocol with no binding at all.
 //!
 //! # Examples
 //!
@@ -117,12 +117,6 @@
     not(any(feature = "system", feature = "runtime", feature = "engine")),
     allow(dead_code)
 )]
-
-#[cfg(all(feature = "system", feature = "runtime"))]
-compile_error!(
-    "tenferro-mpi: features `system` and `runtime` are mutually exclusive; \
-     enable exactly one MPI binding"
-);
 
 mod backend;
 #[cfg(any(feature = "system", feature = "runtime", feature = "engine"))]

@@ -11,7 +11,7 @@
 #                       mpi-rt-sys; needs system MPI headers and libclang;
 #   `runtime`           exactly one rsmpi-rt 0.8.2 and one mpi-rt-sys 0.1.0, no
 #                       rsmpi-sys; loads MPI at run time;
-#   `system`+`runtime`  must stop at the crate's own compile_error!.
+#   `system`+`runtime`  must not build; rsmpi-rt rejects its two backends.
 set -Eeuo pipefail
 
 cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
@@ -93,17 +93,12 @@ if grep -qE '^(rsmpi-sys|mpi-sys) v' <<<"$runtime_tree"; then
     exit 1
 fi
 
-# Enabling both bindings is a configuration error, not a silent precedence rule.
-# rsmpi-rt itself rejects its two backend features, so rustc may fail inside the
-# dependency before reaching this crate's compile_error!; the property under test is
-# that the combination does not build, plus the source-level guard below.
-if output=$(cargo check -j "$jobs" -p tenferro-mpi --features system,runtime 2>&1); then
+# Enabling both bindings is a configuration error. rsmpi-rt itself rejects its two
+# backend features, so the failure is reported inside the dependency before this
+# crate compiles; the property under test is that the combination does not build.
+if cargo check -j "$jobs" -p tenferro-mpi --features system,runtime >/dev/null 2>&1; then
     echo "check-mpi-features: system+runtime built instead of failing" >&2
     exit 1
 fi
-grep -q 'features `system` and `runtime` are mutually exclusive' \
-    crates/tenferro-mpi/src/lib.rs || {
-    echo "check-mpi-features: the crate lost its mutually-exclusive compile_error!" >&2
-    exit 1
-}
+
 echo "check-mpi-features: $crate feature combinations are consistent"
