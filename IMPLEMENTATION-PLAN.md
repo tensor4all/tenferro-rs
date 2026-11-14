@@ -554,6 +554,16 @@ The fourth was verification, not judgement: I checked `Cargo.toml` for a `[featu
 table during the first pass and concluded "none" from the *absence of a `default`
 key*, then wrote the stronger claim. `cargo metadata --no-deps` would have shown it.
 
+### Third review round (same page)
+
+A follow-up finding on `docs/performance/tt-inner-product-overhead.md`: my sentence
+pointed at "the faer run above", which was the deleted `cpu_install_overhead` block
+(#2206), and line 398 still listed that dead command. Fixed by deleting the block,
+naming both dead runs in one historical paragraph, and pointing at the two script
+runs that work. Verifying that pointer exposed a pre-existing stale crate path in
+`scripts/bench-pairwise-contraction.sh` (`-p tenferro-tensor` for a target that lives
+in `tenferro-cpu`), fixed in the same change so the documented command is true.
+
 ### Final verification
 
 Recorded in `docs/worklogs/2026-11-14-issue-2608-drop-vendor-blas-lapack.md` with the exact

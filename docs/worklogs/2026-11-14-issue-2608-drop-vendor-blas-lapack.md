@@ -169,6 +169,26 @@ and `#2608` banners on the three design records that still present CPU-BLAS as
 current (`incremental-householder-qr.md`, `rank-revealing-qr.md`,
 `incremental-householder-qr-performance-gate.md`).
 
+Follow-up on the same page (#2609 third round): the sentence I added pointed at "the
+faer run above", but the block immediately above it was the `cpu_install_overhead`
+command, whose target was deleted in #2206 — my own sentence inherited the defect it
+was meant to fix. Fixed → the dead block is deleted and both dead runs (the
+#2206 install-overhead target and the #2608 vendor runs) are named as historical in
+one paragraph; the pointer now names the two script runs that work; and
+`cargo bench --bench cpu_install_overhead --no-run` moved out of the "Verification
+Performed" list into the same historical note.
+
+Verifying that pointer found a pre-existing bug: `scripts/bench-pairwise-contraction.sh`
+ran `cargo bench -p tenferro-tensor --bench pairwise_contraction`, and that target
+lives in `tenferro-cpu` (it moved there before #2206), so the script's `--kind rust`
+leg failed with "no bench target named `pairwise_contraction`". One-word fix to
+`-p tenferro-cpu` (the criterion ids the script's own example filters on,
+`pairwise_contraction/c64/one_thread/normal_per_call`, are the ones that bench
+defines), then `bash scripts/bench-pairwise-contraction.sh --kind rust -- pairwise_contraction/c64/one_thread/normal_per_call`
+runs a filtered smoke pass end to end. No numbers from that run are recorded or
+published: it used a 0.2 s warm-up / 0.5 s measurement budget and 10 samples, so it
+proves the leg starts and finishes, nothing more.
+
 Deliberately not changed: `docs/testing/storage-traversal-performance.md:87-90`. Its
 `thread_environment` block is a captured measurement record, and
 `scripts/verify-storage-traversal-performance.py:14` lists those five variables as

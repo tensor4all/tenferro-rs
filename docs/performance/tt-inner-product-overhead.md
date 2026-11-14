@@ -80,25 +80,16 @@ bash scripts/bench-pairwise-contraction.sh \
   --sample-size 10
 ```
 
-Run CPU install overhead benchmark:
-
-```bash
-RAYON_NUM_THREADS=1 \
-VECLIB_MAXIMUM_THREADS=1 \
-OPENBLAS_NUM_THREADS=1 \
-OMP_NUM_THREADS=1 \
-MKL_NUM_THREADS=1 \
-cargo bench -p tenferro-cpu --bench cpu_install_overhead -- \
-  --warm-up-time 0.5 \
-  --measurement-time 1 \
-  --sample-size 20
-```
-
-The OpenBLAS-backed pairwise run and the direct OpenBLAS microbenchmark that
-produced the columns below needed the vendor provider and
-`benches/openblas_direct_overhead.rs`. Both were deleted in #2608, so those two
-commands no longer exist and are not reproduced here; the faer run above is the
-one that still works.
+Two further runs produced columns below and can no longer be started. The CPU
+install-overhead benchmark (`--bench cpu_install_overhead`) went with the backend
+context in #2206, and the OpenBLAS-backed pairwise run and direct OpenBLAS
+microbenchmark (`--features blas-openblas`, `--bench openblas_direct_overhead`)
+went with the vendor provider and its benchmark in #2608. Both blocks were
+deleted rather than kept as commands that fail; the numbers they produced stay in
+the tables. Of the commands on this page, the two script runs above are the ones
+that still work: `--kind rust` drives `cargo bench -p tenferro-cpu --bench
+pairwise_contraction`, and `--kind julia` needs Julia and the `benchmarks/julia`
+environment instantiated first.
 
 ## Pairwise Result Summary
 
@@ -395,12 +386,12 @@ entry point without making normal eager contractions context-dependent.
 
 - `cargo fmt --all -- --check`
 - `cargo bench -p tenferro-cpu --bench pairwise_contraction --no-run`
-- `cargo bench -p tenferro-cpu --bench cpu_install_overhead --no-run`
 - `cargo test -p tenferro-cpu --release dot_general -- --nocapture`
-- Also run at the time: the four `--no-default-features --features blas-openblas`
-  `cargo bench`/`cargo test` lines. The feature and the
-  `openblas_direct_overhead` target were deleted in #2608, so they are recorded
-  here as what was executed rather than as commands to repeat.
+- Also run at the time, and no longer startable: `cargo bench -p tenferro-cpu
+  --bench cpu_install_overhead --no-run` (target removed in #2206) and the four
+  `--no-default-features --features blas-openblas` `cargo bench`/`cargo test`
+  lines (feature and `openblas_direct_overhead` target removed in #2608). They
+  are recorded here as what was executed, not as commands to repeat.
 - `bash -n scripts/bench-pairwise-contraction.sh`
 - Julia `Pkg.instantiate()` and `Pkg.precompile()`
 - ITensors version check: `0.9.27`
