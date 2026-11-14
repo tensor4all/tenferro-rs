@@ -61,13 +61,15 @@ relationship; the role is stated only on the first row.
 | `tenferro-tensor-core` | Rank/layout metadata, dtype tags, scalar promotion | — | Original |
 | `tenferro-tensor` | Dense runtime tensors, backend contracts | — | Original |
 | `tenferro-cpu` | CPU backend, kernels, buffer pools | [strided-rs](https://github.com/tensor4all/strided-rs) | Backend |
-| `tenferro-gpu` | CUDA backend, transfers | [CubeCL](https://github.com/tracel-ai/cubecl) | Backend |
+| `tenferro-gpu` | CUDA backend, transfers | [t4a-gpu-backend](https://github.com/tensor4all/t4a-gpu-backend) (`t4a-cuda-runtime`) / [t4a-cuda-kernels](https://github.com/tensor4all/t4a-cuda-kernels) | Backend (CUDA runtime and NVRTC kernel catalogue) |
+| `tenferro-gpu` | | [cudarc](https://github.com/coreylowman/cudarc) | Backend (CUDA driver/runtime/NVRTC bindings; cuBLAS and cuTENSOR) |
 | `tenferro-einsum` | Subscripts, contraction planning, einsum APIs | [omeco](https://crates.io/crates/omeco) | Backend (contraction-order optimization) |
 | `tenferro-einsum` | | [JAX](https://github.com/jax-ml/jax) / XLA | Inspired (`dot_general` primitive; JAX-compatible contraction-path format) |
 | `tenferro-linalg` | Linear algebra APIs and AD rules | [faer](https://github.com/sarah-quinones/faer-rs) | Backend (dense CPU linear algebra) |
 | `tenferro-linalg` | | [JAX](https://github.com/jax-ml/jax) | Inspired (AD-rule conventions, e.g. complex SVD gauge correction; SVD driver selection) |
 | `tenferro-linalg` | | [PyTorch](https://github.com/pytorch/pytorch) | Compatible (manual autograd formulas as comparison baselines; validated against torch-generated oracles) |
-| `tenferro-fft` | FFT extension | cubek-fft | Backend |
+| `tenferro-fft` | FFT extension | [RustFFT](https://github.com/ejmahler/RustFFT) / [RealFFT](https://github.com/HEnquist/realfft) | Backend (CPU FFT) |
+| `tenferro-fft` | | NVIDIA cuFFT | Backend (CUDA FFT, loaded at runtime) |
 | `tenferro-runtime` | Traced tensors, graph compile/exec | [JAX](https://github.com/jax-ml/jax) | Inspired (trace-then-transform program architecture) |
 | `tenferro-ad` | Eager and traced autodiff surfaces | JAX / linearize-then-transpose AD literature | Inspired (semantic transform composition, gradient seed conventions) |
 | `tenferro-ad` | | [JAX](https://github.com/jax-ml/jax) | Inspired (transform composition, gradient seed conventions) |
