@@ -230,10 +230,9 @@ impl OperationCapability {
 
 /// Resolve one operation/dtype entry against a backend capability table.
 ///
-/// This is the single lookup rule behind [`TensorBackendCapability::capability`]
-/// and [`TensorBackendCapability::require_capability`]. Backends and their
-/// operation kernels call it directly so a support decision is spelled once
-/// instead of re-implemented next to each table.
+/// This is the single lookup rule behind [`TensorBackendCapability::capability`].
+/// Backends and their operation kernels call it directly so a support decision
+/// is spelled once instead of re-implemented next to each table.
 ///
 /// `axis` selects the capability axis the caller needs: `None` returns the
 /// declared entry without judging it, `Some(_)` returns it only when that axis
@@ -355,66 +354,6 @@ pub trait TensorBackendCapability {
     #[must_use]
     fn capability(&self, query: CapabilityQuery) -> Option<OperationCapability> {
         capability_entry(self.capabilities(), self.backend_id(), query, None)
-    }
-
-    /// Require support for one operation/dtype/axis, returning a structured
-    /// unsupported error otherwise.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_core_ops::PrimitiveOpKind;
-    /// use tenferro_tensor::{
-    ///     BackendId, CapabilityAxis, CapabilityQuery, DType, Error, OperationCapability,
-    ///     SupportLevel, TensorBackendCapability,
-    /// };
-    ///
-    /// struct Backend;
-    /// const ENTRIES: &[OperationCapability] = &[OperationCapability {
-    ///     backend: BackendId::Cuda,
-    ///     op: PrimitiveOpKind::Neg,
-    ///     dtype: DType::I32,
-    ///     output_dtype: DType::I32,
-    ///     result: SupportLevel::Unsupported,
-    ///     read_inputs: SupportLevel::Unsupported,
-    ///     write_output: SupportLevel::Unsupported,
-    ///     strided_output: SupportLevel::Unsupported,
-    ///     accumulation: SupportLevel::Unsupported,
-    /// }];
-    /// impl TensorBackendCapability for Backend {
-    ///     fn backend_id(&self) -> BackendId { BackendId::Cuda }
-    ///     fn capabilities(&self) -> &'static [OperationCapability] { ENTRIES }
-    /// }
-    ///
-    /// let err = Backend
-    ///     .require_capability(
-    ///         CapabilityQuery::new(PrimitiveOpKind::Neg, DType::I32),
-    ///         CapabilityAxis::OwnedResult,
-    ///     )
-    ///     .unwrap_err();
-    /// assert!(matches!(err, Error::UnsupportedDType { op: "neg", dtype: DType::I32, .. }));
-    /// ```
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::UnsupportedDType`] when the backend capability
-    /// table does not support the requested operation and dtype.
-    fn require_capability(
-        &self,
-        query: CapabilityQuery,
-        axis: CapabilityAxis,
-    ) -> crate::Result<OperationCapability> {
-        capability_entry(self.capabilities(), self.backend_id(), query, Some(axis)).ok_or_else(
-            || {
-                crate::Error::unsupported_dtype(
-                    descriptor(query.op).name,
-                    query.dtype,
-                    format!(
-                        "backend {} does not support this operation/dtype",
-                        self.backend_id()
-                    ),
-                )
-            },
-        )
     }
 }
 

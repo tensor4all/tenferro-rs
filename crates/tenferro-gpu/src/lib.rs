@@ -35,6 +35,12 @@ mod event_retirement;
 #[cfg(feature = "cuda")]
 pub mod gpu;
 
+// The capability table is plain `const` data; it stays compiled without `cuda` so the guide
+// table can be checked in a default-features build. Only its `cuda`-gated readers name it
+// then, which is why the module allows dead code in that build.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub(crate) mod capability;
+
 #[cfg(feature = "cuda")]
 pub mod cuda;
 

@@ -366,8 +366,6 @@ mod backend_misc;
 mod basic_ops;
 #[path = "tests/cpu_tests/blas1.rs"]
 mod blas1;
-#[path = "tests/cpu_tests/capability.rs"]
-mod capability;
 mod cast_matrix_coverage_tests;
 #[path = "tests/cpu_tests/context.rs"]
 mod context;

@@ -1,5 +1,7 @@
 #[path = "integration/backend_capability_contracts.rs"]
 mod backend_capability_contracts;
+#[path = "integration/capability_conformance.rs"]
+mod capability_conformance;
 #[path = "integration/lanes.rs"]
 mod lanes;
 #[path = "integration/runtime_error_tests.rs"]

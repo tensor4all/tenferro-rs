@@ -1,7 +1,7 @@
 use tenferro_core_ops::PrimitiveOpKind;
 
 use crate::{
-    capability_output_dtype, BackendId, CapabilityAxis, CapabilityQuery, DType, Error,
+    capability_output_dtype, BackendId, CapabilityAxis, CapabilityQuery, DType,
     OperationCapability, SupportLevel, TensorBackendCapability,
 };
 
@@ -85,12 +85,10 @@ fn backend_capability_query_reports_axis_specific_support() {
         dot.axis(CapabilityAxis::WriteOutput),
         SupportLevel::FallbackCopy
     );
-    assert!(backend
-        .require_capability(
-            CapabilityQuery::new(PrimitiveOpKind::DotGeneral, DType::F64),
-            CapabilityAxis::Accumulation,
-        )
-        .is_ok());
+    assert_eq!(
+        dot.axis(CapabilityAxis::Accumulation),
+        SupportLevel::FallbackCopy
+    );
 
     assert!(
         backend
@@ -98,41 +96,6 @@ fn backend_capability_query_reports_axis_specific_support() {
             .is_none(),
         "missing descriptor entries remain explicit rather than guessed"
     );
-}
-
-#[test]
-fn backend_require_capability_reports_structured_unsupported_errors() {
-    let backend = DescriptorBackend;
-    let err = backend
-        .require_capability(
-            CapabilityQuery::new(PrimitiveOpKind::Add, DType::Bool),
-            CapabilityAxis::OwnedResult,
-        )
-        .unwrap_err();
-
-    assert!(matches!(
-        err,
-        Error::UnsupportedDType {
-            op: "add",
-            dtype: DType::Bool,
-            ..
-        }
-    ));
-
-    let err = backend
-        .require_capability(
-            CapabilityQuery::new(PrimitiveOpKind::Add, DType::I32),
-            CapabilityAxis::Accumulation,
-        )
-        .unwrap_err();
-    assert!(matches!(
-        err,
-        Error::UnsupportedDType {
-            op: "add",
-            dtype: DType::I32,
-            ..
-        }
-    ));
 }
 
 #[test]

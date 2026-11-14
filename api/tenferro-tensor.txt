@@ -326,7 +326,6 @@ pub trait tenferro_tensor::capability::TensorBackendCapability
 pub fn tenferro_tensor::capability::TensorBackendCapability::backend_id(&self) -> tenferro_tensor::capability::BackendId
 pub fn tenferro_tensor::capability::TensorBackendCapability::capabilities(&self) -> &'static [tenferro_tensor::capability::OperationCapability]
 pub fn tenferro_tensor::capability::TensorBackendCapability::capability(&self, tenferro_tensor::capability::CapabilityQuery) -> core::option::Option<tenferro_tensor::capability::OperationCapability>
-pub fn tenferro_tensor::capability::TensorBackendCapability::require_capability(&self, tenferro_tensor::capability::CapabilityQuery, tenferro_tensor::capability::CapabilityAxis) -> tenferro_tensor::error::Result<tenferro_tensor::capability::OperationCapability>
 pub fn tenferro_tensor::capability::capability_entry(&[tenferro_tensor::capability::OperationCapability], tenferro_tensor::capability::BackendId, tenferro_tensor::capability::CapabilityQuery, core::option::Option<tenferro_tensor::capability::CapabilityAxis>) -> core::option::Option<tenferro_tensor::capability::OperationCapability>
 pub fn tenferro_tensor::capability::capability_output_dtype(tenferro_core_ops::catalog::PrimitiveOpKind, tenferro_tensor_core::DType) -> core::option::Option<tenferro_tensor_core::DType>
 pub mod tenferro_tensor::config
@@ -3513,7 +3512,6 @@ pub trait tenferro_tensor::TensorBackendCapability
 pub fn tenferro_tensor::TensorBackendCapability::backend_id(&self) -> tenferro_tensor::capability::BackendId
 pub fn tenferro_tensor::TensorBackendCapability::capabilities(&self) -> &'static [tenferro_tensor::capability::OperationCapability]
 pub fn tenferro_tensor::TensorBackendCapability::capability(&self, tenferro_tensor::capability::CapabilityQuery) -> core::option::Option<tenferro_tensor::capability::OperationCapability>
-pub fn tenferro_tensor::TensorBackendCapability::require_capability(&self, tenferro_tensor::capability::CapabilityQuery, tenferro_tensor::capability::CapabilityAxis) -> tenferro_tensor::error::Result<tenferro_tensor::capability::OperationCapability>
 pub trait tenferro_tensor::TensorBuffer
 pub fn tenferro_tensor::TensorBuffer::reclaim_buffer(&mut self, tenferro_tensor::types::Tensor)
 pub trait tenferro_tensor::TensorDeviceTransfer
