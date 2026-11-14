@@ -60,8 +60,7 @@ fallback.
 ## Shared command profiles
 
 `scripts/ci/run_profile.py` owns immutable profiles for workspace-faer,
-workspace-blas, macos-accelerate, provider injection, extensions, documentation, coverage, and
-CI configuration. Local and hosted execution call the same profile names.
+macos, extensions, documentation, coverage, and CI configuration. Local and hosted execution call the same profile names.
 `full` is composition rather than another command list, so repeated profiles
 execute once. Hosted Rust compile/test commands use workspace `[profile.ci]`
 (`opt-level=0`, `debug=0`, `incremental=false`, `strip="symbols"`) rather than
@@ -72,8 +71,8 @@ disable Cargo's reuse of unchanged dependency artifacts.
 On GitHub Actions, the profile runner logs the detected CPU count and explicitly
 sets Cargo build jobs (CPU count, capped at 16), nextest test concurrency, and
 libtest threads (CPU count). Explicit environment overrides are preserved;
-local execution is unchanged. Test scheduling is separate from backend-internal
-BLAS/Rayon threading. GPU archive execution keeps its independent serial policy.
+local execution is unchanged. Test scheduling is separate from kernel-internal
+Rayon threading. GPU archive execution keeps its independent serial policy.
 Coverage uses `cargo llvm-cov nextest`, allowing tests from different binaries
 to overlap while retaining the existing per-file coverage thresholds. It does
 not replace Linux doctest validation or the external extension fixture.
@@ -81,15 +80,13 @@ not replace Linux doctest validation or the external extension fixture.
 ## macOS support gate
 
 `macOS workspace tests` is a required Apple Silicon execution gate for code
-changes and `main` pushes. It runs `macos-accelerate` on `macos-15`, disabling
-default features and selecting Accelerate rather than faer. Only the dedicated
-Apple context, CPU/Metal FFT, and Apple shared Cholesky test targets are built;
-the latter also checks Accelerate GEMM and Cholesky independently of Metal.
-Selecting targets rather than runtime test-name filters avoids compiling the
-full integration suites. Common workspace tests, doctests, and scalar codegen
-checks remain in Linux lanes. The profile requires Metal initialization to
-succeed (`TENFERRO_REQUIRE_METAL=1`); an unavailable device is not a passing
-hardware test. After change classification, the job starts in parallel with
+changes and `main` pushes. It runs the `macos` profile on `macos-15` against the
+same faer CPU stack Linux uses, so the lane is a second-architecture and
+second-libc check rather than a second BLAS. It runs the `tenferro-gpu`,
+`tenferro-fft`, and `tenferro-linalg` test suites; the linalg suite covers the
+shared Cholesky implementation independently of Metal. Common workspace tests,
+doctests, and scalar codegen checks remain in Linux lanes. After change
+classification, the job starts in parallel with
 the selected Linux workspace and extension lanes. Linux and macOS remain
 independent required checks, reducing pull-request wall-clock time while still
 failing closed on either platform. The trusted RunPod workflow starts from the

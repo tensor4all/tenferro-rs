@@ -180,7 +180,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 For PyTorch-style eager autodiff with `backward()` and functional
 `EagerRuntime` transforms, see the
 [eager autodiff tutorial](https://tensor4all.org/tenferro-rs/tutorials/eager-autodiff-pytorch-style.html).
-Setup notes, including local-checkout builds and BLAS provider selection, are
+Setup notes, including local-checkout builds and the single CPU backend, are
 in [Getting Started](https://tensor4all.org/tenferro-rs/getting-started/index.html).
 
 ## Is tenferro for You?

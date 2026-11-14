@@ -1,57 +1,5 @@
 use std::{fs, path::Path};
 
-fn lapack_production_sources() -> Vec<(String, String)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join("cpu")
-        .join("linalg")
-        .join("lapack_linalg");
-    let mut sources = Vec::new();
-    for entry in fs::read_dir(&root)
-        .unwrap_or_else(|err| panic!("LAPACK source directory should be readable: {err}"))
-    {
-        let path = entry
-            .unwrap_or_else(|err| panic!("LAPACK source entry should be readable: {err}"))
-            .path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
-            continue;
-        }
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_else(|| panic!("LAPACK source path should have a UTF-8 file name"))
-            .to_owned();
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("LAPACK source {name} should be readable: {err}"));
-        sources.push((name, source));
-    }
-    sources
-}
-
-fn cpu_lapack_helpers_source() -> String {
-    fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("cpu")
-            .join("linalg")
-            .join("lapack_linalg")
-            .join("helpers.rs"),
-    )
-    .unwrap_or_else(|err| panic!("LAPACK helper source should be readable: {err}"))
-}
-
-fn cpu_lapack_source(path: &str) -> String {
-    fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("cpu")
-            .join("linalg")
-            .join("lapack_linalg")
-            .join(path),
-    )
-    .unwrap_or_else(|err| panic!("LAPACK source {path} should be readable: {err}"))
-}
-
 fn cpu_faer_linalg_source() -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -74,51 +22,17 @@ fn linalg_extension_source() -> String {
 
 #[test]
 fn cpu_linalg_allocation_helpers_remain_fallible_and_checked() {
-    let faer = cpu_faer_linalg_source();
-    let lapack = cpu_lapack_helpers_source();
-
-    for source in [&faer, &lapack] {
-        let lines: Vec<_> = source.lines().collect();
-        for (index, line) in lines.iter().enumerate() {
-            if line.contains("rows * cols") || line.contains(".expect(") {
-                let invariant = index > 0 && lines[index - 1].contains("// INVARIANT:");
-                assert!(
-                    invariant,
-                    "linalg helpers must propagate errors and use checked allocation sizes unless the immediately preceding line documents an INVARIANT"
-                );
-            }
+    let source = cpu_faer_linalg_source();
+    let lines: Vec<_> = source.lines().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if line.contains("rows * cols") || line.contains(".expect(") {
+            let invariant = index > 0 && lines[index - 1].contains("// INVARIANT:");
+            assert!(
+                invariant,
+                "linalg helpers must propagate errors and use checked allocation sizes unless the immediately preceding line documents an INVARIANT"
+            );
         }
     }
-}
-
-#[test]
-fn lapack_shape_derived_allocation_lengths_remain_checked() {
-    let mut violations = Vec::new();
-    for (name, source) in lapack_production_sources() {
-        let lines: Vec<_> = source.lines().collect();
-        for (index, line) in lines.iter().enumerate() {
-            let allocation_product = (line.contains("vec![")
-                || line.contains("with_capacity(")
-                || line.contains("pool_acquire("))
-                && line.contains(" * ");
-            let unchecked_workspace_formula = line.contains("return 5 * mn * mn")
-                || line.contains("(5 * mn * mn")
-                || line.contains("8 * min_dim")
-                || line.contains("2 * min_dim * min_dim")
-                || line.contains("5 * min_dim * min_dim");
-            if allocation_product || unchecked_workspace_formula {
-                let invariant = index > 0 && lines[index - 1].contains("// INVARIANT:");
-                if !invariant {
-                    violations.push(format!("{name}:{}: {}", index + 1, line.trim()));
-                }
-            }
-        }
-    }
-    assert!(
-        violations.is_empty(),
-        "LAPACK allocation lengths require checked arithmetic:\n{}",
-        violations.join("\n")
-    );
 }
 
 fn cpu_backend_source() -> String {
@@ -149,28 +63,6 @@ fn linalg_backend_trait_source() -> String {
             .join("backend.rs"),
     )
     .unwrap_or_else(|err| panic!("linalg backend trait source should be readable: {err}"))
-}
-
-fn assert_unsafe_blocks_have_safety_comments(path: &str, source: &str) {
-    let lines: Vec<_> = source.lines().collect();
-    let mut missing = Vec::new();
-    for (idx, line) in lines.iter().enumerate() {
-        if !line.contains("unsafe {") {
-            continue;
-        }
-        let window_start = idx.saturating_sub(3);
-        let has_safety = lines[window_start..idx]
-            .iter()
-            .any(|candidate| candidate.trim_start().starts_with("// SAFETY:"));
-        if !has_safety {
-            missing.push(format!("{}:{}", path, idx + 1));
-        }
-    }
-    assert!(
-        missing.is_empty(),
-        "LAPACK unsafe blocks need local SAFETY comments:\n{}",
-        missing.join("\n")
-    );
 }
 
 fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
@@ -393,8 +285,8 @@ fn faer_eligible_reads_reach_the_view_path_before_any_materialization() {
         ("svd_values_read", "svd_values_faer_view_entered"),
         ("qr_read", "qr_faer_view_entered"),
         ("eigh_read", "eigh_faer_view_entered"),
-        ("eig_read", "linalg::faer::eig"),
-        ("eig_values_read", "linalg::faer::eig_values"),
+        ("eig_read", "linalg::faer_linalg::eig"),
+        ("eig_values_read", "linalg::faer_linalg::eig_values"),
         (
             "rank_revealing_qr_read",
             "rank_revealing_qr_faer_view_entered",
@@ -457,7 +349,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
     for (read, entered) in methods {
         let section = rust_function_section(&source, read);
         assert_eq!(
-            section.matches("self.with_linalg_pool_checked(").count(),
+            section.matches("self.with_linalg_pool(").count(),
             1,
             "{read} must enter CPU resources exactly once"
         );
@@ -500,7 +392,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
 
     let cholesky = rust_function_section(&source, "cholesky_read");
     let entry = cholesky
-        .find("self.with_linalg_pool_checked(")
+        .find("self.with_linalg_pool(")
         .expect("cholesky_read must have one operation entry");
     let managed_dispatch = cholesky
         .find("input.backend_family().is_some()")
@@ -588,32 +480,10 @@ fn cpu_linalg_materialization_requires_the_operations_exec_bundle() {
 }
 
 #[test]
-fn lapack_ffi_unsafe_blocks_document_safety_invariants() {
-    for path in [
-        "cholesky.rs",
-        "eig.rs",
-        "eigh.rs",
-        "lu.rs",
-        "qr.rs",
-        "solve.rs",
-        "svd.rs",
-        "triangular_solve.rs",
-    ] {
-        assert_unsafe_blocks_have_safety_comments(path, &cpu_lapack_source(path));
-    }
-}
-
-#[test]
 fn cpu_linalg_routes_hand_whole_batches_to_the_extracted_providers() {
-    // The batch loop belongs to the extracted providers (`tlinalg`, `tlinalg-blas`): a host
-    // route makes one provider call per batch and never slices the batch into per-matrix tensors.
-    for (name, source) in lapack_production_sources()
-        .into_iter()
-        .chain(std::iter::once((
-            "faer_linalg.rs".to_owned(),
-            cpu_faer_linalg_source(),
-        )))
-    {
+    // The batch loop belongs to the extracted provider (`tlinalg`): a host route makes one
+    // provider call per batch and never slices the batch into per-matrix tensors.
+    for (name, source) in std::iter::once(("faer_linalg.rs".to_owned(), cpu_faer_linalg_source())) {
         for needle in [
             "fn batched_single",
             "fn batched_multi",
@@ -653,13 +523,6 @@ fn faer_complex_slice_casts_assert_field_offsets() {
 
 #[test]
 fn linalg_host_shapes_use_checked_products() {
-    for (name, source) in lapack_production_sources() {
-        assert!(
-            !source.contains(".iter().product"),
-            "LAPACK host source {name} must use checked shape products"
-        );
-    }
-
     let faer_source = cpu_faer_linalg_source();
     let lu_factor = source_section(
         &faer_source,

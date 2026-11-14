@@ -32,7 +32,7 @@ see [CUDA engines and pinned transfers](engines-and-transfers.md).
 
 | Provider | Status | Feature | Notes |
 | --- | --- | --- | --- |
-| CPU | Supported | default CPU provider features | Host execution |
+| CPU | Supported | none (faer is always compiled in) | Host execution |
 | CUDA | Supported | `cuda` | Native NVIDIA CUDA through the `t4a-cuda-kernels` catalogue plus CUDA libraries |
 | WebGPU / Metal / Apple shared CPU/Metal | Not provided | None | No backend or transfer quickstart |
 | ROCm | Not supported for execution | None | No feature and no runtime quickstart |
@@ -164,7 +164,7 @@ CUDA tutorial is the hardware-gated artifact described in the tutorial index.
 
 ```bash
 cargo build -p tenferro-tutorial-code --no-default-features \
-  --features cuda,native --bin cuda_tutorial
+  --features cuda --bin cuda_tutorial
 ```
 
 The example downloads the result back to CPU and asserts the expected values.

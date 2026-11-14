@@ -195,7 +195,7 @@ fn cpu_ignores_explicit_svd_driver_on_concrete_and_traced_paths() {
 }
 
 fn check_cpu_ignores_svd_driver(trace: &TraceContext, driver: SvdDriver) {
-    // `SvdDriver` selects a cuSOLVER routine; CPU providers have one SVD
+    // `SvdDriver` selects a cuSOLVER routine; the CPU provider has one SVD
     // kernel, so a forced driver must execute and match the default policy
     // bit-for-bit on the same host.
     let data = vec![3.0_f64, 1.0, 0.5, -2.0, 0.25, 1.5];
@@ -278,7 +278,7 @@ fn check_cpu_ignores_svd_driver(trace: &TraceContext, driver: SvdDriver) {
 #[test]
 fn cpu_ignores_explicit_eigh_driver_on_concrete_and_traced_paths() {
     let trace = tenferro_runtime::TraceContext::new();
-    // `EighDriver` selects a cuSOLVER routine; CPU providers have one eigh
+    // `EighDriver` selects a cuSOLVER routine; the CPU provider has one eigh
     // kernel, so a forced driver must execute and match the default policy on
     // the same host. As with `SvdDriver`, that is a per-entry-point property:
     // the LAPACK provider reaches the vectors and values-only routines

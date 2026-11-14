@@ -414,18 +414,6 @@ fn backend_surface_has_hidden_hermitian_values_only_hook() {
 
 #[test]
 fn cpu_general_eig_values_only_paths_do_not_request_vectors() {
-    let lapack_source = crate_source("src/cpu/linalg/lapack_linalg/eig.rs");
-    let lapack_values = source_section(&lapack_source, "pub(crate) fn eig_values", "\n}\n");
-    assert!(
-        lapack_values.contains("eig_erased(buffers, input, false)"),
-        "LAPACK eig_values should ask the provider for no eigenvectors"
-    );
-    let lapack_typed = source_section(&lapack_source, "fn eig_typed", "fn eig_erased");
-    assert!(
-        lapack_typed.contains("vectors.then_some("),
-        "LAPACK eig should pass the eigenvector buffer only when vectors are requested"
-    );
-
     let faer_source = crate_source("src/cpu/linalg/faer_linalg.rs");
     let faer_dispatch = source_section(
         &faer_source,

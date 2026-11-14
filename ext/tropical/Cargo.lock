@@ -1494,7 +1494,6 @@ dependencies = [
  "cpueinsum",
  "lru",
  "omeco",
- "tenferro-ad",
  "tenferro-cpu",
  "tenferro-cpu-basic",
  "tenferro-internal-extension-macros",

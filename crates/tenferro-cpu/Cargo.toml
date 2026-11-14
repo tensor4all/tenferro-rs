@@ -17,44 +17,24 @@ documentation = "https://docs.rs/tenferro-cpu"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["native"]
+# One backend, no features: docs.rs builds the same surface every dependent gets.
+all-features = true
 
 [lib]
 name = "tenferro_cpu"
 
 [features]
-default = ["native"]
 # Test support, off by default: the engine reports the `threadteam::ledger` root of every
 # token it mints (`CpuEngine::take_ledger_*`), so tests assert placement invariants. The ledger
 # allocates per token, so allocation-counting tests run without it; the CI placement job runs
 # the ledger tests with `--features ledger` in a build of their own.
 ledger = ["threadteam/ledger"]
-native = ["dep:faer"]
 # Host-check support, off by default: the crate reports the driver and tcontract
 # selection reason of every prepared contraction plan (`take_last_plan_route`),
 # so `examples/route_faerlimit.rs` can check which way a host and thread budget
 # route a c64 product. The record is written on plan preparation only, never per
 # contraction.
 route-report = []
-blas = ["dep:cpueinsum-blas", "dep:cblas-sys", "dep:lapack"]
-# Each supported provider exports CBLAS; no separate Netlib CBLAS build is needed.
-provider-src = ["blas", "dep:blas-src", "dep:lapack-src"]
-provider-inject = ["blas", "dep:cblas-inject", "dep:lapack-inject"]
-blas-openblas = [
-    "provider-src",
-    "blas-src/openblas",
-    "lapack-src/openblas",
-]
-blas-accelerate = [
-    "provider-src",
-    "blas-src/accelerate",
-    "lapack-src/accelerate",
-]
-blas-mkl = [
-    "provider-src",
-    "blas-src/intel-mkl-dynamic-parallel",
-    "lapack-src/intel-mkl-dynamic-parallel",
-]
 
 [dependencies]
 tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.11.0" }
@@ -65,7 +45,6 @@ tenferro-runtime = { path = "../tenferro-runtime", version = "0.11.0", default-f
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.11.0" }
 cpueinsum.workspace = true
 elem-simd-math.workspace = true
-cpueinsum-blas = { workspace = true, optional = true }
 libm.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
@@ -75,13 +54,7 @@ strided-kernel.workspace = true
 strided-basic = { workspace = true, features = ["parallel"] }
 strided-nn.workspace = true
 thiserror.workspace = true
-faer = { workspace = true, optional = true }
-cblas-sys = { workspace = true, optional = true }
-cblas-inject = { workspace = true, optional = true }
-lapack-inject = { workspace = true, optional = true }
-blas-src = { workspace = true, optional = true }
-lapack = { workspace = true, optional = true }
-lapack-src = { workspace = true, optional = true }
+faer.workspace = true
 lru.workspace = true
 
 [dev-dependencies]
@@ -102,11 +75,6 @@ harness = false
 [[bench]]
 name = "view_materialization"
 harness = false
-
-[[bench]]
-name = "openblas_direct_overhead"
-harness = false
-required-features = ["blas"]
 
 [[bench]]
 name = "route_matrix"
@@ -131,9 +99,8 @@ path = "tests/blas1_pool_aliasing.rs"
 [[test]]
 name = "direct_faer_on_engine_pool"
 path = "tests/direct_faer_on_engine_pool.rs"
-required-features = ["native"]
 
 [[example]]
 name = "route_faerlimit"
 path = "examples/route_faerlimit.rs"
-required-features = ["native", "route-report"]
+required-features = ["route-report"]

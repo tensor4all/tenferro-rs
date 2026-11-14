@@ -106,12 +106,12 @@ fn session_support_admits_every_cpu_linear_algebra_op() {
         );
     }
 
-    // Full-matrices SVD is now implemented by both CPU providers, so the
+    // Full-matrices SVD is now implemented by the CPU provider, so the
     // type-only seam admits it like every other CPU linalg kernel.
     let svd_full = LinalgExtensionOp::new(LinalgOp::SvdFull);
     assert!(
         super::linalg_session_supported::<CpuEngine>(&svd_full),
-        "SvdFull must be admitted on CPU: faer and BLAS both execute it in-session"
+        "SvdFull must be admitted on CPU: faer executes it in-session"
     );
 }
 

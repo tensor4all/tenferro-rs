@@ -36,8 +36,8 @@ esac
 # emits no JSON; its exported macros are reviewed through the crates using them.
 # Format: <crate> <file-suffix> <features ("-" for the default set)>.
 # The second row of a crate is its docs.rs feature set, which is the combination
-# that widens the public surface; it is omitted where that set equals the
-# default set (tenferro-cpu and tenferro-runtime: `native` is the default).
+# that widens the public surface; a crate with one row declares no default
+# feature set at all.
 COMBOS=(
     "tenferro-tensor-core default -"
     "tenferro-tensor default -"
@@ -50,17 +50,17 @@ COMBOS=(
     "tenferro-internal-ops default -"
     "tenferro-internal-ops all autodiff,cuda"
     "tenferro-gpu default -"
-    "tenferro-gpu native-cuda native,cuda"
+    "tenferro-gpu cuda cuda"
     "tenferro-xla default -"
     "tenferro-xla pjrt pjrt"
     "tenferro-einsum default -"
-    "tenferro-einsum autodiff-native-cuda autodiff,native,cuda"
+    "tenferro-einsum autodiff-cuda autodiff,cuda"
     "tenferro-ad default -"
-    "tenferro-ad native-cuda native,cuda"
+    "tenferro-ad cuda cuda"
     "tenferro-linalg default -"
-    "tenferro-linalg autodiff-native-cuda autodiff,native,cuda"
+    "tenferro-linalg autodiff-cuda autodiff,cuda"
     "tenferro-fft default -"
-    "tenferro-fft autodiff-native-cuda autodiff,native,cuda"
+    "tenferro-fft autodiff-cuda autodiff,cuda"
 )
 
 if [ "$mode" = --write ]; then

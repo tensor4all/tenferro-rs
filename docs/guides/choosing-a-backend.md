@@ -1,8 +1,8 @@
 # Choosing A Backend
 
-Choose a backend in two steps. First choose the execution backend that owns the
-device and its synchronization boundary. If that backend is CPU, choose a dense
-CPU provider separately. In every case the important choice is the same one:
+Choose the execution backend that owns the device and its synchronization
+boundary. A CPU build has no provider to pick: it links exactly one faer stack.
+In every case the important choice is the same one:
 **the caller owns the engine**. tenferro never builds threads, never opens a
 hidden session, and never moves a tensor to another device on its own. You build
 the pool or open the device, hold the engine, and pass it to every operation.
@@ -11,7 +11,7 @@ the pool or open the device, hold the engine, and pass it to every operation.
 
 | Backend | Device | Hard requirements | Cargo feature | Threading and synchronization | Good fit |
 | --- | --- | --- | --- | --- | --- |
-| CPU | Host CPUs | At least one CPU provider; `native` is the default | `tenferro-cpu` `native` or `blas` | The caller's `Pool` (or no pool at all for `CpuEngine::serial`); one placement token per operation. CPU calls return synchronously. | Controlled CPU execution, dense linalg, and host pipelines |
+| CPU | Host CPUs | None beyond the Rust dependencies (faer is compiled in) | none | The caller's `Pool` (or no pool at all for `CpuEngine::serial`); one placement token per operation. CPU calls return synchronously. | Controlled CPU execution, dense linalg, and host pipelines |
 | CUDA | NVIDIA GPU | CUDA runtime plus the NVIDIA library stack required by the operation, including cuBLAS/cuSOLVER/cuTENSOR/cuFFT where applicable; missing libraries are typed errors | `tenferro-gpu` `cuda` | `CudaEngine::open` owns one device, its stream and its caches. Launches are asynchronous until an explicit synchronize, download, or host inspection. | NVIDIA production workloads and CUDA library-backed dense operations |
 | XLA/PJRT | A PJRT addressable device | A PJRT plugin shared library; the `pjrt` loader returns a typed error when it is absent or invalid | `tenferro-xla` `pjrt` | The PJRT plugin owns device execution and intra-op scheduling. tenferro controls lowering and invocation, not the plugin's worker pool. | Static traced programs and deployments already using XLA plugins |
 
@@ -37,41 +37,22 @@ one runtime, and reports an explicit `SKIP` with the detected count only when
 successful discovery finds fewer than two visible devices. A discovery error
 fails the test with the original typed error.
 
-## CPU Provider Choice
+## CPU Provider
 
-The CPU numerical provider is selected at compile time, never per engine
-handle. `native` (the default) links the tenferro-owned faer/cpueinsum/
-tcontract/tlinalg kernels; `blas` adds the vendor adapters.
+The CPU numerical provider is not selectable: every build links the
+tenferro-owned faer/cpueinsum/tcontract/tlinalg kernels, and
+`tenferro-cpu` declares no backend feature.
 
-The faer provider is the default because it gives tenferro the most control:
-the operation's placement token carries the engine's `threadteam::Team`, which
-faer runs on as `Par::Team` (or `Par::Seq` for a serial token), and every worker
-belongs to the pool the caller handed the engine. Nothing goes through Rayon.
+That stack gives tenferro the most control: the operation's placement token
+carries the engine's `threadteam::Team`, which faer runs on as `Par::Team` (or
+`Par::Seq` for a serial token), and every worker belongs to the pool the caller
+handed the engine. Nothing goes through Rayon.
 
-External BLAS providers own their worker pools. Provider workers inherit the
-calling thread's mask, but tenferro cannot bound the provider's fan-out, and
-their environment variables are generally process-wide, so a provider call can
-oversubscribe an outer tenferro fan-out unless its provider thread count is
-reduced, often to one. Choose an external provider when its peak dense-kernel
-performance is worth giving up tenferro's per-operation thread-count control.
+External CPU providers remain possible only as provider-bundle slots (for
+example a replacement `dot_general`); they do not replace the linalg path, and
+tenferro offers no wrapper that gives a vendor library a per-lane width.
 
-| Provider family | Required library | Cargo feature | Thread ownership and scope | Guidance |
-| --- | --- | --- | --- | --- |
-| faer / cpueinsum / tcontract / tlinalg | None beyond the Rust dependencies | `native` | The caller's `Pool`; the engine never creates workers. Per-context entry: a lane forked from the engine's token runs a plan on its own share of the budget | Default choice when reproducibility and predictable nesting matter, and the only choice for per-lane GEMM widths |
-| OpenBLAS | OpenBLAS and its CBLAS/LAPACK entry points | `blas`, `blas-openblas` | OpenBLAS-owned pool; settings such as `OPENBLAS_NUM_THREADS` are provider/process-wide | Use for peak BLAS/LAPACK throughput; keep the outer fan-out small to avoid oversubscription |
-| Intel MKL | MKL and its BLAS/LAPACK entry points | `blas`, `blas-mkl` | MKL-owned pool; `MKL_NUM_THREADS` and related OpenMP settings are provider/process-wide | Use when the deployment already standardizes on MKL; tenferro cannot bound the provider's fan-out |
-| Apple Accelerate | Apple Accelerate BLAS/LAPACK | `blas`, `blas-accelerate` | Accelerate-owned pool; `VECLIB_MAXIMUM_THREADS` is provider/process-wide | Use for Apple-native deployments |
-| BLIS | BLIS | Planned in [#1334](https://github.com/tensor4all/tenferro-rs/issues/1334) | Provider-owned; the final scope and controls are not part of the current API | Do not rely on a BLIS feature until the planned provider contract lands |
-
-The vendor rows share one boundary. A vendor call takes the whole engine and
-the library's own threads, so a context's thread budget is not honoured there,
-and lanes must not enter the vendor provider concurrently unless the library is
-known to tolerate it. Only the native provider has a per-context entry, and
-tenferro offers no wrapper that simulates per-lane widths on a vendor library.
-See [Lanes and the vendor provider](cpu-execution.md#lanes-and-the-vendor-provider).
-
-A build chooses the numerical provider; the application chooses the pool it
-hands to `CpuEngine`:
+The application chooses the pool it hands to `CpuEngine`:
 
 <!-- snippet-source: crates/tenferro-cpu/examples/choosing_cpu_provider.rs -->
 ```rust
@@ -93,14 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 <!-- end-snippet-source -->
 
-The example compiles under either provider feature. A build enables at most one
-of `native` and `blas`; enabling both is a `compile_error!`, so one process links
-one CPU provider and `cpu_provider_id()` is fixed for the build. A build with
-neither compiles, reports `tenferro.cpu.none`, and returns a typed `Unsupported`
-for the numerical routes.
-The concrete external BLAS implementation is chosen by the linked library
-configuration, and its worker environment remains a provider-owned process-wide
-concern.
+`cpu_provider_id()` is fixed for the build.
 
 ## Nested Parallelism
 
@@ -117,20 +91,10 @@ caller thread
          child a share of the budget)
       -> faer ops (Par::Team on the engine's team, Par::Seq for a serial token)
 
-Panel B: external BLAS (provider-owned pool)
-caller thread
-  -> CpuEngine operation (borrowed for the call)
-    -> outer tenferro fanout (pool width partitions)
-      -> provider call -> provider-owned pool
-         possible workers: pool width * OPENBLAS_NUM_THREADS
-  remedy: set the provider thread count to 1 when outer fanout is active
 ```
 
 The faer model keeps outer and inner work inside one caller-owned pool and
-prevents a child operation from recursively fanning out on the same pool. The
-external model cannot provide that invariant because the library owns the inner
-pool. Do not infer a strict tenferro thread budget from a provider environment
-variable.
+prevents a child operation from recursively fanning out on the same pool.
 
 Small operations never enter the pool at all: an operation starts on the
 calling thread and only fans out after a provider has chosen more than one
@@ -141,8 +105,7 @@ the caller already owns.
 
 | Backend/family | Outer/inner parallelism and nesting | Worker, stream, or queue owner and scope | Synchronization | Storage and event domain | Unsupported behavior and dtype/op coverage |
 | --- | --- | --- | --- | --- | --- |
-| CPU/native kernels | The engine starts on the calling thread and enters the caller's pool only for a multi-worker provider choice | The caller's `Pool`, one engine per pool | Direct CPU operations complete before return | Host storage classes; the CPU runtime uses an immediate event domain | Typed unsupported errors; see [CPU execution](cpu-execution.md) and [linear algebra](linear-algebra.md) |
-| CPU/BLAS or LAPACK | The vendor owns its own worker team; tenferro neither bounds nor schedules it | Linked provider pool and environment; usually process-wide | The provider call returns before the synchronous CPU API returns; worker synchronization is vendor-owned | Host storage classes; CPU event domain | Unsupported operations are typed errors; `blas` keeps a native fallback for declined small steps; see [CPU execution](cpu-execution.md) |
+| CPU/faer kernels | The engine starts on the calling thread and enters the caller's pool only for a multi-worker provider choice | The caller's `Pool`, one engine per pool | Direct CPU operations complete before return | Host storage classes; the CPU runtime uses an immediate event domain | Typed unsupported errors; see [CPU execution](cpu-execution.md) and [linear algebra](linear-algebra.md) |
 | CUDA | Device kernels use provider-selected grid/stream parallelism; host-side nesting is limited to explicit engine calls | One `CudaEngine` owns its `CudaRuntime`, stream, handles and plan caches | Launches may be asynchronous; synchronize, download, or host inspection is the boundary | CUDA device storage and CUDA stream/event domain | Unsupported CUDA operation or dtype, and missing NVIDIA library, return typed errors; see [GPU coverage](devices-and-gpu.md) |
 | XLA/PJRT | XLA decides intra-op decomposition; tenferro does not add a second hidden inner pool | PJRT plugin owns its client, device, streams, and worker scope | PJRT execution and transfers define the host-visible boundary | PJRT device buffers and plugin event domain | Unsupported lowering, dtype, shape, or missing plugin is rejected; see [XLA subset](xla.md) |
 
@@ -160,9 +123,9 @@ Every engine is caller-held, and that is the whole contract:
   belong to those resources.
 - **tenferro owns nothing it cannot see.** No background threads, no hidden
   pools, no implicit device, no implicit transfer.
-- **External providers keep their own workers.** A BLAS/LAPACK library is
-  constructed and shut down by the process, not by tenferro; the engine simply
-  calls into it.
+- **A provider bundle keeps its own workers.** An external provider slot is
+  constructed and shut down by whoever installed it, not by tenferro; the engine
+  simply calls into it.
 
 GPU runtimes and PJRT plugins have their own stream, queue, and client
 lifetimes. They are described by explicit engine capabilities rather than being
@@ -204,11 +167,7 @@ assert_eq!(runtime.snapshot()?.engine_count(), 1);
 <!-- end-snippet-source -->
 
 If two pools must run in one process, give each its own `CpuEngine` and its own
-`Runtime`. Every engine of a build shares that build's single CPU provider; if
-the build uses OpenBLAS, MKL, or Accelerate, its library and thread settings are
-still process-wide provider settings. Separate processes are required when
-the application needs mutually incompatible external BLAS installations or
-independent provider environment pools.
+`Runtime`. Every engine of a build shares that build's single CPU provider.
 
 ## Policy Selection
 
@@ -220,6 +179,5 @@ request must produce a typed error; an engine must not silently switch to
 another provider or device.
 
 See [Parallelism and Caching](parallelism-and-caching.md) for thread-budget
-mechanics, provider environment variables, cache lifetime, and
-oversubscription diagnostics.
+mechanics, cache lifetime, and oversubscription diagnostics.
 

@@ -85,8 +85,8 @@ not when changing tenferro itself.
 - Traced standard extensions need an explicitly installed extension module and
   a matching registered runtime engine.
 - Keep a scratch crate in its own Cargo workspace (use an empty
-  `[workspace]` table when it lives inside a checkout), and enable exactly one
-  BLAS provider when using `blas`.
+  `[workspace]` table when it lives inside a checkout). The CPU crates declare
+  no backend feature.
 
 The executable Rust examples in the references are extracted from
 `docs/tutorial-code/src/bin/tenferro_compute_skill.rs` and compiled by the

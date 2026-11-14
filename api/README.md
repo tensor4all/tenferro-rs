@@ -18,16 +18,15 @@ this table together.
 |---|---|---|
 | `<crate>.txt` | every crate below | default features |
 | `tenferro-internal-ops+all.txt` | `tenferro-internal-ops` | `autodiff,cuda` |
-| `tenferro-gpu+native-cuda.txt` | `tenferro-gpu` | `native,cuda` |
+| `tenferro-gpu+cuda.txt` | `tenferro-gpu` | `cuda` |
 | `tenferro-xla+pjrt.txt` | `tenferro-xla` | `pjrt` |
-| `tenferro-einsum+autodiff-native-cuda.txt` | `tenferro-einsum` | `autodiff,native,cuda` |
-| `tenferro-ad+native-cuda.txt` | `tenferro-ad` | `native,cuda` |
-| `tenferro-linalg+autodiff-native-cuda.txt` | `tenferro-linalg` | `autodiff,native,cuda` |
-| `tenferro-fft+autodiff-native-cuda.txt` | `tenferro-fft` | `autodiff,native,cuda` |
+| `tenferro-einsum+autodiff-cuda.txt` | `tenferro-einsum` | `autodiff,cuda` |
+| `tenferro-ad+cuda.txt` | `tenferro-ad` | `cuda` |
+| `tenferro-linalg+autodiff-cuda.txt` | `tenferro-linalg` | `autodiff,cuda` |
+| `tenferro-fft+autodiff-cuda.txt` | `tenferro-fft` | `autodiff,cuda` |
 
-The second combination of a crate is its docs.rs feature set. `tenferro-cpu`
-and `tenferro-runtime` have one file each, because their docs.rs set
-(`native`) is the default set.
+The second combination of a crate is its docs.rs feature set. `tenferro-cpu` and
+`tenferro-runtime` have one file each, because they declare no features at all.
 
 `allowlist.txt` is not a snapshot: it lists, symbol by symbol, the approved
 external types and owner-scoped bridges of exception E06 (see the core
@@ -40,8 +39,6 @@ Not snapshotted:
   manifests).
 - `tenferro-internal-extension-macros`: a proc-macro crate, for which rustdoc
   emits no JSON.
-- BLAS-provider features (`blas`, `blas-*`, `provider-inject`): they select a
-  backend implementation and are mutually exclusive with `native`.
 
 ## Updating
 

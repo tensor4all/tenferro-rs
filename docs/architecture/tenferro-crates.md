@@ -63,16 +63,16 @@ implementation crates and should not be presented as user-facing API surfaces.
 `tenferro-cpu` does not depend on `tblis-ffi` or `t4a-tblis-src`, and it has no
 tcontract or linalg dependency of its own. CPU `dot_general`, grouped GEMM, and
 N-ary concrete einsum delegate to `cpueinsum` (which uses tcontract internally),
-and CPU linalg delegates to the extracted `tlinalg`/`tlinalg-blas` crates.
+and CPU linalg delegates to the extracted `tlinalg` crate.
 The former external-provider example crates (`ext/tenferro-cpu-tblis`,
 `ext/tenferro-cpu-tprims`) and `third_party/t4a-tblis-src` were removed by
 #2004 with the runtime provider machinery.
-`tenferro-linalg` takes its built-in CPU kernels from the extracted
-`tlinalg` (faer) and `tlinalg-blas` (LAPACK/BLAS) crates of the tlinalg-rs
-workspace. The CPU numeric dependencies (`cpueinsum`, `cpueinsum-blas`,
-`tcontract-exec`, `tlinalg`, and `tlinalg-blas`) use registry version
-requirements in the root `Cargo.toml`; the committed `Cargo.lock` records the
-resolved versions, not git revision pins.
+`tenferro-linalg` takes its built-in CPU kernels from the extracted `tlinalg`
+(faer-backed) crate of the tlinalg-rs workspace. The CPU numeric dependencies
+(`cpueinsum`, `tcontract-exec`, and `tlinalg`) use registry version requirements
+in the root `Cargo.toml`; the committed `Cargo.lock` records the resolved
+versions, not git revision pins. This is the whole CPU stack: there is no
+vendor BLAS/LAPACK provider and no backend feature that could select one.
 
 ## III. Layering
 

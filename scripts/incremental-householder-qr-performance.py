@@ -18,7 +18,7 @@ from pathlib import Path
 
 SCHEMA = "tenferro.incremental-householder-qr-performance.v1"
 ALGORITHMS = ("compact", "bcgs2", "full-qr")
-BACKENDS = ("faer", "blas", "cuda")
+BACKENDS = ("faer", "cuda")
 CYCLES = 7
 BOOTSTRAP_SEED = 1735
 BOOTSTRAP_SAMPLES = 10_000
@@ -69,9 +69,7 @@ def process_order(case: Case, cycle: int) -> tuple[str, ...]:
 
 def cargo_prefix(backend: str) -> list[str]:
     command = ["cargo", "bench", "-q", "-p", "tenferro-linalg"]
-    if backend == "blas":
-        command += ["--no-default-features", "--features", "blas,blas-openblas"]
-    elif backend == "cuda":
+    if backend == "cuda":
         command += ["--features", "cuda"]
     command += ["--bench", "incremental_householder_qr", "--"]
     return command

@@ -27,7 +27,6 @@ class ChangePolicy:
 
     change_class: ChangeClass
     run_rust: bool
-    run_blas: bool
     run_extensions: bool
     run_docs: bool
     run_ci_config: bool
@@ -41,7 +40,6 @@ class ChangePolicy:
         return {
             "classification": self.change_class.value,
             "run_rust": self.run_rust,
-            "run_blas": self.run_blas,
             "run_extensions": self.run_extensions,
             "run_docs": self.run_docs,
             "run_ci_config": self.run_ci_config,
@@ -328,7 +326,6 @@ def _full_policy(reason: str, *, run_gpu: bool = True) -> ChangePolicy:
     return ChangePolicy(
         change_class=ChangeClass.CODE,
         run_rust=True,
-        run_blas=True,
         run_extensions=True,
         run_docs=True,
         run_ci_config=True,
@@ -384,7 +381,6 @@ def classify_paths(
             return ChangePolicy(
                 change_class=ChangeClass.CODE,
                 run_rust=True,
-                run_blas=True,
                 run_extensions=True,
                 run_docs=True,
                 run_ci_config=True,
@@ -417,7 +413,6 @@ def classify_paths(
     return ChangePolicy(
         change_class=ChangeClass.CI_ONLY if has_ci else ChangeClass.DOCS_ONLY,
         run_rust=False,
-        run_blas=False,
         run_extensions=False,
         run_docs=bool(docs),
         run_ci_config=has_ci,

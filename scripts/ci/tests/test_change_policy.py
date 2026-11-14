@@ -408,7 +408,6 @@ class RustCommentPolicyTests(unittest.TestCase):
         self.assertTrue(policy.run_rust)
         self.assertTrue(policy.run_docs)
         self.assertTrue(policy.run_macos)
-        self.assertTrue(policy.run_blas)
         self.assertIn("docs-only Rust comments", "; ".join(policy.reasons))
         self.assertIn(self.LIB, "; ".join(policy.reasons))
 

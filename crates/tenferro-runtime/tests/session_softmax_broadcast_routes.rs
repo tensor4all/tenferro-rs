@@ -1,6 +1,5 @@
 //! #2143 item 1: the session softmax must reach its broadcast as a metadata view
 //! rather than through the materializing `broadcast_in_dim_read` route.
-#![cfg(feature = "native")]
 
 use tenferro_cpu::CpuEngine;
 use tenferro_runtime::composite::{

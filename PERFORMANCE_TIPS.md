@@ -252,14 +252,14 @@ Audit hints:
   `Par::Team`; otherwise it uses `Par::Seq`. Never reconstruct parallelism
   from a plain width or use `Par::rayon` inside operation helpers.
 - Scratch and batching follow the batched linalg rule in Dense Layout And
-  Linear Algebra, which applies to faer and LAPACK providers alike.
-- CPU `dot_general` (native provider) plans with tcontract's `FaerLimit`. Its
+  Linear Algebra.
+- CPU `dot_general` plans with tcontract's `FaerLimit`. Its
   default sends c64 products above `m*n*k = 1 << 17` to the packed driver.
   That driver is slower than faer at a thread budget of one on the x86 hosts
   measured: on AVX2 it lost in all 46 measured c64 cells (packed/faer 1.08 to
   2.13, EPYC 7763) and at `8x141 * 141x282` c64 it takes 170 us against faer's
   82 us (AVX-512, Ryzen AI 9 HX 470, tensor4all-rs#1040), so a plan prepared
-  under a budget-one token on a `native` build uses `FaerLimit::NONE`. **The
+  under a budget-one token uses `FaerLimit::NONE`. **The
   host class does not enter**: `HostClass::detect` — AVX-512, AVX2, aarch64 or
   whatever comes next — is not a condition. This is a policy restoration, not
   a conclusion drawn from the measurements above: #2415 narrowed the lift to
@@ -585,29 +585,19 @@ thread count, nothing across thread counts — is owned by `docs/spec/reproducib
   has no affinity setting of its own. Placement is on by default (threadteam
   0.5): member `k` gets CPU `S[k]` of the calling thread's set `S`, and the
   team's creator (the engine's leader) stays pinned to `{S[0]}` for the team's
-  life. A vendor call from the leader therefore goes through `tenferro-linalg`'s
-  `vendor_call` (`TeamExec::external`: `S` for the call, `{S[0]}` after it), and
-  one from a member through `Exec::external`; see #2553 and the vendor section
-  of `docs/guides/cpu-execution.md` (the `cpueinsum-blas` GEMM is not widened
-  yet). Nothing wraps: when `S` has fewer CPUs than participants nobody is
-  placed and `Pool::pin_skips()` counts those scopes; opt out with
-  `Pool::builder().pin_participants(false)`. Provider thread counts remain
-  controlled by the provider variables below, not by worker affinity.
+  life. A call from a member uses `Exec::external` over `S`. Nothing wraps:
+  when `S` has fewer CPUs than participants nobody is placed and
+  `Pool::pin_skips()` counts those scopes; opt out with
+  `Pool::builder().pin_participants(false)`.
 - `PoolBuilder` reserves 16 MiB per worker by default rather than the
   `std::thread` default of 2 MiB, because provider kernels recurse with large
-  private frames: a `NUM_THREADS=64` OpenBLAS build keeps about 541 KiB per
-  `dgetrf_parallel` level, which overflowed a 2 MiB worker at n>=256. Lower it
-  with `stack_size` only for pools that never run provider code.
+  private frames, which overflowed a 2 MiB worker at moderate matrix sizes.
+  Lower it with `stack_size` only for pools that never run provider code.
 - tenferro does not own an outer fan-out for ordinary numerical work: lane
   selection for batched and grouped work belongs to cpueinsum and tlinalg, which
-  fork the token they receive. tlinalg-blas takes no token: the vendor owns its
-  threading. No placement promise is made for threads a vendor creates.
-- Vendor BLAS/LAPACK is called from the coordinator thread; tenferro bounds
-  only the token it passes to its own lower libraries.
-- Tensor-sized strided CPU kernels that are not provider-owned also run on the
-  engine's pool through the token. BLAS/LAPACK provider-owned threading remains
-  controlled by provider variables such as `OPENBLAS_NUM_THREADS`,
-  `MKL_NUM_THREADS`, `OMP_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS`.
+  fork the token they receive.
+- Tensor-sized strided CPU kernels also run on the engine's pool through the
+  token, so one budget covers every CPU kernel.
 - The invariants are checked mechanically: `deny.toml` (`cargo deny check bans`)
   rejects a direct `rayon` dependency anywhere in the workspace;
   `scripts/check-no-public-rayon.sh` (`cargo public-api`) fails when a `rayon::`

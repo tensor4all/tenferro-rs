@@ -65,7 +65,7 @@ Singular value decomposition `a = u diag(s) vh`; `SvdShape::Full` returns the fu
 - Options: `SvdOptions`
 - Output: `Svd<V, R>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `u` and `vh` have the dtype of `a`; `s` is real.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
 - Errors: `Validation`, `Unsupported`, `NumericalFailure(NonConvergence)`
 - Omissions:
   - `SvdShape::Full` combined with a non-default `gauge`, `derivative_eps` or `driver` returns `Unsupported`: the full-matrices route has no gauge or derivative regularization yet
@@ -79,7 +79,7 @@ Singular values only, in descending order.
 - Options: `SvdvalsOptions`
 - Output: `R`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result is real.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
 - Errors: `Validation`, `Unsupported`, `NumericalFailure(NonConvergence)`
 - Omissions:
   - `driver` is a hint for providers that can choose a driver; the current CPU provider ignores it
@@ -91,7 +91,7 @@ Thin QR factorization `a = q r`.
 - Options: `QrOptions`
 - Output: `Qr<V>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `q` and `r` have the dtype of `a`.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): only the default `QrOptions` run in a lane; a non-default gauge returns `Unsupported`
@@ -115,7 +115,7 @@ Column-pivoted QR with a numerical rank: `q`, `r`, `column_permutation` and `ran
 - Options: `RankRevealingQrOptions`
 - Output: `RankRevealingQrResult<V, I>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `q` and `r` have the dtype of `a`; `column_permutation` and `rank` are i64.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`
@@ -127,7 +127,7 @@ Partial-pivot LU `a = p l u`; `p` is a permutation matrix and `parity` is the re
 - Options: none
 - Output: `Lu<V>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `p`, `l`, `u` and `parity` (+1 or -1) have the dtype of `a`.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`
@@ -139,7 +139,7 @@ Complete-pivot LU `a = p l u q`; `p` and `q` are permutation matrices and `parit
 - Options: none
 - Output: `FullPivLu<V, R>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `p`, `l`, `u` and `q` have the dtype of `a`; `parity` (+1 or -1) is real for an owned `Tensor` and has the dtype of `a` on the borrowed route (#2552 Q21).
-- Layout: A rank-2 matrix with non-negative strides is read in place by the faer route (every CPU build); a negative stride or a batched input (rank >= 3) is gathered once into a compact buffer of the same placement and dtype. Operands stay on their device; nothing is transferred.
+- Layout: A rank-2 matrix with non-negative strides is read in place; a negative stride or a batched input (rank >= 3) is gathered once into a compact buffer of the same placement and dtype. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`
@@ -203,7 +203,7 @@ Lower Cholesky factor `l` of a Hermitian positive-definite matrix, `a = l l^H`.
 - Options: `CholeskyOptions`
 - Output: `V`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `l` has the dtype of `a`.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`, `NumericalFailure(NonConvergence)`
 - Omissions:
   - `Uplo::Upper` returns `Unsupported`: only the lower factor is computed
@@ -216,7 +216,7 @@ General eigendecomposition `a v = v diag(values)`; eigenvectors have unit 2-norm
 - Options: none
 - Output: `Eig<C>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `values` and `vectors` are complex (Complex32 for f32 and Complex32 input, Complex64 otherwise).
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`, `NumericalFailure(NonConvergence)`, `NumericalFailure(NonFinite)`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`
@@ -228,7 +228,7 @@ Eigenvalues of a general matrix, as complex numbers.
 - Options: none
 - Output: `C`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result is complex.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
 - Errors: `Validation`, `Unsupported`, `NumericalFailure(NonConvergence)`, `NumericalFailure(NonFinite)`
 - Omissions: none
 
@@ -239,7 +239,7 @@ Eigendecomposition of a Hermitian matrix (the lower triangle is read); `values` 
 - Options: `EighOptions`
 - Output: `Eigh<V, R>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `vectors` has the dtype of `a`; `values` is real.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
 - Errors: `Validation`, `Unsupported`, `NumericalFailure(NonConvergence)`
 - Omissions:
   - `driver` is a hint for providers that can choose a driver; the current CPU provider ignores it
@@ -251,7 +251,7 @@ Eigenvalues of a Hermitian matrix (the lower triangle is read), real and ascendi
 - Options: `EigvalshOptions`
 - Output: `R`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result is real.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred. In a lane (`CpuEngine::with_lanes`), a negative-stride input is gathered once into the lane's pool; zero steady-state allocation is promised only for non-negative strides. A batched operand is read in place in a lane.
 - Errors: `Validation`, `Unsupported`, `NumericalFailure(NonConvergence)`
 - Omissions:
   - `driver` is a hint for providers that can choose a driver; the current CPU provider ignores it
@@ -263,7 +263,7 @@ Sign and natural log of the absolute determinant of a square matrix.
 - Options: none
 - Output: `Slogdet<V, R>`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. `sign` has the dtype of `a`; `log_abs_det` is real.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`
@@ -275,7 +275,7 @@ Determinant of a square matrix, computed as `sign * exp(log_abs_det)`.
 - Options: none
 - Output: `V`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result has the dtype of `a`.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the computation. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`
@@ -299,7 +299,7 @@ Moore-Penrose pseudoinverse through the SVD; singular values below `rtol * max(s
 - Options: `PinvOptions`
 - Output: `V`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result has the dtype of `a`.
-- Layout: On the native CPU provider a rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the SVD. The BLAS provider gathers every operand that is not already compact column-major. Operands stay on their device; nothing is transferred.
+- Layout: A rank-2 matrix with non-negative strides (compact, transposed or any strided view) is read in place; a negative stride, or a batched input (rank >= 3), is gathered once into a compact buffer of the same placement and dtype before the SVD. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`, `NumericalFailure(NonConvergence)`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): not available; returns `Unsupported`

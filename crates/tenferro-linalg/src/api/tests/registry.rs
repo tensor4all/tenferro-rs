@@ -104,9 +104,9 @@ fn compact_copy<T: Sample>(view: &tenferro_tensor::TypedTensorView<'_, T>) -> Te
 
 /// Owned tensor, compact borrowed view, transposed view, negative-stride view
 /// and typed tensor all return the result of the owned call on the same
-/// logical matrix. The native provider reads the strided views in place and
-/// gathers the negative-stride one; every route runs the same kernel, so the
-/// results agree bit for bit.
+/// logical matrix. The provider reads the strided views in place and gathers
+/// the negative-stride one; every route runs the same kernel, so the results
+/// agree bit for bit.
 fn input_kinds_agree<T: Sample>() -> TestResult<()> {
     let typed_base = base::<T>()?;
     let mut e = CpuEngine::serial();

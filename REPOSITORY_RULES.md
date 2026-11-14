@@ -555,7 +555,7 @@ checking where it lives.
   `python3 scripts/count-unsafe.py` for the production figure with a
   per-crate / per-category breakdown. As of 2026-09 the real total is about
   1050 (tenferro-linalg ~420, tenferro-gpu ~260, tenferro-cpu ~160,
-  tenferro-tensor ~80), essentially all FFI/backend: cuSOLVER/cuTENSOR/cuBLAS and LAPACK
+  tenferro-tensor ~80), essentially all FFI/backend: cuSOLVER/cuTENSOR/cuBLAS
   bindings, the batched raw-pointer setup feeding them, SIMD elementwise
   kernels, thread affinity, and buffer pools (`tenferro-linalg`,
   `tenferro-cpu`, `tenferro-gpu`).
@@ -651,8 +651,8 @@ inline `#[cfg(test)]` restriction from it.
   | Gather | `strided-kernel` (`ErasedGatherPlan`) |
   | Additive scatter | `strided-kernel` (`ErasedScatterPlan`) |
   | Fixed-window dynamic slice/update | `strided-kernel` (`ErasedDynamicSlicePlan`, `ErasedDynamicUpdateSlicePlan`) |
-  | GEMM (`dot_general`) | faer (`native`) or BLAS (`blas`) |
-  | Linalg (`svd`, `qr`, `cholesky`, `eigh`, `solve`) | faer (`native`) or LAPACK (`blas`) |
+  | GEMM (`dot_general`) | faer-backed `cpueinsum`/`tcontract` |
+  | Linalg (`svd`, `qr`, `cholesky`, `eigh`, `solve`) | faer-backed `tlinalg` |
 
 - The ownership and overlap boundary is:
 
@@ -712,12 +712,10 @@ inline `#[cfg(test)]` restriction from it.
   sizes, is filed upstream with a strided-level reproduction
   ([strided-rs#269](https://github.com/tensor4all/strided-rs/issues/269)), not
   accepted as a tenferro baseline.
-- CPU provider selection is compile-time. Enabling both `native` (default) and
-  `blas` is a `compile_error!`; neither is allowed with reduced functionality
-  (typed `Unsupported` on CPU numerical routes). The provider-less einsum branch in
-  `crates/tenferro-einsum/src/cpu_concrete.rs` is the `--no-default-features`
-  contract, not dead code. There is no runtime provider kind/bundle, kernel slot,
-  or per-handle selection. `blas` is a compiled adapter, retaining native execution for declined steps.
+- CPU provider selection does not exist: every build links one faer-backed
+  `cpueinsum`/`tcontract`/`tlinalg` stack, and the CPU crates declare no backend
+  feature. There is no runtime provider kind/bundle, kernel slot, or per-handle
+  selection.
 - Tensor-sized CPU kernels run through the repository CPU threading policy:
   only `threadteam` starts tasks (`Exec::fork` / `for_ranges` / `external`;
   no other crate depends on `rayon`, see `deny.toml`). `strided-kernel` is

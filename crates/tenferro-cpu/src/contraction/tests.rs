@@ -49,21 +49,11 @@ fn bare_tcontract_decline_keeps_its_typed_source() {
     assert!(has_source::<cpueinsum::tcontract::Error>(&error));
 }
 
-#[cfg(feature = "blas")]
-#[test]
-fn blas_workspace_is_a_typed_runtime_state_failure() {
-    let error =
-        cpueinsum_blas::BlasError::Work { need: 16, got: 8 }.into_crate_error("dot_general");
-    assert_eq!(error.kind(), ErrorKind::RuntimeState);
-    assert!(has_source::<cpueinsum_blas::BlasError>(&error));
-}
-
 /// Plan-slot reuse (#2314): the fallback paths of [`BinaryCache::plan`].
 ///
 /// A miss rebuilds the slot's plan in place only when the stored plan is
 /// exclusively owned and of the requested scalar type. These cover the two
 /// fallbacks and the failed preparation that must leave the slot untouched.
-#[cfg(any(feature = "native", feature = "blas"))]
 mod plan_slot_reuse {
     use super::super::{
         BinaryCache, BinaryPlan, BufferPool, ExecutionResources, Key, Layout,
@@ -111,12 +101,6 @@ mod plan_slot_reuse {
         let resources = ExecutionResources::new(None);
         let mut exec = resources.exec(Default::default());
         let mut buffers = BufferPool::new();
-        #[cfg(feature = "blas")]
-        let mut work = <T as crate::buffer_pool::PoolScalar>::pool_acquire_zeroed(
-            &mut buffers,
-            plan.work_len(),
-        );
-        #[cfg(feature = "native")]
         let _ = &mut buffers;
         plan.execute_slices_accum(
             &mut exec,
@@ -126,8 +110,6 @@ mod plan_slot_reuse {
             beta,
             SliceAccumulationSource::Output,
             (out, 0),
-            #[cfg(feature = "blas")]
-            &mut work,
         )
         .map(|_| ())
         .map_err(|error| error.into_crate_error("dot_general"))
@@ -291,21 +273,12 @@ fn serial_native_lifts_the_c64_bound_on_every_host_class() {
     let hosts = every_host_class();
     for host in hosts {
         let serial = default_faer_limit(host, 1);
-        if cfg!(feature = "native") {
-            assert_eq!(
-                serial,
-                cpueinsum::tcontract::FaerLimit::NONE,
-                "{} at a budget of one must lift the c64 bound",
-                host.name()
-            );
-        } else {
-            assert_eq!(
-                serial.c64,
-                Some(DEFAULT_C64_BOUND),
-                "{}: a build without `native` keeps tcontract's default",
-                host.name()
-            );
-        }
+        assert_eq!(
+            serial,
+            cpueinsum::tcontract::FaerLimit::NONE,
+            "{} at a budget of one must lift the c64 bound",
+            host.name()
+        );
         for budget in [2, 4] {
             let limit = default_faer_limit(host, budget);
             assert_eq!(
@@ -327,7 +300,6 @@ fn serial_native_lifts_the_c64_bound_on_every_host_class() {
 /// a serial `native` budget lifts that bound on every host class. A plan is not
 /// re-selected per call and one `CpuPlanCache` may be shared by engines of
 /// different widths, so the budget is part of the key.
-#[cfg(feature = "native")]
 mod faer_limit {
     use crate::contraction::{take_last_plan_route, take_last_route_was_faer};
     use crate::test_support::{cpu_engine, with_cpu_session};
@@ -591,333 +563,5 @@ mod faer_limit {
                 "{m}x{k}x{n}: max error {max_err:e} exceeds {bound:e}"
             );
         }
-    }
-}
-
-/// Which plan a thin c64 product takes on a vendor-BLAS build
-/// (tensor4all-rs#1099).
-///
-/// On an Accelerate link, Accelerate's Complex64 GEMM kernel pays a per
-/// right-operand-element read that a thin row role never amortises, so
-/// [`super::blas_plan`] takes tcontract's own (faer) plan for c64 products whose
-/// GEMM row role is one or two. Every other product keeps the vendor kernel:
-/// f64, a real row role, and anything tcontract does not fuse onto faer. A build
-/// that links a reference BLAS keeps the vendor kernel everywhere.
-#[cfg(feature = "blas")]
-mod blas_thin_c64 {
-    use crate::contraction::{plan_config, take_last_route_was_faer};
-    use crate::test_support::{cpu_engine, with_cpu_session};
-    use cpueinsum::tcontract::api::{DType, DotGeneral, LayoutSpec, OperandSpec, Problem};
-    use cpueinsum_blas::BlasScalar;
-    use tenferro_tensor::ContractionScalar;
-    use tenferro_tensor::{
-        Complex64, DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorDot, TensorRead,
-        TensorWrite,
-    };
-
-    /// The gate is compiled only for an Accelerate link.
-    const THIN_C64_IS_ROUTED: bool = cfg!(feature = "blas-accelerate");
-
-    fn config() -> DotGeneralConfig {
-        DotGeneralConfig {
-            lhs_contracting_dims: [1].as_slice().into(),
-            rhs_contracting_dims: [0].as_slice().into(),
-            lhs_batch_dims: [].as_slice().into(),
-            rhs_batch_dims: [].as_slice().into(),
-        }
-    }
-
-    fn data(len: usize, seed: usize) -> Vec<Complex64> {
-        (0..len)
-            .map(|i| {
-                let x = (i * 2654435761 + seed * 40503) % 1009;
-                Complex64::new(
-                    x as f64 / 503.0 - 1.0,
-                    ((x * 7 + i) % 211) as f64 / 105.0 - 1.0,
-                )
-            })
-            .collect()
-    }
-
-    fn run(engine: &mut crate::CpuEngine, a: &Tensor, b: &Tensor) -> Tensor {
-        with_cpu_session(engine, |session| {
-            session
-                .dot_general_read(
-                    TensorRead::from_tensor(a),
-                    TensorRead::from_tensor(b),
-                    &config(),
-                )
-                .unwrap()
-        })
-    }
-
-    /// The problem of one column-major `m x k` by `k x n` product.
-    fn problem<T: BlasScalar>(dtype: DType, m: usize, k: usize, n: usize) -> Problem {
-        let spec = |dims: &[usize], strides: &[isize]| {
-            OperandSpec::new(LayoutSpec::new(dims, strides, 0).expect("valid layout"))
-        };
-        let _ = core::marker::PhantomData::<T>;
-        Problem::from_dot_general(
-            dtype,
-            spec(&[m, k], &[1, m as isize]),
-            spec(&[k, n], &[1, k as isize]),
-            spec(&[m, n], &[1, m as isize]),
-            &DotGeneral::new(&[1], &[0], &[], &[]),
-        )
-        .expect("valid product")
-    }
-
-    /// Whether the cache would prepare tcontract's plan for one product.
-    ///
-    /// Planning only: no operand is touched, so this runs on any provider build.
-    fn plans_faer<T: BlasScalar>(dtype: DType, m: usize, k: usize, n: usize) -> bool {
-        plans_faer_with::<T>(
-            dtype,
-            m,
-            k,
-            n,
-            &plan_config(threadteam::HostClass::detect(), 1),
-        )
-    }
-
-    fn plans_faer_with<T: BlasScalar>(
-        dtype: DType,
-        m: usize,
-        k: usize,
-        n: usize,
-        config: &cpueinsum::tcontract::PlanConfig,
-    ) -> bool {
-        match crate::contraction::blas_plan::BinaryPlan::<T>::new(
-            &problem::<T>(dtype, m, k, n),
-            config,
-        ) {
-            Ok(crate::contraction::blas_plan::BinaryPlan::Native(_)) => true,
-            Ok(crate::contraction::blas_plan::BinaryPlan::Vendor(_)) => false,
-            Err(error) => panic!("{m}x{k}x{n} {dtype:?}: {error}"),
-        }
-    }
-
-    /// The branch itself: a thin c64 product takes tcontract's plan, and every
-    /// product outside the gate keeps the vendor plan.
-    #[test]
-    fn only_thin_c64_takes_the_faer_plan() {
-        // The #1099 shapes: a one- or two-row c64 product against a real right
-        // operand.
-        for (m, k, n) in [(1, 141, 141), (1, 141, 282), (1, 1, 141), (2, 141, 282)] {
-            assert_eq!(
-                plans_faer::<Complex64>(DType::C64, m, k, n),
-                THIN_C64_IS_ROUTED,
-                "{m}x{k}x{n} c64"
-            );
-        }
-        // A real row role keeps Accelerate, which is 4.1x faster at 256^3.
-        for (m, k, n) in [(8, 141, 282), (256, 256, 256)] {
-            assert!(
-                !plans_faer::<Complex64>(DType::C64, m, k, n),
-                "{m}x{k}x{n} c64 must keep the vendor kernel"
-            );
-        }
-        // A thin product that tcontract sends to its packed driver instead
-        // (above the c64 faer bound) keeps the vendor kernel: the gate takes
-        // tcontract's plan only where that plan is faer.
-        assert!(
-            !plans_faer_with::<Complex64>(
-                DType::C64,
-                1,
-                1024,
-                282,
-                &cpueinsum::tcontract::PlanConfig::default()
-            ),
-            "1x1024x282 c64 is above the c64 faer bound and must keep the vendor kernel"
-        );
-        // f64 is already fast on the vendor kernel and every faer route for it
-        // measured slower, so it is never routed.
-        assert!(!plans_faer::<f64>(DType::F64, 1, 141, 282));
-        assert!(!plans_faer::<f64>(DType::F64, 2, 141, 141));
-        // No other dtype is bounded by tcontract, so every fusable non-c64
-        // product reports `Faer` in a native build; the dtype check is what
-        // keeps them on the vendor kernel.
-        assert!(!plans_faer::<f32>(DType::F32, 1, 141, 282));
-        assert!(!plans_faer::<num_complex::Complex32>(
-            DType::C32,
-            1,
-            141,
-            282
-        ));
-    }
-
-    /// The routed product is correct and is the one that ran: a thin c64
-    /// contraction must agree with a scalar complex product, and report the
-    /// route the gate chose.
-    ///
-    /// The reference is a scalar loop rather than a second library, so the check
-    /// does not move with a provider. The bound is the normwise forward bound of
-    /// a length-`k` dot product, `4 * k * eps * max|d|`: a routed kernel that
-    /// dropped a conjugate or lost accuracy moves large components by `O(|d|)`.
-    #[test]
-    fn thin_c64_runs_the_routed_plan_and_matches_a_scalar_product() {
-        for (m, k, n) in [(1, 141, 282), (2, 141, 141)] {
-            let (av, bv) = (data(m * k, 1), data(k * n, 2));
-            let a = Tensor::from_vec_col_major(vec![m, k], av.clone()).unwrap();
-            let b = Tensor::from_vec_col_major(vec![k, n], bv.clone()).unwrap();
-            let mut engine = cpu_engine(1).unwrap();
-            let _ = take_last_route_was_faer();
-            let got = run(&mut engine, &a, &b);
-            assert_eq!(
-                take_last_route_was_faer(),
-                Some(THIN_C64_IS_ROUTED),
-                "{m}x{k}x{n}: the routed plan must be the one that ran"
-            );
-            let got = got.as_slice::<Complex64>().unwrap();
-            let mut max_err: f64 = 0.0;
-            let mut scale: f64 = 0.0;
-            for j in 0..n {
-                for i in 0..m {
-                    let mut acc = Complex64::new(0.0, 0.0);
-                    for t in 0..k {
-                        acc += av[i + t * m] * bv[t + j * k];
-                    }
-                    let g = got[i + j * m];
-                    assert!(g.re.is_finite() && g.im.is_finite(), "non-finite value");
-                    max_err = max_err
-                        .max((g.re - acc.re).abs())
-                        .max((g.im - acc.im).abs());
-                    scale = scale.max(acc.re.abs()).max(acc.im.abs());
-                }
-            }
-            let bound = 4.0 * k as f64 * f64::EPSILON * scale;
-            assert!(
-                max_err <= bound,
-                "{m}x{k}x{n}: max error {max_err:e} exceeds {bound:e}"
-            );
-        }
-    }
-
-    /// The accepted deviation, asserted: the routed plan and the vendor kernel
-    /// that ran before the route agree to 1e-13 relative, and that is the whole
-    /// numeric cost of tensor4all-rs#1099 (2.2e-16 to 1.3e-15 of the output
-    /// scale measured; this is the regression bound).
-    ///
-    /// Both plans are prepared here directly, so the comparison is the old
-    /// output against the new one rather than either against a third reference.
-    #[test]
-    fn routed_plan_stays_within_the_recorded_deviation_of_the_vendor_kernel() {
-        use core::mem::MaybeUninit;
-        use cpueinsum::tcontract::SliceAccumulationSource;
-        use cpueinsum::Exec;
-
-        const RELATIVE_BOUND: f64 = 1e-13;
-
-        for (m, k, n) in [(1, 141, 141), (1, 141, 282), (2, 141, 141), (2, 141, 282)] {
-            let (av, bv) = (data(m * k, 1), data(k * n, 2));
-            let config = plan_config(threadteam::HostClass::detect(), 1);
-            let problem = problem::<Complex64>(DType::C64, m, k, n);
-            let native =
-                cpueinsum::BinaryPlan::<Complex64>::new(&problem, &config).expect("tcontract plan");
-            assert_eq!(
-                native.report().algorithm,
-                cpueinsum::tcontract::Algorithm::Faer,
-                "{m}x{k}x{n}: the baseline must be the plan the route takes"
-            );
-            let vendor = cpueinsum_blas::BinaryPlan::<Complex64>::new(&problem, &config)
-                .expect("vendor plan");
-            let mut work = vec![Complex64::new(0.0, 0.0); vendor.work_len()];
-
-            let mut fresh = vec![MaybeUninit::<Complex64>::uninit(); m * n];
-            let (got, _) = native
-                .execute_uninit_slices(
-                    &mut Exec::serial(),
-                    Complex64::new(1.0, 0.0),
-                    (&av, 0),
-                    (&bv, 0),
-                    Complex64::new(0.0, 0.0),
-                    SliceAccumulationSource::Absent,
-                    (&mut fresh, 0),
-                )
-                .expect("routed execution");
-            let routed = got.to_vec();
-            let mut fresh = vec![MaybeUninit::<Complex64>::uninit(); m * n];
-            let (got, _) = vendor
-                .execute_uninit_slices(
-                    &mut Exec::serial(),
-                    Complex64::new(1.0, 0.0),
-                    (&av, 0),
-                    (&bv, 0),
-                    Complex64::new(0.0, 0.0),
-                    SliceAccumulationSource::Absent,
-                    (&mut fresh, 0),
-                    &mut work,
-                )
-                .expect("vendor execution");
-            let vendor_out = got.to_vec();
-
-            let scale = vendor_out
-                .iter()
-                .map(|z| z.re.abs().max(z.im.abs()))
-                .fold(0.0_f64, f64::max);
-            let max_diff = routed
-                .iter()
-                .zip(&vendor_out)
-                .map(|(r, v)| (r.re - v.re).abs().max((r.im - v.im).abs()))
-                .fold(0.0_f64, f64::max);
-            assert!(
-                max_diff <= RELATIVE_BOUND * scale,
-                "{m}x{k}x{n}: routed output moved {max_diff:e} from the vendor kernel, \
-                 above {RELATIVE_BOUND:e} of its {scale:e} scale"
-            );
-        }
-    }
-
-    /// The accumulating entry runs the routed plan too: an initialized output
-    /// with `alpha = 2`, `beta = 3` must produce `2 * A B + 3 * C` from it.
-    #[test]
-    fn thin_c64_accumulates_into_an_initialized_output() {
-        let (m, k, n) = (1, 141, 282);
-        let (av, bv) = (data(m * k, 1), data(k * n, 2));
-        let a = Tensor::from_vec_col_major(vec![m, k], av.clone()).unwrap();
-        let b = Tensor::from_vec_col_major(vec![k, n], bv.clone()).unwrap();
-        let prior = data(m * n, 3);
-        let mut out = Tensor::from_vec_col_major(vec![m, n], prior.clone()).unwrap();
-        let mut engine = cpu_engine(1).unwrap();
-        let accumulation = DotGeneralAccumulation {
-            lhs_conj: false,
-            rhs_conj: false,
-            alpha: ContractionScalar::C64(Complex64::new(2.0, 0.0)),
-            beta: ContractionScalar::C64(Complex64::new(3.0, 0.0)),
-        };
-        let _ = take_last_route_was_faer();
-        with_cpu_session(&mut engine, |session| {
-            session
-                .dot_general_read_into_accum(
-                    TensorRead::from_tensor(&a),
-                    TensorRead::from_tensor(&b),
-                    &config(),
-                    accumulation,
-                    TensorWrite::from_tensor(&mut out),
-                )
-                .unwrap()
-        });
-        assert_eq!(
-            take_last_route_was_faer(),
-            Some(THIN_C64_IS_ROUTED),
-            "the accumulating call must run the routed plan"
-        );
-        let got = out.as_slice::<Complex64>().unwrap();
-        let mut max_err: f64 = 0.0;
-        let mut scale: f64 = 0.0;
-        for j in 0..n {
-            let mut acc = Complex64::new(0.0, 0.0);
-            for t in 0..k {
-                acc += av[t] * bv[t + j * k];
-            }
-            let want = acc * 2.0 + prior[j] * 3.0;
-            let g = got[j];
-            max_err = max_err
-                .max((g.re - want.re).abs())
-                .max((g.im - want.im).abs());
-            scale = scale.max(want.re.abs()).max(want.im.abs());
-        }
-        let bound = 4.0 * k as f64 * f64::EPSILON * scale * 3.0;
-        assert!(max_err <= bound, "max error {max_err:e} exceeds {bound:e}");
     }
 }

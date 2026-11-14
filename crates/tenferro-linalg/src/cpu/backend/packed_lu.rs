@@ -1,4 +1,4 @@
-//! Batched packed-LU solve entry points shared by both CPU providers.
+//! Batched packed-LU solve entry points.
 //!
 //! `lu_solve_prepared` and the fused `lu_factor_solve` both copy the RHS once
 //! into the output buffer and hand the whole batch to one provider kernel,
@@ -6,10 +6,6 @@
 //! per-matrix tensor, permutation vector, or triangular-solve intermediate is
 //! materialized.
 
-#[cfg(any(not(feature = "native"), not(feature = "blas")))]
-#[allow(unused_imports)]
-use super::linalg;
-#[cfg(any(not(feature = "native"), not(feature = "blas")))]
 use super::{
     batched_vector_rhs_shape_of, has_zero_dim, square_matrix_dim, HostOperand, HostOperandExt,
 };
@@ -18,152 +14,10 @@ use crate::cpu::linalg::{compact_host_data, pooled_copy, pooled_zeroed};
 use num_complex::{Complex32, Complex64};
 use tcontract_exec::Exec;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
-use tenferro_tensor::{Error, Tensor, TensorScalar, TypedTensor};
-
-/// Per-dtype dispatch from a CPU provider to its packed-LU batch kernels.
-pub(super) trait CpuPackedLu: TensorScalar + PoolScalar + Copy {
-    /// Solve `op(A) X = B` in place for every batch from packed factors.
-    #[allow(clippy::too_many_arguments)]
-    fn prepared_solve(
-        exec: &mut Exec<'_>,
-        buffers: &BufferPool,
-        op: &'static str,
-        n: usize,
-        nrhs: usize,
-        packed_lu: &[Self],
-        pivots: &[i32],
-        output: &mut [Self],
-        transpose_a: bool,
-        conjugate_a: bool,
-    ) -> tenferro_tensor::Result<()>;
-
-    /// Factor `A` in place and solve `A X = B` for every batch.
-    #[allow(clippy::too_many_arguments)]
-    fn factor_solve(
-        exec: &mut Exec<'_>,
-        buffers: &BufferPool,
-        op: &'static str,
-        n: usize,
-        nrhs: usize,
-        packed_lu: &mut [Self],
-        pivots: &mut [i32],
-        output: &mut [Self],
-    ) -> tenferro_tensor::Result<()>;
-}
-
-macro_rules! impl_cpu_packed_lu {
-    ($($scalar:ty),* $(,)?) => {
-        $(
-            impl CpuPackedLu for $scalar {
-                fn prepared_solve(
-                    exec: &mut Exec<'_>,
-                    buffers: &BufferPool,
-                    op: &'static str,
-                    n: usize,
-                    nrhs: usize,
-                    packed_lu: &[Self],
-                    pivots: &[i32],
-                    output: &mut [Self],
-                    transpose_a: bool,
-                    conjugate_a: bool,
-                ) -> tenferro_tensor::Result<()> {
-                    let _ = (op, &exec, &buffers, &packed_lu, &pivots, &output, n, nrhs, transpose_a, conjugate_a);
-                    {
-#[cfg(feature = "native")]
-{
-                            #[cfg(feature = "native")]
-                            {
-                                crate::cpu::tlinalg::solve_prepared_batch::<$scalar>(
-                                    exec,
-                                    tlinalg::Op::LuSolvePrepared,
-                                    n,
-                                    nrhs,
-                                    packed_lu,
-                                    pivots,
-                                    output,
-                                    transpose_a,
-                                    conjugate_a,
-                                )
-                            }
-
-                        }
-#[cfg(feature = "blas")]
-{
-                            #[cfg(feature = "blas")]
-                            {
-                                crate::cpu::tlinalg_blas::solve_prepared_batch::<$scalar>(
-                                    exec,
-                                    tlinalg_blas::Op::LuSolvePrepared,
-                                    n,
-                                    nrhs,
-                                    packed_lu,
-                                    pivots,
-                                    output,
-                                    transpose_a,
-                                    conjugate_a,
-                                )
-                            }
-
-                        }
-}
-                }
-
-                fn factor_solve(
-                    exec: &mut Exec<'_>,
-                    buffers: &BufferPool,
-                    op: &'static str,
-                    n: usize,
-                    nrhs: usize,
-                    packed_lu: &mut [Self],
-                    pivots: &mut [i32],
-                    output: &mut [Self],
-                ) -> tenferro_tensor::Result<()> {
-                    let _ = (op, &exec, &buffers, &packed_lu, &pivots, &output, n, nrhs);
-                    {
-#[cfg(feature = "native")]
-{
-                            #[cfg(feature = "native")]
-                            {
-                                crate::cpu::tlinalg::factor_solve_batch::<$scalar>(
-                                    exec,
-                                    buffers,
-                                    tlinalg::Op::LuFactorSolve,
-                                    n,
-                                    nrhs,
-                                    packed_lu,
-                                    pivots,
-                                    output,
-                                )
-                            }
-
-                        }
-#[cfg(feature = "blas")]
-{
-                            #[cfg(feature = "blas")]
-                            {
-                                crate::cpu::tlinalg_blas::factor_solve_batch::<$scalar>(
-                                    exec,
-                                    tlinalg_blas::Op::LuFactorSolve,
-                                    n,
-                                    nrhs,
-                                    packed_lu,
-                                    pivots,
-                                    output,
-                                )
-                            }
-
-                        }
-}
-                }
-            }
-        )*
-    };
-}
-
-impl_cpu_packed_lu!(f32, f64, Complex32, Complex64);
+use tenferro_tensor::{Error, Tensor, TypedTensor};
 
 /// A pooled compact copy of `source` carrying `source`'s placement.
-fn pooled_output<T: CpuPackedLu>(
+fn pooled_output<T: tlinalg::FaerScalar + PoolScalar + Copy>(
     buffers: &BufferPool,
     op: &'static str,
     source: &HostView<'_, T>,
@@ -199,7 +53,7 @@ pub(super) fn rhs_matrix_shape(a_shape: &[usize], b_shape: &[usize]) -> Vec<usiz
 /// Returns `Error::InvalidArgument` for an out-of-range pivot and
 /// `Error::Internal` if the precondition above does not hold.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
+pub(super) fn lu_solve_prepared_typed<T: tlinalg::FaerScalar + PoolScalar + Copy>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a_shape: &[usize],
@@ -217,10 +71,9 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
         )));
     };
     let mut output = pooled_output(buffers, OP, b)?;
-    T::prepared_solve(
+    crate::cpu::tlinalg::solve_prepared_batch::<T>(
         exec,
-        buffers,
-        OP,
+        tlinalg::Op::LuSolvePrepared,
         n,
         nrhs,
         compact_host_data(OP, packed_lu)?,
@@ -242,7 +95,7 @@ pub(super) fn lu_solve_prepared_typed<T: CpuPackedLu>(
 /// non-square `A`, mismatched RHS rows or batch shape, and
 /// `Error::Extension` with `crate::Error::Singular` for an exactly singular
 /// matrix when the RHS is nonempty.
-pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
+pub(super) fn lu_factor_solve_typed<T: tlinalg::FaerScalar + PoolScalar + Copy>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     a: &HostView<'_, T>,
@@ -277,10 +130,10 @@ pub(super) fn lu_factor_solve_typed<T: CpuPackedLu>(
     let mut pivot_data = pooled_zeroed::<i32>(buffers, OP, "pivots", &pivot_shape)?;
     let mut output = pooled_output(buffers, OP, b)?;
     if !has_zero_dim(a.shape()) {
-        T::factor_solve(
+        crate::cpu::tlinalg::factor_solve_batch::<T>(
             exec,
             buffers,
-            OP,
+            tlinalg::Op::LuFactorSolve,
             n,
             nrhs,
             lu_data.host_data_mut()?,

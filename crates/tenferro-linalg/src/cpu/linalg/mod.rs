@@ -1,11 +1,6 @@
-// Both CPU builds: the `blas` build takes complete-pivoting LU (`full_piv_lu`,
-// `full_piv_lu_solve`) from here too, because LAPACK has no rank-revealing equivalent.
-#[cfg_attr(not(feature = "native"), allow(dead_code, unused_imports))]
+// Complete-pivoting LU (`full_piv_lu`, `full_piv_lu_solve`) is here as well,
+// because no other CPU kernel family provides a rank-revealing equivalent.
 pub mod faer_linalg;
-
-#[cfg(feature = "blas")]
-#[cfg_attr(feature = "native", allow(dead_code, unused_imports))]
-pub mod lapack_linalg;
 
 mod rank_revealing_qr;
 
@@ -130,7 +125,7 @@ pub(crate) fn reject_negative_strides<T: 'static>(
 
 /// Describe a host view to a linalg provider without copying it.
 ///
-/// Both providers read their operands as borrowed strided descriptors. The view's shape, strides
+/// The provider reads its operands as borrowed strided descriptors. The view's shape, strides
 /// and offset pass through unchanged; `RawStridedRef::new` re-validates that every reachable offset
 /// lies inside the borrowed storage, so a malformed view fails closed instead of reading out of
 /// range. A negative stride is not a supported provider layout.
@@ -148,13 +143,9 @@ pub(crate) fn raw_view<'v, T: 'static>(
     .map_err(|error| tenferro_tensor::Error::invalid_argument(op, "layout", error.to_string()))
 }
 
-pub(crate) use faer_linalg as faer;
-#[cfg(feature = "blas")]
-pub(crate) use lapack_linalg as blas;
-
-/// A view the providers can read in place, or a compact pooled copy of it.
+/// A view the provider can read in place, or a compact pooled copy of it.
 ///
-/// The providers take non-negative strides only. A borrowed operand with a negative stride (a
+/// The provider takes non-negative strides only. A borrowed operand with a negative stride (a
 /// reversed slice, say) is gathered once into a compact column-major tensor, which is the copy the
 /// pre-extraction routes made for every such operand anyway; any other layout is read in place.
 pub(crate) fn provider_readable<T: Copy + Clone + PoolScalar + 'static>(

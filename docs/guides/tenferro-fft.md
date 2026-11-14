@@ -232,7 +232,7 @@ TENFERRO_REQUIRE_CUDA=1 \
 CUDA_PATH=/usr/local/cuda \
 LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-} \
 cargo run -p tenferro-tutorial-code --no-default-features \
-  --features native,cuda,doc-snippets --bin cuda_fft
+  --features cuda,doc-snippets --bin cuda_fft
 ```
 
 CUDA supports one-dimensional transforms with these dtype combinations:

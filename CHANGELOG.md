@@ -147,6 +147,32 @@ layer, generated from a per-family registry. The operation list, options,
 
 ### Removed
 
+- **The vendor BLAS/LAPACK CPU providers are gone, and with them the CPU backend
+  feature** (#2608). Every build now links one faer-backed
+  `tlinalg`/`cpueinsum`/`tcontract` stack; there is no `native`/`blas` choice, no
+  `blas-openblas`/`blas-mkl`/`blas-accelerate` provider, and no
+  `provider-inject`/`provider-src` test seam. Consequences for a dependent
+  crate:
+  - The features `native`, `blas`, `blas-openblas`, `blas-accelerate`,
+    `blas-mkl`, `provider-inject`, `provider-src`, `cpueinsum-blas` and
+    `tlinalg-blas` no longer exist on `tenferro-cpu`, `tenferro-linalg`,
+    `tenferro-runtime`, `tenferro-ad`, `tenferro-einsum`, `tenferro-fft`,
+    `tenferro-gpu`, `tenferro-xla` or `docs/tutorial-code`. A stale dependency
+    line fails with "feature does not exist"; delete the feature and the
+    `default-features = false` that went with it. There is no back-compat alias.
+  - `tenferro-cpu` and `tenferro-runtime` no longer declare a `default` feature.
+    `tenferro-cpu` declares no features at all.
+  - The provider crates `cblas-sys`, `cblas-inject`, `blas-src`,
+    `lapack`, `lapack-src` and `lapack-inject` are no longer workspace
+    dependencies, so `Cargo.lock` no longer contains `openblas-src`,
+    `openblas-build`, `intel-mkl-src` or `accelerate-src`.
+  - `scripts/api-snapshot.sh` renamed its docs.rs snapshots from
+    `+native-cuda` to `+cuda` and dropped `native` from the feature lists;
+    `api/README.md` documents the new combination table.
+  - CI lost the `workspace-blas` and `blas-inject` profiles and the
+    `cargo test (blas inject)` context; the macOS lane is now the `macos`
+    profile and no longer selects Accelerate.
+
 - **Eight unused internal `pub` items are gone** (#2546): the seven in the U02
   table, plus the `transpose_primal_outputs` getter, which the table did not list
   and which with its setter gone could only return `None`. `ShapeGuardContext`

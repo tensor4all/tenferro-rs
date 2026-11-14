@@ -126,7 +126,6 @@ class WorkflowContractTests(unittest.TestCase):
         text = read(".github/workflows/ci.yml")
         self.assertIn("python3 scripts/ci/change_policy.py", text)
         self.assertIn("python3 scripts/ci/run_profile.py fmt", text)
-        self.assertIn("python3 scripts/ci/run_profile.py blas-inject", text)
         self.assertIn("python3 scripts/ci/run_profile.py coverage", text)
         self.assertIn("python3 scripts/ci/run_profile.py docs", text)
         self.assertIn("name: CI configuration checks", text)
@@ -140,8 +139,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("needs: [changes, ci-gate]", block)
         self.assertIn("run_macos: ${{ steps.policy.outputs.run_macos }}", text)
         self.assertIn("'macos-15' || 'ubuntu-24.04'", block)
-        self.assertIn("python3 scripts/ci/run_profile.py macos-accelerate", block)
-        self.assertIn("shared-key: macos-accelerate-v1", block)
+        self.assertIn("python3 scripts/ci/run_profile.py macos", block)
+        self.assertIn("shared-key: macos-v1", block)
         self.assertNotIn("run_profile.py workspace-faer", block)
         self.assertIn("needs.changes.result == 'success'", block)
         self.assertIn("Change classification failed", block)
@@ -163,7 +162,6 @@ class WorkflowContractTests(unittest.TestCase):
             "clippy",
             "coverage",
             "docs-site",
-            "cargo test (blas inject)",
         ):
             with self.subTest(name=name):
                 self.assertIn(f"name: {name}", fast)
