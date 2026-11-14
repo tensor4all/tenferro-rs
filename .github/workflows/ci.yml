@@ -148,6 +148,52 @@ jobs:
           if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
           if [ "${REQUIRED}" != true ]; then echo "clippy not required: ${REASON}"; fi
 
+  hdf5-adapter:
+    name: hdf5 adapter
+    needs: policy
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        with:
+          prefix-key: v1-hdf5-ubuntu24
+          workspaces: ext/hdf5
+      - name: Install libhdf5 and h5py
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libhdf5-dev python3-h5py
+          python3 -c "import h5py; print('h5py', h5py.__version__, 'libhdf5', h5py.version.hdf5_version)"
+      - name: Run rustfmt
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: cargo fmt --manifest-path ext/hdf5/Cargo.toml --all --check
+      - name: Run clippy
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: >-
+          cargo clippy --manifest-path ext/hdf5/Cargo.toml --all-targets --
+          -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+      - name: Run tests and doctests
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        env:
+          TENFERRO_HDF5_INTEROP: "1"
+        run: cargo test --manifest-path ext/hdf5/Cargo.toml --locked
+      - name: Report hdf5 adapter disposition
+        if: always()
+        env:
+          POLICY_RESULT: ${{ needs.policy.result }}
+          REQUIRED: ${{ needs.policy.outputs.run_rust }}
+          REASON: ${{ needs.policy.outputs.reason }}
+        run: |
+          if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${REQUIRED}" != true ]; then echo "hdf5 adapter not required: ${REASON}"; fi
+
   test-inject-blas:
     name: cargo test (blas inject)
     needs: policy

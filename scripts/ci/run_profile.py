@@ -30,6 +30,9 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "cargo fmt --all --check",
         "cargo fmt --manifest-path ext/tropical/Cargo.toml --all --check",
         "cargo fmt --manifest-path ext/sparse/Cargo.toml --all --check",
+        # Only `fmt` covers the HDF5 adapter: its tests need a runtime libhdf5,
+        # so they run in the dedicated `hdf5-adapter` CI job instead.
+        "cargo fmt --manifest-path ext/hdf5/Cargo.toml --all --check",
     ),
     "clippy": (
         f"cargo clippy --workspace --all-targets -- {_CLIPPY_FLAGS}",
