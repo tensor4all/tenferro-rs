@@ -2,6 +2,10 @@
 # Check the backend-feature combinations of `tenferro-mpi`.
 #
 #   scripts/check-mpi-features.sh tenferro-mpi
+#   scripts/check-mpi-features.sh tenferro-mpi --runtime-only
+#
+# `--runtime-only` skips the `system` graph and the both-feature check, which need
+# system MPI headers and libclang. Use it from the MPIwrapper-only runtime lane.
 #
 # `tenferro-mpi` is a workspace member with `default = []`, so the root default
 # lanes compile it without an MPI binding. This check pins the rest of the contract:
@@ -17,6 +21,7 @@ set -Eeuo pipefail
 cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
 crate=${1:-tenferro-mpi}
+mode=${2:-all}
 jobs=${JOBS:-4}
 # rsmpi-sys builds bindgen output; clang needs the GCC private include directory for
 # stddef.h on hosts where it is not on clang's default search path.
@@ -24,6 +29,10 @@ export BINDGEN_EXTRA_CLANG_ARGS=${BINDGEN_EXTRA_CLANG_ARGS:-"-I$(gcc -print-file
 
 [[ "$crate" == "tenferro-mpi" ]] || {
     echo "check-mpi-features: unknown crate $crate (only tenferro-mpi remains)" >&2
+    exit 2
+}
+[[ "$mode" == "all" || "$mode" == "--runtime-only" ]] || {
+    echo "check-mpi-features: unknown mode $mode (use --runtime-only or omit it)" >&2
     exit 2
 }
 [[ -f "crates/tenferro-mpi/Cargo.toml" ]] || {
@@ -51,8 +60,9 @@ expect_absent default
 
 # `engine` alone has no MPI at all, for a caller that supplies its own backend.
 cargo check -j "$jobs" -p tenferro-mpi --features engine
-expect_absent engine
+expect_absent engine --features engine
 
+if [[ "$mode" == "all" ]]; then
 # The system backend: exactly one rsmpi-rt and one rsmpi-sys.
 cargo check -j "$jobs" -p tenferro-mpi --features system
 system_tree=$(tree --features system)
@@ -71,6 +81,7 @@ found=$(grep -cE '^rsmpi-sys v0\.2\.4' <<<"$system_tree" || true)
 if grep -qE '^mpi-rt-sys v' <<<"$system_tree"; then
     echo "check-mpi-features: the system backend also resolved mpi-rt-sys" >&2
     exit 1
+fi
 fi
 
 # The runtime backend: exactly one rsmpi-rt and one mpi-rt-sys, no bindgen sys crate.
@@ -93,12 +104,14 @@ if grep -qE '^(rsmpi-sys|mpi-sys) v' <<<"$runtime_tree"; then
     exit 1
 fi
 
+if [[ "$mode" == "all" ]]; then
 # Enabling both bindings is a configuration error. rsmpi-rt itself rejects its two
 # backend features, so the failure is reported inside the dependency before this
 # crate compiles; the property under test is that the combination does not build.
 if cargo check -j "$jobs" -p tenferro-mpi --features system,runtime >/dev/null 2>&1; then
     echo "check-mpi-features: system+runtime built instead of failing" >&2
     exit 1
+fi
 fi
 
 echo "check-mpi-features: $crate feature combinations are consistent"

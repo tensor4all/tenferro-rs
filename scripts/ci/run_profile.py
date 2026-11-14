@@ -88,7 +88,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         # identity, and `mpi_p2p_runtime` runs the two-rank scenarios.
         "cargo test -p tenferro-mpi --features runtime -j 4",
         "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-mpi --features runtime -j 4 --no-deps",
-        "scripts/check-mpi-features.sh tenferro-mpi",
+        "scripts/check-mpi-features.sh tenferro-mpi --runtime-only",
         "scripts/run-mpi.sh rt",
     ),
     "extensions": (

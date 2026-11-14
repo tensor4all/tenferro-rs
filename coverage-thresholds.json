@@ -121,7 +121,7 @@
     "crates/tenferro-internal-cpu-kernels/src/lib.rs": 79,
     "crates/tenferro-tensor-core/src/scalar_set.rs": 75,
     "crates/tenferro-tensor/src/types/accessors.rs": 70,
-    "ext/bf16-proof/src/einsum.rs": 78,
-    "ext/df64-proof/src/extension.rs": 79
+    "ext/experiments/bf16-proof/src/einsum.rs": 78,
+    "ext/experiments/df64-proof/src/extension.rs": 79
   }
 }

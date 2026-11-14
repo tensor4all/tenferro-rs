@@ -41,6 +41,12 @@
   that lane. The `system` lane runs the same doctest bodies against the same API.
 - `tenferro-hdf5 --features hdf5` builds without HDF5 headers; the test suite needs
   a runtime `libhdf5`, which Homebrew provides on this host.
+- The workspace coverage gate now measures `tenferro-mpi` (including the
+  `error.rs` wire-reason/Display/source/abort tests, 100% line coverage) and the
+  moved experiment files keep their existing per-file thresholds under the new
+  `ext/experiments/` paths.
+- The docs-site API index lists both optional adapters, so the rendered crate-link
+  inventory covers every workspace library.
 - `cargo publish --dry-run -p tenferro-mpi` is the publication gate; the branch does
   not publish it. `tenferro-hdf5` stays unpublished until `hdf5-rt` is on
   crates.io, and its git dependency remains the only unpublished dependency.

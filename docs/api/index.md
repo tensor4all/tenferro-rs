@@ -35,6 +35,16 @@ For contributors, internal crate APIs are also available in the
 - [tenferro-fft](./tenferro_fft/index.html): FFT extension runtime and
   public concrete/traced FFT APIs
 
+## Optional Adapter Crates
+
+These are workspace members whose system bindings are opt-in features; a default
+build contains no MPI or HDF5 edge.
+
+- [tenferro-mpi](./tenferro_mpi/index.html): blocking point-to-point MPI
+  transport for host tensors, with `system` and `runtime` backends
+- [tenferro-hdf5](./tenferro_hdf5/index.html): HDF5 payload adapter behind the
+  `hdf5` feature (unpublished until `hdf5-rt` is on crates.io)
+
 ## Extension and Consumer Crates
 
 These crates are not published. They show how an application adds a scalar

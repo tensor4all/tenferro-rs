@@ -63,6 +63,16 @@ in one graph, which rsmpi-rt rejects before the adapter is compiled.
 `rsmpi-sys 0.2.4` in the `system` graph, one `rsmpi-rt` and one `mpi-rt-sys 0.1.0`
 in the `runtime` graph, and no MPI package at all in the default and `engine` graphs.
 
+### Co-installation with hataori-rs
+
+`tenferro-mpi --features system` resolves crates.io `rsmpi-sys`, which declares
+`links = "mpi"`. hataori-rs still resolves crates.io `mpi 0.8.1` and its
+`mpi-sys`, which declares the same link identity, so Cargo cannot place both in one
+graph. A process that needs both must move hataori to `rsmpi-rt`; `runtime` is the
+co-installable backend because `mpi-rt-sys` declares no link identity and loads MPI
+at run time. This is a dependency-identity constraint, not a feature of the
+transport itself.
+
 ## Wire format v1
 
 All frames are byte-oriented: the header, the ack and the payload go through the same

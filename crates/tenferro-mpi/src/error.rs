@@ -272,3 +272,223 @@ impl fmt::Display for AbortReason {
         write!(formatter, "{self:?}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reject_codes_round_trip_and_unknown_codes_stay_unknown() {
+        let cases = [
+            (RejectReason::DTypeMismatch, 1),
+            (RejectReason::RankMismatch, 2),
+            (RejectReason::ShapeMismatch, 3),
+            (RejectReason::UnsupportedVersion, 4),
+            (RejectReason::MalformedHeader, 5),
+            (RejectReason::TooManyElements, 6),
+            (RejectReason::DestinationNotWritable, 7),
+            (RejectReason::ByteOrderMismatch, 8),
+            (RejectReason::Unknown(42), 42),
+        ];
+        for (reason, code) in cases {
+            assert_eq!(reason.code(), code);
+            assert_eq!(RejectReason::from_code(code), reason);
+        }
+        // Zero and five both mean a malformed header; an unassigned code is
+        // preserved so a newer peer's reason is not silently relabelled.
+        assert_eq!(RejectReason::from_code(0), RejectReason::MalformedHeader);
+        assert_eq!(RejectReason::from_code(9), RejectReason::Unknown(9));
+    }
+
+    #[test]
+    fn abort_codes_round_trip_and_unknown_codes_stay_unknown() {
+        let cases = [
+            (AbortReason::NotHostResident, 1),
+            (AbortReason::NonCompact, 2),
+            (AbortReason::UnsupportedDType, 3),
+            (AbortReason::TooManyElements, 4),
+            (AbortReason::RankTooLarge, 5),
+            (AbortReason::HostAccess, 6),
+            (AbortReason::Unknown(42), 42),
+        ];
+        for (reason, code) in cases {
+            assert_eq!(reason.code(), code);
+            assert_eq!(AbortReason::from_code(code), reason);
+        }
+        assert_eq!(AbortReason::from_code(0), AbortReason::Unknown(0));
+        assert_eq!(
+            AbortReason::HostAccess.to_string(),
+            "HostAccess",
+            "the wire ack is human-readable through Debug"
+        );
+    }
+
+    #[test]
+    fn error_display_covers_local_checks_and_receiver_failures() {
+        let cases = [
+            (
+                Error::NotHostResident,
+                "tensor is not host-resident; download it explicitly before sending",
+            ),
+            (
+                Error::NonCompact,
+                "tensor payload is not a compact column-major host slice",
+            ),
+            (
+                Error::UnsupportedDType { dtype: DType::F64 },
+                "dtype F64 has no MPI wire encoding",
+            ),
+            (
+                Error::TooManyElements {
+                    elements: 10,
+                    max: 5,
+                },
+                "10 elements exceed the per-message limit 5",
+            ),
+            (
+                Error::RankTooLarge { rank: 65, max: 64 },
+                "tensor rank 65 exceeds the wire limit 64",
+            ),
+            (Error::InvalidTag { tag: -1 }, "tag -1 is negative"),
+            (
+                Error::SelfMessage,
+                "blocking self-send would deadlock; send to a different process",
+            ),
+            (
+                Error::DTypeMismatch {
+                    expected: DType::F64,
+                    received: DType::F32,
+                },
+                "dtype mismatch: expected F64, received F32",
+            ),
+            (
+                Error::RankMismatch {
+                    expected: 2,
+                    received: 3,
+                },
+                "rank mismatch: expected 2, received 3",
+            ),
+            (
+                Error::ShapeMismatch {
+                    expected: vec![2, 3],
+                    received: vec![3, 2],
+                },
+                "shape mismatch: expected [2, 3], received [3, 2]",
+            ),
+            (
+                Error::UnsupportedVersion {
+                    received: 2,
+                    supported: 1,
+                },
+                "unsupported protocol version 2 (supported 1)",
+            ),
+            (
+                Error::MalformedHeader {
+                    reason: "bad magic",
+                },
+                "malformed frame: bad magic",
+            ),
+            (
+                Error::UnexpectedFrame { kind: 9 },
+                "unexpected frame kind 9",
+            ),
+            (
+                Error::ByteOrderMismatch { received: 1 },
+                "peer element byte order 1 differs from this host",
+            ),
+            (
+                Error::PeerRejected {
+                    reason: RejectReason::DTypeMismatch,
+                },
+                "peer rejected the tensor: DTypeMismatch",
+            ),
+            (
+                Error::PeerAborted {
+                    reason: AbortReason::NotHostResident,
+                },
+                "peer aborted the send: NotHostResident",
+            ),
+            (
+                Error::PayloadCountMismatch {
+                    expected: 10,
+                    received: 8,
+                },
+                "payload byte count mismatch: expected 10, received 8",
+            ),
+            (
+                Error::InvalidBoolPayload,
+                "bool payload contained a byte other than 0 or 1",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn tensor_failure_is_transparent_and_keeps_its_source() {
+        use std::error::Error as _;
+
+        let inner = tenferro_tensor::Error::BackendSource {
+            op: "send",
+            source: Box::new(std::io::Error::other("backend down")),
+        };
+        let error = Error::from(inner);
+        assert!(matches!(error, Error::Tensor(_)));
+        assert_eq!(error.to_string(), "send: backend failure: backend down");
+        assert!(
+            error.source().is_some(),
+            "a transparent wrapper forwards the inner error's source"
+        );
+
+        let leaf = Error::from(tenferro_tensor::Error::Internal("inner failure".into()));
+        assert_eq!(leaf.to_string(), "internal tensor error: inner failure");
+        assert!(leaf.source().is_none());
+        assert!(Error::InvalidTag { tag: -1 }.source().is_none());
+    }
+
+    #[cfg(not(any(feature = "system", feature = "runtime", feature = "engine")))]
+    #[test]
+    fn error_type_is_usable_in_the_no_feature_protocol_shell() {
+        let error = Error::TooManyElements {
+            elements: 2,
+            max: 1,
+        };
+        assert_eq!(error.abort_reason(), AbortReason::TooManyElements);
+        assert!(error.to_string().contains("per-message limit"));
+    }
+
+    #[test]
+    fn abort_reason_classifies_every_send_failure() {
+        assert_eq!(
+            Error::NotHostResident.abort_reason(),
+            AbortReason::NotHostResident
+        );
+        assert_eq!(Error::NonCompact.abort_reason(), AbortReason::NonCompact);
+        assert_eq!(
+            Error::UnsupportedDType { dtype: DType::F64 }.abort_reason(),
+            AbortReason::UnsupportedDType
+        );
+        assert_eq!(
+            Error::TooManyElements {
+                elements: 2,
+                max: 1
+            }
+            .abort_reason(),
+            AbortReason::TooManyElements
+        );
+        assert_eq!(
+            Error::RankTooLarge { rank: 2, max: 1 }.abort_reason(),
+            AbortReason::RankTooLarge
+        );
+        assert_eq!(
+            Error::Tensor(tenferro_tensor::Error::Internal("access".into())).abort_reason(),
+            AbortReason::HostAccess
+        );
+        assert_eq!(
+            Error::InvalidTag { tag: -1 }.abort_reason(),
+            AbortReason::HostAccess,
+            "receiver-side failures are not abort headers"
+        );
+    }
+}

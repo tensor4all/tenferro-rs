@@ -44,6 +44,11 @@ export MPI_RT_LIB=$HOME/.local/lib/libmpiwrapper.so
 features at once. `engine` compiles the protocol with no binding for a caller that
 supplies its own backend implementation.
 
+For a combined graph with hataori-rs, use `runtime`: hataori still resolves
+crates.io `mpi 0.8.1`/`mpi-sys`, whose `links = "mpi"` conflicts with `system`'s
+`rsmpi-sys`. The two can share a graph only after hataori moves to `rsmpi-rt`;
+`runtime` itself is co-installable because `mpi-rt-sys` declares no link identity.
+
 The adapter borrows the caller's communicator: it never initializes or finalizes MPI,
 never duplicates a communicator and never moves data between host and device. A
 `Gpu` tensor does not implement `Transport`, so an accidental device transfer is a

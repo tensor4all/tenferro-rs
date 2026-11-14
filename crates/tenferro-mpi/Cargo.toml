@@ -20,6 +20,12 @@ include = [
     "README.md",
 ]
 
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+# docs.rs otherwise builds `default = []` and would show only the protocol shell.
+# The runtime backend is the MPIABI loader, so building it needs no MPI headers.
+features = ["runtime"]
+
 # A workspace member. Neither backend is a default feature: `default = []` keeps
 # system MPI headers, libclang and the rsmpi-rt dependency out of the root
 # `cargo test --workspace` graph. `engine` alone compiles the protocol with no MPI
