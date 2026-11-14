@@ -788,10 +788,20 @@ drains to a proven retired failure or the same ownerless
 | checked shared pairing -> prepared host/device read | shared | capability and checked descriptor carried by target variant | retained static proofs; provider may map/synchronize once | exact unchanged checked pairing plus typed error | temporary provider state released | owner/root lifetime |
 | checked exclusive pairing -> prepared host/device write | exclusive | capability and checked injective descriptor carried by target variant | retained static proofs; provider may map/synchronize once | exact unchanged checked pairing plus typed error | temporary provider state released | owner/root lifetime |
 | prepared host access -> synchronous return | shared/exclusive | guard lives through call | provider work retires before return | typed retired error | no work survives return/unwind | after guard and owner release |
+| shared allocation -> CPU read borrow | shared | borrow of the allocation, not of a guard | provider waits for pending device writes at admission, and again only when a later write was enqueued | typed refusal (unsupported backend, foreign domain, provider failure) | no state, nothing to unwind | owner/root lifetime |
 | prepared device access -> pre-admission rejection | owning | no caller borrow escapes | no enqueue occurred | exact unchanged package | no retirement record exists | caller retains owners |
 | possible enqueue -> draining | task-owned | no caller borrow | event domains drain | no immediate owner return | worker/reaper owns retirement bindings, event, roots, context | not yet |
 | draining -> retired completed/failed | task-owned | none | completion proven | typed result; owners only after retirement | record releases bindings/event/roots/context once | normal root lifetime |
 | draining -> completion unproven | provider-private | none | completion not proven | diagnostics only, no owner | permanently retains bindings, event, roots, context | never by this outcome |
+
+The last row is the one exception to "host access goes through a guard", and it
+covers only an allocation in a shared domain, where the CPU and the device
+address the same bytes: there is nothing to map, unmap, or stage, so the borrow
+is the whole contract and the provider's admission is the synchronization point.
+Exclusive CPU writes still take a write guard, so this introduces no writable
+alias. Every device-local allocation keeps the guard path and, for the CPU, the
+refusal in "Device transfer and backend buffer errors" in
+`REPOSITORY_RULES.md`.
 
 ### Acceptance evidence
 
@@ -968,7 +978,7 @@ group unchanged.
 | Transition | cap | borrow | sync | fail | panic/drop | reclaim |
 |---|---|---|---|---|---|---|
 | construct group | owning (consumes owners) | none | none | typed invariant-validation error returns owners or drops them exactly once, per constructor contract | no partially observable record; validated layout/range/storage/provider metadata is published only after all checks pass | owners' G1 rules |
-| `view` | shared | group borrow resolves a local slot and returns a borrowed view | none (host access goes through G1 guards) | invalid/empty slot error, group unchanged | view drop ends the borrow | n/a |
+| `view` | shared | group borrow resolves a local slot and returns a borrowed view | none (host access goes through G1 guards, except the shared-domain read borrow below) | invalid/empty slot error, group unchanged | view drop ends the borrow | n/a |
 | `view_mut` | exclusive | exclusive group borrow resolves the record and supplies write authority | none | invalid/empty slot error, group unchanged | borrow end; bytes written stay written | n/a |
 | `split_mut` | exclusive | requested slots consume retained metadata under one group borrow; children receive temporary disjoint mutable borrows/capabilities, never persistent claims | no map/enqueue; no repeated validation | invalid/empty slot, non-injective write layout when its proof was absent, pairwise overlap, or not provably disjoint; group unchanged | children drop ends borrow; no partial child set is observable on panic (proof precedes construction) | n/a |
 | `try_extract` | exclusive | direct borrowed slot; local descriptor count proves allocation uniqueness | none | invalid/empty or aliased-allocation reason, group unchanged | descriptor and allocation entries become vacant without renumbering; the descriptor slot is never reused; no borrowed view can coexist with the exclusive borrow | extracted owner follows G1 |

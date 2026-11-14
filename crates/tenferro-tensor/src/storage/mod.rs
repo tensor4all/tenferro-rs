@@ -16,6 +16,7 @@ pub(crate) use group::{AllocationSlot, GroupReadView, GroupWriteView};
 pub use identity::{AllocationKey, RootResourceId};
 #[doc(hidden)]
 pub use prepared::{AccessError, ProviderReadMapping, ProviderWriteMapping};
+pub(crate) use root::BackendStorageAllocation;
 #[doc(hidden)]
 pub use root::{BackendAllocation, HostBufferRecycler, ProviderCapabilities, ProviderKind};
 #[doc(hidden)]

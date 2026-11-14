@@ -270,6 +270,8 @@ pub enum GpuBackendKind {
     Cuda,
     WebGpu,
     Rocm,
+    /// Apple GPU through Metal (design `metal-backend.md`, issue tenferro-rs#2402).
+    Metal,
     Other(String),
 }
 
@@ -939,6 +941,42 @@ pub trait BackendStorage<T>: Debug + Send + Sync + 'static {
     /// The default returns [`HostAccessError::Unsupported`]. Host-visible
     /// backends return typed overlap, pending-GPU, or backend mapping failures.
     fn map_write(&mut self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+        Err(HostAccessError::Unsupported {
+            backend: self.backend_family(),
+        })
+    }
+
+    /// Borrow the allocation as shared memory the CPU and the device both address.
+    ///
+    /// A provider implements this only for an allocation whose elements are
+    /// readable at the same address from the host and from the device (a shared
+    /// allocation domain). **The call is the wait**: an implementation waits for
+    /// its pending device writes before it hands out the borrow, so there is no
+    /// separate fence call and no copy, and the borrow itself is the only host
+    /// access that exists for such an allocation.
+    ///
+    /// This is deliberately a borrow rather than a closure-scoped guard like
+    /// [`Self::map_read`]: a shared allocation is never mapped or unmapped, and
+    /// a CPU kernel needs a `StridedView<'a, T>` that outlives such a guard.
+    /// Exclusive CPU writes still go through [`Self::map_write`] and the
+    /// ownership kernel's exclusive capability.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{BackendStorage, BackendStorageHandle};
+    ///
+    /// // An opaque handle exposes no shared memory, so it keeps the refusal.
+    /// let buffer = BackendStorageHandle::<f32>::new_with_len(1, 4);
+    /// assert!(buffer.shared_host_slice().is_err());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default returns [`HostAccessError::Unsupported`], so every
+    /// device-local backend refuses shared host access exactly as before. A
+    /// provider that cannot serve the borrow returns its own typed failure.
+    fn shared_host_slice(&self) -> Result<&[T], HostAccessError> {
         Err(HostAccessError::Unsupported {
             backend: self.backend_family(),
         })
@@ -3631,6 +3669,32 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
                         StorageBuffer::Host(_) => None,
                         StorageBuffer::Backend(buffer) => Some(buffer.as_ref()),
                     })
+            }
+        }
+    }
+
+    /// Return the backend allocation with the view's storage lifetime.
+    ///
+    /// [`Self::backend_buffer`] keeps the borrow of the view itself, which is
+    /// enough to start a provider mapping but not to carry a shared-memory
+    /// borrow out of this call. A CPU admission point needs the latter, so this
+    /// accessor resolves through the root the view already holds instead.
+    #[doc(hidden)]
+    pub fn shared_backend_storage(&self) -> Option<&'a dyn BackendStorage<T>>
+    where
+        T: 'static,
+    {
+        match &self.buffer {
+            TensorStorageRef::Host(_) => None,
+            TensorStorageRef::Backend(buffer) => Some(*buffer),
+            TensorStorageRef::Root(allocation) => {
+                let allocation = allocation
+                    .as_any()
+                    .downcast_ref::<crate::storage::BackendStorageAllocation<T>>()?;
+                match allocation.buffer() {
+                    StorageBuffer::Host(_) => None,
+                    StorageBuffer::Backend(buffer) => Some(buffer.as_ref()),
+                }
             }
         }
     }

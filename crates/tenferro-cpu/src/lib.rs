@@ -292,8 +292,8 @@ pub(crate) fn cpu_negative_integer_exponent(op: &'static str, dtype: DType) -> c
 }
 
 pub(crate) use tenferro_cpu_basic::{
-    cpu_backend_buffer_error, cpu_non_host_operand_error, typed_host_data, typed_view,
-    typed_view_from_view,
+    cpu_backend_buffer_error, cpu_non_host_operand_error, shared_view_read_slice, typed_host_data,
+    typed_view, typed_view_from_view,
 };
 pub(crate) fn materialize_tensor_read_in_domain(
     buffers: &mut BufferPool,

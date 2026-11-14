@@ -1066,6 +1066,7 @@ pub fn tenferro_tensor::types::DeviceKind::hash<__H: core::hash::Hasher>(&self, 
 impl core::marker::StructuralPartialEq for tenferro_tensor::types::DeviceKind
 pub enum tenferro_tensor::types::GpuBackendKind
 pub tenferro_tensor::types::GpuBackendKind::Cuda
+pub tenferro_tensor::types::GpuBackendKind::Metal
 pub tenferro_tensor::types::GpuBackendKind::Other(alloc::string::String)
 pub tenferro_tensor::types::GpuBackendKind::Rocm
 pub tenferro_tensor::types::GpuBackendKind::WebGpu
@@ -1345,6 +1346,7 @@ pub fn tenferro_tensor::types::BackendStorageHandle<T>::is_empty(&self) -> bool
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::len(&self) -> usize
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::map_read(&self) -> core::result::Result<tenferro_tensor::types::HostReadGuard<'_, T>, tenferro_tensor::types::HostAccessError>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::map_write(&mut self) -> core::result::Result<tenferro_tensor::types::HostWriteGuard<'_, T>, tenferro_tensor::types::HostAccessError>
+pub fn tenferro_tensor::types::BackendStorageHandle<T>::shared_host_slice(&self) -> core::result::Result<&[T], tenferro_tensor::types::HostAccessError>
 impl<T> core::fmt::Debug for tenferro_tensor::types::BackendStorageHandle<T>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_tensor::types::ColMajorView<'a, T, const N: usize>
@@ -1838,6 +1840,7 @@ pub fn tenferro_tensor::types::BackendStorage::is_empty(&self) -> bool
 pub fn tenferro_tensor::types::BackendStorage::len(&self) -> usize
 pub fn tenferro_tensor::types::BackendStorage::map_read(&self) -> core::result::Result<tenferro_tensor::types::HostReadGuard<'_, T>, tenferro_tensor::types::HostAccessError>
 pub fn tenferro_tensor::types::BackendStorage::map_write(&mut self) -> core::result::Result<tenferro_tensor::types::HostWriteGuard<'_, T>, tenferro_tensor::types::HostAccessError>
+pub fn tenferro_tensor::types::BackendStorage::shared_host_slice(&self) -> core::result::Result<&[T], tenferro_tensor::types::HostAccessError>
 impl<T: core::marker::Send + core::marker::Sync + 'static> tenferro_tensor::types::BackendStorage<T> for tenferro_tensor::types::BackendStorageHandle<T>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::allocation_domain(&self) -> core::option::Option<tenferro_tensor::types::AllocationDomainId>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::allocation_id(&self) -> core::option::Option<tenferro_tensor::types::AllocationId>
@@ -1847,6 +1850,7 @@ pub fn tenferro_tensor::types::BackendStorageHandle<T>::is_empty(&self) -> bool
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::len(&self) -> usize
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::map_read(&self) -> core::result::Result<tenferro_tensor::types::HostReadGuard<'_, T>, tenferro_tensor::types::HostAccessError>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::map_write(&mut self) -> core::result::Result<tenferro_tensor::types::HostWriteGuard<'_, T>, tenferro_tensor::types::HostAccessError>
+pub fn tenferro_tensor::types::BackendStorageHandle<T>::shared_host_slice(&self) -> core::result::Result<&[T], tenferro_tensor::types::HostAccessError>
 pub trait tenferro_tensor::types::Representation: tenferro_tensor::types::representation_sealed::Sealed + 'static
 pub fn tenferro_tensor::types::Representation::default_placement() -> tenferro_tensor::types::Placement
 impl tenferro_tensor::types::Representation for tenferro_tensor::types::Dynamic
@@ -2315,6 +2319,7 @@ impl core::fmt::Display for tenferro_tensor::error::Error
 pub fn tenferro_tensor::error::Error::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum tenferro_tensor::GpuBackendKind
 pub tenferro_tensor::GpuBackendKind::Cuda
+pub tenferro_tensor::GpuBackendKind::Metal
 pub tenferro_tensor::GpuBackendKind::Other(alloc::string::String)
 pub tenferro_tensor::GpuBackendKind::Rocm
 pub tenferro_tensor::GpuBackendKind::WebGpu
@@ -2661,6 +2666,7 @@ pub fn tenferro_tensor::types::BackendStorageHandle<T>::is_empty(&self) -> bool
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::len(&self) -> usize
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::map_read(&self) -> core::result::Result<tenferro_tensor::types::HostReadGuard<'_, T>, tenferro_tensor::types::HostAccessError>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::map_write(&mut self) -> core::result::Result<tenferro_tensor::types::HostWriteGuard<'_, T>, tenferro_tensor::types::HostAccessError>
+pub fn tenferro_tensor::types::BackendStorageHandle<T>::shared_host_slice(&self) -> core::result::Result<&[T], tenferro_tensor::types::HostAccessError>
 impl<T> core::fmt::Debug for tenferro_tensor::types::BackendStorageHandle<T>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct tenferro_tensor::CacheStats
@@ -3436,6 +3442,7 @@ pub fn tenferro_tensor::BackendStorage::is_empty(&self) -> bool
 pub fn tenferro_tensor::BackendStorage::len(&self) -> usize
 pub fn tenferro_tensor::BackendStorage::map_read(&self) -> core::result::Result<tenferro_tensor::types::HostReadGuard<'_, T>, tenferro_tensor::types::HostAccessError>
 pub fn tenferro_tensor::BackendStorage::map_write(&mut self) -> core::result::Result<tenferro_tensor::types::HostWriteGuard<'_, T>, tenferro_tensor::types::HostAccessError>
+pub fn tenferro_tensor::BackendStorage::shared_host_slice(&self) -> core::result::Result<&[T], tenferro_tensor::types::HostAccessError>
 impl<T: core::marker::Send + core::marker::Sync + 'static> tenferro_tensor::types::BackendStorage<T> for tenferro_tensor::types::BackendStorageHandle<T>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::allocation_domain(&self) -> core::option::Option<tenferro_tensor::types::AllocationDomainId>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::allocation_id(&self) -> core::option::Option<tenferro_tensor::types::AllocationId>
@@ -3445,6 +3452,7 @@ pub fn tenferro_tensor::types::BackendStorageHandle<T>::is_empty(&self) -> bool
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::len(&self) -> usize
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::map_read(&self) -> core::result::Result<tenferro_tensor::types::HostReadGuard<'_, T>, tenferro_tensor::types::HostAccessError>
 pub fn tenferro_tensor::types::BackendStorageHandle<T>::map_write(&mut self) -> core::result::Result<tenferro_tensor::types::HostWriteGuard<'_, T>, tenferro_tensor::types::HostAccessError>
+pub fn tenferro_tensor::types::BackendStorageHandle<T>::shared_host_slice(&self) -> core::result::Result<&[T], tenferro_tensor::types::HostAccessError>
 pub trait tenferro_tensor::Engine: TensorBackendOps + tenferro_tensor::backend::SessionCachedDot + tenferro_tensor::backend::TensorDeviceTransfer
 pub fn tenferro_tensor::Engine::axpby_read_into_accum(&mut self, tenferro_tensor::backend::ContractionScalar, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::backend::ContractionScalar, tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
 pub fn tenferro_tensor::Engine::fused_activation_read(&mut self, tenferro_tensor::backend::ActivationOp, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<core::option::Option<tenferro_tensor::types::Tensor>>

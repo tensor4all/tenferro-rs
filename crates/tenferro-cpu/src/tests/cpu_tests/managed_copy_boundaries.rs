@@ -5,22 +5,26 @@ use crate::test_support::RunErased;
 use std::any::Any;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
     AllocationDomainId, AllocationId, BackendStorage, DType, DynRank, ErasedHostTensor, Host,
     HostAccessError, HostReadGuard, HostWriteGuard, MemoryKind, Placement,
-    SharedTensorAllocationDomain, StorageBuffer, Tensor, TensorRead, TensorScalar, TensorView,
-    TensorWrite, TypedTensor, TypedTensorView,
+    SharedTensorAllocationDomain, StorageBuffer, StridedSliceSpec, Tensor, TensorRead,
+    TensorScalar, TensorView, TensorWrite, TypedTensor, TypedTensorView,
 };
 
 use crate::{CpuEngine, Error};
 
 struct FakeManagedBuffer<T> {
-    values: Mutex<Vec<T>>,
+    values: Vec<T>,
     domain: AllocationDomainId,
     allocation: AllocationId,
+    /// Counts `shared_host_slice` calls, i.e. the CPU waiting for device writes.
+    waits: Arc<AtomicU64>,
+    /// Set when the provider refuses shared host access for this allocation.
+    refusal: Option<HostAccessError>,
 }
 
 impl<T> fmt::Debug for FakeManagedBuffer<T> {
@@ -39,7 +43,7 @@ impl<T: Copy + Send + Sync + 'static> BackendStorage<T> for FakeManagedBuffer<T>
     }
 
     fn len(&self) -> usize {
-        self.values.lock().map_or(0, |values| values.len())
+        self.values.len()
     }
 
     fn allocation_domain(&self) -> Option<AllocationDomainId> {
@@ -51,26 +55,23 @@ impl<T: Copy + Send + Sync + 'static> BackendStorage<T> for FakeManagedBuffer<T>
     }
 
     fn map_read(&self) -> Result<HostReadGuard<'_, T>, HostAccessError> {
-        let guard = self
-            .values
-            .lock()
-            .map_err(|_| HostAccessError::BackendFailure {
-                message: "fake read lock poisoned".to_string(),
-            })?;
-        Ok(HostReadGuard::new(guard))
+        Ok(HostReadGuard::new(&self.values))
     }
 
     fn map_write(&mut self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
-        let mut guard = self
-            .values
-            .lock()
-            .map_err(|_| HostAccessError::BackendFailure {
-                message: "fake write lock poisoned".to_string(),
-            })?;
-        Ok(HostWriteGuard::new(guard.len(), move |source: &[T]| {
-            guard.copy_from_slice(source);
+        let values = &mut self.values;
+        Ok(HostWriteGuard::new(values.len(), move |source: &[T]| {
+            values.copy_from_slice(source);
             Ok(())
         }))
+    }
+
+    fn shared_host_slice(&self) -> Result<&[T], HostAccessError> {
+        if let Some(refusal) = &self.refusal {
+            return Err(refusal.clone());
+        }
+        self.waits.fetch_add(1, Ordering::Relaxed);
+        Ok(&self.values)
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -82,6 +83,10 @@ impl<T: Copy + Send + Sync + 'static> BackendStorage<T> for FakeManagedBuffer<T>
 struct FakeDomain {
     id: AllocationDomainId,
     next_allocation: AtomicU64,
+    /// `shared_host_slice` calls across this domain's allocations.
+    waits: Arc<AtomicU64>,
+    /// Calls the domain's own allocator served, i.e. same-domain outputs.
+    allocations: AtomicU64,
 }
 
 impl FakeDomain {
@@ -89,7 +94,17 @@ impl FakeDomain {
         Arc::new(Self {
             id: AllocationDomainId::fresh(),
             next_allocation: AtomicU64::new(1),
+            waits: Arc::new(AtomicU64::new(0)),
+            allocations: AtomicU64::new(0),
         })
+    }
+
+    fn waits(&self) -> u64 {
+        self.waits.load(Ordering::Relaxed)
+    }
+
+    fn allocations(&self) -> u64 {
+        self.allocations.load(Ordering::Relaxed)
     }
 
     fn typed<T: TensorScalar + Copy + Send + Sync + 'static>(
@@ -100,19 +115,48 @@ impl FakeDomain {
         self.backend_tensor(shape, values, MemoryKind::Managed)
     }
 
+    /// One allocation whose provider refuses shared host access.
+    fn refusing_tensor<T: TensorScalar + Copy + Send + Sync + 'static>(
+        &self,
+        shape: &[usize],
+        values: Vec<T>,
+        refusal: HostAccessError,
+    ) -> Tensor {
+        self.buffer_tensor(shape, values, MemoryKind::Managed, Some(refusal))
+    }
+
     /// A backend buffer in this domain with an explicit memory kind.
+    ///
+    /// Device memory is not shared with the host, so its provider offers no
+    /// shared host borrow at all.
     fn backend_tensor<T: TensorScalar + Copy + Send + Sync + 'static>(
         &self,
         shape: &[usize],
         values: Vec<T>,
         memory_kind: MemoryKind,
     ) -> Tensor {
+        let refusal =
+            matches!(memory_kind, MemoryKind::Device).then(|| HostAccessError::Unsupported {
+                backend: "fake-managed",
+            });
+        self.buffer_tensor(shape, values, memory_kind, refusal)
+    }
+
+    fn buffer_tensor<T: TensorScalar + Copy + Send + Sync + 'static>(
+        &self,
+        shape: &[usize],
+        values: Vec<T>,
+        memory_kind: MemoryKind,
+        refusal: Option<HostAccessError>,
+    ) -> Tensor {
         let buffer = FakeManagedBuffer {
-            values: Mutex::new(values),
+            values,
             domain: self.id,
             allocation: AllocationId::from_backend_id(
                 self.next_allocation.fetch_add(1, Ordering::Relaxed),
             ),
+            waits: Arc::clone(&self.waits),
+            refusal,
         };
         Tensor::from_typed(
             TypedTensor::<T>::from_buffer_col_major(
@@ -136,6 +180,7 @@ impl SharedTensorAllocationDomain for FakeDomain {
 
     fn allocate(&self, dtype: DType, shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
         let len = shape.iter().product();
+        self.allocations.fetch_add(1, Ordering::Relaxed);
         Ok(match dtype {
             DType::F32 => self.typed(shape, vec![0.0_f32; len]),
             DType::F64 => self.typed(shape, vec![0.0_f64; len]),
@@ -473,4 +518,189 @@ fn copy_read_into_refuses_an_externally_defined_source_payload() {
         other => panic!("expected UnsupportedDType, got {other:?}"),
     }
     assert_eq!(destination.as_slice::<f64>().unwrap(), [-1.0, -1.0]);
+}
+
+/// Add two shared-domain operands on the CPU engine.
+fn add_shared(engine: &mut CpuEngine, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    crate::test_support::on_engine(engine, |session| {
+        session.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_shared_tensor_is_read_by_cpu_ops_through_the_waiting_provider_borrow() {
+    let domain = FakeDomain::new();
+    let mut engine = backend_in(domain.clone());
+    let lhs = domain.typed(&[3], vec![1.0_f32, 2.0, 3.0]);
+    let rhs = domain.typed(&[3], vec![10.0_f32, 20.0, 30.0]);
+
+    let sum = add_shared(&mut engine, &lhs, &rhs).unwrap();
+
+    assert_eq!(sum.as_slice::<f32>().unwrap(), [11.0, 22.0, 33.0]);
+    // One wait per shared operand, and no domain allocation: the CPU read the
+    // shared allocation itself instead of copying it into a same-domain output.
+    assert_eq!(domain.waits(), 2);
+    assert_eq!(domain.allocations(), 0);
+    assert_eq!(sum.placement().memory_kind, MemoryKind::UnpinnedHost);
+}
+
+#[test]
+fn a_shared_tensor_reduction_still_refuses_until_the_payload_predicate_admits() {
+    // Reductions narrow the operand through `TypedTensorView::try_host`, whose
+    // verdict must agree with `is_host_memory` (`structural.rs`, "the two
+    // surfaces cannot disagree about one tensor"). Admitting shared memory there
+    // therefore needs the payload predicate itself, which is follow-up U1c; this
+    // test pins today's typed refusal so turning it on is a deliberate change.
+    let domain = FakeDomain::new();
+    let mut engine = backend_in(domain.clone());
+    let input = domain.typed(&[2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]);
+
+    let error = crate::test_support::on_engine(&mut engine, |session| {
+        session.reduce_sum_read(TensorRead::from_tensor(&input), &[0, 1])
+    })
+    .unwrap()
+    .unwrap_err();
+
+    match error {
+        Error::RuntimeState { op, message } => {
+            assert_eq!(op, "reduce_sum");
+            assert_eq!(
+                message,
+                "CPU backend received a backend buffer; download the tensor to host before CPU execution"
+            );
+        }
+        other => panic!("expected RuntimeState, got {other:?}"),
+    }
+    assert_eq!(domain.waits(), 0);
+}
+
+#[test]
+fn a_strided_shared_view_is_admitted_with_its_strides() {
+    let domain = FakeDomain::new();
+    let mut engine = backend_in(domain.clone());
+    let input = domain.typed(&[2, 2], vec![1.0_f32, 2.0, 3.0, 4.0]);
+    let read = TensorRead::from_tensor(&input);
+    let TensorView::F32(typed) = read.tensor_view().unwrap() else {
+        panic!("an f32 read")
+    };
+    let transposed = TensorView::F32(typed.transpose_view([1, 0]).unwrap());
+
+    let doubled = crate::test_support::on_engine(&mut engine, |session| {
+        session.add_read(
+            TensorRead::from_view(transposed.clone()),
+            TensorRead::from_view(transposed),
+        )
+    })
+    .unwrap()
+    .unwrap();
+
+    // Column-major [1 3; 2 4] transposed is [1 2; 3 4]: the strides, not a
+    // staged compact copy, decided the element order.
+    assert_eq!(doubled.as_slice::<f32>().unwrap(), [2.0, 6.0, 4.0, 8.0]);
+    assert_eq!(domain.waits(), 2);
+}
+
+#[test]
+fn a_sliced_shared_view_is_admitted_with_its_offset() {
+    // The allocation, not the view, bounds the borrow: this view starts at
+    // element 2 of a four-element allocation, so truncating the borrow to the
+    // view's own element count would put its last element out of bounds.
+    let domain = FakeDomain::new();
+    let mut engine = backend_in(domain.clone());
+    let input = domain.typed(&[4], vec![1.0_f32, 2.0, 3.0, 4.0]);
+    let read = TensorRead::from_tensor(&input);
+    let TensorView::F32(typed) = read.tensor_view().unwrap() else {
+        panic!("an f32 read")
+    };
+    let slice = typed
+        .slice_view(&[StridedSliceSpec::new(2, Some(4), 1)])
+        .unwrap();
+
+    let doubled = crate::test_support::on_engine(&mut engine, |session| {
+        session.add_read(
+            TensorRead::from_view(TensorView::F32(slice.clone())),
+            TensorRead::from_view(TensorView::F32(slice)),
+        )
+    })
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(doubled.as_slice::<f32>().unwrap(), [6.0, 8.0]);
+    assert_eq!(domain.waits(), 2);
+}
+
+#[test]
+fn a_strided_slice_of_a_shared_view_keeps_its_step() {
+    // Every other element, so the reachable extent (index 4) exceeds the
+    // element count of the view (3) and only the allocation bounds it.
+    let domain = FakeDomain::new();
+    let mut engine = backend_in(domain.clone());
+    let input = domain.typed(&[6], vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    let read = TensorRead::from_tensor(&input);
+    let TensorView::F32(typed) = read.tensor_view().unwrap() else {
+        panic!("an f32 read")
+    };
+    let slice = typed
+        .slice_view(&[StridedSliceSpec::new(0, Some(6), 2)])
+        .unwrap();
+
+    let doubled = crate::test_support::on_engine(&mut engine, |session| {
+        session.add_read(
+            TensorRead::from_view(TensorView::F32(slice.clone())),
+            TensorRead::from_view(TensorView::F32(slice)),
+        )
+    })
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(doubled.as_slice::<f32>().unwrap(), [2.0, 6.0, 10.0]);
+    assert_eq!(domain.waits(), 2);
+}
+
+#[test]
+fn a_device_only_backend_operand_still_requires_a_download() {
+    let domain = FakeDomain::new();
+    let mut engine = backend_in(domain.clone());
+    let device = domain.backend_tensor(&[2], vec![1.0_f32, 2.0], MemoryKind::Device);
+
+    let error = add_shared(&mut engine, &device, &device).unwrap_err();
+
+    match error {
+        Error::RuntimeState { message, .. } => assert_eq!(
+            message,
+            "CPU backend received backend buffer; download to host before CPU execution"
+        ),
+        other => panic!("expected RuntimeState, got {other:?}"),
+    }
+    assert_eq!(domain.waits(), 0);
+}
+
+#[test]
+fn a_provider_refusal_reaches_the_caller_as_a_typed_host_access_error() {
+    let domain = FakeDomain::new();
+    let mut engine = backend_in(domain.clone());
+    let foreign = FakeDomain::new();
+    let refused = domain.refusing_tensor(
+        &[2],
+        vec![1.0_f32, 2.0],
+        HostAccessError::ForeignDomain {
+            expected: domain.id,
+            actual: foreign.id,
+        },
+    );
+    let host = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 1.0]).unwrap();
+
+    let error = add_shared(&mut engine, &refused, &host).unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            Error::HostAccess {
+                source: HostAccessError::ForeignDomain { expected, actual },
+                ..
+            } if *expected == domain.id && *actual == foreign.id
+        ),
+        "{error:?}"
+    );
 }

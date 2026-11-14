@@ -48,6 +48,10 @@ impl<'a, T: tenferro_tensor::TensorScalar + Copy + 'static> Operand<'a, T> {
 }
 
 /// Descriptor of a borrowed view, keeping its strides and offset.
+///
+/// A view whose root is a shared allocation is admitted through the provider's
+/// shared host borrow, the same rule `typed_view_from_view` applies; every other
+/// backend view keeps the historical "download to host" refusal.
 pub(crate) fn operand_from_view<'a, T, R>(
     view: &'a TypedTensorView<'a, T, R>,
 ) -> crate::Result<Operand<'a, T>>
@@ -55,8 +59,12 @@ where
     T: Copy + 'static,
     R: tenferro_tensor::TensorRank,
 {
+    let data = match view.shared_backend_storage() {
+        Some(buffer) => crate::shared_view_read_slice("operand", buffer)?,
+        None => view.host_storage()?,
+    };
     Ok(Operand {
-        data: view.host_storage()?,
+        data,
         shape: view.shape(),
         strides: view.strides(),
         offset: view.offset(),
