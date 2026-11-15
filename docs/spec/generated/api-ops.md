@@ -306,7 +306,7 @@ Moore-Penrose pseudoinverse through the SVD; singular values below `rtol * max(s
 
 ### norm
 
-Vector or matrix norm over the chosen axes, selected by `NormOrd`.
+Vector or matrix norm over the chosen axes, selected by `NormOrd`; `NormOrd::Zero` counts entries `!= 0` (NaN counts as nonzero).
 
 - Options: `NormOptions`
 - Output: `R`

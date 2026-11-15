@@ -257,8 +257,11 @@ impl PinvOptions {
 ///   value, and any other `p` the entrywise `p`-norm of the matrix;
 /// - more axes: the entrywise `p`-norm over all reduced axes.
 ///
-/// `Zero` counts the nonzero entries; `Inf` / `NegInf` are the largest /
-/// smallest absolute entry (vector) or absolute row sum (matrix).
+/// `Zero` counts the entries that are not equal to zero, not the entries with
+/// `|x| > 0`: a NaN counts as nonzero, `+0.0` and `-0.0` count as zero, and
+/// `±inf` count as nonzero; for complex dtypes an entry is zero exactly when
+/// both components are zero. `Inf` / `NegInf` are the largest / smallest
+/// absolute entry (vector) or absolute row sum (matrix).
 /// `Frobenius` is the Euclidean norm of the reduced entries. `P(p)` with
 /// `p == 0`, an infinite `p` or a NaN `p` is rejected as an invalid argument;
 /// use `Zero`, `Inf` or `NegInf` instead.
@@ -278,7 +281,11 @@ pub enum NormOrd {
     /// The Euclidean (Frobenius) norm of the reduced entries.
     #[default]
     Frobenius,
-    /// The number of nonzero entries.
+    /// The number of entries not equal to zero.
+    ///
+    /// The predicate is `x != 0`, not `|x| > 0`: a NaN entry counts as nonzero,
+    /// `+0.0` and `-0.0` count as zero, and `±inf` count as nonzero. For complex
+    /// dtypes an entry is zero exactly when both components are zero.
     Zero,
     /// The largest absolute entry, or the largest absolute row sum.
     Inf,
