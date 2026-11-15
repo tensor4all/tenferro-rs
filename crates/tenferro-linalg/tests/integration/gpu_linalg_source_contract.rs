@@ -469,7 +469,7 @@ fn cuda_linalg_overrides_eigh_read_with_backend_canonicalization() {
     for needle in [
         "session.to_contiguous_view(&view)?",
         "let input = Tensor::from_typed::<f64>(compact);",
-        "linalg::eigh(session, &input, driver)",
+        "linalg::eigh(session, &input, driver, batch_policy)",
     ] {
         assert!(
             helper_source.contains(needle),
@@ -478,13 +478,19 @@ fn cuda_linalg_overrides_eigh_read_with_backend_canonicalization() {
     }
 
     let eigh_read_source = source_section(&source, "fn eigh_read(", "fn eig_read");
-    assert!(
-        eigh_read_source.contains("eigh_read_with_driver(self, input, EighDriver::Auto)"),
-        "CUDA eigh_read should keep the default driver policy"
-    );
+    for needle in [
+        "EighDriver::Auto",
+        // The entries without options keep the permissive batch policy (#2616).
+        "EighBatchPolicy::AllowPerMatrixFallback",
+    ] {
+        assert!(
+            eigh_read_source.contains(needle),
+            "CUDA eigh_read should keep the default driver and batch policy: missing {needle}"
+        );
+    }
     let with_options_source = source_section(&source, "fn eigh_with_options_read", "fn eigh_read(");
     for needle in [
-        "eigh_read_with_driver(self, input, options.driver)",
+        "eigh_read_with_driver(self, input, options.driver, options.batch_policy)",
         "apply_eigh_gauge(options.gauge, &mut outputs)?",
     ] {
         assert!(
@@ -523,10 +529,15 @@ fn gpu_eigh_sends_every_batch_to_a_batched_routine() {
     for needle in [
         "enum CusolverEighRoutine",
         "fn select_eigh_driver(",
-        "xsyev_batched_available: bool,",
+        "batch_policy: EighBatchPolicy,",
+        "symbols_resolved: bool,",
         "let batched = batch_total > 1;",
-        // A library without the batched entry point sends the batch to the loop (#2413).
-        "if batched && xsyev_batched_available {",
+        // A library without the batched entry point sends the batch to the loop (#2413)...
+        "if batched && xsyev_batched_available(version, symbols_resolved) {",
+        // ...unless the caller required the single launch, which is refused
+        // with a typed error instead (#2616).
+        "else if batched && batch_policy == EighBatchPolicy::RequireBatched {",
+        "Err(required_batched_unavailable(version, symbols_resolved))",
         "CusolverEighRoutine::XsyevBatched",
         "CusolverEighRoutine::SyevjBatched",
     ] {
@@ -539,7 +550,7 @@ fn gpu_eigh_sends_every_batch_to_a_batched_routine() {
     for section in [eigh, eigh_values] {
         for needle in [
             "let routine = select_eigh_driver(",
-            "handles.cusolver().xsyev_batched_available(),",
+            "handles.cusolver().batched_eigh_symbols_resolved(),",
             "handles.cusolver().syevd_buffer_size(",
             "handles.cusolver().syevj_buffer_size(",
             "handles.cusolver().syevj_batched_buffer_size(",

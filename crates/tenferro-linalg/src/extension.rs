@@ -327,6 +327,8 @@ pub struct EighOptions {
     pub derivative_eps: f64,
     /// Algorithm family for the eigensolver; a provider may ignore it.
     pub driver: EighDriver,
+    /// Whether a real batch may fall back to one launch per matrix.
+    pub batch_policy: EighBatchPolicy,
 }
 
 impl Default for EighOptions {
@@ -335,8 +337,68 @@ impl Default for EighOptions {
             gauge: EighGauge::Raw,
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             driver: EighDriver::Auto,
+            batch_policy: EighBatchPolicy::AllowPerMatrixFallback,
         }
     }
+}
+
+/// Whether a batched [`EighOptions`] call may fall back to one launch per
+/// matrix.
+///
+/// [`Self::RequireBatched`] is the strict contract for a caller that promised
+/// one launch per batch: when the selected driver's single-launch entry point
+/// is unavailable, or the provider has no batched routine at all, `eigh`
+/// returns a typed `Unsupported` error naming the missing capability instead of
+/// launching one call per matrix.
+///
+/// A single matrix, and a batch whose size is at most one, already is one call
+/// and is never refused.
+///
+/// # Carve-outs: where the policy is not consulted
+///
+/// The policy belongs to the two-output `eigh`, and it is part of that
+/// operation's identity. A traced graph that keeps only the eigenvalues is
+/// pruned to the values-only operation, which carries the driver but has no
+/// batch policy at all, and whose recompute is free to take the per-matrix
+/// loop:
+///
+/// - The traced extension op `LinalgOp::Eigh` is rewritten to `LinalgOp::EighVals`
+///   when the vectors are dead, so a traced `eigh_with(RequireBatched)` whose
+///   values feed the graph can be recomputed one launch per matrix on a cuSOLVER
+///   below 11.7.1 without reporting anything.
+/// - The values-only entries themselves (`eigvalsh` and friends) are not
+///   strict: they carry no [`EighOptions`] and always accept the loop.
+///
+/// Ask for the two outputs, or check the result rather than the request, when
+/// the launch count has to hold after tracing as well. Both refusals — the CUDA
+/// one and the provider-neutral one — are attached to the two-output operation
+/// for the same reason: the values-only paths reach the very same batched entry
+/// point, so there is no separate capability for them to require.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::{EighBatchPolicy, EighOptions};
+///
+/// let options = EighOptions::default().batch_policy(EighBatchPolicy::RequireBatched);
+/// assert_eq!(options.batch_policy, EighBatchPolicy::RequireBatched);
+/// assert_eq!(
+///     EighOptions::default().batch_policy,
+///     EighBatchPolicy::AllowPerMatrixFallback,
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EighBatchPolicy {
+    /// Today's behaviour: a batch takes the single-launch routine when the
+    /// provider has one and the per-matrix loop when it does not.
+    #[default]
+    AllowPerMatrixFallback,
+    /// Refuse the per-matrix loop. On the CUDA provider this requires
+    /// `cusolverDnXsyevBatched`, exported since cuSOLVER 11.7.1.
+    ///
+    /// This binds the two-output `eigh` only; see the type-level carve-outs for
+    /// the values-only operation a traced graph is pruned to.
+    RequireBatched,
 }
 
 impl EighOptions {
@@ -382,6 +444,21 @@ impl EighOptions {
     /// ```
     pub fn driver(mut self, driver: EighDriver) -> Self {
         self.driver = driver;
+        self
+    }
+
+    /// Return options that refuse the per-matrix fallback for a real batch.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::{EighBatchPolicy, EighOptions};
+    ///
+    /// let options = EighOptions::default().batch_policy(EighBatchPolicy::RequireBatched);
+    /// assert_eq!(options.batch_policy, EighBatchPolicy::RequireBatched);
+    /// ```
+    pub fn batch_policy(mut self, batch_policy: EighBatchPolicy) -> Self {
+        self.batch_policy = batch_policy;
         self
     }
 }
@@ -441,6 +518,31 @@ pub(crate) fn validate_derivative_eps(
             format!("must be positive and finite, got {derivative_eps}"),
         ))
     }
+}
+
+/// Refuse [`EighBatchPolicy::RequireBatched`] on a provider with no batched
+/// eigensolver.
+///
+/// A batch of at most one matrix is already one call, so the policy has nothing
+/// to refuse there and the call proceeds. `shape` is the operand's shape; the
+/// batch is every trailing axis.
+pub(crate) fn reject_required_batched(
+    op: &'static str,
+    options: &EighOptions,
+    shape: &[usize],
+) -> tenferro_tensor::Result<()> {
+    // A rank below two is not a matrix at all; leave that to the provider's own
+    // rank validation rather than indexing into it here.
+    let batch = shape.get(2..).map_or(1, |batch| batch.iter().product());
+    if options.batch_policy == EighBatchPolicy::RequireBatched && batch > 1 {
+        return Err(tenferro_tensor::Error::unsupported(
+            op,
+            "EighBatchPolicy::RequireBatched needs a batched eigensolver; this provider solves a \
+             batch with one launch per matrix, so the whole-batch single launch it was asked for \
+             is unavailable. Use EighBatchPolicy::AllowPerMatrixFallback to accept that loop",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -521,6 +623,7 @@ pub(crate) enum LinalgOp {
         derivative_eps: f64,
         gauge: EighGauge,
         driver: EighDriver,
+        batch_policy: EighBatchPolicy,
     },
     /// Eigenvalues only.
     EighVals {
@@ -691,10 +794,12 @@ impl ExtensionOp for LinalgExtensionOp {
                 derivative_eps,
                 gauge,
                 driver,
+                batch_policy,
             } => {
                 hasher.write_u64(derivative_eps.to_bits());
                 hash_eigh_gauge(hasher, gauge);
                 hash_eigh_driver(hasher, driver);
+                hash_eigh_batch_policy(hasher, batch_policy);
             }
             LinalgOp::Eig { input_dtype } | LinalgOp::EigVals { input_dtype } => {
                 hash_dtype(hasher, input_dtype);
@@ -1025,6 +1130,7 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
             derivative_eps,
             gauge,
             driver,
+            batch_policy,
         } => {
             return session.eigh_with_options_read(
                 inputs[0].clone(),
@@ -1032,6 +1138,7 @@ fn execute_linalg_extension_reads_in_session<S: LinalgBackend>(
                     derivative_eps,
                     gauge,
                     driver,
+                    batch_policy,
                 },
             );
         }
@@ -1248,12 +1355,14 @@ fn execute_linalg<B: LinalgBackend>(
             derivative_eps,
             gauge,
             driver,
+            batch_policy,
         } => backend.eigh_with_options(
             inputs[0],
             EighOptions {
                 derivative_eps,
                 gauge,
                 driver,
+                batch_policy,
             },
         ),
         LinalgOp::EighVals { driver, .. } => {
@@ -2168,6 +2277,14 @@ fn hash_eigh_driver(hasher: &mut dyn Hasher, driver: EighDriver) {
         EighDriver::Auto => 0,
         EighDriver::DivideAndConquer => 1,
         EighDriver::Jacobi => 2,
+    };
+    hasher.write_u8(tag);
+}
+
+fn hash_eigh_batch_policy(hasher: &mut dyn Hasher, policy: EighBatchPolicy) {
+    let tag = match policy {
+        EighBatchPolicy::AllowPerMatrixFallback => 0,
+        EighBatchPolicy::RequireBatched => 1,
     };
     hasher.write_u8(tag);
 }

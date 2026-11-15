@@ -102,10 +102,12 @@ pub fn tenferro_linalg::Eigh<V, R>::clone(&self) -> tenferro_linalg::Eigh<V, R>
 impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Eigh<V, R>
 pub fn tenferro_linalg::Eigh<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct tenferro_linalg::prelude::EighOptions
+pub tenferro_linalg::prelude::EighOptions::batch_policy: tenferro_linalg::EighBatchPolicy
 pub tenferro_linalg::prelude::EighOptions::derivative_eps: f64
 pub tenferro_linalg::prelude::EighOptions::driver: tenferro_linalg::EighDriver
 pub tenferro_linalg::prelude::EighOptions::gauge: tenferro_linalg::EighGauge
 impl tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::batch_policy(self, tenferro_linalg::EighBatchPolicy) -> Self
 pub fn tenferro_linalg::EighOptions::derivative_eps(self, f64) -> Self
 pub fn tenferro_linalg::EighOptions::driver(self, tenferro_linalg::EighDriver) -> Self
 pub fn tenferro_linalg::EighOptions::gauge(self, tenferro_linalg::EighGauge) -> Self
@@ -505,6 +507,20 @@ impl core::hash::Hash for tenferro_linalg::Diag
 pub fn tenferro_linalg::Diag::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for tenferro_linalg::Diag
 impl core::marker::StructuralPartialEq for tenferro_linalg::Diag
+pub enum tenferro_linalg::EighBatchPolicy
+pub tenferro_linalg::EighBatchPolicy::AllowPerMatrixFallback
+pub tenferro_linalg::EighBatchPolicy::RequireBatched
+impl core::clone::Clone for tenferro_linalg::EighBatchPolicy
+pub fn tenferro_linalg::EighBatchPolicy::clone(&self) -> tenferro_linalg::EighBatchPolicy
+impl core::cmp::Eq for tenferro_linalg::EighBatchPolicy
+impl core::cmp::PartialEq for tenferro_linalg::EighBatchPolicy
+pub fn tenferro_linalg::EighBatchPolicy::eq(&self, &tenferro_linalg::EighBatchPolicy) -> bool
+impl core::default::Default for tenferro_linalg::EighBatchPolicy
+pub fn tenferro_linalg::EighBatchPolicy::default() -> tenferro_linalg::EighBatchPolicy
+impl core::fmt::Debug for tenferro_linalg::EighBatchPolicy
+pub fn tenferro_linalg::EighBatchPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_linalg::EighBatchPolicy
+impl core::marker::StructuralPartialEq for tenferro_linalg::EighBatchPolicy
 pub enum tenferro_linalg::EighDriver
 pub tenferro_linalg::EighDriver::Auto
 pub tenferro_linalg::EighDriver::DivideAndConquer
@@ -787,10 +803,12 @@ pub fn tenferro_linalg::Eigh<V, R>::clone(&self) -> tenferro_linalg::Eigh<V, R>
 impl<V: core::fmt::Debug, R: core::fmt::Debug> core::fmt::Debug for tenferro_linalg::Eigh<V, R>
 pub fn tenferro_linalg::Eigh<V, R>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct tenferro_linalg::EighOptions
+pub tenferro_linalg::EighOptions::batch_policy: tenferro_linalg::EighBatchPolicy
 pub tenferro_linalg::EighOptions::derivative_eps: f64
 pub tenferro_linalg::EighOptions::driver: tenferro_linalg::EighDriver
 pub tenferro_linalg::EighOptions::gauge: tenferro_linalg::EighGauge
 impl tenferro_linalg::EighOptions
+pub fn tenferro_linalg::EighOptions::batch_policy(self, tenferro_linalg::EighBatchPolicy) -> Self
 pub fn tenferro_linalg::EighOptions::derivative_eps(self, f64) -> Self
 pub fn tenferro_linalg::EighOptions::driver(self, tenferro_linalg::EighDriver) -> Self
 pub fn tenferro_linalg::EighOptions::gauge(self, tenferro_linalg::EighGauge) -> Self
@@ -1342,6 +1360,7 @@ pub fn tenferro_runtime::traced::TracedTensor::svdvals_with(&self, &tenferro_lin
 pub fn tenferro_runtime::traced::TracedTensor::triangular_solve(&self, &tenferro_runtime::traced::TracedTensor) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub fn tenferro_runtime::traced::TracedTensor::triangular_solve_with(&self, &tenferro_runtime::traced::TracedTensor, &tenferro_linalg::TriangularSolveOptions) -> tenferro_runtime::error::Result<tenferro_runtime::traced::TracedTensor>
 pub fn tenferro_linalg::all_linalg_ad_support() -> &'static [tenferro_linalg::LinalgAdSupport; 26]
+pub fn tenferro_linalg::cuda_batched_eigh_available() -> tenferro_tensor::error::Result<bool>
 pub fn tenferro_linalg::extension_module<B: tenferro_tensor::backend::Engine + 'static>(tenferro_runtime::runtime::identity::EngineId) -> core::result::Result<alloc::sync::Arc<dyn tenferro_runtime::runtime::extension::ExtensionModule>, tenferro_runtime::runtime::error::RuntimeConfigError> where LinalgExtensionOp: core::clone::Clone + core::marker::Send + core::marker::Sync + 'static
 pub fn tenferro_linalg::linalg_ad_support(tenferro_linalg::LinalgAdOpKind) -> &'static tenferro_linalg::LinalgAdSupport
 pub fn tenferro_linalg::normalize_eig_vectors<R>(&mut [num_complex::Complex<R>], usize, usize) -> tenferro_tensor::error::Result<()> where R: num_traits::float::Float + num_traits::NumAssign + num_traits::cast::AsPrimitive<f64> + 'static, f64: num_traits::cast::AsPrimitive<R>

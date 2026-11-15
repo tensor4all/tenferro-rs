@@ -12,8 +12,8 @@ pub struct CompactQrResult {
 
 pub(crate) use crate::error::unsupported_dtype;
 use crate::extension::{
-    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighDriver,
-    EighOptions, QrOptions, SvdDriver, SvdOptions,
+    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, reject_required_batched,
+    validate_derivative_eps, EighDriver, EighOptions, QrOptions, SvdDriver, SvdOptions,
 };
 use crate::RankRevealingQrOptions;
 
@@ -736,12 +736,19 @@ pub trait LinalgBackend: Engine {
     /// [`tenferro_tensor::Error::BackendSource`] or
     /// [`tenferro_tensor::Error::RuntimeState`] for provider and placement
     /// failures.
+    ///
+    /// `EighOptions::batch_policy` of
+    /// [`crate::EighBatchPolicy::RequireBatched`] adds
+    /// [`tenferro_tensor::Error::Unsupported`] for a real batch on a provider
+    /// without a batched eigensolver — this default implementation among them,
+    /// because it runs [`LinalgBackend::eigh`], one launch per matrix.
     fn eigh_with_options(
         &mut self,
         input: &Tensor,
         options: EighOptions,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
+        reject_required_batched("eigh_with_options", &options, input.shape())?;
         let mut outputs = self.eigh(input)?;
         apply_eigh_gauge(options.gauge, &mut outputs)?;
         Ok(outputs)
@@ -789,12 +796,16 @@ pub trait LinalgBackend: Engine {
     /// unsupported-dtype, numerical, placement, or typed backend/provider
     /// errors from [`LinalgBackend::eigh_read`] and the gauge metadata and
     /// host-access errors from the default host gauge path.
+    /// [`crate::EighBatchPolicy::RequireBatched`] adds the same
+    /// [`tenferro_tensor::Error::Unsupported`] refusal as
+    /// [`LinalgBackend::eigh_with_options`] for a real batch.
     fn eigh_with_options_read(
         &mut self,
         input: TensorRead<'_>,
         options: EighOptions,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         validate_derivative_eps("eigh_with_options_read", options.derivative_eps)?;
+        reject_required_batched("eigh_with_options_read", &options, input.shape())?;
         let mut outputs = self.eigh_read(input)?;
         apply_eigh_gauge(options.gauge, &mut outputs)?;
         Ok(outputs)

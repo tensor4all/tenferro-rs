@@ -30,10 +30,17 @@ use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 use crate::backend::{unsupported_dtype, LinalgBackend};
 use crate::extension::{
-    apply_eigh_gauge, apply_svd_gauge, validate_derivative_eps, EighDriver, EighOptions, SvdDriver,
-    SvdOptions,
+    apply_eigh_gauge, apply_svd_gauge, validate_derivative_eps, EighBatchPolicy, EighDriver,
+    EighOptions, SvdDriver, SvdOptions,
 };
 use crate::{QrOptions, RankRevealingQrOptions};
+
+/// Whether the loaded cuSOLVER can diagonalise a whole batch in one launch.
+///
+/// Loads cuSOLVER only: a capability question must not require cuBLAS.
+pub(crate) fn batched_eigh_available() -> tenferro_tensor::Result<bool> {
+    Ok(ffi::cusolver::CusolverDnHandle::load()?.xsyev_batched_available())
+}
 
 /// cuSOLVER needs compact column-major device storage, so a borrowed view is
 /// made contiguous on the device and never crosses the host boundary.
@@ -119,6 +126,7 @@ fn eigh_read_with_driver(
     session: &mut CudaEngine,
     input: TensorRead<'_>,
     driver: EighDriver,
+    batch_policy: EighBatchPolicy,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     // A caller-owned payload has no preset view (#2486); refuse it like any
     // other dtype cuSOLVER does not cover.
@@ -130,22 +138,22 @@ fn eigh_read_with_driver(
         TensorView::F32(view) => {
             let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<f32>(compact);
-            linalg::eigh(session, &input, driver)
+            linalg::eigh(session, &input, driver, batch_policy)
         }
         TensorView::F64(view) => {
             let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<f64>(compact);
-            linalg::eigh(session, &input, driver)
+            linalg::eigh(session, &input, driver, batch_policy)
         }
         TensorView::C32(view) => {
             let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<num_complex::Complex32>(compact);
-            linalg::eigh(session, &input, driver)
+            linalg::eigh(session, &input, driver, batch_policy)
         }
         TensorView::C64(view) => {
             let compact = session.to_contiguous_view(&view)?;
             let input = Tensor::from_typed::<num_complex::Complex64>(compact);
-            linalg::eigh(session, &input, driver)
+            linalg::eigh(session, &input, driver, batch_policy)
         }
         TensorView::I32(_) | TensorView::I64(_) | TensorView::Bool(_) => {
             Err(unsupported_dtype("eigh", input.dtype()))
@@ -500,7 +508,12 @@ impl LinalgBackend for CudaEngine {
     }
 
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        linalg::eigh(self, input, EighDriver::Auto)
+        linalg::eigh(
+            self,
+            input,
+            EighDriver::Auto,
+            EighBatchPolicy::AllowPerMatrixFallback,
+        )
     }
 
     fn eigh_with_options(
@@ -509,7 +522,7 @@ impl LinalgBackend for CudaEngine {
         options: EighOptions,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         validate_derivative_eps("eigh_with_options", options.derivative_eps)?;
-        let mut outputs = linalg::eigh(self, input, options.driver)?;
+        let mut outputs = linalg::eigh(self, input, options.driver, options.batch_policy)?;
         apply_eigh_gauge(options.gauge, &mut outputs)?;
         Ok(outputs)
     }
@@ -520,13 +533,18 @@ impl LinalgBackend for CudaEngine {
         options: EighOptions,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         validate_derivative_eps("eigh_with_options_read", options.derivative_eps)?;
-        let mut outputs = eigh_read_with_driver(self, input, options.driver)?;
+        let mut outputs = eigh_read_with_driver(self, input, options.driver, options.batch_policy)?;
         apply_eigh_gauge(options.gauge, &mut outputs)?;
         Ok(outputs)
     }
 
     fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        eigh_read_with_driver(self, input, EighDriver::Auto)
+        eigh_read_with_driver(
+            self,
+            input,
+            EighDriver::Auto,
+            EighBatchPolicy::AllowPerMatrixFallback,
+        )
     }
 
     fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {

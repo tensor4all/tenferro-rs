@@ -340,6 +340,27 @@ there, by about 4x at order 128, and much further on wide spectra where it is
 also the less accurate of the two. Measure your own shapes. CPU providers
 ignore the driver.
 
+`EighOptions::batch_policy` decides whether a real batch may fall back to one
+launch per matrix. The default, `EighBatchPolicy::AllowPerMatrixFallback`, is the
+routing above: a batched cuSOLVER routine when the loaded library provides one
+and a per-matrix loop when it does not. If you promised your caller one launch
+per batch, set `EighBatchPolicy::RequireBatched` instead and the loop becomes a
+typed `Unsupported` error that names `cusolverDnXsyevBatched`, the missing fact
+(cuSOLVER older than 11.7.1, or either batched symbol unresolved) and the loop it
+declined. A single matrix is one call either way, so `RequireBatched` never
+refuses one matrix or a batch of one.
+
+The policy binds the two-output `eigh`. A traced graph that keeps only the
+eigenvalues is pruned to the values-only operation, which carries the driver but
+not the batch policy, so its recompute may take the per-matrix loop; keep both
+outputs alive (or check the result) when the launch count has to survive tracing.
+
+To branch before the call, use `tenferro_linalg::cuda_batched_eigh_available()`
+on a `cuda` build: it reports the capability of the loaded cuSOLVER, and a
+cuSOLVER that cannot be loaded is its typed load error rather than `false`. CPU
+providers have no batched eigensolver at all, so they refuse `RequireBatched` for
+a real batch; that is the same error, with the same advice.
+
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_eigh_driver -->
 ```rust
 use tenferro_linalg::{Eigh, EighDriver, EighOptions, TracedLinalgOps};

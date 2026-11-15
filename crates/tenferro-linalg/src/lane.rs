@@ -25,7 +25,8 @@ use tenferro_tensor::{Engine, Tensor, TensorRead, TensorView, TypedTensorView};
 
 use crate::error::unsupported_dtype;
 use crate::extension::{
-    apply_eigh_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions, SvdOptions,
+    apply_eigh_gauge, apply_svd_gauge, reject_required_batched, validate_derivative_eps,
+    EighOptions, SvdOptions,
 };
 use crate::LinalgScalar;
 
@@ -205,6 +206,13 @@ pub(crate) fn try_lane_eigh(
     }
     if let Some(Err(error)) =
         options.map(|(entry, options)| validate_derivative_eps(entry, options.derivative_eps))
+    {
+        return Some(Err(error));
+    }
+    // The lane runs the same per-matrix CPU kernel, so it has no batched launch
+    // to offer either.
+    if let Some(Err(error)) =
+        options.map(|(entry, options)| reject_required_batched(entry, &options, input.shape()))
     {
         return Some(Err(error));
     }

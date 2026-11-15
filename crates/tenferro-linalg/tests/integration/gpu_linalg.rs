@@ -9,8 +9,9 @@ use tenferro_gpu::{
     cuda::CudaEngine,
 };
 use tenferro_linalg::{
-    EighDriver, EighOptions, HouseholderQr, LinalgBackend, LinalgOps, PinvOptions, QrGauge,
-    QrOptions, RankRevealingQrOptions, SvdDriver, SvdOptions, TracedLinalgOps,
+    cuda_batched_eigh_available, EighBatchPolicy, EighDriver, EighOptions, HouseholderQr,
+    LinalgBackend, LinalgOps, PinvOptions, QrGauge, QrOptions, RankRevealingQrOptions, SvdDriver,
+    SvdOptions, TracedLinalgOps,
 };
 use tenferro_runtime::{ExecutionEngine, GraphCompiler, Runtime, TraceContext};
 use tenferro_tensor::{DType, Error, Tensor, TensorRead, TypedTensor};
@@ -1552,6 +1553,75 @@ fn test_cuda_eigh_complex_batches_run_through_xsyev_batched() {
     let expected32 =
         with_cpu_linalg_session(&mut cpu, |session| session.eigh_values(&input32)).unwrap();
     assert_tensor_close(&values32, &expected32, 1e-3);
+}
+
+#[test]
+#[ignore = "requires a CUDA GPU"]
+fn test_cuda_eigh_batch_policy_requires_the_batched_routine() {
+    // The capability query and the routing must agree, and `RequireBatched` must
+    // not change a result it can honour: it is the same single cuSOLVER launch
+    // the default takes (#2616).
+    let available = cuda_batched_eigh_available().expect("cuSOLVER must load");
+    let mut gpu = gpu_backend();
+    let (n, batch) = (17, 17);
+    let input = patterned_symmetric_f64(n, batch);
+    let device = upload(&gpu, &input);
+
+    for driver in [EighDriver::Auto, EighDriver::DivideAndConquer] {
+        let permissive = EighOptions::default().driver(driver);
+        let strict = permissive.batch_policy(EighBatchPolicy::RequireBatched);
+        let strict_result = with_cuda_linalg_session(&mut gpu, |session| {
+            session.eigh_with_options(&device, strict)
+        });
+        match available {
+            true => {
+                let outputs = strict_result.unwrap_or_else(|error| {
+                    panic!("RequireBatched must be honoured on this cuSOLVER: {error}")
+                });
+                let default_outputs = with_cuda_linalg_session(&mut gpu, |session| {
+                    session.eigh_with_options(&device, permissive)
+                })
+                .unwrap();
+                for (strict, default) in outputs.iter().zip(&default_outputs) {
+                    assert_tensor_close(&download(&gpu, strict), &download(&gpu, default), 0.0);
+                }
+                let values = download(&gpu, &outputs[0]);
+                let mut cpu = cpu_backend();
+                let expected =
+                    with_cpu_linalg_session(&mut cpu, |session| session.eigh_values(&input))
+                        .unwrap();
+                assert_tensor_close(&values, &expected, 1e-8);
+            }
+            false => {
+                // No batched entry point: the strict call must refuse rather
+                // than launch `batch` syevd calls, and the permissive one must
+                // still return today's per-matrix result.
+                let error = strict_result
+                    .expect_err("RequireBatched must refuse the per-matrix loop on this cuSOLVER");
+                assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+                assert!(
+                    format!("{error}").contains("AllowPerMatrixFallback"),
+                    "the refusal should name the fallback it refused: {error}"
+                );
+                with_cuda_linalg_session(&mut gpu, |session| {
+                    session.eigh_with_options(&device, permissive)
+                })
+                .unwrap();
+            }
+        }
+    }
+
+    // A single matrix is one call, so the strict policy accepts it even without
+    // the batched entry point.
+    let single = patterned_symmetric_f64(n, 1);
+    let single_device = upload(&gpu, &single);
+    with_cuda_linalg_session(&mut gpu, |session| {
+        session.eigh_with_options(
+            &single_device,
+            EighOptions::default().batch_policy(EighBatchPolicy::RequireBatched),
+        )
+    })
+    .expect("one matrix is one launch");
 }
 
 #[test]

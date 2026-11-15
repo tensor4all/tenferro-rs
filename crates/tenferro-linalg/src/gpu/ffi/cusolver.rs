@@ -1525,14 +1525,14 @@ type GetVersionFn = unsafe extern "C" fn(*mut i32) -> CusolverStatus;
 /// Update 2). JAX gates on the same boundary in
 /// `jaxlib/gpu/solver_kernels_ffi.cc`: "syevBatched is supported since CUDA
 /// 12.6.2, where CUSOLVER version is 11.7.1", `version >= 11701`.
-const XSYEV_BATCHED_MIN_VERSION: i32 = 11701;
+pub(in crate::gpu) const XSYEV_BATCHED_MIN_VERSION: i32 = 11701;
 
 /// Whether batched divide-and-conquer eigh may be used.
 ///
 /// Both symbols must resolve *and* the library must report the release that
 /// introduced them; a library that reports a version below the boundary (or
 /// reports nothing) falls back to the per-matrix loop.
-pub(super) fn xsyev_batched_available(version: i32, both_symbols_resolved: bool) -> bool {
+pub(in crate::gpu) fn xsyev_batched_available(version: i32, both_symbols_resolved: bool) -> bool {
     both_symbols_resolved && version >= XSYEV_BATCHED_MIN_VERSION
 }
 
@@ -1866,6 +1866,17 @@ impl CusolverDnHandle {
     /// launch, or whether callers must use the per-matrix `syevd` loop (#2413).
     pub(in crate::gpu) fn xsyev_batched_available(&self) -> bool {
         self.lib.xsyev_batched_available()
+    }
+
+    /// The cuSOLVER release, e.g. 11701 for 11.7.1, or 0 when the library does
+    /// not export `cusolverGetVersion`.
+    pub(in crate::gpu) fn version(&self) -> i32 {
+        self.lib.version
+    }
+
+    /// Whether both `cusolverDnXsyevBatched` symbols resolved.
+    pub(in crate::gpu) fn batched_eigh_symbols_resolved(&self) -> bool {
+        self.lib.vtable.batched_eigh_resolved()
     }
 
     /// Load cuSOLVER and create a native handle.

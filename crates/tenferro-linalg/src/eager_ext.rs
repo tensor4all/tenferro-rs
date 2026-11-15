@@ -297,6 +297,7 @@ impl EagerLinalg for EagerSession<'_> {
                     derivative_eps: options.derivative_eps,
                     gauge: options.gauge,
                     driver: options.driver,
+                    batch_policy: options.batch_policy,
                 },
                 &[input],
             )?,
