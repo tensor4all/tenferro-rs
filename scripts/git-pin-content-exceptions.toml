@@ -24,7 +24,7 @@
 # `tenferro-gpu` is republished; removing the pins is the release follow-up on that issue.
 [[exception]]
 package = "t4a-metal-runtime"
-issue = "#2402"
+issue = "https://github.com/tensor4all/tenferro-rs/issues/2402"
 reason = """
 Unpublished sibling: the runtime that opens Metal with dlopen and carries the
 allocating `Runtime` is not on crates.io yet. The pin is the reviewed revision that
@@ -33,7 +33,7 @@ adds `Send` for the shared runtime lock; the release follow-up publishes it.
 
 [[exception]]
 package = "t4a-cuda-kernels"
-issue = "#2402"
+issue = "https://github.com/tensor4all/tenferro-rs/issues/2402"
 reason = """
 Unpublished sibling: version 0.2.0 adds the Metal source set (`src/metal.rs`, the MSL
 under `metal/`). It depends on the unpublished `t4a-metal-runtime`, so it cannot be

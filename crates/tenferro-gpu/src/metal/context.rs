@@ -498,8 +498,10 @@ impl MetalContext {
     ///
     /// # Errors
     ///
-    /// A typed `Unsupported` when the source is not a compact tensor of this context's
-    /// domain, and the host-access failure otherwise.
+    /// `Error::Unsupported` when the source is not an owned shared tensor or is not
+    /// compact, `Error::UnsupportedDType` for a dtype the shared domain does not
+    /// allocate, and `Error::RuntimeState` when another context owns the allocation or
+    /// the host copy fails.
     pub fn download(&self, tensor: TensorRead<'_>) -> Result<Tensor, Error> {
         const OP: &str = "MetalContext::download";
         let source = tensor
