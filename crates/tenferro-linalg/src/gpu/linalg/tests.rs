@@ -2,7 +2,15 @@ use super::{
     select_eigh_driver, select_svd_driver, CusolverEighRoutine, CusolverSvdRoutine,
     JAX_COMPATIBLE_GESVDJ_MAX_DIM,
 };
-use crate::extension::{EighDriver, SvdDriver};
+use crate::extension::{EighBatchPolicy, EighDriver, SvdDriver};
+use tenferro_tensor::ErrorKind;
+
+/// The capability the batched divide-and-conquer eigh needs on a real batch.
+const BATCHED_EIGH: (i32, bool) = (12_000, true);
+/// A cuSOLVER older than 11.7.1: both symbols load but the version gate fails.
+const OLD_CUSOLVER: (i32, bool) = (11_700, true);
+/// A newer cuSOLVER that does not export the two batched symbols.
+const MISSING_SYMBOLS: (i32, bool) = (12_000, false);
 
 mod xgesvdp;
 
@@ -63,21 +71,26 @@ fn eigh_batches_take_a_batched_routine_at_every_order() {
     for n in [1, 8, 32, 33, 64, 128, 512, 4096] {
         let _ = n; // the policy is order-independent; the range documents that.
         for batch in [2, 1024] {
-            assert_eq!(
-                select_eigh_driver(EighDriver::Auto, batch, true),
-                CusolverEighRoutine::XsyevBatched,
-                "Auto batch={batch}"
-            );
-            assert_eq!(
-                select_eigh_driver(EighDriver::DivideAndConquer, batch, true),
-                CusolverEighRoutine::XsyevBatched,
-                "Syevd batch={batch}"
-            );
-            assert_eq!(
-                select_eigh_driver(EighDriver::Jacobi, batch, true),
-                CusolverEighRoutine::SyevjBatched,
-                "Syevj batch={batch}"
-            );
+            for policy in [
+                EighBatchPolicy::AllowPerMatrixFallback,
+                EighBatchPolicy::RequireBatched,
+            ] {
+                assert_eq!(
+                    select(EighDriver::Auto, batch, policy, BATCHED_EIGH),
+                    Ok(CusolverEighRoutine::XsyevBatched),
+                    "Auto batch={batch} {policy:?}"
+                );
+                assert_eq!(
+                    select(EighDriver::DivideAndConquer, batch, policy, BATCHED_EIGH),
+                    Ok(CusolverEighRoutine::XsyevBatched),
+                    "Syevd batch={batch} {policy:?}"
+                );
+                assert_eq!(
+                    select(EighDriver::Jacobi, batch, policy, BATCHED_EIGH),
+                    Ok(CusolverEighRoutine::SyevjBatched),
+                    "Syevj batch={batch} {policy:?}"
+                );
+            }
         }
     }
 }
@@ -87,27 +100,49 @@ fn eigh_batches_fall_back_to_the_syevd_loop_without_the_batched_entry_point() {
     // A cuSOLVER older than 11.7.1 exports no `XsyevBatched`, so the batch
     // takes the per-matrix `syevd` loop instead of failing (#2413).
     for batch in [2, 1024] {
-        assert_eq!(
-            select_eigh_driver(EighDriver::Auto, batch, false),
-            CusolverEighRoutine::Syevd,
-            "Auto batch={batch}"
-        );
-        assert_eq!(
-            select_eigh_driver(EighDriver::DivideAndConquer, batch, false),
-            CusolverEighRoutine::Syevd,
-            "Syevd batch={batch}"
-        );
+        for capability in [OLD_CUSOLVER, MISSING_SYMBOLS] {
+            assert_eq!(
+                select(
+                    EighDriver::Auto,
+                    batch,
+                    EighBatchPolicy::AllowPerMatrixFallback,
+                    capability,
+                ),
+                Ok(CusolverEighRoutine::Syevd),
+                "Auto batch={batch} {capability:?}"
+            );
+            assert_eq!(
+                select(
+                    EighDriver::DivideAndConquer,
+                    batch,
+                    EighBatchPolicy::AllowPerMatrixFallback,
+                    capability,
+                ),
+                Ok(CusolverEighRoutine::Syevd),
+                "Syevd batch={batch} {capability:?}"
+            );
+        }
         // The Jacobi batched entry point predates the version boundary, so its
         // capability does not depend on `XsyevBatched`.
         assert_eq!(
-            select_eigh_driver(EighDriver::Jacobi, batch, false),
-            CusolverEighRoutine::SyevjBatched,
+            select(
+                EighDriver::Jacobi,
+                batch,
+                EighBatchPolicy::AllowPerMatrixFallback,
+                MISSING_SYMBOLS,
+            ),
+            Ok(CusolverEighRoutine::SyevjBatched),
             "Syevj batch={batch}"
         );
     }
     assert_eq!(
-        select_eigh_driver(EighDriver::Auto, 1, false),
-        CusolverEighRoutine::Syevd
+        select(
+            EighDriver::Auto,
+            1,
+            EighBatchPolicy::AllowPerMatrixFallback,
+            MISSING_SYMBOLS,
+        ),
+        Ok(CusolverEighRoutine::Syevd)
     );
 }
 
@@ -124,16 +159,160 @@ fn eigh_route_is_recorded_in_the_solver_diagnostics() {
 fn eigh_single_matrices_keep_the_per_matrix_entry_points() {
     // One matrix has no launch overhead to amortize, so the batched entry
     // points have nothing to win and the per-matrix routines stay.
+    for policy in [
+        EighBatchPolicy::AllowPerMatrixFallback,
+        EighBatchPolicy::RequireBatched,
+    ] {
+        assert_eq!(
+            select(EighDriver::Auto, 1, policy, BATCHED_EIGH),
+            Ok(CusolverEighRoutine::Syevd),
+            "{policy:?}"
+        );
+        assert_eq!(
+            select(EighDriver::DivideAndConquer, 1, policy, BATCHED_EIGH),
+            Ok(CusolverEighRoutine::Syevd),
+            "{policy:?}"
+        );
+        assert_eq!(
+            select(EighDriver::Jacobi, 1, policy, BATCHED_EIGH),
+            Ok(CusolverEighRoutine::Syevj),
+            "{policy:?}"
+        );
+    }
+    // A batch of at most one matrix is one call, so `RequireBatched` has nothing
+    // to refuse even on a library without the batched entry point.
     assert_eq!(
-        select_eigh_driver(EighDriver::Auto, 1, true),
-        CusolverEighRoutine::Syevd
+        select(
+            EighDriver::Auto,
+            0,
+            EighBatchPolicy::RequireBatched,
+            MISSING_SYMBOLS,
+        ),
+        Ok(CusolverEighRoutine::Syevd)
     );
     assert_eq!(
-        select_eigh_driver(EighDriver::DivideAndConquer, 1, true),
-        CusolverEighRoutine::Syevd
+        select(
+            EighDriver::Auto,
+            1,
+            EighBatchPolicy::RequireBatched,
+            MISSING_SYMBOLS,
+        ),
+        Ok(CusolverEighRoutine::Syevd)
     );
-    assert_eq!(
-        select_eigh_driver(EighDriver::Jacobi, 1, true),
-        CusolverEighRoutine::Syevj
+}
+
+/// Call the selector and normalise the two failure arms to their kinds, so the
+/// table-style assertions above stay readable.
+fn select(
+    driver: EighDriver,
+    batch_total: usize,
+    policy: EighBatchPolicy,
+    (version, symbols_resolved): (i32, bool),
+) -> Result<CusolverEighRoutine, ErrorKind> {
+    select_eigh_driver(driver, batch_total, policy, version, symbols_resolved)
+        .map_err(|error| error.kind())
+}
+
+#[test]
+fn require_batched_refuses_the_per_matrix_loop_and_names_the_capability() {
+    // The reported case: a batch of 17 with a cuSOLVER below the 11.7.1 floor.
+    for driver in [EighDriver::Auto, EighDriver::DivideAndConquer] {
+        let error = select_eigh_driver(driver, 17, EighBatchPolicy::RequireBatched, 11_700, true)
+            .expect_err("a batch of 17 without XsyevBatched must not be launched per matrix");
+        assert_eq!(error.kind(), ErrorKind::Unsupported, "{driver:?}");
+        let message = error.to_string();
+        for needle in [
+            "EighBatchPolicy::RequireBatched",
+            "one launch",
+            "cusolverDnXsyevBatched",
+            "below 11.7.1",
+            "cusolverDn<t>syevd launch per matrix",
+            "EighBatchPolicy::AllowPerMatrixFallback",
+        ] {
+            assert!(
+                message.contains(needle),
+                "the refusal should name {needle}: {message}"
+            );
+        }
+    }
+
+    // The same version with the two symbols missing: the message names those,
+    // not the version.
+    let error = select_eigh_driver(
+        EighDriver::DivideAndConquer,
+        17,
+        EighBatchPolicy::RequireBatched,
+        12_000,
+        false,
+    )
+    .expect_err("unresolved batched eigh symbols must not be launched per matrix");
+    assert_eq!(error.kind(), ErrorKind::Unsupported);
+    let message = error.to_string();
+    assert!(
+        message.contains("unresolved"),
+        "the refusal should name the unresolved symbols: {message}"
     );
+    assert!(
+        !message.contains("below 11.7.1"),
+        "a new enough library must not be reported as too old: {message}"
+    );
+
+    // An old library that also lacks the symbols names both facts.
+    let error = select_eigh_driver(
+        EighDriver::Auto,
+        17,
+        EighBatchPolicy::RequireBatched,
+        0,
+        false,
+    )
+    .expect_err("the refusal covers both missing facts");
+    let message = error.to_string();
+    assert!(message.contains("unresolved"), "{message}");
+    assert!(message.contains("below 11.7.1"), "{message}");
+}
+
+#[test]
+fn allow_per_matrix_fallback_keeps_todays_routing_under_the_same_capabilities() {
+    // The default policy is exactly the pre-#2616 behaviour: the refusal never
+    // fires for it, whatever the capability.
+    for (version, symbols_resolved) in [BATCHED_EIGH, OLD_CUSOLVER, MISSING_SYMBOLS, (0, false)] {
+        for batch in [0, 1, 2, 17, 1024] {
+            for driver in [
+                EighDriver::Auto,
+                EighDriver::DivideAndConquer,
+                EighDriver::Jacobi,
+            ] {
+                assert!(
+                    select_eigh_driver(
+                        driver,
+                        batch,
+                        EighBatchPolicy::AllowPerMatrixFallback,
+                        version,
+                        symbols_resolved,
+                    )
+                    .is_ok(),
+                    "the default policy never refuses {driver:?} batch={batch} \
+                     version={version} symbols={symbols_resolved}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn require_batched_is_satisfied_by_the_jacobi_batch_route() {
+    // `syevjBatched` is a required symbol and predates the `XsyevBatched`
+    // version boundary, so a Jacobi batch always has its single launch.
+    for capability in [BATCHED_EIGH, OLD_CUSOLVER, MISSING_SYMBOLS] {
+        assert_eq!(
+            select(
+                EighDriver::Jacobi,
+                17,
+                EighBatchPolicy::RequireBatched,
+                capability,
+            ),
+            Ok(CusolverEighRoutine::SyevjBatched),
+            "{capability:?}"
+        );
+    }
 }

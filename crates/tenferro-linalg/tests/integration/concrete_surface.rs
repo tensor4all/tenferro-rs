@@ -1,8 +1,9 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{
-    Eig, EighOptions, KeepDims, LinalgBackend, LinalgOps, NormOptions, NormOrd, PinvOptions, Qr,
-    QrOptions, RankRevealingQrOptions, Slogdet, Svd, SvdOptions, TriangularSolveOptions, Uplo,
+    Eig, EighBatchPolicy, EighOptions, KeepDims, LinalgBackend, LinalgOps, NormOptions, NormOrd,
+    PinvOptions, Qr, QrOptions, RankRevealingQrOptions, Slogdet, Svd, SvdOptions,
+    TriangularSolveOptions, Uplo,
 };
 use tenferro_tensor::{AxisVec, Dest, Tensor, TensorRead, TensorScalar, TypedTensor};
 
@@ -995,5 +996,84 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
             .unwrap(),
     ] {
         assert_eq!(count.as_slice::<f64>().unwrap(), &[2.0]);
+    }
+}
+
+/// A batch of two well-separated `[[2+b, 0], [0, 5+b]]` spectra on the trailing
+/// axis, so every batch member is diagonal.
+fn batched_hermitian(batch: usize) -> Tensor {
+    let mut data = Vec::with_capacity(4 * batch);
+    for b in 0..batch {
+        data.extend_from_slice(&[2.0 + b as f64, 0.0, 0.0, 5.0 + b as f64]);
+    }
+    Tensor::from_vec_col_major(vec![2, 2, batch], data).unwrap()
+}
+
+#[test]
+fn require_batched_is_unsupported_on_a_provider_without_a_batched_eigensolver() {
+    // The CPU provider diagonaises one matrix per call, so it cannot honour a
+    // whole-batch single launch. `RequireBatched` must say so instead of
+    // looping, and it must name the refused fallback (#2616).
+    let batched = batched_hermitian(3);
+    let strict = EighOptions::default().batch_policy(EighBatchPolicy::RequireBatched);
+    let mut host = tenferro_cpu::CpuEngine::serial();
+
+    let owned = batched.eigh_with(&strict, &mut host).unwrap_err();
+    assert_eq!(owned.kind(), tenferro_tensor::ErrorKind::Unsupported);
+    let message = format!("{owned}");
+    for needle in [
+        "RequireBatched",
+        "one launch per matrix",
+        "AllowPerMatrixFallback",
+    ] {
+        assert!(
+            message.contains(needle),
+            "the refusal should name {needle}: {message}"
+        );
+    }
+
+    let read = TensorRead::from_tensor(&batched)
+        .eigh_with(&strict, &mut host)
+        .unwrap_err();
+    assert_eq!(read.kind(), tenferro_tensor::ErrorKind::Unsupported);
+
+    // The policy must not pre-empt the ordinary rank validation: a vector is
+    // rejected as a rank problem, not by this refusal.
+    let vector = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let rank = vector.eigh_with(&strict, &mut host).unwrap_err();
+    assert_ne!(rank.kind(), tenferro_tensor::ErrorKind::Unsupported);
+
+    // The default policy keeps taking the per-matrix route and answers the same
+    // values.
+    let permissive = batched
+        .eigh_with(&EighOptions::default(), &mut host)
+        .unwrap();
+    assert_eq!(permissive.values.shape(), &[2, 3]);
+    assert_eq!(permissive.vectors.shape(), &[2, 2, 3]);
+    assert_eq!(
+        permissive.values.as_slice::<f64>().unwrap(),
+        &[2.0, 5.0, 3.0, 6.0, 4.0, 7.0]
+    );
+}
+
+#[test]
+fn require_batched_allows_one_matrix_and_singleton_batches() {
+    // One matrix is one call, so the policy has nothing to refuse: a rank-2
+    // operand and a rank-3 operand with a singleton batch both succeed and match
+    // the permissive policy bit for bit.
+    let strict = EighOptions::default().batch_policy(EighBatchPolicy::RequireBatched);
+    let mut host = tenferro_cpu::CpuEngine::serial();
+
+    let single = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 5.0]).unwrap();
+    for input in [single, batched_hermitian(1)] {
+        let strict_result = input.eigh_with(&strict, &mut host).unwrap();
+        let default_result = input.eigh_with(&EighOptions::default(), &mut host).unwrap();
+        assert_eq!(strict_result.values.shape(), default_result.values.shape());
+        assert_eq!(
+            strict_result.values.as_slice::<f64>().unwrap(),
+            default_result.values.as_slice::<f64>().unwrap(),
+            "shape {:?}",
+            input.shape()
+        );
     }
 }

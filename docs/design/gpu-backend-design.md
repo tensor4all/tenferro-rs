@@ -362,8 +362,27 @@ stack, not a hardware one: the loader resolves cuSOLVER at runtime, and CUDA
 12.x supports the same GPU architectures throughout, so no hardware or driver
 requirement changes.
 
+A caller that promised one launch per batch states it rather than inspecting the
+loader's warning: `EighOptions::batch_policy` defaults to
+`EighBatchPolicy::AllowPerMatrixFallback` (the routing above) and
+`EighBatchPolicy::RequireBatched` refuses the per-matrix loop for
+`Auto`/`DivideAndConquer` on a real batch, returning a typed `Unsupported` error
+that names `cusolverDnXsyevBatched`, which fact is missing (unresolved symbols or
+a version below the floor), and the `syevd` loop it declined
+(issue #2616). `syevjBatched` is a required symbol and predates the floor, so a
+Jacobi batch always satisfies the requirement, and a batch of at most one matrix
+is one call, so the policy never refuses it.
+`tenferro_linalg::cuda_batched_eigh_available()` reports the same capability
+before the call; a cuSOLVER that cannot be loaded is a typed load error there,
+never `false`. Launch-count strictness is not an `EighDriver`: the driver picks
+the algorithm family, and a provider without a batched routine cannot honour a
+family value. That is why the policy is refused on CPU and in a lane too.
+
 As with the SVD driver, the eigh driver is part of the traced op identity and
-survives pruning to the values-only op, and CPU providers ignore it.
+survives pruning to the values-only op, and CPU providers ignore it. The batch
+policy is part of the op identity as well, but pruning `Eigh` to the values-only
+`EighVals` **drops** it: that op carries no policy and its recomputed spectrum
+accepts the per-matrix loop.
 
 ## Tests
 

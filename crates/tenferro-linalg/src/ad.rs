@@ -411,7 +411,8 @@ fn fixed_transpose_value(
 mod tests {
     use super::*;
     use crate::extension::{
-        EighDriver, EighGauge, QrGauge, SvdDriver, SvdGauge, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+        EighBatchPolicy, EighDriver, EighGauge, QrGauge, SvdDriver, SvdGauge,
+        DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
     };
     use computegraph::graph::GraphBuilder;
     use std::collections::HashSet;
@@ -729,6 +730,7 @@ mod tests {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                     gauge: EighGauge::Raw,
                     driver: EighDriver::Auto,
+                    batch_policy: EighBatchPolicy::AllowPerMatrixFallback,
                 },
                 eigh_context(),
                 vec![None, None],
@@ -817,6 +819,7 @@ mod tests {
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             gauge: EighGauge::Raw,
             driver: EighDriver::Auto,
+            batch_policy: EighBatchPolicy::AllowPerMatrixFallback,
         });
 
         let result = LinalgAdRule
@@ -1106,6 +1109,7 @@ mod tests {
             derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             gauge: EighGauge::Raw,
             driver: EighDriver::Auto,
+            batch_policy: EighBatchPolicy::AllowPerMatrixFallback,
         });
 
         let result = LinalgAdRule
@@ -1233,6 +1237,7 @@ mod tests {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                 gauge: EighGauge::Raw,
                 driver: EighDriver::Auto,
+                batch_policy: EighBatchPolicy::AllowPerMatrixFallback,
             },
             LinalgOp::EighVals {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
@@ -1552,6 +1557,7 @@ mod tests {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                     gauge: EighGauge::Raw,
                     driver: EighDriver::Auto,
+                    batch_policy: EighBatchPolicy::AllowPerMatrixFallback,
                 },
                 active_outputs: &[0, 1],
                 matrix: symmetric,
@@ -2336,6 +2342,7 @@ mod tests {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                     gauge: EighGauge::Raw,
                     driver: EighDriver::Auto,
+                    batch_policy: EighBatchPolicy::AllowPerMatrixFallback,
                 },
                 vec![true, true],
                 true,
@@ -2546,6 +2553,7 @@ mod tests {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                     gauge: EighGauge::Raw,
                     driver: EighDriver::Auto,
+                    batch_policy: EighBatchPolicy::AllowPerMatrixFallback,
                 },
                 vec![true, true],
             ),

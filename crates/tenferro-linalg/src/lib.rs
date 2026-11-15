@@ -185,9 +185,55 @@ pub use backend::LinalgBackend;
 pub use eig_normalize::normalize_eig_vectors;
 pub use error::{Error, Result};
 pub use extension::{
-    extension_module, EighDriver, EighGauge, EighOptions, QrGauge, QrOptions, SvdDriver, SvdGauge,
-    SvdOptions, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,
+    extension_module, EighBatchPolicy, EighDriver, EighGauge, EighOptions, QrGauge, QrOptions,
+    SvdDriver, SvdGauge, SvdOptions, DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
+    LINALG_EXTENSION_FAMILY_ID,
 };
+
+/// Whether the loaded cuSOLVER can diagonalise a whole batch of Hermitian
+/// matrices in one launch.
+///
+/// This is the capability [`EighBatchPolicy::RequireBatched`] needs, exposed so
+/// a caller can branch before the call instead of catching the error. `Ok(true)`
+/// means `cusolverDnXsyevBatched` is callable for
+/// [`EighDriver::Auto`]/[`EighDriver::DivideAndConquer`] on a batch of more than
+/// one matrix; `Ok(false)` means the loaded cuSOLVER lacks it, and `eigh` keeps
+/// today's per-matrix loop unless the caller asks for
+/// [`EighBatchPolicy::RequireBatched`].
+///
+/// The answer follows the process-wide cuSOLVER library, which is loaded once
+/// and never reloaded, so the same value is reported for the life of the
+/// process.
+///
+/// # Examples
+///
+/// ```rust
+/// # #[cfg(feature = "cuda")] {
+/// use tenferro_linalg::{cuda_batched_eigh_available, EighBatchPolicy, EighOptions};
+///
+/// // Branch ahead of the call: promise one launch per batch only when the
+/// // capability is really there.
+/// let policy = match cuda_batched_eigh_available() {
+///     Ok(true) => EighBatchPolicy::RequireBatched,
+///     // A loaded library without the entry point, or no cuSOLVER at all.
+///     Ok(false) | Err(_) => EighBatchPolicy::AllowPerMatrixFallback,
+/// };
+/// let options = EighOptions::default().batch_policy(policy);
+/// assert_eq!(options.batch_policy, policy);
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns [`tenferro_tensor::Error::IoSource`] (with the typed
+/// `CudaLibraryLoadError`) when the cuSOLVER shared library, or a symbol this
+/// crate requires from it, cannot be loaded. A missing batched entry point is
+/// not an error: it is the `Ok(false)` answer.
+#[cfg(feature = "cuda")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
+pub fn cuda_batched_eigh_available() -> tenferro_tensor::Result<bool> {
+    gpu::batched_eigh_available()
+}
 pub use flags::{Diag, KeepDims, MatOp, Side, SvdShape, Uplo};
 pub use householder::HouseholderQr;
 pub use rank_revealing_qr::{RankRevealingQrOptions, RankRevealingQrResult};

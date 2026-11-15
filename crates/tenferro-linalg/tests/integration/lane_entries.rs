@@ -14,7 +14,8 @@ use std::error::Error as _;
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{linalg_interop::BufferPool, CpuEngine};
 use tenferro_linalg::{
-    EighGauge, EighOptions, LinalgOps, LinalgScalar, Svd, SvdGauge, SvdOptions, SvdShape,
+    EighBatchPolicy, EighGauge, EighOptions, LinalgOps, LinalgScalar, Svd, SvdGauge, SvdOptions,
+    SvdShape,
 };
 use tenferro_tensor::{
     DType, Engine, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TypedTensor, TypedTensorView,
@@ -772,6 +773,37 @@ fn an_invalid_derivative_eps_fails_on_a_lane_like_on_the_engine_route() {
         let got = herm.eigh_with(&bad_eigh, lane).unwrap_err();
         assert_eq!(got.kind(), want_eigh.kind());
         assert_eq!(format!("{got:?}"), format!("{want_eigh:?}"));
+    });
+}
+
+#[test]
+fn require_batched_fails_on_a_lane_like_on_the_engine_route() {
+    // A lane runs the same per-matrix CPU kernel, so it has no whole-batch
+    // launch either: the lane must report the same typed refusal the engine
+    // route does instead of looping (#2616).
+    let strict = EighOptions::default().batch_policy(EighBatchPolicy::RequireBatched);
+    let mut cpu = CpuEngine::serial();
+    // The lane is fed a borrowed operand, so the reference is the engine's
+    // borrowed route; the two must agree word for word.
+    let reference = hermitian::<f64>(3, 2);
+    let want = read_of(&reference.as_view())
+        .eigh_with(&strict, &mut cpu)
+        .unwrap_err();
+    assert_eq!(want.kind(), ErrorKind::Unsupported);
+    on_lane(|lane| {
+        let batched = hermitian::<f64>(3, 2);
+        let got = read_of(&batched.as_view())
+            .eigh_with(&strict, lane)
+            .unwrap_err();
+        assert_eq!(got.kind(), ErrorKind::Unsupported);
+        assert_eq!(format!("{got}"), format!("{want}"));
+
+        // One matrix is one call, so the same lane still solves it.
+        let single = Tensor::from_typed::<f64>(hermitian::<f64>(3, 1));
+        assert_eq!(
+            single.eigh_with(&strict, lane).unwrap().values.shape(),
+            &[3, 1]
+        );
     });
 }
 

@@ -6,11 +6,12 @@ use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
 
 use super::ffi::cusolver::{
-    CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode, CublasSideMode,
-    CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode,
+    xsyev_batched_available, CublasDiagType, CublasFillMode, CublasOperation, CublasPointerMode,
+    CublasSideMode, CudaDataType, CudaLinalgHandles, CudaStream, CusolverEigMode,
+    XSYEV_BATCHED_MIN_VERSION,
 };
 use crate::backend::CompactQrResult;
-use crate::extension::{EighDriver, QrGauge, QrOptions, SvdDriver};
+use crate::extension::{EighBatchPolicy, EighDriver, QrGauge, QrOptions, SvdDriver};
 use crate::validation::validate_square_matrix;
 use tenferro_gpu::cuda::{download_tensor, CudaEngine};
 use tenferro_tensor::config::SliceConfig;
@@ -261,25 +262,68 @@ enum CusolverEighRoutine {
 fn select_eigh_driver(
     driver: EighDriver,
     batch_total: usize,
-    xsyev_batched_available: bool,
-) -> CusolverEighRoutine {
+    batch_policy: EighBatchPolicy,
+    version: i32,
+    symbols_resolved: bool,
+) -> Result<CusolverEighRoutine> {
     let batched = batch_total > 1;
     match driver {
         EighDriver::Auto | EighDriver::DivideAndConquer => {
-            if batched && xsyev_batched_available {
-                CusolverEighRoutine::XsyevBatched
+            if batched && xsyev_batched_available(version, symbols_resolved) {
+                Ok(CusolverEighRoutine::XsyevBatched)
+            } else if batched && batch_policy == EighBatchPolicy::RequireBatched {
+                Err(required_batched_unavailable(version, symbols_resolved))
             } else {
-                CusolverEighRoutine::Syevd
+                Ok(CusolverEighRoutine::Syevd)
             }
         }
-        EighDriver::Jacobi => {
-            if batched {
-                CusolverEighRoutine::SyevjBatched
-            } else {
-                CusolverEighRoutine::Syevj
-            }
-        }
+        // `syevjBatched` is a required symbol and predates the `XsyevBatched`
+        // version boundary, so a Jacobi batch always has its single launch.
+        EighDriver::Jacobi => Ok(if batched {
+            CusolverEighRoutine::SyevjBatched
+        } else {
+            CusolverEighRoutine::Syevj
+        }),
     }
+}
+
+/// The typed refusal behind [`EighBatchPolicy::RequireBatched`] when the loaded
+/// cuSOLVER cannot diagonalise a batch in one launch. It names the missing
+/// capability and the fallback it refused, so a caller can log the reason.
+fn required_batched_unavailable(version: i32, symbols_resolved: bool) -> Error {
+    let mut missing = Vec::new();
+    if !symbols_resolved {
+        missing.push(
+            "cusolverDnXsyevBatched and its buffer-size companion are unresolved".to_string(),
+        );
+    }
+    if version < XSYEV_BATCHED_MIN_VERSION {
+        missing.push(format!(
+            "the reported cuSOLVER version is below {}",
+            format_cusolver_version(XSYEV_BATCHED_MIN_VERSION)
+        ));
+    }
+    Error::unsupported(
+        "eigh",
+        format!(
+            "EighBatchPolicy::RequireBatched: cuSOLVER {} cannot diagonalise a batch in one \
+             launch with cusolverDnXsyevBatched ({}); the refused fallback is one \
+             cusolverDn<t>syevd launch per matrix. Use EighBatchPolicy::AllowPerMatrixFallback to \
+             accept that loop",
+            format_cusolver_version(version),
+            missing.join("; "),
+        ),
+    )
+}
+
+/// `11701` as `11.7.1`, the spelling cuSOLVER's own diagnostics use.
+fn format_cusolver_version(version: i32) -> String {
+    format!(
+        "{}.{}.{}",
+        version / 1000,
+        version % 1000 / 100,
+        version % 100
+    )
 }
 
 impl CusolverEighRoutine {
@@ -1208,28 +1252,47 @@ pub(super) fn eigh(
     backend: &mut CudaEngine,
     input: &Tensor,
     driver: EighDriver,
+    batch_policy: EighBatchPolicy,
 ) -> Result<Vec<Tensor>> {
     match input.dtype() {
-        DType::F32 => eigh_typed(backend, typed_host::<f32>("eigh", input)?, driver)
-            .map(|(w, v)| vec![Tensor::from_typed::<f32>(w), Tensor::from_typed::<f32>(v)]),
-        DType::F64 => eigh_typed(backend, typed_host::<f64>("eigh", input)?, driver)
-            .map(|(w, v)| vec![Tensor::from_typed::<f64>(w), Tensor::from_typed::<f64>(v)]),
-        DType::C32 => {
-            eigh_typed(backend, typed_host::<Complex32>("eigh", input)?, driver).map(|(w, v)| {
-                vec![
-                    Tensor::from_typed::<f32>(w),
-                    Tensor::from_typed::<Complex32>(v),
-                ]
-            })
-        }
-        DType::C64 => {
-            eigh_typed(backend, typed_host::<Complex64>("eigh", input)?, driver).map(|(w, v)| {
-                vec![
-                    Tensor::from_typed::<f64>(w),
-                    Tensor::from_typed::<Complex64>(v),
-                ]
-            })
-        }
+        DType::F32 => eigh_typed(
+            backend,
+            typed_host::<f32>("eigh", input)?,
+            driver,
+            batch_policy,
+        )
+        .map(|(w, v)| vec![Tensor::from_typed::<f32>(w), Tensor::from_typed::<f32>(v)]),
+        DType::F64 => eigh_typed(
+            backend,
+            typed_host::<f64>("eigh", input)?,
+            driver,
+            batch_policy,
+        )
+        .map(|(w, v)| vec![Tensor::from_typed::<f64>(w), Tensor::from_typed::<f64>(v)]),
+        DType::C32 => eigh_typed(
+            backend,
+            typed_host::<Complex32>("eigh", input)?,
+            driver,
+            batch_policy,
+        )
+        .map(|(w, v)| {
+            vec![
+                Tensor::from_typed::<f32>(w),
+                Tensor::from_typed::<Complex32>(v),
+            ]
+        }),
+        DType::C64 => eigh_typed(
+            backend,
+            typed_host::<Complex64>("eigh", input)?,
+            driver,
+            batch_policy,
+        )
+        .map(|(w, v)| {
+            vec![
+                Tensor::from_typed::<f64>(w),
+                Tensor::from_typed::<Complex64>(v),
+            ]
+        }),
         DType::I32 | DType::I64 | DType::Bool => Err(unsupported_linalg_dtype("eigh", input)),
         DType::External(_) => Err(unsupported_linalg_dtype("eigh", input)),
     }
@@ -3159,6 +3222,7 @@ fn eigh_typed<T>(
     backend: &mut CudaEngine,
     input: &TypedTensor<T>,
     driver: EighDriver,
+    batch_policy: EighBatchPolicy,
 ) -> Result<(TypedTensor<<T as LinalgScalar>::Real>, TypedTensor<T>)>
 where
     T: LinalgScalar + TensorScalar,
@@ -3199,12 +3263,15 @@ where
         let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
         // A cuSOLVER without `XsyevBatched` sends the batch to the per-matrix
-        // loop below instead of failing (#2413).
+        // loop instead of failing (#2413); `RequireBatched` refuses that loop
+        // instead of taking it.
         let routine = select_eigh_driver(
             driver,
             batch_total,
-            handles.cusolver().xsyev_batched_available(),
-        );
+            batch_policy,
+            handles.cusolver().version(),
+            handles.cusolver().batched_eigh_symbols_resolved(),
+        )?;
         // The Jacobi routine needs a parameter object: it is queried for the
         // workspace size and reused by every call below. It outlives the
         // launches because the solver-status download later in this scope is
@@ -3518,12 +3585,15 @@ where
         let stream = raw.stream().raw_handle() as usize as CudaStream;
         handles.cusolver().set_stream(stream, OP)?;
         // A cuSOLVER without `XsyevBatched` sends the batch to the per-matrix
-        // loop below instead of failing (#2413).
+        // loop below instead of failing (#2413). The values-only entries carry
+        // no `EighBatchPolicy`, so they always accept that loop.
         let routine = select_eigh_driver(
             driver,
             batch_total,
-            handles.cusolver().xsyev_batched_available(),
-        );
+            EighBatchPolicy::AllowPerMatrixFallback,
+            handles.cusolver().version(),
+            handles.cusolver().batched_eigh_symbols_resolved(),
+        )?;
         // The Jacobi routine needs a parameter object: it is queried for the
         // workspace size and reused by every call below. It outlives the
         // launches because the solver-status download later in this scope is

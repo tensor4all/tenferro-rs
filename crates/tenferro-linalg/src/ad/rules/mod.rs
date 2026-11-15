@@ -23,7 +23,8 @@ use tenferro_ops::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 
 use crate::extension::{
-    EighDriver, EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdDriver, SvdGauge,
+    EighBatchPolicy, EighDriver, EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdDriver,
+    SvdGauge,
 };
 use tenferro_ops::ad::context::{resolve_and_guard, ShapeGuardContext};
 pub(crate) use tenferro_ops::ad::support::{
@@ -1088,6 +1089,9 @@ pub(crate) fn linearize_eigh_values(
             derivative_eps: eps,
             gauge: EighGauge::Raw,
             driver,
+            // The values-only tangent has no batch policy, so its recomputed
+            // spectrum accepts the per-matrix fallback.
+            batch_policy: EighBatchPolicy::AllowPerMatrixFallback,
         }),
         vec![ValueRef::External(primal_in[0].clone())],
         OperationRole::Primary,
