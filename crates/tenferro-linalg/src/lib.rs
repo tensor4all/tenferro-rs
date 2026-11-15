@@ -227,8 +227,12 @@ pub use extension::{
 ///
 /// Returns [`tenferro_tensor::Error::IoSource`] (with the typed
 /// `CudaLibraryLoadError`) when the cuSOLVER shared library, or a symbol this
-/// crate requires from it, cannot be loaded. A missing batched entry point is
-/// not an error: it is the `Ok(false)` answer.
+/// crate requires from it, cannot be loaded, and
+/// [`tenferro_tensor::Error::BackendFailure`] when the loaded library cannot
+/// create its handle — `cusolverDnCreate`, or the parameter object
+/// `cusolverDnCreateParams` — so a driver that is present but unusable is
+/// reported, not hidden behind a capability answer. A missing batched entry
+/// point is not an error: it is the `Ok(false)` answer.
 #[cfg(feature = "cuda")]
 #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
 pub fn cuda_batched_eigh_available() -> tenferro_tensor::Result<bool> {

@@ -350,6 +350,11 @@ typed `Unsupported` error that names `cusolverDnXsyevBatched`, the missing fact
 declined. A single matrix is one call either way, so `RequireBatched` never
 refuses one matrix or a batch of one.
 
+The policy binds the two-output `eigh`. A traced graph that keeps only the
+eigenvalues is pruned to the values-only operation, which carries the driver but
+not the batch policy, so its recompute may take the per-matrix loop; keep both
+outputs alive (or check the result) when the launch count has to survive tracing.
+
 To branch before the call, use `tenferro_linalg::cuda_batched_eigh_available()`
 on a `cuda` build: it reports the capability of the loaded cuSOLVER, and a
 cuSOLVER that cannot be loaded is its typed load error rather than `false`. CPU

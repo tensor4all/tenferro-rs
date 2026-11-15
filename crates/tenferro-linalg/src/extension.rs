@@ -354,6 +354,27 @@ impl Default for EighOptions {
 /// A single matrix, and a batch whose size is at most one, already is one call
 /// and is never refused.
 ///
+/// # Carve-outs: where the policy is not consulted
+///
+/// The policy belongs to the two-output `eigh`, and it is part of that
+/// operation's identity. A traced graph that keeps only the eigenvalues is
+/// pruned to the values-only operation, which carries the driver but has no
+/// batch policy at all, and whose recompute is free to take the per-matrix
+/// loop:
+///
+/// - The traced extension op `LinalgOp::Eigh` is rewritten to `LinalgOp::EighVals`
+///   when the vectors are dead, so a traced `eigh_with(RequireBatched)` whose
+///   values feed the graph can be recomputed one launch per matrix on a cuSOLVER
+///   below 11.7.1 without reporting anything.
+/// - The values-only entries themselves (`eigvalsh` and friends) are not
+///   strict: they carry no [`EighOptions`] and always accept the loop.
+///
+/// Ask for the two outputs, or check the result rather than the request, when
+/// the launch count has to hold after tracing as well. Both refusals — the CUDA
+/// one and the provider-neutral one — are attached to the two-output operation
+/// for the same reason: the values-only paths reach the very same batched entry
+/// point, so there is no separate capability for them to require.
+///
 /// # Examples
 ///
 /// ```rust
@@ -374,6 +395,9 @@ pub enum EighBatchPolicy {
     AllowPerMatrixFallback,
     /// Refuse the per-matrix loop. On the CUDA provider this requires
     /// `cusolverDnXsyevBatched`, exported since cuSOLVER 11.7.1.
+    ///
+    /// This binds the two-output `eigh` only; see the type-level carve-outs for
+    /// the values-only operation a traced graph is pruned to.
     RequireBatched,
 }
 
