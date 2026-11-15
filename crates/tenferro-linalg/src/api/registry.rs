@@ -1592,7 +1592,7 @@ assert!(close(wt.as_slice::<f64>()?[0], 0.375));
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op norm {
-        summary: "Vector or matrix norm over the chosen axes, selected by `NormOrd`.";
+        summary: "Vector or matrix norm over the chosen axes, selected by `NormOrd`; `NormOrd::Zero` counts entries `!= 0` (NaN counts as nonzero).";
         operands: (a);
         options: NormOptions;
         output: R;
