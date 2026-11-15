@@ -1449,6 +1449,9 @@ host	tenferro-linalg	gpu::linalg::tests::eigh_batches_fall_back_to_the_syevd_loo
 host	tenferro-linalg	gpu::linalg::tests::eigh_batches_take_a_batched_routine_at_every_order
 host	tenferro-linalg	gpu::linalg::tests::eigh_route_is_recorded_in_the_solver_diagnostics
 host	tenferro-linalg	gpu::linalg::tests::eigh_single_matrices_keep_the_per_matrix_entry_points
+host	tenferro-linalg	gpu::linalg::tests::allow_per_matrix_fallback_keeps_todays_routing_under_the_same_capabilities
+host	tenferro-linalg	gpu::linalg::tests::require_batched_is_satisfied_by_the_jacobi_batch_route
+host	tenferro-linalg	gpu::linalg::tests::require_batched_refuses_the_per_matrix_loop_and_names_the_capability
 host	tenferro-linalg	gpu::linalg::tests::explicit_driver_overrides_dimension_policy
 gpu	tenferro-linalg	gpu::linalg::tests::xgesvdp::test_cuda_svd_xgesvdp_full_and_economy
 host	tenferro-linalg	traced::tests::p_norm_rejects_zero_and_non_finite_orders
@@ -1603,6 +1606,7 @@ gpu	tenferro-linalg::integration	gpu_linalg::test_cuda_eig_c32_returns_unsupport
 gpu	tenferro-linalg::integration	gpu_linalg::test_cuda_eig_f32_returns_unsupported_error
 gpu	tenferro-linalg::integration	gpu_linalg::test_cuda_eigh_auto_batched_matches_the_per_matrix_spectrum
 gpu	tenferro-linalg::integration	gpu_linalg::test_cuda_eigh_auto_driver_matches_default_eigh
+gpu	tenferro-linalg::integration	gpu_linalg::test_cuda_eigh_batch_policy_requires_the_batched_routine
 gpu	tenferro-linalg::integration	gpu_linalg::test_cuda_eigh_c64_reconstructs_input
 gpu	tenferro-linalg::integration	gpu_linalg::test_cuda_eigh_complex_batches_run_through_xsyev_batched
 gpu	tenferro-linalg::integration	gpu_linalg::test_cuda_eigh_forced_syevd_matches_reference
@@ -1744,6 +1748,8 @@ host	tenferro-linalg::integration	traced_extension::traced_pinv_rejects_integer_
 host	tenferro-linalg::integration	traced_extension::traced_svd_eigh_qr_cholesky_reject_integer_and_bool_dtypes_at_construction
 host	tenferro-linalg::integration	traced_correctness::zero_order_norm_counts_nan_entries_as_nonzero
 host	tenferro-linalg::integration	concrete_surface::read_surface_solve_into_writes_the_caller_buffer_directly
+host	tenferro-linalg::integration	concrete_surface::require_batched_allows_one_matrix_and_singleton_batches
+host	tenferro-linalg::integration	concrete_surface::require_batched_is_unsupported_on_a_provider_without_a_batched_eigensolver
 host	tenferro-linalg::integration	error_causes::concrete_cholesky_indefinite_keeps_linalg_cause
 host	tenferro-linalg::integration	error_causes::concrete_solve_singular_keeps_linalg_cause
 host	tenferro-linalg::integration	error_causes::traced_cholesky_indefinite_keeps_linalg_cause
@@ -1763,6 +1769,7 @@ host	tenferro-linalg::integration	lane_entries::lane_results_are_bit_identical_t
 host	tenferro-linalg::integration	lane_entries::svd_and_eigh_gauges_on_a_lane_match_the_engine_route
 host	tenferro-linalg::integration	lane_entries::two_lanes_with_two_pools_do_not_share_storage
 host	tenferro-linalg::integration	lane_entries::two_lanes_with_two_pools_run_concurrent_factorizations_with_the_reference_bits
+host	tenferro-linalg::integration	lane_entries::require_batched_fails_on_a_lane_like_on_the_engine_route
 host	tenferro-linalg::integration	trace_context_linalg::traced_lu_records_on_a_symbolic_input
 host	tenferro-linalg::integration	trace_context_linalg::traced_norm_with_no_axes_returns_the_same_value
 host	tenferro-linalg::integration	trace_context_linalg::traced_solve_records_exactly_one_operation
