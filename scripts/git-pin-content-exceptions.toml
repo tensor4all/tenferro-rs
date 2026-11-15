@@ -7,7 +7,35 @@
 # removed. Each entry therefore needs a tracked issue and a concrete reason so
 # that review sees why the deviation is accepted.
 #
-# No exceptions are current: every dependency this workspace used to pin has a
-# published release whose sources match, so the workspace depends on the
-# registry directly. This file stays in place as the place to record a reviewed
-# deviation if a pin is ever reintroduced.
+# Two entries are current, both for the Metal backend work (#2402): the
+# `t4a-metal-runtime` and `t4a-cuda-kernels` revisions this branch pins are not on
+# crates.io yet. They do not make the check pass. A pin to a package that exists but
+# whose required version does not is a hard error raised before exceptions are
+# consulted, so `scripts/check-git-pin-content.py` still exits 1 on this branch. That is
+# the correct signal: the workspace cannot be published until the publish chain
+# (`t4a-metal-sys` -> `t4a-metal-runtime` -> `t4a-cuda-kernels` 0.2.0) has run and these
+# pins are replaced by registry versions. The policy is "resolved, not excepted"
+# (`docs/design/cubecl-011-pins.md`); these entries record the deviation and its issue
+# meanwhile, and are removed with the pins.
+
+# #2402: the Metal backend's sibling crates are not published yet, so `tenferro-gpu` pins
+# their revisions directly. Each pin is a reviewed deviation until the publish chain
+# (`t4a-metal-sys` -> `t4a-metal-runtime 0.1.1` -> `t4a-cuda-kernels 0.2.0`) lands and
+# `tenferro-gpu` is republished; removing the pins is the release follow-up on that issue.
+[[exception]]
+package = "t4a-metal-runtime"
+issue = "#2402"
+reason = """
+Unpublished sibling: the runtime that opens Metal with dlopen and carries the
+allocating `Runtime` is not on crates.io yet. The pin is the reviewed revision that
+adds `Send` for the shared runtime lock; the release follow-up publishes it.
+"""
+
+[[exception]]
+package = "t4a-cuda-kernels"
+issue = "#2402"
+reason = """
+Unpublished sibling: version 0.2.0 adds the Metal source set (`src/metal.rs`, the MSL
+under `metal/`). It depends on the unpublished `t4a-metal-runtime`, so it cannot be
+published before that crate; the same release follow-up publishes both.
+"""

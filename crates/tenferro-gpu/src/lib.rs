@@ -32,17 +32,21 @@
 mod event_domain_admission;
 #[cfg(feature = "cuda")]
 mod event_retirement;
-#[cfg(feature = "cuda")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 pub mod gpu;
 
-// The capability table is plain `const` data; it stays compiled without `cuda` so the guide
-// table can be checked in a default-features build. Only its `cuda`-gated readers name it
-// then, which is why the module allows dead code in that build.
+// The capability tables are plain `const` data; they stay compiled without their feature so
+// the guide table can be checked in a default-features build. Only the feature-gated
+// readers name the CUDA rows otherwise, which is why the module allows dead code there.
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub(crate) mod capability;
 
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
-#[cfg(feature = "cuda")]
+#[cfg(feature = "metal")]
+pub mod metal;
+
+#[cfg(any(feature = "cuda", feature = "metal"))]
+#[allow(unused_imports)]
 use tenferro_tensor::*;

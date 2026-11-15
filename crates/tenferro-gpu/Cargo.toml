@@ -9,7 +9,7 @@ publish.workspace = true
 readme.workspace = true
 repository.workspace = true
 homepage.workspace = true
-description = "CUDA backend for tenferro tensors, built on the t4a-cuda-kernels catalogue."
+description = "CUDA and Metal backends for tenferro tensors, built on the t4a-cuda-kernels catalogue."
 rust-version.workspace = true
 keywords = ["tensor", "gpu", "cuda"]
 categories = ["science", "hardware-support", "mathematics"]
@@ -24,7 +24,17 @@ name = "tenferro_gpu"
 
 [features]
 # The CUDA engine: the operation surface over the kernel catalogue, plus the vendor bindings.
-cuda = ["dep:t4a-cuda-runtime", "dep:t4a-cuda-kernels", "dep:cudarc"]
+cuda = [
+    "dep:t4a-cuda-runtime",
+    "dep:t4a-cuda-kernels",
+    "dep:cudarc",
+    "dep:libloading",
+]
+# The Metal engine: the operation surface over the same kernel catalogue's Metal source
+# set, run through t4a-metal-runtime. Additive with `cuda`: nothing selects a vendor
+# through `cfg(not(...))`, and on a non-Apple target this code compiles out and discovery
+# lists no Metal device.
+metal = ["dep:t4a-metal-runtime", "dep:t4a-cuda-kernels"]
 
 [dependencies]
 tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.12.0" }
@@ -34,9 +44,10 @@ tenferro-runtime = { path = "../tenferro-runtime", version = "0.12.0", default-f
 # The standalone CUDA runtime the U1 seam is built on and the kernel catalogue
 # (issue #2208); the pins live in `[workspace.dependencies]`.
 t4a-cuda-runtime = { workspace = true, optional = true }
+t4a-metal-runtime = { workspace = true, optional = true }
 t4a-cuda-kernels = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true, features = ["cublas", "cutensor"] }
-libloading.workspace = true
+libloading = { workspace = true, optional = true }
 num-complex.workspace = true
 num-traits.workspace = true
 tinyvec.workspace = true
@@ -206,6 +217,17 @@ required-features = ["cuda"]
 name = "seam_structural"
 path = "tests/seam_structural.rs"
 required-features = ["cuda"]
+
+[[test]]
+name = "metal_engine"
+path = "tests/metal_engine.rs"
+required-features = ["metal"]
+
+[[bench]]
+name = "metal_engine"
+path = "benches/metal_engine.rs"
+harness = false
+required-features = ["metal"]
 
 [[test]]
 name = "seam_full_reduction"

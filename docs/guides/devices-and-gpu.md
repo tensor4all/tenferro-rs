@@ -7,10 +7,13 @@ CUDA is a backend/device choice, not a separate tensor type. The same
 concrete, eager, and traced APIs can run supported CUDA operations when tensors
 are explicitly uploaded and execution uses the owning CUDA engine.
 
-CUDA support targets NVIDIA CUDA. WebGPU, Metal execution, and the Apple shared
-CPU/Metal path are not provided today. `tenferro-gpu` has no `webgpu` feature or
-WebGPU upload API. AMD/ROCm is not a supported execution path either: there is
-no `rocm` feature and no HIP runtime.
+CUDA support targets NVIDIA CUDA. Metal execution is a first slice behind the
+`metal` feature (issue #2402, design `docs/design/metal-backend.md` in
+`tensor4all-meta`): it serves f32 and Complex32 elementwise work and refuses
+everything else with a typed error naming the slice that serves it. WebGPU is
+not provided: `tenferro-gpu` has no `webgpu` feature or WebGPU upload API.
+AMD/ROCm is not a supported execution path either: there is no `rocm` feature
+and no HIP runtime.
 
 Probe before constructing an engine. `tenferro_gpu::cuda::gpu_available()`
 answers whether a CUDA device is usable without reaching the driver's entry
@@ -34,8 +37,29 @@ see [CUDA engines and pinned transfers](engines-and-transfers.md).
 | --- | --- | --- | --- |
 | CPU | Supported | none (faer is always compiled in) | Host execution |
 | CUDA | Supported | `cuda` | Native NVIDIA CUDA through the `t4a-cuda-kernels` catalogue plus CUDA libraries |
-| WebGPU / Metal / Apple shared CPU/Metal | Not provided | None | No backend or transfer quickstart |
+| Metal | First slice (f32, Complex32; elementwise) | `metal` | `tenferro_gpu::metal`, one shared CPU/Metal allocation domain per context |
+| WebGPU | Not provided | None | No backend or transfer quickstart |
 | ROCm | Not supported for execution | None | No feature and no runtime quickstart |
+
+## Metal
+
+Metal needs no upload for an operation to read a tensor: a `MetalContext` owns
+one shared allocation domain, so its allocations are host-visible and the CPU
+and the GPU address the same memory. `MetalContext::upload` and `download` are
+the explicit copies that cross that boundary, both counted in
+`MetalContext::stats()`. `MetalEngine::capabilities()` reports the operation and
+dtype rows this slice serves; `tenferro_gpu::metal::metal_capabilities()` is the
+same table without a device.
+
+The same context hands out a `CpuEngine` bound to that domain
+(`MetalContext::cpu_engine`), so f64 and Complex64 work runs on the CPU over the
+same tensors: the Metal engine refuses those dtypes with an error naming that
+engine, and nothing is copied and nothing falls back silently.
+
+Nothing links Metal, MetalPerformanceShaders or Accelerate at build time. The
+frameworks are opened with `dlopen` on first use, and a host without them gets
+`MetalError::Unavailable` instead of a link failure, so one binary runs on macOS
+with and without a usable device.
 
 ## Transfer Model
 
@@ -46,6 +70,10 @@ see [CUDA engines and pinned transfers](engines-and-transfers.md).
 | CUDA tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
 | GPU tensor to host inspection | Direct host slice APIs return `Error::RuntimeState`; download first |
 | Unsupported CUDA op or dtype | Error, not silent CPU fallback |
+| CPU tensor to Metal backend | `MetalContext::upload` copies once into a shared allocation |
+| Metal tensor to Metal backend | Launches read the shared allocation in place; no copy |
+| Metal tensor to CPU backend | Runs on the paired `CpuEngine` over the same allocation |
+| Metal f64 or Complex64 operand | Typed `Unsupported` naming the paired `CpuEngine` |
 
 Keep tensors on one GPU provider across a GPU workload. Download only when the
 host needs to inspect values or hand data to CPU-only code.

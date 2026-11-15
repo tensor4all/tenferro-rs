@@ -52,6 +52,7 @@ COMBOS=(
     "tenferro-internal-ops all autodiff,cuda"
     "tenferro-gpu default -"
     "tenferro-gpu cuda cuda"
+    "tenferro-gpu metal metal"
     "tenferro-xla default -"
     "tenferro-xla pjrt pjrt"
     "tenferro-einsum default -"
