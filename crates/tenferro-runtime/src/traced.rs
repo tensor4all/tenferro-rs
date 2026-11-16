@@ -307,28 +307,7 @@ fn reduction_output_meta(
     axes: &[usize],
     op: &'static str,
 ) -> Result<(usize, Option<Vec<SymDim>>)> {
-    let mut seen = vec![false; tensor.rank];
-    for &axis in axes {
-        if axis >= tensor.rank {
-            return Err(graph_validation(
-                op,
-                ValidationError::AxisOutOfBounds {
-                    axis: isize::try_from(axis).unwrap_or(isize::MAX),
-                    rank: tensor.rank,
-                },
-            ));
-        }
-        if seen[axis] {
-            return Err(graph_validation(
-                op,
-                ValidationError::DuplicateAxis {
-                    axis,
-                    role: "reduction",
-                },
-            ));
-        }
-        seen[axis] = true;
-    }
+    validate_traced_axes(tensor.rank, axes, op)?;
 
     let out_shape_hint = tensor.shape_hint.as_ref().map(|shape| {
         (0..shape.len())
@@ -367,7 +346,7 @@ fn validate_traced_axes(rank: usize, axes: &[usize], op: &'static str) -> Result
         if seen[axis] {
             return Err(graph_validation(
                 op,
-                ValidationError::DuplicateAxis { axis, role: "axis" },
+                ValidationError::DuplicateAxis { axis, role: "axes" },
             ));
         }
         seen[axis] = true;

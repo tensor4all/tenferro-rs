@@ -696,7 +696,7 @@ fn permute_shape(input_shape: &[DimExpr], perm: &[usize]) -> Result<Vec<DimExpr>
 fn validate_reduction_axes(input_shape: &[DimExpr], axes: &[usize]) -> Result<()> {
     tenferro_tensor::validate::validate_unique_axes(
         "shape_infer_reduction",
-        "reduction",
+        "axes",
         input_shape.len(),
         axes,
     )

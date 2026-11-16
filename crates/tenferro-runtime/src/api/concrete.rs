@@ -534,7 +534,7 @@ where
         "transpose",
         body::transpose(
             a.as_read(),
-            &axes::axes("transpose", perm, a.as_read().shape().len())?,
+            &axes::perm("transpose", perm, a.as_read().shape().len())?,
             e,
         )?,
     )

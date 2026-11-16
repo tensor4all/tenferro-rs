@@ -98,7 +98,7 @@ fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate:
             validate_axis(op, axis, rank)?;
             let bit = 1u128 << axis;
             if seen & bit != 0 {
-                return Err(crate::Error::duplicate_axis(op, axis, "perm"));
+                return Err(crate::Error::duplicate_axis(op, axis, "permutation"));
             }
             seen |= bit;
         }
@@ -108,7 +108,7 @@ fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate:
     for &axis in perm {
         validate_axis(op, axis, rank)?;
         if seen[axis] {
-            return Err(crate::Error::duplicate_axis(op, axis, "perm"));
+            return Err(crate::Error::duplicate_axis(op, axis, "permutation"));
         }
         seen[axis] = true;
     }

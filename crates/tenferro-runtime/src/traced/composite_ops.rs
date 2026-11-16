@@ -4,7 +4,7 @@
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{CompareDir, DType, GatherConfig};
 
-use super::{apply_nullary, TracedTensor};
+use super::{apply_nullary, validate_traced_axes, TracedTensor};
 use crate::composite::{
     self, scalar_bytes, zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce,
     CompositeUnary,
@@ -279,11 +279,11 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::TensorRuntime`] wrapping `UnsupportedDType` for
-    /// integer or `Bool` input or `AxisOutOfBounds` / `DuplicateAxis` for
-    /// invalid axes, [`Error::Validation`] with `InvalidArgument` when the
-    /// input shape is symbolic, or [`Error::RuntimeStateSource`] when graph
-    /// metadata registration fails.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` or `DuplicateAxis`
+    /// for invalid axes, [`Error::TensorRuntime`] wrapping `UnsupportedDType`
+    /// for integer or `Bool` input, [`Error::Validation`] with
+    /// `InvalidArgument` when the input shape is symbolic, or
+    /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     pub fn reduce_mean(&self, axes: Option<&[isize]>) -> Result<TracedTensor> {
         let axes = axes
             .map(|axes| {
@@ -295,6 +295,12 @@ impl TracedTensor {
             })
             .transpose()?;
         let axes = axes.as_deref();
+        // Axes are validated before the dtype dispatch inside the composite, so
+        // an invalid axis list wins over an unsupported dtype here as it does on
+        // the concrete surface.
+        if let Some(axes) = axes {
+            validate_traced_axes(self.rank(), axes, "TracedTensor::reduce_mean")?;
+        }
         composite::reduce_mean(&mut TracedComposite { ctx: &self.ctx }, self, axes)
     }
 

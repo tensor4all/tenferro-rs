@@ -340,7 +340,7 @@ fn single_session_output(op: &StdTensorOp, outputs: Vec<Tensor>) -> Result<Tenso
 }
 
 pub(crate) fn validate_eager_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<()> {
-    tenferro_tensor::validate::validate_unique_axes(op, "axis", rank, axes)
+    tenferro_tensor::validate::validate_unique_axes(op, "axes", rank, axes)
         .map_err(Error::TensorRuntime)
 }
 

@@ -362,6 +362,16 @@ impl<'a> EagerSession<'a> {
             })
             .transpose()?;
         let axes = axes.as_deref();
+        // Axes are validated before the dtype dispatch inside the composite, so an
+        // invalid axis list wins over an unsupported dtype here as it does on the
+        // concrete surface.
+        if let Some(axes) = axes {
+            crate::eager_ops::validate_eager_axes(
+                "EagerSession::reduce_mean",
+                input.shape().len(),
+                axes,
+            )?;
+        }
         composite::reduce_mean(&mut self.composite(), input, axes)
     }
 
