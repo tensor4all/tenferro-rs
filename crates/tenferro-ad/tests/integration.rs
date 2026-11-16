@@ -25,6 +25,8 @@ mod cpu_backend;
 mod dot_general_validation;
 #[path = "integration/dtype_propagation.rs"]
 mod dtype_propagation;
+#[path = "integration/duplicate_axis_payload_parity.rs"]
+mod duplicate_axis_payload_parity;
 #[path = "integration/dynamic_truncate.rs"]
 mod dynamic_truncate;
 #[path = "integration/eager_backend_capability_contract.rs"]

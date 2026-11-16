@@ -337,7 +337,7 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
                     op: _,
                     source: tenferro_tensor::ValidationError::DuplicateAxis {
                         axis: 0,
-                        role: "axis",
+                        role: "axes",
                     },
                 })
             ),

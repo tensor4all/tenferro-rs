@@ -197,6 +197,24 @@ layer, generated from a per-family registry. The operation list, options,
 
 ### Fixed
 
+- **Duplicate-axis validation reports one payload on the concrete, eager and
+traced surfaces.** The same repeated axis in a reduction, `reverse` or
+`transpose` argument reached a different validator on each layer, so
+`ValidationError::DuplicateAxis` carried `role: "axes"` (concrete), `"axis"`
+(eager reductions and eager/traced `reverse`), `"reduction"` (traced
+reductions) or `"permutation"` (eager/traced `transpose`). Reduction and
+`reverse` lists now report `"axes"` everywhere and permutations report
+`"permutation"` everywhere, so a repeated axis is reported identically on the
+three surfaces. The three surfaces also validate in one order — range, then
+length, then duplicate — instead of the concrete layer reporting a repeat that
+appears before a later out-of-range entry, and `reduce_mean` now reports an
+invalid axis list before the unsupported-dtype error its composite path raises.
+On the concrete surface `transpose` additionally reports
+`InvalidPermutationLength` instead of `RankMismatch` for a wrong-length `perm`,
+matching the other two layers. Verified by
+`crates/tenferro-ad/tests/integration/duplicate_axis_payload_parity.rs`, which
+compares the full payload across the three surfaces. #2601
+
 - **A one-input `stack` / `concatenate` compiles.** The output dtype of
 `StdTensorOp::Concatenate` was read from inputs 0 and 1 even though the op takes
 any number of inputs, so `TracedTensor::stack(&[&x], axis)` and

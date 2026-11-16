@@ -176,7 +176,7 @@ fn reductions_reject_invalid_axes_instead_of_saturating_rank() {
 
     let duplicate = x.reduce_min(Some(&[0, 0])).unwrap_err();
     assert!(
-        duplicate.to_string().contains("duplicate reduction axis 0"),
+        duplicate.to_string().contains("duplicate axes axis 0"),
         "{duplicate}"
     );
 

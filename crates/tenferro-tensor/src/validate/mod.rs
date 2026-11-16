@@ -196,15 +196,20 @@ pub fn validate_permutation_axes(op: &'static str, rank: usize, perm: &[usize]) 
 /// ```rust
 /// use tenferro_tensor::validate::validate_unique_axes;
 ///
-/// validate_unique_axes("reduce_sum", "axis", 3, &[0, 2])?;
-/// assert!(validate_unique_axes("reduce_sum", "axis", 2, &[2]).is_err());
-/// assert!(validate_unique_axes("reduce_sum", "axis", 2, &[0, 0]).is_err());
+/// validate_unique_axes("reduce_sum", "axes", 3, &[0, 2])?;
+/// assert!(validate_unique_axes("reduce_sum", "axes", 2, &[2]).is_err());
+/// assert!(validate_unique_axes("reduce_sum", "axes", 2, &[0, 0]).is_err());
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 /// # Errors
 ///
 /// Returns [`crate::Error::Validation`] with `AxisOutOfBounds` for an invalid
 /// axis or `DuplicateAxis` when an axis occurs more than once.
+///
+/// `role` names the argument family and is the same for every surface that
+/// validates the same list: `"axes"` for a reduction or `reverse` axis list,
+/// `"dim"` for a linalg dimension list. A permutation list is validated by
+/// [`validate_permutation_axes`] instead.
 pub fn validate_unique_axes(
     op: &'static str,
     role: &'static str,
