@@ -27,7 +27,7 @@ the result.
 | [Dynamic shapes: truncated SVD](dynamic-shape-truncated-svd.md) | Output ranks depend on runtime values such as singular-value thresholds. |
 | [Tropical extension](tropical-extension.md) | You want a complete extension crate for non-standard arithmetic, runtime registration, and AD rules. |
 | [Sparse tensor extension](sparse-extension.md) | You want a fixed-pattern sparse COO extension with sparse-sparse contraction and value AD. |
-| [KdV PINN sample](kdv-pinn.md) | You want a full traced-graph PINN training loop with PDE residuals and scalar loss gradients. |
+| [KdV PINN example](https://github.com/tensor4all/tenferro-examples/tree/main/examples/kdv-pinn) (tenferro-examples) | You want a full traced-graph PINN training loop with PDE residuals and scalar loss gradients. |
 
 The [custom operations guide](../guides/custom-operations.md) explains the
 extension architecture only when you need to add a new operation family.
@@ -51,10 +51,4 @@ The tropical and sparse extension tutorials are tested as standalone crates:
 ```bash
 cargo test --manifest-path ext/tropical/Cargo.toml --release --features autodiff
 cargo test --manifest-path ext/sparse/Cargo.toml --release --features autodiff
-```
-
-The KdV PINN sample is compile-checked separately:
-
-```bash
-cargo check --manifest-path samples/kdv-pinn/Cargo.toml --release --all-targets
 ```

@@ -153,8 +153,8 @@ jobs:
           REASON: ${{ needs.changes.outputs.reason }}
         run: echo "Workspace tests not required - ${REASON}"
 
-  ext-samples:
-    name: Extension and sample tests
+  extensions:
+    name: Extension tests
     needs: changes
     runs-on: ubuntu-24.04
     steps:
@@ -162,7 +162,7 @@ jobs:
         if: needs.changes.outputs.run_extensions == 'true'
       - uses: dtolnay/rust-toolchain@stable
         if: needs.changes.outputs.run_extensions == 'true'
-      - name: Cache extension/sample target dirs
+      - name: Cache extension target dirs
         if: needs.changes.outputs.run_extensions == 'true'
         uses: Swatinem/rust-cache@v2
         with:
@@ -170,7 +170,6 @@ jobs:
           workspaces: |
             ext/tropical
             ext/sparse
-            samples/kdv-pinn
       - name: Run extension profile
         if: needs.changes.outputs.run_extensions == 'true'
         run: python3 scripts/ci/run_profile.py extensions
@@ -228,7 +227,7 @@ jobs:
 
   ci-gate:
     name: CI gate (PR workspace tests)
-    needs: [changes, ci-fork, ci-maintainer, ext-samples, api-surface]
+    needs: [changes, ci-fork, ci-maintainer, extensions, api-surface]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -237,7 +236,7 @@ jobs:
           CHANGE_RESULT: ${{ needs.changes.result }}
           FORK_RESULT: ${{ needs.ci-fork.result }}
           MAINTAINER_RESULT: ${{ needs.ci-maintainer.result }}
-          EXT_RESULT: ${{ needs.ext-samples.result }}
+          EXT_RESULT: ${{ needs.extensions.result }}
           API_RESULT: ${{ needs.api-surface.result }}
           RUN_WORKSPACE: ${{ needs.changes.outputs.run_workspace }}
           RUN_EXTENSIONS: ${{ needs.changes.outputs.run_extensions }}
@@ -247,7 +246,7 @@ jobs:
             exit 1
           fi
           if [ "${EXT_RESULT}" != success ]; then
-            echo "Expected ext-samples to succeed or no-op; got ${EXT_RESULT}"
+            echo "Expected extension tests to succeed or no-op; got ${EXT_RESULT}"
             exit 1
           fi
           if [ "${API_RESULT}" != success ]; then

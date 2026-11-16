@@ -57,6 +57,8 @@ mod graph_compile;
 mod hvp;
 #[path = "integration/iterative_ad.rs"]
 mod iterative_ad;
+#[path = "integration/kdv_pinn_end_to_end.rs"]
+mod kdv_pinn_end_to_end;
 #[path = "integration/memory_order_api.rs"]
 mod memory_order_api;
 #[path = "integration/multi_input_traced.rs"]

@@ -7,6 +7,13 @@ with the decisions recorded in §5, plus two accepted additions: public multi-`w
 reverse mode in P2 (§3.6, §7) and an end-to-end `samples/kdv-pinn` check in §8.
 No implementation before this design was approved; P1 may start after merge.
 
+> The KdV PINN sample has since moved to
+> [tensor4all/tenferro-examples](https://github.com/tensor4all/tenferro-examples)
+> (`examples/kdv-pinn`, #2628). `samples/kdv-pinn` paths and line numbers below
+> refer to the checkout this record was written against. The PR-time guard in
+> this repository is
+> `crates/tenferro-ad/tests/integration/kdv_pinn_end_to_end.rs` (§8).
+
 Every count, line number and size below was taken from the checkout at
 `bdde3f2b6e82f0c9991f4170a642ad80dca7b707` with the command quoted next to it.
 The `TraceContext` op surface in §1 and the linalg/fft rows of §2.4 were
@@ -599,6 +606,11 @@ Migration size inside tenferro: 258 files mention `TracedTensor` (112 under
 | tensor4all-rs and yao-rs build against the new API | phase 4 | local build of both with a local patch; summary in the PR body |
 | `EagerTensor: Send + Sync` stays a checked property | §3.8 | `eager_tensor.rs:1431` plus a new assertion on the journal type |
 
+`samples/` no longer exists in this repository (#2628). The traced-API part of
+its "builds" check is carried by
+`crates/tenferro-ad/tests/integration/kdv_pinn_end_to_end.rs`, which runs, not
+only compiles, as part of the `tenferro-ad` integration suite.
+
 ## 4. Answers to the open questions
 
 **Q1 `TraceHandle` sharing.** `Rc<RefCell<TraceInner>>`, `TracedTensor: !Send`.
@@ -735,6 +747,16 @@ multi-`wrt` change is visible end to end: at HEAD it compiles one gradient
 program per parameter (`main.rs:114-141`) and runs one program per parameter per
 epoch (`:173-175`), so the epoch time is the metric the multi-`wrt` API is
 supposed to move.
+
+The sample, and with it the epoch-time measurement, now lives in
+tensor4all/tenferro-examples (`examples/kdv-pinn`), which builds against the
+released crates and, on a daily schedule, against tenferro-rs `main` (#2628).
+The PR-time end-to-end guard in this repository is
+`crates/tenferro-ad/tests/integration/kdv_pinn_end_to_end.rs`: an MLP whose
+parameters are placeholders of the caller's `TraceContext`, the KdV residual
+from chained `jvp`, `grad` of the scalar loss with respect to every parameter,
+`compile_with_input_specs`, and execution on the CPU engine, with each gradient
+compared against central finite differences of the loss.
 
 Expected direction: per-op cost falls (one builder append instead of a graph
 fragment plus three map merges and a metadata registration), and compile becomes

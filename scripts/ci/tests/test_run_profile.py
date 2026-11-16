@@ -44,7 +44,6 @@ class RunProfileTests(unittest.TestCase):
         for relative in (
             "ext/tropical/Cargo.toml",
             "ext/sparse/Cargo.toml",
-            "samples/kdv-pinn/Cargo.toml",
         ):
             manifest = tomllib.loads((ROOT / relative).read_text())
             with self.subTest(manifest=relative):
