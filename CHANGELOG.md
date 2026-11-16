@@ -6,7 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Breaking changes — one call grammar (#2552, planned for 0.12)
+### Breaking changes — one call grammar (#2552, ships in 0.12.0)
 
 Every operation family (core, linalg, einsum, FFT) now has one spelling per
 layer, generated from a per-family registry. The operation list, options,
@@ -86,8 +86,7 @@ layer, generated from a per-family registry. The operation list, options,
   `BufferPool` (now re-exported at the `tenferro-cpu` root), and replaces the
   `*_with_exec` entries: inside a lane the ordinary grammar runs
   (`view.svd(lane)`). Only `svd`, `svdvals`, `qr`, `eigh`, `eigvalsh` and
-  `eigvals` run in a lane; every other operation returns `Unsupported`. Under
-  the `blas` provider a lane returns `Unsupported`.
+  `eigvals` run in a lane; every other operation returns `Unsupported`.
 - **New operations.** Concrete and eager `fftn`, `ifftn`, `rfftn`, `irfftn`;
   `EagerFftOps::{fft_in_place, ifft_in_place}` replace the eager-tensor
   in-place FFT (`sess.fft_in_place(x, &opts)`).

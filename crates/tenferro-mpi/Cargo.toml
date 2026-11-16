@@ -41,7 +41,7 @@ runtime = ["dep:mpi", "mpi/mpi-rt-sys-backend"]
 engine = []
 
 [dependencies]
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.11.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.12.0", default-features = false }
 thiserror = "2"
 # The published rsmpi-rt 0.8.2 package kept its library target as `mpi`, so the
 # dependency is aliased back to `mpi` and the adapter's `use mpi::...` paths and
