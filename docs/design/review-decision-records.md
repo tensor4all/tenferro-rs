@@ -49,7 +49,9 @@ input or, when the input counts happened to match, bound to a retained constant
 input in its place. Keeping unused placeholders as ignored program inputs was
 rejected because it needs a semantic input that no operation reads; rejecting
 the declaration is the fail-fast contract. Callers drop the binding, as the
-kdv-pinn `pde::tests` do for the constant third derivative of `x^3`.
+KdV PINN example's `pde::tests` do for the constant third derivative of `x^3`
+(formerly `samples/kdv-pinn`, now `examples/kdv-pinn` in
+tensor4all/tenferro-examples, #2628).
 
 ### Concrete session surface parity (#1858)
 

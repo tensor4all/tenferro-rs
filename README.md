@@ -316,6 +316,12 @@ Selected deep dives:
 - [Custom operations](https://tensor4all.org/tenferro-rs/guides/custom-operations.html)
   — extension operations and AD rules from external crates.
 
+Larger example applications, such as a physics-informed neural network for the
+Korteweg–de Vries equation, live in
+[tensor4all/tenferro-examples](https://github.com/tensor4all/tenferro-examples).
+They build against the crates released on crates.io and are also checked daily
+against tenferro-rs `main`.
+
 ## Project
 
 **Why tenferro-rs exists.** Moving tensor-network engines from Julia to Rust
