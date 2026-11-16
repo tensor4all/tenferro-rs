@@ -93,6 +93,7 @@ host	tenferro-ad	eager_exec::tests::dynamic_truncate_invalid_axis_returns_tensor
 host	tenferro-ad	eager_exec::tests::dynamic_truncate_rejects_nan_size
 host	tenferro-ad	eager_exec::tests::dynamic_truncate_rejects_non_scalar_size
 host	tenferro-ad	eager_exec::tests::dynamic_truncate_rounds_non_integer_size
+host	tenferro-ad	eager_exec::tests::eager_convert_reaches_the_read_hook_with_a_view
 host	tenferro-ad	eager_exec::tests::eager_input_promotion_plan_covers_all_promoted_families
 host	tenferro-ad	eager_exec::tests::eager_promoting_read_entries_convert_only_the_mismatched_operand
 host	tenferro-ad	eager_exec::tests::eager_read_dispatch_only_materializes_when_the_operation_requires_it

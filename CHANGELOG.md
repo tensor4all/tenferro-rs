@@ -111,6 +111,18 @@ layer, generated from a per-family registry. The operation list, options,
 
 ### Added
 
+- **`TensorStructural::cast_read` and `convert_read` (#2223).** The read form of the
+  explicit dtype projection consumes a `TensorRead` where it lies, so a borrowed view
+  is not staged before a cast. `convert_read` is the checked form (promotion-lattice
+  validation, then `cast_read`). The CPU engine reads a view's own layout, including
+  its float-to-int range check, which now walks the view's logical elements rather than
+  its backing buffer; the CUDA engine takes one counted staging copy until a
+  layout-taking `Convert` entry exists. The traced `Convert`, the eager executor, the
+  eager promotion path and the erased core body now pass the operand's `TensorRead`
+  through: a metadata view folds into `Convert`, and a traced convert of a program-input
+  view pays no `to_contiguous_read` staging. `cast_read` carries a temporary staging
+  default; it becomes required when the owned `cast`/`convert` twins are removed.
+
 - **`CpuEngine::dispatch_costs` is public** (#2590). The read-only accessor
   returns the `threadteam::DispatchCosts` the engine's tokens use, so a caller
   can decide with `num_threads` and threadteam's `width_for_by` / `pays_at`
