@@ -200,12 +200,15 @@ fn kdv_residual_vanishes_on_exact_soliton() {
     assert_eq!(out.shape(), &[n, 1]);
     // Each term of the residual is O(1) on these points, so cancellation to
     // rounding level checks every derivative order.
-    for &r in out.as_slice::<f64>().unwrap() {
-        assert!(
-            r.abs() < 1e-10,
-            "residual of the exact soliton should vanish, got {r}"
-        );
-    }
+    let max_abs = out
+        .as_slice::<f64>()
+        .unwrap()
+        .iter()
+        .fold(0.0_f64, |acc, r| acc.max(r.abs()));
+    assert!(
+        max_abs < 1e-10,
+        "residual of the exact soliton should vanish: max |r| = {max_abs:e}"
+    );
 }
 
 #[test]
@@ -327,10 +330,14 @@ fn kdv_pinn_loss_gradients_run_and_match_finite_differences() {
             };
             let fd = (loss_at(original + h) - loss_at(original - h)) / (2.0 * h);
             loss_at(original);
+            let abs_err = (fd - grad[k]).abs();
+            let scale = grad[k].abs().max(1.0);
             assert!(
-                (fd - grad[k]).abs() <= 1e-8 * grad[k].abs().max(1.0),
-                "parameter {p} entry {k}: grad = {}, central difference = {fd}",
-                grad[k]
+                abs_err <= 1e-8 * scale,
+                "parameter {p} entry {k}: grad = {:e}, central difference = {fd:e}, \
+                 |error| = {abs_err:e}, |error| / max(|grad|, 1) = {:e}",
+                grad[k],
+                abs_err / scale
             );
         }
     }
