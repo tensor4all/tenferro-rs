@@ -37,6 +37,11 @@ impl CudaStorage {
     pub(crate) fn allocation(&self) -> &t4a_cuda_runtime::Buffer {
         self.buffer.allocation()
     }
+
+    /// Identity of the allocation, so two views can be told to share one.
+    pub(crate) fn allocation_id(&self) -> AllocationId {
+        self.buffer.identity().allocation
+    }
 }
 
 impl std::fmt::Debug for CudaStorage {
@@ -62,7 +67,7 @@ impl<T: Send + Sync + 'static> BackendStorage<T> for CudaStorage {
     }
 
     fn allocation_id(&self) -> Option<AllocationId> {
-        Some(self.buffer.identity().allocation)
+        Some(CudaStorage::allocation_id(self))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

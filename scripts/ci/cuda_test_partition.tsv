@@ -1090,6 +1090,12 @@ host	tenferro-gpu	cuda::structural::tests::a_coalesced_view_addresses_every_elem
 host	tenferro-gpu	cuda::structural::tests::a_dense_destination_order_exists_only_for_a_permuted_compact_span
 host	tenferro-gpu	cuda::structural::tests::the_benchmark_permutations_the_tiled_transpose_addresses
 host	tenferro-gpu	cuda::structural::tests::a_source_run_past_the_default_grid_plans_with_the_wide_tile
+gpu	tenferro-gpu	cuda::structural::tests::a_wide_reversal_reads_through_the_vendor_permutation
+gpu	tenferro-gpu	cuda::structural::tests::a_wide_reversal_is_written_into_a_reused_destination
+gpu	tenferro-gpu	cuda::structural::tests::a_wide_cyclic_rotation_stays_on_the_tiled_transpose
+gpu	tenferro-gpu	cuda::structural::tests::a_refused_vendor_plan_leaks_no_native_handle
+gpu	tenferro-gpu	cuda::structural::tests::a_refused_vendor_plan_keeps_the_reused_destination_copy
+host	tenferro-gpu	cuda::structural::tests::vendor_permutation_routing_takes_only_a_wide_supported_view
 host	tenferro-gpu	cuda::device::tests::discovery_reports_an_unloadable_driver_as_a_typed_error
 host	tenferro-gpu	cuda::runtime::tests::the_budget_grows_with_the_device_and_stays_bounded
 host	tenferro-gpu	cuda::runtime::tests::the_environment_overrides_the_budget_in_mib

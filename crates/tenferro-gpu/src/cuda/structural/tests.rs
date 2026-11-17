@@ -1544,6 +1544,15 @@ fn a_permuted_batched_dot_stages_the_permuted_operand() {
     assert_eq!(read(&engine, &product), expected);
 }
 
+/// The rank-18 full reversal of a compact source: the `reverse_18d_3` geometry after merging,
+/// with no two destination axes adjacent in the source.
+fn reversed_rank_18() -> (Vec<usize>, Vec<isize>) {
+    (
+        vec![2; 18],
+        (0..18).map(|axis| 1isize << (17 - axis)).collect(),
+    )
+}
+
 /// The compact copy of one host view, in the view's logical order: the reference the generic and
 /// the tiled materialization must both reproduce.
 fn host_compact(data: &[f64], extents: &[usize], strides: &[isize], offset: isize) -> Vec<f64> {
@@ -1711,6 +1720,7 @@ fn a_three_axis_reversal_stays_on_the_generic_materialization() {
     // (The `[2, 0, 1]` rotation this test used to hold is a pair swap once its trailing axes
     // merge, and now takes the tiled entry.)
     let before = engine.tiled_transposes();
+    let before_vendor = engine.vendor_permutations();
     let copy = engine
         .to_contiguous_read(region(&source, vec![4, 3, 2], vec![6, 2, 1], 0))
         .expect("materialize the reversal");
@@ -1718,6 +1728,11 @@ fn a_three_axis_reversal_stays_on_the_generic_materialization() {
         engine.tiled_transposes(),
         before,
         "a three-axis reversal keeps the generic path"
+    );
+    assert_eq!(
+        engine.vendor_permutations(),
+        before_vendor,
+        "and a view at the by-value rank is not one the vendor is asked for"
     );
     assert_eq!(
         read(&engine, &copy),
@@ -2080,5 +2095,329 @@ fn copy_read_into_an_offset_permuted_destination_keeps_the_strided_copy() {
     assert_eq!(
         observed,
         expected_after_copy(&sentinels, &shape, &strides, 2, &values)
+    );
+}
+
+/// Which views the vendor permutation is asked to serve.
+///
+/// The predicate is the whole routing rule for the layouts the by-value entries cannot address,
+/// so it is pinned without a device: each case is a row of the rule.
+#[test]
+fn vendor_permutation_routing_takes_only_a_wide_supported_view() {
+    use tenferro_tensor::DType;
+
+    // A full reversal of a compact rank-18 source: no two axes merge, which is the shape of the
+    // benchmark's `reverse_18d_3` and `reverse_23d_128x2` rows.
+    let extents: Vec<i64> = vec![2; 18];
+    let strides: Vec<i64> = (0..18).map(|axis| 1i64 << (17 - axis)).collect();
+    for dtype in [DType::F32, DType::F64, DType::C32, DType::C64] {
+        assert!(
+            super::vendor_permutation_applies(dtype, &extents, &strides, 0, false),
+            "{dtype:?} is served"
+        );
+    }
+    // A dtype cuTENSOR's compute descriptor does not serve here keeps the native path.
+    for dtype in [DType::Bool, DType::I32, DType::I64] {
+        assert!(
+            !super::vendor_permutation_applies(dtype, &extents, &strides, 0, false),
+            "{dtype:?} keeps the native path"
+        );
+    }
+    // A view the by-value entries address keeps the provider it has today, at every rank up to
+    // their limit.
+    let narrow_strides: Vec<i64> = (0..t4a_cuda_kernels::MAX_RANK as i64).collect();
+    let narrow_extents: Vec<i64> = vec![2; t4a_cuda_kernels::MAX_RANK];
+    assert!(!super::vendor_permutation_applies(
+        DType::F64,
+        &narrow_extents,
+        &narrow_strides,
+        0,
+        false
+    ));
+    // A broadcast axis and a negative stride are layouts cuTENSOR 2.x refuses.
+    let mut broadcast = strides.clone();
+    broadcast[3] = 0;
+    assert!(!super::vendor_permutation_applies(
+        DType::F64,
+        &extents,
+        &broadcast,
+        0,
+        false
+    ));
+    let mut negative = strides.clone();
+    negative[5] = -negative[5];
+    assert!(!super::vendor_permutation_applies(
+        DType::F64,
+        &extents,
+        &negative,
+        0,
+        false
+    ));
+    // The descriptor declares 16-byte alignment, so a base that loses it is not routed.
+    assert!(super::vendor_permutation_applies(
+        DType::F64,
+        &extents,
+        &strides,
+        2,
+        false
+    ));
+    assert!(!super::vendor_permutation_applies(
+        DType::F64,
+        &extents,
+        &strides,
+        1,
+        false
+    ));
+    assert!(!super::vendor_permutation_applies(
+        DType::F64,
+        &extents,
+        &strides,
+        -1,
+        false
+    ));
+    // The 4-byte dtypes take the other branch of the same product.
+    assert!(super::vendor_permutation_applies(
+        DType::F32,
+        &extents,
+        &strides,
+        4,
+        false
+    ));
+    assert!(!super::vendor_permutation_applies(
+        DType::F32,
+        &extents,
+        &strides,
+        3,
+        false
+    ));
+    // `cutensorPermute` is undefined for aliased operands.
+    assert!(!super::vendor_permutation_applies(
+        DType::F64,
+        &extents,
+        &strides,
+        0,
+        true
+    ));
+    // A rank past the widest one this repository demonstrates keeps the device-geometry path.
+    let mut wide_extents: Vec<i64> = vec![2; 25];
+    let mut wide_strides: Vec<i64> = (0..25).map(|axis| 1i64 << (24 - axis)).collect();
+    assert!(!super::vendor_permutation_applies(
+        DType::F64,
+        &wide_extents,
+        &wide_strides,
+        0,
+        false
+    ));
+    wide_extents.pop();
+    wide_strides.pop();
+    assert!(super::vendor_permutation_applies(
+        DType::F64,
+        &wide_extents,
+        &wide_strides,
+        0,
+        false
+    ));
+}
+
+/// A reversal wider than the by-value entries address is materialized through the vendor.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_wide_reversal_reads_through_the_vendor_permutation() {
+    let Some(mut engine) = engine() else { return };
+    // Rank 18 with every extent 2: `s[k + 1] = s[k] / 2`, so no two destination axes merge and
+    // the view keeps the rank the benchmark's `reverse_18d_3` has after coalescing.
+    let (extents, strides) = reversed_rank_18();
+    let count: usize = extents.iter().product();
+    let data: Vec<f64> = (0..count).map(|index| index as f64).collect();
+    let source = device(&engine, vec![count], data.clone());
+
+    let before = engine.vendor_permutations();
+    let copy = engine
+        .to_contiguous_read(region(&source, extents.clone(), strides.clone(), 0))
+        .expect("materialize the wide reversal");
+    assert_eq!(
+        engine.vendor_permutations(),
+        before + 1,
+        "a rank the by-value entries cannot address takes the vendor permutation"
+    );
+    assert_eq!(
+        read(&engine, &copy),
+        host_compact(&data, &extents, &strides, 0)
+    );
+}
+
+/// The same shape of view written into a reused permuted destination, as the benchmark's
+/// destination-reuse arm does: the vendor writes the caller's buffer, so nothing past the span
+/// moves and no fresh allocation is paid.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_wide_reversal_is_written_into_a_reused_destination() {
+    let Some(mut engine) = engine() else { return };
+    // Rank 23 of extent 2, the benchmark's `reverse_23d_128x2` rank.
+    let extents = vec![2usize; 23];
+    let count: usize = extents.iter().product();
+    let values: Vec<f64> = (0..count).map(|index| 1000.0 + index as f64).collect();
+    let source = device(&engine, extents.clone(), values.clone());
+    // The destination is one compact span of its allocation read in reversed axis order, which is
+    // the permutation; five sentinels past the span must keep their values.
+    let sentinels: Vec<f64> = (0..count + 5).map(|index| -(index as f64)).collect();
+    let mut root = device(&engine, vec![count + 5], sentinels.clone());
+    let destination_strides: Vec<isize> = (0..23).map(|axis| 1isize << (22 - axis)).collect();
+
+    let before = engine.vendor_permutations();
+    let observed = copy_into_region(
+        &mut engine,
+        &mut root,
+        &source,
+        extents.clone(),
+        destination_strides.clone(),
+        0,
+    );
+    assert_eq!(
+        engine.vendor_permutations(),
+        before + 1,
+        "a wide permuted destination takes the vendor permutation"
+    );
+    assert_eq!(
+        observed,
+        expected_after_copy(&sentinels, &extents, &destination_strides, 0, &values)
+    );
+}
+
+/// A cyclic rotation of the same rank keeps the tiled transpose: its axes merge into one pair
+/// swap, so the vendor is not asked and the row #2581 fixed does not move.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_wide_cyclic_rotation_stays_on_the_tiled_transpose() {
+    let Some(mut engine) = engine() else { return };
+    // `perm = [1, …, 17, 0]` of a compact rank-18 source: destination strides
+    // `[2, 4, …, 2^17, 1]`, which merge to `[(2^17, 2), (2, 1)]`.
+    let extents = vec![2usize; 18];
+    let mut strides: Vec<isize> = (1..18).map(|axis| 1isize << axis).collect();
+    strides.push(1);
+    let count: usize = extents.iter().product();
+    let data: Vec<f64> = (0..count).map(|index| index as f64).collect();
+    let source = device(&engine, vec![count], data.clone());
+
+    let (before_tiled, before_vendor) = (engine.tiled_transposes(), engine.vendor_permutations());
+    let copy = engine
+        .to_contiguous_read(region(&source, extents.clone(), strides.clone(), 0))
+        .expect("materialize the rotation");
+    assert_eq!(
+        engine.tiled_transposes(),
+        before_tiled + 1,
+        "a mergeable cyclic rotation takes the tiled transpose"
+    );
+    assert_eq!(
+        engine.vendor_permutations(),
+        before_vendor,
+        "and the vendor is not asked for it"
+    );
+    assert_eq!(
+        read(&engine, &copy),
+        host_compact(&data, &extents, &strides, 0)
+    );
+}
+
+/// A vendor plan the library refuses leaves no native handle behind, and the catalogue's own
+/// entry still produces the copy.
+///
+/// The leak this pins is invisible without the counters: a build that creates descriptors, an
+/// operation and a preference and then fails leaves the driver holding handles nobody can see.
+/// Every stage is injected, so the cleanup is exercised with one, two, three, four and five
+/// handles already created. The counters are process-wide, so the delta — not a total — is what
+/// this asserts, and the device tests run one at a time.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_refused_vendor_plan_leaks_no_native_handle() {
+    let Some(mut engine) = engine() else { return };
+    let (extents, strides) = reversed_rank_18();
+    let count: usize = extents.iter().product();
+    let data: Vec<f64> = (0..count).map(|index| index as f64).collect();
+    let source = device(&engine, vec![count], data.clone());
+    let (created_before, retired_before) = super::super::cutensor::plan_handles();
+    let cached_before = engine.cutensor().expect("cuTENSOR").cached_plans();
+
+    for stage in 1..=4 {
+        super::super::cutensor::arm_plan_build_failure(stage);
+        let vendor_before = engine.vendor_permutations();
+        let fallbacks_before = engine.vendor_permutation_fallbacks();
+        let copy = engine
+            .to_contiguous_read(region(&source, extents.clone(), strides.clone(), 0))
+            .expect("materialize after the refused plan");
+        assert_eq!(
+            read(&engine, &copy),
+            host_compact(&data, &extents, &strides, 0),
+            "the catalogue's entry writes the whole copy after a refusal at stage {stage}"
+        );
+        assert_eq!(
+            engine.vendor_permutations(),
+            vendor_before,
+            "nothing was written by the library at stage {stage}"
+        );
+        assert_eq!(
+            engine.vendor_permutation_fallbacks(),
+            fallbacks_before + 1,
+            "the refusal is counted, not silent, at stage {stage}"
+        );
+        assert_eq!(
+            engine.cutensor().expect("cuTENSOR").cached_plans(),
+            cached_before,
+            "a refused plan never enters the cache (stage {stage})"
+        );
+    }
+
+    let (created, retired) = super::super::cutensor::plan_handles();
+    assert!(
+        created > created_before,
+        "the injected builds did create handles"
+    );
+    assert_eq!(
+        created - created_before,
+        retired - retired_before,
+        "every handle an aborted plan build created was destroyed"
+    );
+}
+
+/// The same refusal on the destination-reuse arm: the copy still lands in the caller's buffer,
+/// past the span nothing moves, and no handle leaks.
+#[test]
+#[ignore = "requires CUDA"]
+fn a_refused_vendor_plan_keeps_the_reused_destination_copy() {
+    let Some(mut engine) = engine() else { return };
+    let extents = vec![2usize; 23];
+    let count: usize = extents.iter().product();
+    let values: Vec<f64> = (0..count).map(|index| 1000.0 + index as f64).collect();
+    let source = device(&engine, extents.clone(), values.clone());
+    let sentinels: Vec<f64> = (0..count + 5).map(|index| -(index as f64)).collect();
+    let mut root = device(&engine, vec![count + 5], sentinels.clone());
+    let destination_strides: Vec<isize> = (0..23).map(|axis| 1isize << (22 - axis)).collect();
+    let (created_before, retired_before) = super::super::cutensor::plan_handles();
+
+    super::super::cutensor::arm_plan_build_failure(3);
+    let fallbacks_before = engine.vendor_permutation_fallbacks();
+    let observed = copy_into_region(
+        &mut engine,
+        &mut root,
+        &source,
+        extents.clone(),
+        destination_strides.clone(),
+        0,
+    );
+    assert_eq!(
+        engine.vendor_permutation_fallbacks(),
+        fallbacks_before + 1,
+        "the refusal is counted"
+    );
+    assert_eq!(
+        observed,
+        expected_after_copy(&sentinels, &extents, &destination_strides, 0, &values)
+    );
+
+    let (created, retired) = super::super::cutensor::plan_handles();
+    assert_eq!(
+        created - created_before,
+        retired - retired_before,
+        "every handle an aborted plan build created was destroyed"
     );
 }
