@@ -248,3 +248,51 @@ fn fft_semantic_rules_run_through_whole_program_jvp_and_vjp() {
             | SemanticOpRef::Core(CoreSemanticOp::DynamicTruncate { axis: 0 })
     )));
 }
+
+#[cfg(feature = "autodiff")]
+#[test]
+fn rfft_rules_on_a_symbolic_extent_linearize_but_refuse_the_parity_dependent_transpose() {
+    use tenferro_ad::AdContext;
+    use tenferro_ops::dim_expr::DimExpr;
+    use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
+
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }],
+        ))
+        .unwrap();
+    let output = builder
+        .add_extension(
+            Arc::new(FftOp::new(
+                FftOperation::R2cOnesided,
+                vec![0],
+                None,
+                FftNorm::Backward,
+            )),
+            &[input],
+        )
+        .unwrap()[0];
+    let source = builder.finish(&[output]).unwrap();
+    let ad = AdContext::builder()
+        .with_semantic_extension_rules(semantic_ad_rules().unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
+
+    // The tangent is the same transform, which needs no extent.
+    ad.jvp_program(&source, &[true]).unwrap();
+    // The cotangent padding depends on the parity of the unbound length.
+    let error = match ad.vjp_program(&source, &[true], &[true]) {
+        Ok(_) => panic!("an unbound rfft length has no parity to pad the cotangent with"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{error:?}").contains("requires a concrete extent on axis 0"),
+        "{error:?}"
+    );
+}

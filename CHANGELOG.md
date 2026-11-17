@@ -133,6 +133,16 @@ layer, generated from a per-family registry. The operation list, options,
   broken) and the same workspace retention bound, but it reserves no worker.
   The body gets a `SerialCtx` with the engine's workspace and batch policy,
   which is not a provider bundle and cannot fork.
+- **AD through the real FFTs (#2644).** `rfft`, `irfft`, `rfftn`, `irfftn` and
+  `fft`/`fftn` of a real input now have JVP and VJP rules on the traced and
+  eager paths, so an `rfft` -> spectral multiply -> `irfft` model trains
+  without a complex-to-complex workaround. The VJP of `rfft` zero-pads the
+  half-spectrum cotangent to the full length, applies the adjoint inverse
+  transform and keeps the real part; the VJP of `irfft` is the forward
+  half-spectrum transform of the cotangent with every bin except DC and (even
+  length) Nyquist doubled. `n`/`shape`, every `FftNorm`, and even and odd
+  lengths are covered; the complex-to-complex rules are unchanged. These
+  transforms previously returned an unsupported-AD-rule error.
 
 ### Changed
 

@@ -59,11 +59,6 @@ pub enum FftOperation {
 }
 
 impl FftOperation {
-    #[cfg(feature = "autodiff")]
-    pub(crate) const fn is_c2c(self) -> bool {
-        matches!(self, Self::C2cForward | Self::C2cInverse)
-    }
-
     pub(crate) const fn is_forward(self) -> bool {
         matches!(self, Self::C2cForward | Self::R2cFull | Self::R2cOnesided)
     }
