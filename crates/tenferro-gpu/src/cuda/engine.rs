@@ -117,6 +117,16 @@ pub struct CudaEngine {
     /// does, so which one ran is the selection rule's only observable form. Measurement for the
     /// transpose tests, not a public surface: [`CudaEngine::tiled_transposes`] is crate-private.
     tiled_transposes: std::cell::Cell<u64>,
+    /// How many permutations this engine took through cuTENSOR.
+    ///
+    /// Same role as `tiled_transposes`: the vendor serves the layouts the catalogue's by-value
+    /// entries cannot, and which provider ran is the routing rule's observable form.
+    vendor_permutations: std::cell::Cell<u64>,
+    /// How many of those the vendor could not serve, so the catalogue's entry did.
+    ///
+    /// A routed view falls back only when the library or its plan is unavailable, and both
+    /// providers write the whole destination; the counter keeps that visible instead of silent.
+    vendor_permutation_fallbacks: std::cell::Cell<u64>,
     // `!Sync` explicitly rather than by inheritance from the runtime's auto traits.
     _not_sync: PhantomData<std::cell::Cell<()>>,
 }
@@ -167,6 +177,8 @@ impl CudaEngine {
             launch_completion_syncs: std::cell::Cell::new(0),
             staged_reads: std::cell::Cell::new(0),
             tiled_transposes: std::cell::Cell::new(0),
+            vendor_permutations: std::cell::Cell::new(0),
+            vendor_permutation_fallbacks: std::cell::Cell::new(0),
             _not_sync: PhantomData,
         })
     }
@@ -302,6 +314,30 @@ impl CudaEngine {
     /// Record one tiled transpose for [`CudaEngine::tiled_transposes`].
     pub(crate) fn note_tiled_transpose(&self) {
         self.tiled_transposes.set(self.tiled_transposes.get() + 1);
+    }
+
+    /// How many permutations this engine took through cuTENSOR.
+    #[cfg(test)]
+    pub(crate) fn vendor_permutations(&self) -> u64 {
+        self.vendor_permutations.get()
+    }
+
+    /// Record one vendor permutation for [`CudaEngine::vendor_permutations`].
+    pub(crate) fn note_vendor_permutation(&self) {
+        self.vendor_permutations
+            .set(self.vendor_permutations.get() + 1);
+    }
+
+    /// How many routed permutations the vendor could not serve.
+    #[cfg(test)]
+    pub(crate) fn vendor_permutation_fallbacks(&self) -> u64 {
+        self.vendor_permutation_fallbacks.get()
+    }
+
+    /// Record one routed permutation the catalogue had to serve instead.
+    pub(crate) fn note_vendor_permutation_fallback(&self) {
+        self.vendor_permutation_fallbacks
+            .set(self.vendor_permutation_fallbacks.get() + 1);
     }
 
     /// Refuse numerical submission on an engine the runtime marked broken.

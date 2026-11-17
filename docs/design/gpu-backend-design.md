@@ -50,7 +50,7 @@ crates/tenferro-gpu/src/cuda/
     structural.rs          engine structural/read/write operations
                            (structural/activation.rs: fused activations)
     fusion.rs              fused elementwise catalogue integration
-    cutensor.rs            cuTENSOR contraction integration
+    cutensor.rs            cuTENSOR contraction and permutation integration
     vendor.rs              cuBLAS integration
     raw.rs                 engine-scoped vendor stream, spans and scratch
     runtime_adapter.rs     prepared-runtime engine registration
@@ -219,6 +219,47 @@ stride, or one still above the by-value rank after merging, keeps
 The by-value materialization allocates its destination uninitialised: both
 entries write every destination element, so a zero fill would be a full extra
 pass. The wide (device-geometry) path still allocates zeroed.
+
+A view still above the by-value rank after that merge has no catalogue entry that
+addresses it: `MaterializeStrided`'s general symbol and `StridedToStrided`'s walk
+every axis per element, which is what makes a rank-18 or rank-23 reversal an order
+of magnitude slower than a bandwidth-bound copy (`gpu/permutation`'s
+`reverse_18d_3` and `reverse_23d_128x2`). Those views, and only those, are
+materialized by `cutensorPermute` (`cuda/cutensor.rs::permute`), selected by
+`cuda/structural.rs::vendor_permutation_applies`: a rank above `MAX_RANK` and
+within the widest rank a device here demonstrates, a dtype the compute descriptor
+serves, no zero or negative stride, a base pointer that keeps the 16-byte
+alignment the descriptor declares, and source and destination in different
+allocations (`cutensorPermute` is undefined for aliased operands, while the native
+element-wise copy documents that precondition instead of detecting it). This is a
+provider selection, not a fallback tier: a view the tiled or by-value entries
+serve keeps them, and the vendor route never widens to a layout the predicate
+rejects.
+
+Two failure classes on that route stay distinct, and only one of them is a dead
+end. Setup that cannot be planned at all — no library file, no handle, or a
+descriptor, operation or plan the library refuses — returns
+`cutensor::PermuteFailure::Unusable`; the destination is untouched, so the
+catalogue's own wide entry finishes the operation and
+`CudaEngine::note_vendor_permutation_fallback` counts it rather than hiding it.
+That entry is a real provider for the same layout, which it served before the
+route existed, so this is selection between two complete implementations, not the
+silent native downgrade the vendor contract forbids for a vendor-owned
+operation. A failure of the planned call returns `PermuteFailure::Submitted` and
+is an error: the destination may then be partly written. A permutation plan joins
+the handle's plan cache under a reserved key prefix, and `cutensorPermute` takes
+no workspace, so no workspace buffer is allocated for one. A routed destination
+the caller owns costs no fill; a fresh one is allocated zeroed, because the raw
+scope that registers operands for the library can only register initialised
+buffers.
+
+Plan construction is failure-atomic. A plan is a bundle of native handles — up to
+four tensor descriptors, an operation, a plan preference and the plan — created in
+stages whose later steps can fail, so `cutensor.rs::PlanBuild` owns them while they
+are being built and destroys whatever exists if the build stops part-way; only a
+complete bundle is handed to the cache. The cache itself destroys the plan it is
+asked to insert when it cannot retire the oldest entry, because such a plan was
+never stored and nothing has run against it.
 
 Catalogue planners receive validated dtype/layout/operation metadata and
 produce the launch geometry. `cuda/dispatch.rs` calls the catalogue's `plan_*`

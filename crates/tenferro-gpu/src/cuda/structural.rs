@@ -25,7 +25,7 @@ use t4a_cuda_kernels::{
 };
 use t4a_cuda_runtime::{Arg, LaunchConfig};
 
-use super::cutensor::{Contraction, Operand};
+use super::cutensor::{Contraction, Operand, Permutation};
 use super::dispatch::{pod_arg, IndexPointer};
 use super::engine::CudaEngine;
 use super::launch::layout_arg;
@@ -592,6 +592,13 @@ fn region_has_compact_strides(region: &Region<'_>) -> bool {
     true
 }
 
+/// The widest rank a permutation may reach before cuTENSOR is asked to serve it.
+///
+/// What bounds it is not the vendor's descriptor rank but this repository's evidence: a routed
+/// view of this rank is what a device here can exercise (24 axes of extent 2 is 134 MB), and a
+/// wider one keeps the catalogue's device-geometry path, which is what it takes today.
+const VENDOR_PERMUTATION_MAX_RANK: usize = 24;
+
 /// Whether a region is one contiguous span starting at its allocation's base.
 ///
 /// A flat region's elements are the first `element_count` entries of the allocation, which is
@@ -625,6 +632,53 @@ const TILED_TRANSPOSE_CONFIG: TransposeConfig = TransposeConfig::DEFAULT;
 /// catalogue ever drops that member, in which case the refused geometry keeps the generic path.
 fn tiled_transpose_wide_config() -> Option<TransposeConfig> {
     TransposeConfig::new(32, 8, 1, 1).ok()
+}
+
+/// Whether a coalesced view is one `cutensorPermute` is asked to serve.
+///
+/// The library is the provider for exactly the layouts the catalogue's by-value entries cannot
+/// address: a rank above their by-value limit (`MAX_RANK`), within the widest rank this
+/// repository demonstrates ([`VENDOR_PERMUTATION_MAX_RANK`]). Everything narrower keeps the
+/// tiled transpose or the generic materialization, so a row those already serve never moves to
+/// the vendor. Of the remainder: a broadcast (zero) or negative stride is a layout cuTENSOR 2.x
+/// refuses (#1509), a dtype it does not serve here is F32, F64, C32 or C64, a base pointer that
+/// loses the 16-byte alignment the descriptor declares would make that declaration a lie, and a
+/// source and destination in one allocation are undefined operands for `cutensorPermute` — the
+/// native element-wise copy documents the same precondition for its callers but cannot enforce
+/// it, so an aliased pair stays where that contract already governs it.
+fn vendor_permutation_applies(
+    dtype: DType,
+    extents: &[i64],
+    strides: &[i64],
+    source_offset: i64,
+    aliased: bool,
+) -> bool {
+    let element = match dtype {
+        DType::F32 | DType::C32 => 4,
+        DType::F64 | DType::C64 => 8,
+        _ => return false,
+    };
+    !aliased
+        && extents.len() > t4a_cuda_kernels::MAX_RANK
+        && extents.len() <= VENDOR_PERMUTATION_MAX_RANK
+        && source_offset >= 0
+        && source_offset * element % 16 == 0
+        && extents
+            .iter()
+            .zip(strides)
+            .all(|(&extent, &stride)| extent > 0 && stride > 0)
+}
+
+/// Whether a vendor failure means the library cannot serve this request at all.
+///
+/// Both classes come from setup — no library file, no handle, or a descriptor, operation or plan
+/// the library refuses — so the destination has not been touched and the catalogue's own entry
+/// can still produce it. Every other failure comes from the call itself.
+fn vendor_missing(error: &crate::gpu::GpuError) -> bool {
+    matches!(
+        error.kind(),
+        crate::gpu::SeamError::Unavailable | crate::gpu::SeamError::Unsupported
+    )
 }
 
 /// The view a compact column-major destination reads, with its mergeable axes merged.
@@ -1331,6 +1385,32 @@ impl TensorStructural for CudaEngine {
                         OP,
                     );
                 }
+                if vendor_permutation_applies(
+                    dtype,
+                    &extents,
+                    &strides,
+                    source.offset,
+                    source.storage.allocation_id() == destination.storage.allocation_id(),
+                ) {
+                    // The vendor reads an address and a descriptor, so the view's span inside the
+                    // allocation is proved here: the by-value route above gets the same proof
+                    // from the planner `materialize_by_value` calls.
+                    let reference = LayoutRef::new(&extents, &strides, source.offset)
+                        .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+                    plan_materialize_strided(kernel, reference, source.len(OP)?)
+                        .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+                    if self.permute_into(
+                        source.storage,
+                        dtype,
+                        &extents,
+                        &strides,
+                        source.offset,
+                        destination.storage.allocation(),
+                        OP,
+                    )? {
+                        return Ok(());
+                    }
+                }
             }
             if source.extents.len() <= t4a_cuda_kernels::MAX_RANK {
                 let source_layout = source.layout(OP)?;
@@ -2032,6 +2112,14 @@ impl CudaEngine {
         // Both operands are validated before any early return: an empty general-path view still
         // has to belong to this runtime.
         let destination = with_scalar!(dtype, |T| self.allocation_of::<T>(&output, op))?;
+        if vendor_permutation_applies(dtype, extents, strides, offset, false)
+            && self.permute_into(storage, dtype, extents, strides, offset, destination, op)?
+        {
+            // The library owns the permutation of a view this wide; the catalogue's
+            // device-geometry entry below keeps every layout the predicate does not take, and
+            // one the library cannot serve after all.
+            return Ok(output);
+        }
         let source = storage.allocation();
         if plan.grid[0] == 0 {
             return Ok(output);
@@ -2078,6 +2166,79 @@ impl CudaEngine {
         }?;
         self.prove_launch(op)?;
         Ok(output)
+    }
+
+    /// Write the compact copy of a coalesced view through `cutensorPermute`.
+    ///
+    /// `destination` is a device allocation of this runtime with room for the view's elements,
+    /// and receives them in the view's own order. The caller only reaches this after the layout
+    /// planner proved the view's span inside `storage`, so the library reads exactly those
+    /// elements.
+    ///
+    /// `Ok(true)` means the library wrote the destination. `Ok(false)` means it could not be
+    /// used at all — no library, no handle, or a refused descriptor/operation/plan — and the
+    /// caller has to serve the view with the catalogue's own entry, which this selection never
+    /// replaced: both providers write the whole destination, so either one finishes the
+    /// operation and neither is a degraded fallback. A failure of the library *call* itself is
+    /// still an error, since the destination may then be partly written.
+    #[allow(clippy::too_many_arguments)]
+    fn permute_into(
+        &mut self,
+        storage: &CudaStorage,
+        dtype: DType,
+        extents: &[i64],
+        strides: &[i64],
+        offset: i64,
+        destination: &t4a_cuda_runtime::Buffer,
+        op: &'static str,
+    ) -> crate::Result<bool> {
+        let kernel = kernel_dtype(dtype, op)?;
+        let element = with_scalar!(dtype, |T| Ok(std::mem::size_of::<T>().max(1) as i64))?;
+        let modes: Vec<i32> = (0..extents.len() as i32).collect();
+        // The destination is compact in the view's own order, so its strides are the running
+        // product of the extents.
+        let mut destination_strides = Vec::with_capacity(extents.len());
+        let mut stride = 1i64;
+        for &extent in extents {
+            destination_strides.push(stride);
+            stride *= extent;
+        }
+        let request = Permutation {
+            dtype: kernel,
+            input: Operand {
+                buffer: storage.allocation(),
+                modes: &modes,
+                extents,
+                strides,
+            },
+            output: Operand {
+                buffer: destination,
+                modes: &modes,
+                extents,
+                strides: &destination_strides,
+            },
+            input_offset_bytes: (offset * element) as u64,
+        };
+        let cutensor = match self.cutensor() {
+            Ok(cutensor) => cutensor,
+            Err(super::engine::CudaEngineError::Seam(error)) if vendor_missing(&error) => {
+                self.note_vendor_permutation_fallback();
+                return Ok(false);
+            }
+            Err(super::engine::CudaEngineError::Seam(error)) => return Err(seam_error(op, error)),
+            Err(error) => return Err(crate::Error::runtime_state(op, error.to_string())),
+        };
+        match cutensor.permute(&request) {
+            Ok(()) => {}
+            Err(super::cutensor::PermuteFailure::Unusable(_)) => {
+                self.note_vendor_permutation_fallback();
+                return Ok(false);
+            }
+            Err(failure) => return Err(seam_error(op, failure.into_error())),
+        }
+        self.note_vendor_permutation();
+        self.prove_launch(op)?;
+        Ok(true)
     }
 
     /// Write the `len`-element compact copy of a view of rank at most `MAX_RANK` to the base of

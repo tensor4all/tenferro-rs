@@ -28,6 +28,7 @@ use super::runtime::CudaRuntime;
 /// Loaded from the library file [`load_library`] found, which keeps the search order under
 /// this crate's control (`TENFERRO_CUTENSOR_PATH`, then the distribution's subdirectory)
 /// instead of a fixed list of sonames.
+#[derive(Clone, Copy)]
 struct Vtable {
     create: unsafe extern "C" fn(*mut ct::cutensorHandle_t) -> ct::cutensorStatus_t,
     destroy: unsafe extern "C" fn(ct::cutensorHandle_t) -> ct::cutensorStatus_t,
@@ -94,6 +95,24 @@ struct Vtable {
         *mut c_void,
         *mut c_void,
         u64,
+        ct::cudaStream_t,
+    ) -> ct::cutensorStatus_t,
+    create_permutation: unsafe extern "C" fn(
+        ct::cutensorHandle_t,
+        *mut ct::cutensorOperationDescriptor_t,
+        ct::cutensorTensorDescriptor_t,
+        *const i32,
+        ct::cutensorOperator_t,
+        ct::cutensorTensorDescriptor_t,
+        *const i32,
+        ct::cutensorComputeDescriptor_t,
+    ) -> ct::cutensorStatus_t,
+    permute: unsafe extern "C" fn(
+        ct::cutensorHandle_t,
+        ct::cutensorPlan_t,
+        *const c_void,
+        *const c_void,
+        *mut c_void,
         ct::cudaStream_t,
     ) -> ct::cutensorStatus_t,
 }
@@ -218,6 +237,30 @@ impl Vtable {
                         ct::cudaStream_t,
                     ) -> ct::cutensorStatus_t
                 ),
+                create_permutation: bind!(
+                    "cutensorCreatePermutation",
+                    unsafe extern "C" fn(
+                        ct::cutensorHandle_t,
+                        *mut ct::cutensorOperationDescriptor_t,
+                        ct::cutensorTensorDescriptor_t,
+                        *const i32,
+                        ct::cutensorOperator_t,
+                        ct::cutensorTensorDescriptor_t,
+                        *const i32,
+                        ct::cutensorComputeDescriptor_t,
+                    ) -> ct::cutensorStatus_t
+                ),
+                permute: bind!(
+                    "cutensorPermute",
+                    unsafe extern "C" fn(
+                        ct::cutensorHandle_t,
+                        ct::cutensorPlan_t,
+                        *const c_void,
+                        *const c_void,
+                        *mut c_void,
+                        ct::cudaStream_t,
+                    ) -> ct::cutensorStatus_t
+                ),
             })
         }
     }
@@ -231,8 +274,11 @@ trait Pipe: Sized {
 }
 impl<T> Pipe for T {}
 
-fn check_vendor(call: &'static str) -> impl FnOnce(ct::cutensorStatus_t) -> Result<(), GpuError> {
-    move |status| check(status, "contract", call)
+fn check_vendor(
+    op: &'static str,
+    call: &'static str,
+) -> impl FnOnce(ct::cutensorStatus_t) -> Result<(), GpuError> {
+    move |status| check(status, op, call)
 }
 
 /// Refuse a non-success cuTENSOR status with the call that produced it.
@@ -318,6 +364,25 @@ impl Contraction<'_> {
     }
 }
 
+/// A permutation `out[modes_b] = in[modes_a]`: `cutensorPermute` over two descriptors.
+///
+/// The library owns the layouts the catalogue's by-value entries cannot address — a rank above
+/// their limit after axis merging — and, as with a contraction, only the dtypes a compute
+/// descriptor serves.
+#[derive(Debug, Clone, Copy)]
+#[doc(hidden)]
+pub struct Permutation<'a> {
+    /// Dtype of both operands.
+    pub dtype: DType,
+    /// The operand that is read.
+    pub input: Operand<'a>,
+    /// The operand that is written.
+    pub output: Operand<'a>,
+    /// Byte offset of the input's first element inside its buffer: a descriptor carries extents
+    /// and strides but no offset, so a strided view's base moves the pointer instead.
+    pub input_offset_bytes: u64,
+}
+
 /// A cuTENSOR scalar operand, laid out as the compute type expects.
 #[derive(Clone, Copy)]
 enum Coefficient {
@@ -342,7 +407,7 @@ impl Coefficient {
     }
 }
 
-/// How many contraction plans (and their device workspaces) one handle retains.
+/// How many plans (and the device workspaces contractions planned with them) one handle retains.
 const MAX_CACHED_PLANS: usize = 32;
 /// Largest descriptor rank a contraction operand may have. cuTENSOR takes the rank as a
 /// `u32` and the mode labels as `i32`, so `i32::MAX` is the tighter of the two; the bound
@@ -357,6 +422,202 @@ struct CachedPlan {
     operation: ct::cutensorOperationDescriptor_t,
     /// Bytes this plan needs; the handle's single workspace is at least this large.
     workspace_bytes: u64,
+}
+
+/// Why a permutation request did not run.
+#[doc(hidden)]
+#[derive(Debug)]
+pub enum PermuteFailure {
+    /// Nothing was submitted: the request cannot be planned, or the plan cache cannot retire an
+    /// entry. The destination is untouched, so the catalogue's own entry can still produce it.
+    Unusable(GpuError),
+    /// The planned call failed. The destination may be partly written, so this is an error.
+    Submitted(GpuError),
+}
+
+impl PermuteFailure {
+    /// The underlying failure.
+    pub fn into_error(self) -> GpuError {
+        match self {
+            PermuteFailure::Unusable(error) | PermuteFailure::Submitted(error) => error,
+        }
+    }
+}
+
+/// Native handles that a plan under construction owns, and that leak if the build stops.
+///
+/// Every handle is recorded as soon as the library returned it, so a refusal at any later
+/// stage — the next descriptor, the operation, the preference, the workspace growth, the plan
+/// itself, or a plan cache that cannot evict — destroys exactly the handles that already
+/// exist. An armed guard hands them to the plan cache instead.
+struct PlanBuild {
+    runtime: CudaRuntime,
+    vtable: Vtable,
+    descriptors: [ct::cutensorTensorDescriptor_t; 4],
+    operation: ct::cutensorOperationDescriptor_t,
+    preference: ct::cutensorPlanPreference_t,
+    plan: ct::cutensorPlan_t,
+    armed: bool,
+}
+
+impl PlanBuild {
+    fn new(runtime: &CudaRuntime, vtable: &Vtable) -> PlanBuild {
+        PlanBuild {
+            runtime: runtime.clone(),
+            vtable: *vtable,
+            descriptors: [std::ptr::null_mut(); 4],
+            operation: std::ptr::null_mut(),
+            preference: std::ptr::null_mut(),
+            plan: std::ptr::null_mut(),
+            armed: false,
+        }
+    }
+
+    /// Record a descriptor the library just created.
+    fn set_descriptor(&mut self, index: usize, handle: ct::cutensorTensorDescriptor_t) {
+        self.descriptors[index] = handle;
+        live::record();
+    }
+
+    /// Record the operation descriptor the library just created.
+    fn set_operation(&mut self, handle: ct::cutensorOperationDescriptor_t) {
+        self.operation = handle;
+        live::record();
+    }
+
+    /// Record the plan preference the library just created.
+    fn set_preference(&mut self, handle: ct::cutensorPlanPreference_t) {
+        self.preference = handle;
+        live::record();
+    }
+
+    /// Record the plan the library just created.
+    fn set_plan(&mut self, handle: ct::cutensorPlan_t) {
+        self.plan = handle;
+        live::record();
+    }
+
+    /// Hand the handles to the plan cache, so dropping the guard does not destroy them.
+    fn into_cached(mut self, workspace_bytes: u64) -> CachedPlan {
+        self.armed = true;
+        CachedPlan {
+            descriptors: self.descriptors,
+            plan: self.plan,
+            preference: self.preference,
+            operation: self.operation,
+            workspace_bytes,
+        }
+    }
+}
+
+impl Drop for PlanBuild {
+    fn drop(&mut self) {
+        if self.armed {
+            return;
+        }
+        let descriptors = self.descriptors;
+        let (plan, preference, operation) = (self.plan, self.preference, self.operation);
+        let vtable = self.vtable;
+        // SAFETY: the raw scope activates the context these handles belong to, and a handle is
+        // only ever recorded after the library returned it; nothing has run against this plan,
+        // so destroying it without draining the stream is the order a refused build leaves.
+        unsafe {
+            let _ = self.runtime.with_raw_locked(Vec::new(), |_raw| {
+                if !plan.is_null() {
+                    let _ = (vtable.destroy_plan)(plan);
+                    live::retire();
+                }
+                if !preference.is_null() {
+                    let _ = (vtable.destroy_plan_preference)(preference);
+                    live::retire();
+                }
+                if !operation.is_null() {
+                    let _ = (vtable.destroy_operation_descriptor)(operation);
+                    live::retire();
+                }
+                for descriptor in descriptors {
+                    if !descriptor.is_null() {
+                        let _ = (vtable.destroy_tensor_descriptor)(descriptor);
+                        live::retire();
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// Counters that make a leaked plan handle visible to a test.
+///
+/// A plan builds once per shape, so two relaxed atomic adds per handle cost nothing measurable
+/// and are the only way a test can tell "the failure path destroyed its handles" from "the
+/// failure path left them behind" — the driver cannot report a leaked descriptor.
+mod live {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static CREATED: AtomicU64 = AtomicU64::new(0);
+    static RETIRED: AtomicU64 = AtomicU64::new(0);
+
+    /// One handle the library created.
+    pub(super) fn record() {
+        CREATED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// One handle that was destroyed.
+    pub(super) fn retire() {
+        RETIRED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Handles created so far in this process.
+    #[cfg(test)]
+    pub(super) fn created() -> u64 {
+        CREATED.load(Ordering::Relaxed)
+    }
+
+    /// Handles destroyed so far in this process.
+    #[cfg(test)]
+    pub(super) fn retired() -> u64 {
+        RETIRED.load(Ordering::Relaxed)
+    }
+}
+
+/// Handles created and destroyed so far, for the leak test.
+#[cfg(test)]
+pub(crate) fn plan_handles() -> (u64, u64) {
+    (live::created(), live::retired())
+}
+
+/// Make the next plan build of `op` fail right after `stage` handles exist (**crate-private**).
+///
+/// The only reachable failure mode a test can arrange without a broken driver is a refused
+/// ``cutensorCreateTensorDescriptor``; every later stage needs the vendor to refuse a request it
+/// accepts, so it is injected here instead. The arm disarms itself once used.
+#[cfg(test)]
+pub(crate) fn arm_plan_build_failure(stage: u64) {
+    FAIL_AT.store(stage, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+static FAIL_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Fail this plan build if a test armed it for this stage; a no-op in a release build.
+#[allow(unused_variables)]
+fn plan_build_failure(op: &'static str, stage: u64) -> Result<(), GpuError> {
+    #[cfg(test)]
+    if FAIL_AT
+        .compare_exchange(
+            stage,
+            0,
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        )
+        .is_ok()
+    {
+        return Err(GpuError::unsupported(
+            op,
+            format!("injected plan-build failure after stage {stage}"),
+        ));
+    }
+    Ok(())
 }
 
 /// A cuTENSOR handle bound to one runtime, with its shape-keyed plan cache.
@@ -478,26 +739,7 @@ impl Cutensor {
             self.warm_hits += 1;
         } else {
             let plan = self.build_plan(request)?;
-            // A varying shape would otherwise retain one device workspace per shape for the
-            // lifetime of the engine; the oldest plan retires instead.
-            if self.order.len() >= MAX_CACHED_PLANS {
-                if let Some(oldest) = self.order.pop_front() {
-                    if let Some(evicted) = self.plans.remove(&oldest) {
-                        // The plan's handles and workspace are native resources: an evicted plan
-                        // has to be destroyed, or a varying-shape workload leaks one bundle per
-                        // shape. Nothing queued may still use it, so the stream is drained first.
-                        self.runtime
-                            .synchronize()
-                            .map_err(|error| GpuError::Unavailable {
-                                detail: error.to_string(),
-                            })?;
-                        self.destroy_plan(evicted);
-                    }
-                }
-            }
-            self.plans.insert(signature.clone(), plan);
-            self.order.push_back(signature.clone());
-            self.cold_plans += 1;
+            self.insert_plan(signature.clone(), plan)?;
         }
         let cached = self.plans.get(&signature).expect("plan inserted above");
         let (a, b, c, d) = (
@@ -564,12 +806,251 @@ impl Cutensor {
                         workspace_bytes,
                         stream,
                     )
-                    .pipe(check_vendor("cutensorContract"))
+                    .pipe(check_vendor("contract", "cutensorContract"))
                 })
                 .map_err(|error| GpuError::Unavailable {
                     detail: error.to_string(),
                 })?
         }
+    }
+
+    /// Execute one permutation, planning it only if its signature is new.
+    ///
+    /// # Panics
+    ///
+    /// Only if the plan cache and the plan it just stored disagree, which is an internal
+    /// invariant: the plan is inserted before it is read back.
+    ///
+    /// # Errors
+    ///
+    /// [`PermuteFailure::Unusable`] when the request cannot be planned at all — the operands'
+    /// lists disagree, a descriptor or the plan is refused, or the plan cache cannot retire an
+    /// entry — and [`PermuteFailure::Submitted`] when the planned call failed.
+    pub fn permute(&mut self, request: &Permutation<'_>) -> Result<(), PermuteFailure> {
+        for operand in [request.input, request.output] {
+            if operand.modes.len() != operand.extents.len()
+                || operand.modes.len() != operand.strides.len()
+            {
+                return Err(PermuteFailure::Unusable(GpuError::unsupported(
+                    "permute",
+                    "an operand's mode, extent and stride lists disagree",
+                )));
+            }
+            if operand.modes.len() > MAX_TENSOR_MODES {
+                return Err(PermuteFailure::Unusable(GpuError::unsupported(
+                    "permute",
+                    format!(
+                        "a permutation operand has {} modes; the cuTENSOR descriptor rank \
+                         supports at most {MAX_TENSOR_MODES}",
+                        operand.modes.len()
+                    ),
+                )));
+            }
+        }
+        let signature = permutation_signature_of(request);
+        if self.plans.contains_key(&signature) {
+            self.warm_hits += 1;
+        } else {
+            let plan = self
+                .build_permutation_plan(request)
+                .map_err(PermuteFailure::Unusable)?;
+            self.insert_plan(signature.clone(), plan)
+                .map_err(PermuteFailure::Unusable)?;
+        }
+        let cached = self.plans.get(&signature).expect("plan inserted above");
+        let plan = cached.plan;
+        let handle = self.handle;
+        let alpha = Contraction::coefficient(request.dtype, (1.0, 0.0))
+            .map_err(PermuteFailure::Unusable)?;
+        let offset = request.input_offset_bytes as usize;
+        let vtable = &self.vtable;
+        let resources = vec![
+            RawResource::Buffer(request.input.buffer),
+            RawResource::Buffer(request.output.buffer),
+        ];
+        // SAFETY: the raw scope registered both operands in this runtime, so the addresses
+        // belong to it and stay alive until the scope's completion; the coefficient is a live
+        // host value and the library runs in host pointer mode.
+        let submitted = unsafe {
+            self.runtime
+                .with_raw_locked(resources, |raw| {
+                    let address = |buffer: &DeviceBuffer| -> Result<usize, GpuError> {
+                        raw.device_ptr(buffer)
+                            .map(|value| value as usize)
+                            .map_err(|error| GpuError::Unavailable {
+                                detail: error.to_string(),
+                            })
+                    };
+                    let input = (address(request.input.buffer)? + offset) as *const c_void;
+                    let output = address(request.output.buffer)? as *mut c_void;
+                    let stream = raw.stream() as usize as ct::cudaStream_t;
+                    (vtable.permute)(handle, plan, alpha.as_ptr(), input, output, stream)
+                        .pipe(check_vendor("permute", "cutensorPermute"))
+                })
+                .map_err(|error| {
+                    PermuteFailure::Unusable(GpuError::Unavailable {
+                        detail: error.to_string(),
+                    })
+                })?
+        };
+        // The scope ran the call, so a failure here is the library's answer to a planned
+        // permutation rather than a request it could not plan.
+        submitted.map_err(PermuteFailure::Submitted)
+    }
+
+    /// Insert a freshly built plan, retiring the oldest one when the cache is full.
+    ///
+    /// Takes ownership of `plan`: every error path destroys it, because a plan the cache never
+    /// holds would otherwise leave its descriptors, operation, preference and plan behind.
+    fn insert_plan(&mut self, signature: Vec<i64>, plan: CachedPlan) -> Result<(), GpuError> {
+        // A varying shape would otherwise retain one plan (and, for a contraction, one device
+        // workspace) per shape for the lifetime of the engine; the oldest retires instead.
+        if self.order.len() >= MAX_CACHED_PLANS {
+            if let Some(oldest) = self.order.pop_front() {
+                if let Some(evicted) = self.plans.remove(&oldest) {
+                    // The plan's handles are native resources: an evicted plan has to be
+                    // destroyed, or a varying-shape workload leaks one bundle per shape.
+                    // Nothing queued may still use it, so the stream is drained first. A drain
+                    // that fails leaves the evicted plan untouched, since destroying it under a
+                    // running stream is worse than keeping it: put it back and drop the plan
+                    // this call was asked to insert, which nothing has run against.
+                    if let Err(error) = self.runtime.synchronize() {
+                        self.plans.insert(oldest.clone(), evicted);
+                        self.order.push_front(oldest);
+                        self.destroy_plan(plan);
+                        return Err(GpuError::Unavailable {
+                            detail: error.to_string(),
+                        });
+                    }
+                    self.destroy_plan(evicted);
+                }
+            }
+        }
+        self.plans.insert(signature.clone(), plan);
+        self.order.push_back(signature);
+        self.cold_plans += 1;
+        Ok(())
+    }
+
+    fn build_permutation_plan(
+        &mut self,
+        request: &Permutation<'_>,
+    ) -> Result<CachedPlan, GpuError> {
+        let handle = self.handle;
+        let data_type = data_type_of(request.dtype)?;
+        let compute = self.compute_descriptor(request.dtype)?;
+        let vtable = &self.vtable;
+        let mut build = PlanBuild::new(&self.runtime, vtable);
+        let resources = vec![
+            RawResource::Buffer(request.input.buffer),
+            RawResource::Buffer(request.output.buffer),
+        ];
+        let workspace_bytes = {
+            // SAFETY: the descriptors and the operation descriptor are created from the
+            // caller's signature and destroyed by `build` (or handed to the plan cache); the
+            // raw scope activates the context the handle belongs to.
+            unsafe {
+                self.runtime
+                    .with_raw_locked(resources, |_raw| {
+                        for (index, operand) in
+                            [request.input, request.output].into_iter().enumerate()
+                        {
+                            let mut descriptor = std::ptr::null_mut();
+                            check(
+                                (vtable.create_tensor_descriptor)(
+                                    handle,
+                                    &mut descriptor,
+                                    operand.modes.len() as u32,
+                                    operand.extents.as_ptr(),
+                                    operand.strides.as_ptr(),
+                                    data_type,
+                                    // 16-byte vectorisation: every tenferro allocation is at
+                                    // least 256-byte aligned (t4a-cuda-runtime's allocator),
+                                    // and a routed view's base keeps 16.
+                                    16,
+                                ),
+                                "permute",
+                                "cutensorCreateTensorDescriptor",
+                            )?;
+                            build.set_descriptor(index, descriptor);
+                            plan_build_failure("permute", 1)?;
+                        }
+                        plan_build_failure("permute", 2)?;
+                        let mut operation = std::ptr::null_mut();
+                        check(
+                            (vtable.create_permutation)(
+                                handle,
+                                &mut operation,
+                                build.descriptors[0],
+                                request.input.modes.as_ptr(),
+                                ct::cutensorOperator_t::CUTENSOR_OP_IDENTITY,
+                                build.descriptors[1],
+                                request.output.modes.as_ptr(),
+                                compute,
+                            ),
+                            "permute",
+                            "cutensorCreatePermutation",
+                        )?;
+                        build.set_operation(operation);
+                        plan_build_failure("permute", 3)?;
+                        let mut preference = std::ptr::null_mut();
+                        check(
+                            (vtable.create_plan_preference)(
+                                handle,
+                                &mut preference,
+                                ct::cutensorAlgo_t::CUTENSOR_ALGO_DEFAULT,
+                                ct::cutensorJitMode_t::CUTENSOR_JIT_MODE_NONE,
+                            ),
+                            "permute",
+                            "cutensorCreatePlanPreference",
+                        )?;
+                        build.set_preference(preference);
+                        let mut workspace_bytes = 0u64;
+                        check(
+                            (vtable.estimate_workspace_size)(
+                                handle,
+                                build.operation,
+                                build.preference,
+                                ct::cutensorWorksizePreference_t::CUTENSOR_WORKSPACE_DEFAULT,
+                                &mut workspace_bytes,
+                            ),
+                            "permute",
+                            "cutensorEstimateWorkspaceSize",
+                        )?;
+                        Ok(workspace_bytes)
+                    })
+                    .map_err(|error| GpuError::Unavailable {
+                        detail: error.to_string(),
+                    })?
+            }
+        }?;
+        {
+            let mut plan = std::ptr::null_mut();
+            // SAFETY: the handle and the operation descriptor are live, and the workspace limit
+            // was estimated for exactly this descriptor and preference. `cutensorPermute` takes
+            // no workspace pointer, so the estimate is only what the plan is allowed to plan
+            // with (the same limit the benchmark's cuTENSOR arm passes); nothing is allocated or
+            // registered for it here.
+            let status = unsafe {
+                self.runtime
+                    .with_raw_locked(Vec::new(), |_raw| {
+                        (vtable.create_plan)(
+                            handle,
+                            &mut plan,
+                            build.operation,
+                            build.preference,
+                            workspace_bytes,
+                        )
+                    })
+                    .map_err(|error| GpuError::Unavailable {
+                        detail: error.to_string(),
+                    })?
+            };
+            check(status, "permute", "cutensorCreatePlan")?;
+            build.set_plan(plan);
+        }
+        plan_build_failure("permute", 4)?;
+        Ok(build.into_cached(workspace_bytes))
     }
 
     fn build_plan(&mut self, request: &Contraction<'_>) -> Result<CachedPlan, GpuError> {
@@ -582,7 +1063,7 @@ impl Cutensor {
         let vtable = &self.vtable;
         let mut operands: [Option<Operand<'_>>; 4] =
             [Some(request.a), Some(request.b), request.c, Some(request.d)];
-        let mut descriptors = [std::ptr::null_mut(); 4];
+        let mut build = PlanBuild::new(&self.runtime, vtable);
         let (a_buffer, b_buffer, d_buffer) = (request.a.buffer, request.b.buffer, request.d.buffer);
         let mut resources = vec![
             RawResource::Buffer(a_buffer),
@@ -592,7 +1073,7 @@ impl Cutensor {
         if let Some(c) = request.c {
             resources.push(RawResource::Buffer(c.buffer));
         }
-        let workspace_bytes_and_plan = {
+        let workspace_bytes = {
             // SAFETY: descriptors and the operation descriptor are created from the
             // caller's signature and destroyed with the cached plan; the raw scope
             // activates the context the handle belongs to, and the workspace allocation
@@ -602,10 +1083,11 @@ impl Cutensor {
                     .with_raw_locked(resources, |_raw| {
                         for (index, operand) in operands.iter_mut().enumerate() {
                             let Some(operand) = operand else { continue };
+                            let mut descriptor = std::ptr::null_mut();
                             check(
                                 (vtable.create_tensor_descriptor)(
                                     handle,
-                                    &mut descriptors[index],
+                                    &mut descriptor,
                                     operand.modes.len() as u32,
                                     operand.extents.as_ptr(),
                                     operand.strides.as_ptr(),
@@ -617,8 +1099,9 @@ impl Cutensor {
                                 "contract",
                                 "cutensorCreateTensorDescriptor",
                             )?;
+                            build.set_descriptor(index, descriptor);
                         }
-                        let [desc_a, desc_b, desc_c, desc_d] = descriptors;
+                        let [desc_a, desc_b, desc_c, desc_d] = build.descriptors;
                         let mode = |operand: &Operand<'_>| operand.modes.as_ptr();
                         // A contraction without an addend passes the destination as C: both
                         // cuTENSOR and the BLAS family guarantee that a zero `beta` never reads
@@ -656,6 +1139,7 @@ impl Cutensor {
                             "contract",
                             "cutensorCreateContraction",
                         )?;
+                        build.set_operation(operation);
                         let mut preference = std::ptr::null_mut();
                         check(
                             (vtable.create_plan_preference)(
@@ -667,26 +1151,26 @@ impl Cutensor {
                             "contract",
                             "cutensorCreatePlanPreference",
                         )?;
+                        build.set_preference(preference);
                         let mut workspace_bytes = 0u64;
                         check(
                             (vtable.estimate_workspace_size)(
                                 handle,
-                                operation,
-                                preference,
+                                build.operation,
+                                build.preference,
                                 ct::cutensorWorksizePreference_t::CUTENSOR_WORKSPACE_DEFAULT,
                                 &mut workspace_bytes,
                             ),
                             "contract",
                             "cutensorEstimateWorkspaceSize",
                         )?;
-                        Ok((workspace_bytes, operation, preference))
+                        Ok(workspace_bytes)
                     })
                     .map_err(|error| GpuError::Unavailable {
                         detail: error.to_string(),
                     })?
             }
         }?;
-        let (workspace_bytes, operation, preference) = workspace_bytes_and_plan;
         // The handle owns one workspace, grown on demand: an allocation per plan would keep a
         // device buffer alive for every shape ever contracted.
         if self.workspace.is_none() || workspace_bytes > self.workspace_bytes {
@@ -723,7 +1207,7 @@ impl Cutensor {
             .as_ref()
             .expect("the workspace was grown for this plan");
         let handle = self.handle;
-        let plan = {
+        {
             let mut plan = std::ptr::null_mut();
             let vtable = &self.vtable;
             // SAFETY: the handle and the operation descriptor are live, and the workspace
@@ -734,8 +1218,8 @@ impl Cutensor {
                         (vtable.create_plan)(
                             handle,
                             &mut plan,
-                            operation,
-                            preference,
+                            build.operation,
+                            build.preference,
                             workspace_bytes,
                         )
                     })
@@ -744,15 +1228,9 @@ impl Cutensor {
                     })?
             };
             check(status, "contract", "cutensorCreatePlan")?;
-            plan
-        };
-        Ok(CachedPlan {
-            descriptors,
-            plan,
-            preference,
-            operation,
-            workspace_bytes,
-        })
+            build.set_plan(plan);
+        }
+        Ok(build.into_cached(workspace_bytes))
     }
 
     fn compute_descriptor(
@@ -852,7 +1330,25 @@ fn data_type_of(dtype: DType) -> Result<ct::cudaDataType_t, GpuError> {
 /// The plan cache key: dtype, then every operand's modes, extents and strides.
 fn signature_of(request: &Contraction<'_>) -> Vec<i64> {
     let mut key = Vec::with_capacity(64);
-    key.push(match request.dtype {
+    key.push(dtype_tag(request.dtype));
+    key.push(i64::from(request.conj_a));
+    key.push(i64::from(request.conj_b));
+    for operand in [Some(request.a), Some(request.b), request.c, Some(request.d)] {
+        let Some(operand) = operand else {
+            key.push(-1);
+            continue;
+        };
+        key.push(operand.modes.len() as i64);
+        key.extend(operand.modes.iter().map(|mode| i64::from(*mode)));
+        key.extend_from_slice(operand.extents);
+        key.extend_from_slice(operand.strides);
+    }
+    key
+}
+
+/// The dtype tag a plan key starts with; a permutation key reserves `-1` in front of it.
+fn dtype_tag(dtype: DType) -> i64 {
+    match dtype {
         DType::F32 => 1,
         DType::F64 => 2,
         DType::C32 => 3,
@@ -861,14 +1357,14 @@ fn signature_of(request: &Contraction<'_>) -> Vec<i64> {
             let _ = other;
             0
         }
-    });
-    key.push(i64::from(request.conj_a));
-    key.push(i64::from(request.conj_b));
-    for operand in [Some(request.a), Some(request.b), request.c, Some(request.d)] {
-        let Some(operand) = operand else {
-            key.push(-1);
-            continue;
-        };
+    }
+}
+
+/// The plan cache key of a permutation: a reserved leading `-1` (a contraction key starts with a
+/// non-negative dtype tag), then the dtype and every operand's modes, extents and strides.
+fn permutation_signature_of(request: &Permutation<'_>) -> Vec<i64> {
+    let mut key = vec![-1, dtype_tag(request.dtype)];
+    for operand in [request.input, request.output] {
         key.push(operand.modes.len() as i64);
         key.extend(operand.modes.iter().map(|mode| i64::from(*mode)));
         key.extend_from_slice(operand.extents);
