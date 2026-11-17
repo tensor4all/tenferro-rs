@@ -1075,11 +1075,13 @@ gpu	tenferro-gpu	cuda::structural::tests::scale_tensor_write_refuses_a_host_owne
 gpu	tenferro-gpu	cuda::structural::tests::scale_tensor_write_refuses_a_host_view_whatever_the_factor
 gpu	tenferro-gpu	cuda::structural::tests::scatter_read_refuses_a_bad_update_axis_before_allocating_or_staging
 gpu	tenferro-gpu	cuda::structural::tests::triangular_reads_mask_borrowed_regions
+gpu	tenferro-gpu	cuda::structural::tests::a_fold_read_reports_compact_strides_after_its_view_is_materialized
 gpu	tenferro-gpu	cuda::structural::tests::an_elementwise_launch_covers_every_length
 gpu	tenferro-gpu	cuda::structural::tests::an_elementwise_launch_does_not_zero_its_destination
 gpu	tenferro-gpu	cuda::structural::tests::an_elementwise_result_holds_no_stale_bytes
 gpu	tenferro-gpu	cuda::structural::tests::the_zero_fill_counter_tracks_a_zeroed_allocation
 host	tenferro-gpu	cuda::structural::tests::the_element_count_checks_both_extremes
+host	tenferro-gpu	cuda::structural::tests::a_fold_presentation_merges_adjacent_axes_and_splits_a_strided_one
 host	tenferro-gpu	cuda::structural::tests::a_batched_pair_swap_plans_one_grid_axis_per_batch
 host	tenferro-gpu	cuda::structural::tests::the_tiled_geometry_addresses_every_element_the_view_names
 host	tenferro-gpu	cuda::structural::tests::tiled_transpose_geometry_selects_only_a_compact_pair_swap
@@ -1267,6 +1269,12 @@ gpu	tenferro-gpu::seam_full_reduction	a_nan_anywhere_propagates_through_a_full_m
 gpu	tenferro-gpu::seam_full_reduction	full_reductions_match_the_host_at_every_plan_boundary
 gpu	tenferro-gpu::seam_full_reduction	multi_axis_reductions_squeeze_without_a_copy_and_wait_once
 gpu	tenferro-gpu::seam_full_reduction	unwritten_device_memory_never_reaches_a_result
+gpu	tenferro-gpu::reduce_axes_layouts	a_repeated_fold_returns_the_same_bytes
+gpu	tenferro-gpu::reduce_axes_layouts	a_strided_view_matches_the_cpu
+gpu	tenferro-gpu::reduce_axes_layouts	a_split_axis_above_a_lower_pass_keeps_every_index_right
+gpu	tenferro-gpu::reduce_axes_layouts	both_axes_of_a_column_major_matrix_match_the_cpu
+gpu	tenferro-gpu::reduce_axes_layouts	every_multi_axis_choice_matches_the_cpu
+gpu	tenferro-gpu::reduce_axes_layouts	the_squared_norm_of_a_matrix_matches_the_cpu
 gpu	tenferro-gpu::seam_structural	a_borrowed_view_materializes_its_own_region
 gpu	tenferro-gpu::seam_structural	a_broadcast_in_dim_read_matches_the_host
 gpu	tenferro-gpu::seam_structural	a_cast_converts_on_the_device

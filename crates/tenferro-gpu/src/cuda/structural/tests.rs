@@ -141,6 +141,100 @@ fn the_element_count_checks_both_extremes() {
     assert!(element_count(&[usize::MAX, 2]).is_err());
 }
 
+/// The shape and pass order one fold of `axes` is presented with, without opening a device.
+///
+/// A wrong presentation does not error, it folds the wrong elements, so the arithmetic that
+/// decides one is pinned here as well as by the shape matrix in `tests/reduce_axes_layouts.rs`
+/// (#2625).
+#[test]
+fn a_fold_presentation_merges_adjacent_axes_and_splits_a_strided_one() {
+    // Adjacent reduced axes are one contiguous run of their product extent.
+    assert_eq!(
+        super::merge_reduced_axes(&[4, 5, 6], &[0, 1]),
+        Some((vec![20, 6], vec![0]))
+    );
+    // A kept axis between them keeps them apart.
+    assert_eq!(
+        super::merge_reduced_axes(&[4, 5, 6], &[0, 2]),
+        Some((vec![4, 5, 6], vec![0, 2]))
+    );
+    // An extent product that overflows leaves the caller on the logical shape.
+    assert_eq!(super::merge_reduced_axes(&[usize::MAX, 2], &[0, 1]), None);
+
+    // A long strided axis becomes two factors that both fit one plane ...
+    let mut matrix = vec![1024, 1024];
+    assert_eq!(super::split_strided_axis(&mut matrix, 1), Some(2));
+    assert_eq!(matrix, vec![1024, 32, 32]);
+    // ... and the contiguous axis of the same matrix stays whole.
+    assert_eq!(super::split_strided_axis(&mut matrix, 0), None);
+    // The planner only splits at 512 and above, so this axis is left to the plane strategy.
+    let mut short = vec![2, 511];
+    assert_eq!(super::split_strided_axis(&mut short, 1), None);
+    assert_eq!(short, vec![2, 511]);
+    // A length with no factor pair inside one plane stays whole as well.
+    let mut prime = vec![2, 1031];
+    assert_eq!(super::split_strided_axis(&mut prime, 1), None);
+    assert_eq!(prime, vec![2, 1031]);
+
+    // Both axes of `[1024, 1024]` are one contiguous run: one pass, and the planner splits it.
+    assert_eq!(
+        super::reduction_passes(&[1024, 1024], &[0, 1]),
+        Some((vec![1048576], vec![0]))
+    );
+    // Axis 1 alone is strided, so it splits into an inner factor and its outer one.
+    assert_eq!(
+        super::reduction_passes(&[1024, 1024], &[1]),
+        Some((vec![1024, 32, 32], vec![1, 2]))
+    );
+    // Nothing to merge on a strided axis of a rank-3 tensor, and the largest axis goes first.
+    assert_eq!(
+        super::reduction_passes(&[8, 9, 40], &[0, 2]),
+        Some((vec![8, 9, 40], vec![2, 0]))
+    );
+    // A split inserts its outer factor above the lower passes only, so the already planned
+    // higher ones move up and the lower one does not: `[7, 8, 1024]` over axes 0 and 2.
+    assert_eq!(
+        super::reduction_passes(&[7, 8, 1024], &[0, 2]),
+        Some((vec![7, 8, 32, 32], vec![2, 3, 0]))
+    );
+}
+
+/// A fold's re-factoring relies on the read being compact, and the check that decides it is the
+/// accessor itself: an owned upload and a materialized view both have to report `compact_strides`.
+///
+/// If either stopped doing so the fold would still be correct — it falls back to the logical shape —
+/// but it would silently lose the contiguous pass, which no timing test here would notice.
+#[test]
+fn a_fold_read_reports_compact_strides_after_its_view_is_materialized() {
+    let Some(mut engine) = engine() else { return };
+    let source = device(&engine, vec![4, 3], (0..12).map(|i| i as f64).collect());
+    let owned = super::compact_strides(&[4, 3], "test").expect("compact strides");
+    assert_eq!(
+        engine.strides_of(&source, "test").expect("strides"),
+        owned,
+        "an uploaded tensor is compact column-major"
+    );
+
+    // The transpose of that tensor arrives as a view and is materialized into a compact copy, whose
+    // shape is the view's, so the copy's strides are the compact ones of the view's shape.
+    let transposed = super::TensorRead::from_view(TensorView::F64(
+        source
+            .as_typed::<f64>()
+            .expect("f64 payload")
+            .backend_region_view(vec![3, 4], vec![3, 1], 0)
+            .expect("transposed view"),
+    ));
+    let materialized = engine
+        .device_read(transposed, "test")
+        .expect("materialized");
+    assert_eq!(materialized.shape(), &[3, 4]);
+    assert_eq!(
+        engine.strides_of(&materialized, "test").expect("strides"),
+        super::compact_strides(&[3, 4], "test").expect("compact strides"),
+        "a materialized view is compact column-major"
+    );
+}
+
 fn engine() -> Option<CudaEngine> {
     // The same guarded probe the integration tests use: with `TENFERRO_REQUIRE_GPU=1` (the GPU
     // lane) a missing device fails here, so an `--ignored` run cannot pass without hardware.

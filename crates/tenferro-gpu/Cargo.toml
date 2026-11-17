@@ -238,3 +238,8 @@ required-features = ["cuda"]
 name = "seam_empty_reduction"
 path = "tests/seam_empty_reduction.rs"
 required-features = ["cuda"]
+
+[[test]]
+name = "reduce_axes_layouts"
+path = "tests/reduce_axes_layouts.rs"
+required-features = ["cuda"]
