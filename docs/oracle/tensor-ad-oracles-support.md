@@ -93,6 +93,7 @@ finite-difference tests because the public oracle family is not yet replayable.
 | --- | --- | --- | --- |
 | Einsum extension | finite-difference | `einsum_with(..., "ij,jk->ik", ...)` | `cargo test -p tenferro-einsum --features autodiff --test integration grad_einsum_matmul_real_matches_finite_diff_for_both_inputs` |
 | FFT C2C extension | finite-difference | `fft(...).jvp(...)` | `cargo test -p tenferro-fft --features autodiff --test fft_ops fft_c64_jvp_matches_finite_diff` |
+| FFT R2C/C2R extension | finite-difference + c2c composite | `rfft`, `irfft`, `rfftn`, `irfftn`, real-input `fft`/`fftn` JVP and VJP | `cargo test -p tenferro-fft --features autodiff --test real_fft_ad` |
 | Rem | finite-difference | `rem(x, y)` JVP/VJP away from `y == 0` and exact integer quotients (#2454) | `cargo test -p tenferro-ad --test integration semantic_core_rem_jvp_and_vjp_match_a_finite_difference` |
 | Lu | finite-difference | `grad(sum(l) + sum(u))` | `cargo test -p tenferro-linalg --features autodiff --test integration lu_qr_sum_grads_match_finite_diff` |
 | Qr | finite-difference | `grad(sum(q) + sum(r))` | `cargo test -p tenferro-linalg --features autodiff --test integration lu_qr_sum_grads_match_finite_diff` |

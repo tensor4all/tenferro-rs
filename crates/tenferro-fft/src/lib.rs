@@ -141,6 +141,8 @@ use tenferro_runtime::extension::{
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
 use tenferro_tensor::{CacheStats, DType, Engine, ErrorKind, Tensor, TensorRead};
+#[cfg(feature = "autodiff")]
+use tenferro_tensor::{PadConfig, SliceConfig};
 
 mod api;
 mod backend;
@@ -1174,13 +1176,8 @@ impl SemanticLinearizeRule for FftAdRule {
         request: SemanticLinearizeRequest<'_>,
         builder: &mut SemanticProgramBuilder,
     ) -> std::result::Result<SemanticLinearizeResult, SemanticAdError> {
+        // Every FFT operation is real-linear, so its tangent is the same transform.
         let fft_op = semantic_fft_payload(request.op(), SemanticAdRuleKind::Linearize)?;
-        if !fft_op.operation.is_c2c() {
-            return Err(semantic_fft_unsupported(
-                fft_op.operation,
-                SemanticAdRuleKind::Linearize,
-            ));
-        }
         let tangent = match request.tangent_inputs()[0] {
             AdValue::Absent => AdValue::Absent,
             AdValue::Value(tangent) => {
@@ -1284,22 +1281,197 @@ fn semantic_fft_adjoint(
         return Ok(AdValue::Absent);
     };
     let fft_op = semantic_fft_payload(op, SemanticAdRuleKind::Transpose)?;
-    if !fft_op.operation.is_c2c() {
-        return Err(semantic_fft_unsupported(
-            fft_op.operation,
-            SemanticAdRuleKind::Transpose,
-        ));
-    }
-    let adjoint_op = fft_op
-        .c2c_adjoint()
-        .ok_or_else(|| semantic_fft_unsupported(fft_op.operation, SemanticAdRuleKind::Transpose))?;
-    let adjoint = builder.add_extension(Arc::new(adjoint_op), &[cotangent])?[0];
-    restore_semantic_c2c_adjoint_input_length(builder, adjoint, primal_input, residual_mask, fft_op)
+    let adjoint = match fft_op.operation {
+        FftOperation::C2cForward | FftOperation::C2cInverse => {
+            let adjoint_op = fft_op.c2c_adjoint().ok_or_else(|| {
+                semantic_fft_unsupported(fft_op.operation, SemanticAdRuleKind::Transpose)
+            })?;
+            builder.add_extension(Arc::new(adjoint_op), &[cotangent])?[0]
+        }
+        FftOperation::R2cFull | FftOperation::R2cOnesided => {
+            semantic_r2c_adjoint(builder, fft_op, cotangent, primal_input)?
+        }
+        FftOperation::C2r => {
+            // The cotangent already has every transform length as its extent.
+            let forward = FftOp::new(
+                FftOperation::R2cOnesided,
+                fft_op.axes.clone(),
+                None,
+                fft_op.norm.c2c_adjoint(),
+            );
+            let spectrum = builder.add_extension(Arc::new(forward), &[cotangent])?[0];
+            semantic_double_mirrored_bins(builder, fft_op, spectrum, primal_input)?
+        }
+    };
+    restore_semantic_adjoint_input_length(builder, adjoint, primal_input, residual_mask, fft_op)
         .map(AdValue::Value)
 }
 
+/// Adjoint of a real-to-complex transform under `<a, b> = Re(conj(a) * b)`.
+///
+/// The forward map is `y = s * F x` restricted to the returned bins, so the
+/// adjoint is `x_bar = Re(s * F^H y_bar)` with `y_bar` read as a full spectrum.
+/// A one-sided `y_bar` is zero-padded on the real axis to the full transform
+/// length: the negative-frequency bins were not returned, so they carry no
+/// cotangent.
 #[cfg(feature = "autodiff")]
-fn restore_semantic_c2c_adjoint_input_length(
+fn semantic_r2c_adjoint(
+    builder: &mut SemanticProgramBuilder,
+    fft_op: &FftOp,
+    cotangent: ProgramValue,
+    primal_input: ProgramValue,
+) -> std::result::Result<ProgramValue, SemanticAdError> {
+    let mut spectrum = cotangent;
+    if fft_op.operation.is_onesided() {
+        let (index, real_axis) = semantic_fft_real_axis(fft_op);
+        let transform_len = match &fft_op.lengths {
+            Some(lengths) => lengths[index],
+            None => semantic_fft_concrete_extent(builder, primal_input, real_axis, fft_op)?,
+        };
+        let missing_bins = transform_len - (transform_len / 2 + 1);
+        if missing_bins > 0 {
+            let rank = builder.value_metadata(cotangent)?.shape().len();
+            let mut edge_padding_high = vec![0; rank];
+            edge_padding_high[real_axis] = i64::try_from(missing_bins).map_err(|_| {
+                semantic_fft_unsupported_family(
+                    fft_ad_family_id(fft_op.operation),
+                    SemanticAdRuleKind::Transpose,
+                    "rfft transform length does not fit in i64",
+                )
+            })?;
+            spectrum = builder.add_op(
+                CoreSemanticOp::Pad(PadConfig {
+                    edge_padding_low: vec![0; rank],
+                    edge_padding_high,
+                    interior_padding: vec![0; rank],
+                }),
+                &[spectrum],
+            )?[0];
+        }
+    }
+    // The cotangent already has every transform length as its extent.
+    let inverse = FftOp::new(
+        FftOperation::C2cInverse,
+        fft_op.axes.clone(),
+        None,
+        fft_op.norm.c2c_adjoint(),
+    );
+    let complex = builder.add_extension(Arc::new(inverse), &[spectrum])?[0];
+    let from = builder.value_metadata(complex)?.dtype();
+    let to = builder.value_metadata(primal_input)?.dtype();
+    Ok(builder.add_op(CoreSemanticOp::Convert { from, to }, &[complex])?[0])
+}
+
+/// Finish the adjoint of a complex-to-real transform under
+/// `<a, b> = Re(conj(a) * b)`, given `spectrum = s * rfft(x_bar)`.
+///
+/// The output is `x = s * Re(sum_k c_k z_k e^{+2 pi i j k / L})` over the
+/// one-sided bins, with `c_k = 2` for every bin that stands for itself and its
+/// conjugate mirror and `c_k = 1` for DC and, at even `L`, Nyquist (whose
+/// imaginary parts the transform ignores). The adjoint is therefore
+/// `z_bar = c * spectrum`; the one-sided transform of a real signal is already
+/// real at DC and Nyquist.
+#[cfg(feature = "autodiff")]
+fn semantic_double_mirrored_bins(
+    builder: &mut SemanticProgramBuilder,
+    fft_op: &FftOp,
+    spectrum: ProgramValue,
+    primal_input: ProgramValue,
+) -> std::result::Result<ProgramValue, SemanticAdError> {
+    let (index, real_axis) = semantic_fft_real_axis(fft_op);
+    // `spectrum` has the primal input shape except on the resized complex
+    // axes; read it from the primal input, whose extents the program binds.
+    let rank = builder.value_metadata(primal_input)?.shape().len();
+    let mut limits = Vec::with_capacity(rank);
+    for axis in 0..rank {
+        limits.push(semantic_fft_concrete_extent(
+            builder,
+            primal_input,
+            axis,
+            fft_op,
+        )?);
+    }
+    if let Some(lengths) = &fft_op.lengths {
+        for (&axis, &len) in fft_op.axes.iter().zip(lengths).take(index) {
+            limits[axis] = len;
+        }
+    }
+    let bins = limits[real_axis];
+    let transform_len = match &fft_op.lengths {
+        Some(lengths) => lengths[index],
+        // The default irfft length `2 * (bins - 1)`.
+        None => 2 * (bins - 1),
+    };
+    let mirrored_bins = transform_len - bins;
+    if mirrored_bins == 0 {
+        return Ok(spectrum);
+    }
+    // Add the bins 1..=mirrored_bins once more instead of building a weight tensor.
+    let mut starts = vec![0; rank];
+    starts[real_axis] = 1;
+    limits[real_axis] = 1 + mirrored_bins;
+    let mirrored = builder.add_op(
+        CoreSemanticOp::Slice(SliceConfig {
+            starts,
+            limits,
+            strides: vec![1; rank],
+        }),
+        &[spectrum],
+    )?[0];
+    let mut edge_padding_low = vec![0; rank];
+    edge_padding_low[real_axis] = 1;
+    let mut edge_padding_high = vec![0; rank];
+    // One trailing Nyquist bin at even length, none at odd length.
+    edge_padding_high[real_axis] = i64::from(transform_len.is_multiple_of(2));
+    let mirrored = builder.add_op(
+        CoreSemanticOp::Pad(PadConfig {
+            edge_padding_low,
+            edge_padding_high,
+            interior_padding: vec![0; rank],
+        }),
+        &[mirrored],
+    )?[0];
+    Ok(builder.add_op(CoreSemanticOp::Add, &[spectrum, mirrored])?[0])
+}
+
+/// Index and axis of the real transform: the last declared axis, as in `rfftn`.
+#[cfg(feature = "autodiff")]
+fn semantic_fft_real_axis(fft_op: &FftOp) -> (usize, usize) {
+    let index = fft_op.axes.len() - 1;
+    (index, fft_op.axes[index])
+}
+
+/// Literal extent of `value` on `axis`, which the real-transform adjoints need
+/// because the half-spectrum bin weights depend on the parity of the length.
+#[cfg(feature = "autodiff")]
+fn semantic_fft_concrete_extent(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+    axis: usize,
+    fft_op: &FftOp,
+) -> std::result::Result<usize, SemanticAdError> {
+    // A bound extent can still be an unfolded expression such as `8 / 2 + 1`
+    // (the extent of an rfft output), so evaluate any input-free expression.
+    match builder.resolved_extent(value, axis)? {
+        tenferro_ops::ShapeExtent::Exact(extent) if extent.max_input_idx().is_none() => {
+            extent.eval(&[]).map_err(|error| {
+                semantic_fft_unsupported_family(
+                    fft_ad_family_id(fft_op.operation),
+                    SemanticAdRuleKind::Transpose,
+                    format!("extent on axis {axis} does not evaluate: {error}"),
+                )
+            })
+        }
+        _ => Err(semantic_fft_unsupported_family(
+            fft_ad_family_id(fft_op.operation),
+            SemanticAdRuleKind::Transpose,
+            format!("real FFT adjoint requires a concrete extent on axis {axis}"),
+        )),
+    }
+}
+
+#[cfg(feature = "autodiff")]
+fn restore_semantic_adjoint_input_length(
     builder: &mut SemanticProgramBuilder,
     adjoint: ProgramValue,
     primal_input: ProgramValue,
@@ -1315,7 +1487,11 @@ fn restore_semantic_c2c_adjoint_input_length(
          declare it; declare it in the fft rule's residual mask"
     );
     let mut adjoint = adjoint;
-    for (&axis, &transform_len) in fft_op.axes.iter().zip(lengths) {
+    for (index, (&axis, &transform_len)) in fft_op.axes.iter().zip(lengths).enumerate() {
+        // The one-sided spectrum of an irfft already has its input extent.
+        if fft_op.operation.step_operation(index, lengths.len()) == FftOperation::C2r {
+            continue;
+        }
         let input_len = builder
             .value_metadata(primal_input)?
             .shape()

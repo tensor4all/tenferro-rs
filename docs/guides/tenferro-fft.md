@@ -425,21 +425,35 @@ the extension.
 
 ## Automatic Differentiation
 
-FFT is linear, so the extension can support AD through registered extension
-rules. The current package registers JVP/VJP rules for complex-to-complex
-`fft` and `ifft`: the tangent or cotangent is transformed with the same
-extension op and normalization.
+Every FFT is real-linear, so the registered extension rules give each
+transform a JVP that applies the same transform to the tangent. VJPs apply the
+adjoint under the cotangent convention of [Complex Autodiff](complex-ad.md)
+(`<a, b> = Re(conj(a) * b)`), with the normalization swapped (`Backward` and
+`Forward` exchange, `Ortho` stays):
+
+- `fft` and `ifft` of a complex input: the opposite complex transform.
+- `rfft`: the half-spectrum cotangent is zero-padded on the transform axis to
+  the full length `n`, transformed back with the inverse complex transform,
+  and its real part is the input cotangent. The bins `rfft` does not return
+  carry no cotangent. `fft` of a real input is the same without the padding.
+- `irfft`: the real cotangent goes through the one-sided forward transform,
+  and every bin except DC and, for even `n`, Nyquist is doubled, because each
+  such bin stands for itself and its conjugate mirror in the output. The
+  imaginary parts of DC and Nyquist do not reach the output, so their
+  cotangent is zero.
+- `rfftn` and `irfftn` apply the same mapping on the last declared axis, the
+  real one; the other axes use the complex rules.
+
+A requested length `n` (or `shape`) that truncates or zero-pads the input is
+undone on the cotangent, which is zero-padded or truncated back to the input
+extent. The real-transform VJPs read the input extents, because the bin
+weights depend on whether `n` is even; an input without concrete extents
+reports an unsupported AD rule.
 
 Use `AdContext` for explicit extension-rule ownership, or import
 `tenferro_ad::TracedTensorAdExt` for the compact traced AD method syntax.
 For eager AD, construct the runtime with `EagerRuntime::with_ad_context` using
 the same `AdContext`.
-
-Real-to-complex and complex-to-real AD are not enabled yet. They require the
-usual Hermitian symmetry handling so cotangents match the half-spectrum
-convention; until those rules are implemented and tested, AD through `rfft` and
-`irfft` reports an unsupported operation instead of returning an incorrect
-gradient.
 
 ## Status
 
