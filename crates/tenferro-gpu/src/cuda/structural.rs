@@ -3519,6 +3519,99 @@ enum ReduceOp {
     SumSquares,
 }
 
+/// The block width every reduction launch on this engine is planned with.
+const REDUCTION_PLANE_WIDTH: u32 = 32;
+
+/// Collapse each run of consecutive reduced axes into one axis of their product extent.
+///
+/// A compact column-major layout advances by `extent[k] * stride[k]` along axis `k + 1`, so two
+/// adjacent reduced axes address exactly the same elements as one axis of extent
+/// `extent[k] * extent[k + 1]`. Folding that axis folds the same elements in the same memory
+/// order, in one pass instead of two, and it can be the contiguous axis that coalesces.
+/// `None` when a product overflows, which leaves the caller on the logical shape.
+fn merge_reduced_axes(shape: &[usize], axes: &[usize]) -> Option<(Vec<usize>, Vec<usize>)> {
+    let mut merged_shape = Vec::with_capacity(shape.len());
+    let mut merged_axes = Vec::with_capacity(axes.len());
+    let mut axis = 0usize;
+    let mut reduced = axes.iter().peekable();
+    while axis < shape.len() {
+        if reduced.peek() != Some(&&axis) {
+            merged_shape.push(shape[axis]);
+            axis += 1;
+            continue;
+        }
+        // A maximal run of consecutive reduced axes becomes one axis at the run's lowest index.
+        let mut extent = shape[axis];
+        reduced.next();
+        axis += 1;
+        while axis < shape.len() && reduced.peek() == Some(&&axis) {
+            extent = extent.checked_mul(shape[axis])?;
+            reduced.next();
+            axis += 1;
+        }
+        merged_axes.push(merged_shape.len());
+        merged_shape.push(extent);
+    }
+    Some((merged_shape, merged_axes))
+}
+
+/// Split a strided reduce axis into two factors that both fit one plane.
+///
+/// The plane strategy puts the lanes on the reduce axis, so on a strided axis the lanes read
+/// addresses a whole row apart. Split into `a x b` with both factors at most one plane wide, both
+/// passes stay on the unit strategy: one thread per output, the lanes varying the contiguous
+/// output axis, which reads consecutively. The planner only splits at `len >= 512`
+/// (`split_policy`), so this replaces two launches with two launches rather than adding one, and
+/// the partials scratch becomes the smaller keepdims intermediate.
+///
+/// Returns the index of the inserted outer factor when the axis was split.
+fn split_strided_axis(shape: &mut Vec<usize>, axis: usize) -> Option<usize> {
+    // In a compact layout `stride[axis] == prod(shape[..axis])`, so the axis is contiguous
+    // exactly when every extent before it is one.
+    if shape[..axis].iter().all(|&extent| extent == 1) {
+        return None;
+    }
+    let len = shape[axis];
+    t4a_cuda_kernels::split_policy(len as i64, REDUCTION_PLANE_WIDTH).ok()??;
+    let plane = REDUCTION_PLANE_WIDTH as usize;
+    let inner = (2..=plane)
+        .rev()
+        .find(|&factor| len.is_multiple_of(factor) && len / factor <= plane)?;
+    shape[axis] = inner;
+    shape.insert(axis + 1, len / inner);
+    Some(axis + 1)
+}
+
+/// The shape and the reduce order a compact fold of `axes` needs: adjacent axes merged, a long
+/// strided axis split, and the axes ordered so a later pass reads the smaller intermediate.
+///
+/// `None` when the merge overflows; the caller then keeps the logical shape and order.
+fn reduction_passes(shape: &[usize], axes: &[usize]) -> Option<(Vec<usize>, Vec<usize>)> {
+    let (mut work, merged) = merge_reduced_axes(shape, axes)?;
+    let mut passes = merged;
+    passes.sort_unstable_by(|left, right| right.cmp(left));
+    // Split in place: a split shifts every later axis index by one, so re-read each pass index
+    // after the shape has changed under it.
+    let mut next = 0usize;
+    while next < passes.len() {
+        let axis = passes[next];
+        match split_strided_axis(&mut work, axis) {
+            Some(outer) => {
+                // The shape grew at `outer`, so the passes planned above it moved up one. The
+                // passes still to come are the lower axes, which the insertion is below and
+                // which therefore keep their indices.
+                for planned in &mut passes[..next] {
+                    *planned += 1;
+                }
+                passes.insert(next + 1, outer);
+                next += 2;
+            }
+            None => next += 1,
+        }
+    }
+    Some((work, passes))
+}
+
 /// The unit an empty fold writes: `sum` and `sum of squares` have `0`, `prod` has `1`.
 #[derive(Clone, Copy)]
 enum EmptyFoldUnit {
@@ -3558,7 +3651,8 @@ impl CudaEngine {
 }
 
 impl CudaEngine {
-    /// Reduce `axes` one axis at a time, largest axis first so the indices stay valid.
+    /// Reduce `axes` over the compact runs a column-major layout allows, largest axis first so a
+    /// later pass reads the smaller intermediate.
     fn reduce_axes(
         &mut self,
         input: TensorRead<'_>,
@@ -3629,14 +3723,33 @@ impl CudaEngine {
         }
         // The first pass reads the caller's tensor; later passes read the previous result.
         let mut owned: Option<Tensor> = None;
-        let width = 32u32;
+        // One pass per reduced axis is not the cheapest fold of a compact layout: consecutive
+        // reduced axes are one contiguous run, and a long strided axis coalesces once it is two
+        // short ones (#2625). A presentation that would outgrow the fast path keeps the logical
+        // shape and order, so the rank gate above stays the only route to `reduce_axes_wide`.
+        //
+        // Re-factoring extents is only the same fold when they are a compact column-major run and
+        // every axis before the split one has extent one: on any other layout the derived strides
+        // would name a different set of elements, so a read that is not compact keeps the logical
+        // shape and order. `device_read` materializes a view into a compact tensor, so this holds
+        // for every path that reaches here, and it is checked rather than assumed.
+        let compact = self.strides_of(&source, name)? == compact_strides(&shape, name)?;
+        let presentation = if compact {
+            reduction_passes(&shape, &ordered)
+                .filter(|(work, _)| work.len() <= t4a_cuda_kernels::MAX_RANK)
+        } else {
+            None
+        };
+        let (work_shape, passes) = presentation
+            .unwrap_or_else(|| (shape.clone(), ordered.iter().rev().copied().collect()));
+        shape = work_shape;
+        let pass_count = passes.len();
         // The reduction kernel is keepdims: the destination has the input's rank with an
         // extent of one on the reduced axis. A compact column-major buffer is the same bytes
         // with or without those unit axes, so the last pass allocates the squeezed result and
         // the kernel writes it through the keepdims layout: no squeeze copy, no second
         // allocation and no second wait (#2406).
-        let passes = ordered.len();
-        for (pass, &axis) in ordered.iter().rev().enumerate() {
+        for (pass, &axis) in passes.iter().enumerate() {
             // Only a sum of squares changes between passes: it folds the squares once and adds
             // them afterwards. Every other fold composes with itself.
             let pass_op = if pass > 0 && matches!(op, ReduceOp::SumSquares) {
@@ -3653,7 +3766,7 @@ impl CudaEngine {
             let in_layout = compact_layout(&shape, &compact_strides(&shape, name)?, name)?;
             let out_len = count_i64(&out_shape, name)?;
             let in_len = count_i64(&shape, name)?;
-            let result_shape: &[usize] = if pass + 1 == passes {
+            let result_shape: &[usize] = if pass + 1 == pass_count {
                 &squeezed
             } else {
                 &out_shape
@@ -3672,7 +3785,7 @@ impl CudaEngine {
                 &in_layout,
                 in_len,
                 axis as u32,
-                width,
+                REDUCTION_PLANE_WIDTH,
             )
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
             let scratch = match &planned {
