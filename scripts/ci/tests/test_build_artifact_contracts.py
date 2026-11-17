@@ -196,14 +196,15 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertNotIn("optional", dependencies["tlinalg"])
 
     def test_cuda_dependencies_are_pinned_revisions(self) -> None:
-        """The CUDA engine's two upstream crates are exact revisions of their releases.
+        """The CUDA engine's upstream crates are pinned exactly.
 
         A branch or a loose version would let the tested kernel ABI change under the
-        build, so both stay exact revisions in `[workspace.dependencies]`, next to the
-        exact crates.io version `cargo publish` keeps (the release preflight and
-        `check-git-pin-content.py` scan that table), and `tenferro-gpu` takes them as
-        optional workspace dependencies. `cudarc` keeps one feature set so a single
-        CUDA binding resolves in the graph.
+        build, so each stays an exact pin in `[workspace.dependencies]`: an exact
+        revision for a crate that is not published yet, or the exact crates.io
+        version once it is (`check-git-pin-content.py` checks that a git pin and its
+        release agree). `tenferro-gpu` takes them as optional workspace
+        dependencies. `cudarc` keeps one feature set so a single CUDA binding
+        resolves in the graph.
         """
         workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"][
             "dependencies"
@@ -214,11 +215,11 @@ class BuildArtifactContracts(unittest.TestCase):
         for name in ("t4a-cuda-runtime", "t4a-cuda-kernels"):
             with self.subTest(dependency=name):
                 spec = workspace[name]
-                self.assertIn("git", spec)
                 self.assertNotIn("branch", spec)
                 self.assertNotIn("tag", spec)
-                self.assertEqual(len(spec["rev"]), 40, "an exact revision")
                 self.assertRegex(spec["version"], r"^=\d+\.\d+\.\d+$")
+                if "git" in spec:
+                    self.assertEqual(len(spec["rev"]), 40, "an exact revision")
                 self.assertEqual(gpu[name], {"workspace": True, "optional": True})
 
         cudarc = workspace["cudarc"]
