@@ -224,6 +224,15 @@ destination contract, and consumes an arbitrary-stride or offset `x` through
 one native strided-source pass rather than canonicalizing it; a compact `x`
 still runs the single cuBLAS `geam` call.
 
+`Engine::vdot_read` is one cuBLAS conjugate dot (`cublasDdot`/`cublasSdot` for the
+real widths, `cublasZdotc`/`cublasCdotc` for the complex ones) over the operands'
+compact spans, with the result written on the engine's stream: no conjugation
+copy, no full product tensor and no separate reduction launch. An owned operand is
+already a compact span; a strided, offset or wide-rank view keeps the same staging
+copy it took before. The element count travels as cuBLAS's 32-bit length, so a dot
+longer than `i32::MAX` elements is refused with a typed `Unsupported` error instead
+of being wrapped (issue #2624).
+
 The CUDA raw session exposes `Session::fill_zero_write`, the `beta = 0`
 reset for storage the caller owns. It never reads the previous contents, so a
 stale `NaN`/`Inf` cannot survive and `-0.0` is normalized to `+0.0`, which

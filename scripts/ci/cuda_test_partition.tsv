@@ -251,6 +251,7 @@ host	tenferro-ad::integration	eager_device_placement_contract::eager_generated_c
 host	tenferro-ad::integration	eager_device_placement_contract::eager_index_select_imports_hidden_indices_through_borrowed_session
 host	tenferro-ad::integration	eager_fixed_pivot_cross::take_axis_rows_cols_and_block_select_static_indices
 host	tenferro-ad::integration	eager_fixed_pivot_cross::take_block_backward_accumulates_to_source
+host	tenferro-ad::integration	eager_runtime_api::eager_filled_constants_hold_the_value_and_take_no_gradient
 host	tenferro-ad::integration	eager_runtime_api::eager_runtime_constructors_return_typed_results
 host	tenferro-ad::integration	eager_runtime_api::eager_runtime_grad_accumulation_keeps_slot_locked_through_update
 host	tenferro-ad::integration	eager_runtime_api::eager_runtime_replaces_eager_context_public_name
@@ -347,6 +348,7 @@ host	tenferro-ad::integration	fallible_api::eager_binary_methods_return_shape_er
 host	tenferro-ad::integration	fallible_api::eager_dot_general_surfaces_validate_config_before_dispatch_source_contract
 host	tenferro-ad::integration	fallible_api::eager_public_tensor_accessors_are_fallible_source_contract
 host	tenferro-ad::integration	fallible_api::eager_runtime_lock_scopes_are_bounded_source_contract
+host	tenferro-ad::integration	fallible_api::traced_filled_constants_differentiate_as_constants_and_reject_seed_roles
 host	tenferro-ad::integration	fallible_api::traced_jvp_vjp_grad_return_typed_errors_for_inactive_inputs
 host	tenferro-ad::integration	fallible_api::traced_jvp_vjp_return_errors_for_symbolic_seed_tensors
 gpu	tenferro-ad::integration	gpu_ad_tests::eager_op_f64_decode_add_host_cost_benchmark
@@ -1113,6 +1115,7 @@ host	tenferro-gpu	cuda::runtime::tests::a_warning_to_a_closed_stderr_is_dropped_
 host	tenferro-gpu	event_retirement::tests::explicit_retirement_then_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_retirement_contains_provider_panic
+host	tenferro-gpu	cuda::tests::vendor_narrowing::a_dot_length_past_the_bound_is_refused_by_name_and_value
 host	tenferro-gpu	cuda::tests::vendor_narrowing::a_negative_value_still_narrows
 host	tenferro-gpu	cuda::tests::vendor_narrowing::one_past_the_bound_is_refused_by_name_and_value
 host	tenferro-gpu	cuda::tests::vendor_narrowing::the_descriptor_rank_bound_fits_both_narrowing_types
@@ -1128,7 +1131,10 @@ gpu	tenferro-gpu::blas1_cuda	cuda_norm_squared_matches_cpu
 gpu	tenferro-gpu::blas1_cuda	cuda_reductions_accept_a_non_contiguous_read
 gpu	tenferro-gpu::blas1_cuda	cuda_reductions_accept_compact_views_with_offsets
 gpu	tenferro-gpu::blas1_cuda	cuda_vdot_accepts_two_strided_operands
+gpu	tenferro-gpu::blas1_cuda	cuda_vdot_handles_rank_zero_operands
 gpu	tenferro-gpu::blas1_cuda	cuda_vdot_matches_cpu_and_conjugates_the_left_operand
+gpu	tenferro-gpu::blas1_cuda	cuda_vdot_over_compact_operands_admits_no_catalogue_launch
+gpu	tenferro-gpu::blas1_cuda	cuda_vdot_real_operands_match_cpu_on_strided_and_offset_layouts
 gpu	tenferro-gpu::chunked_staging	a_payload_exactly_one_chunk_long_round_trips
 gpu	tenferro-gpu::chunked_staging	a_payload_one_element_over_the_chunk_round_trips
 gpu	tenferro-gpu::chunked_staging	a_payload_one_element_under_the_chunk_round_trips

@@ -1,4 +1,5 @@
-//! Vendor operations on the runtime's own stream: cuBLAS GEMM and strided-batched GEMM.
+//! Vendor operations on the runtime's own stream: cuBLAS GEMM, strided-batched GEMM, and
+//! the conjugate dot BLAS-1 folds its callers into.
 //!
 //! The handle is created once per runtime with host pointer mode and the runtime's
 //! stream, and every call runs inside the runtime's raw scope, so the operands are
@@ -43,6 +44,12 @@ pub struct GemmRequest<'a> {
 pub struct Cublas {
     handle: cublas::cublasHandle_t,
     runtime: CudaRuntime,
+    /// Set when a pointer-mode change failed, which leaves the handle's mode unproven.
+    ///
+    /// Every entry reads its coefficients in the mode it sets, so a handle with an unproven mode
+    /// would let a GEMM read stack coefficients as device addresses. The engine replaces such a
+    /// handle instead of reusing it.
+    mode_unproven: bool,
 }
 
 // SAFETY: a handle carries no submission authority of its own; every call runs inside
@@ -57,6 +64,16 @@ impl Cublas {
     /// [`GpuError::Unavailable`] when cuBLAS cannot be loaded or initialised, and the
     /// runtime's typed admission failure.
     pub fn new(runtime: &CudaRuntime) -> Result<Cublas, GpuError> {
+        // Every entry point below resolves a symbol through the loader, and a library that is
+        // not there answers a resolution by panicking. An operation path that requires cuBLAS
+        // must report the typed load error the GPU backend contract asks for, so the library is
+        // probed before any symbol is bound.
+        // SAFETY: the probe opens the library and binds nothing; it enqueues no work.
+        if !unsafe { cublas::is_culib_present() } {
+            return Err(GpuError::Unavailable {
+                detail: "cuBLAS is not loadable: no libcublas candidate dlopens".to_string(),
+            });
+        }
         let handle = {
             // SAFETY: the raw scope activates the owning context, so the handle is created
             // in it and bound to this runtime's stream; nothing is enqueued.
@@ -99,7 +116,25 @@ impl Cublas {
         Ok(Cublas {
             handle,
             runtime: runtime.clone(),
+            mode_unproven: false,
         })
+    }
+
+    /// Refuse a handle whose pointer mode a failed change left unproven.
+    fn ensure_mode_proven(&self) -> Result<(), GpuError> {
+        if self.mode_unproven {
+            return Err(GpuError::Unavailable {
+                detail: "the cuBLAS handle's pointer mode is unproven after a failed \
+                         pointer-mode change; the engine recreates it"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether a failed pointer-mode change left this handle unusable.
+    pub(crate) fn mode_unproven(&self) -> bool {
+        self.mode_unproven
     }
 
     /// One dense or strided-batched GEMM in column-major order.
@@ -111,6 +146,7 @@ impl Cublas {
     /// leading dimension or batch count above `i32::MAX`, which these 32-bit cuBLAS entry
     /// points cannot express), and the library's typed failure.
     pub fn gemm(&mut self, call: &GemmRequest<'_>) -> Result<(), GpuError> {
+        self.ensure_mode_proven()?;
         let (m, n, k) = call.shape;
         let (lda, ldb, ldc) = call.leading;
         let (batches, stride_a, stride_b, stride_c) = call.batches;
@@ -188,6 +224,170 @@ impl Cublas {
                 .map_err(|error| GpuError::Unavailable {
                     detail: error.to_string(),
                 })?
+        }
+    }
+}
+
+impl Cublas {
+    /// One conjugate dot over two flat spans: `result <- sum(conj(x) * y)`.
+    ///
+    /// The complex widths conjugate their left operand in the library; the real widths are
+    /// plain dots, which is the same sum because conjugation is the identity there. The
+    /// result is one element written to `result` on this runtime's stream, so the caller's
+    /// next read of it is stream-ordered and no host barrier is taken here.
+    ///
+    /// # Errors
+    ///
+    /// [`GpuError::Unsupported`] for a non-positive or `i32`-overflowing element count, a
+    /// dtype without a dot entry, or a library status the call reports, and
+    /// [`GpuError::Unavailable`] when the runtime cannot run the call.
+    pub(crate) fn dot(
+        &mut self,
+        dtype: DType,
+        len: i64,
+        x: &DeviceBuffer,
+        y: &DeviceBuffer,
+        result: &DeviceBuffer,
+    ) -> Result<(), GpuError> {
+        self.ensure_mode_proven()?;
+        if len <= 0 {
+            return Err(GpuError::unsupported(
+                "dot",
+                "the element count must be positive",
+            ));
+        }
+        let n = narrow_i32("dot", "element count", len)?;
+        let Some(entry) = DotEntry::of(dtype) else {
+            return Err(GpuError::unsupported(
+                "dot",
+                format!("{dtype:?} has no cuBLAS dot entry"),
+            ));
+        };
+        let handle = self.handle;
+        // A pointer-mode change that fails leaves the handle's mode unproven; the flag crosses the
+        // closure and is recorded on the handle once the scope is over.
+        let mode_unproven = std::cell::Cell::new(false);
+        // SAFETY: the raw scope registered all three operands in this runtime, so the
+        // addresses belong to it and stay alive until the scope's completion; the library
+        // call runs on the runtime's stream.
+        let outcome = unsafe {
+            self.runtime
+                .with_raw_locked(
+                    vec![
+                        RawResource::Buffer(x),
+                        RawResource::Buffer(y),
+                        RawResource::Buffer(result),
+                    ],
+                    |raw| {
+                        let ptr =
+                            |buffer: &DeviceBuffer| -> Result<*mut std::ffi::c_void, GpuError> {
+                                raw.device_ptr(buffer)
+                                    .map(|address| address as usize as *mut std::ffi::c_void)
+                                    .map_err(|error| GpuError::Unavailable {
+                                        detail: error.to_string(),
+                                    })
+                            };
+                        let (x, y, result) = (ptr(x)?, ptr(y)?, ptr(result)?);
+                        let status = cublas::cublasSetPointerMode_v2(
+                            handle,
+                            cublas::cublasPointerMode_t::CUBLAS_POINTER_MODE_DEVICE,
+                        );
+                        if status != cublas::cublasStatus_t::CUBLAS_STATUS_SUCCESS {
+                            mode_unproven.set(true);
+                            return Err(GpuError::Unsupported {
+                                op: "dot",
+                                detail: format!(
+                                    "the handle refused device pointer mode: {status:?}"
+                                ),
+                            });
+                        }
+                        let status = entry.call(handle, n, x, y, result);
+                        // The handle is shared with the GEMM entries, which read their
+                        // coefficients on the host, so host pointer mode comes back on every
+                        // path out of here, whatever the dot reported.
+                        let restored = cublas::cublasSetPointerMode_v2(
+                            handle,
+                            cublas::cublasPointerMode_t::CUBLAS_POINTER_MODE_HOST,
+                        );
+                        if restored != cublas::cublasStatus_t::CUBLAS_STATUS_SUCCESS {
+                            mode_unproven.set(true);
+                            return Err(GpuError::Unsupported {
+                                op: "dot",
+                                detail: format!(
+                                    "the handle refused host pointer mode: {restored:?}"
+                                ),
+                            });
+                        }
+                        if status != cublas::cublasStatus_t::CUBLAS_STATUS_SUCCESS {
+                            return Err(GpuError::Unsupported {
+                                op: "dot",
+                                detail: format!("cuBLAS reported {status:?}"),
+                            });
+                        }
+                        Ok(())
+                    },
+                )
+                .map_err(|error| GpuError::Unavailable {
+                    detail: error.to_string(),
+                })?
+        };
+        self.mode_unproven |= mode_unproven.get();
+        outcome
+    }
+}
+
+/// The cuBLAS dot entry of each width; the complex ones conjugate their left operand.
+#[derive(Clone, Copy)]
+enum DotEntry {
+    /// `cublasSdot`: `sum(x * y)` in `f32`.
+    S,
+    /// `cublasDdot`: `sum(x * y)` in `f64`.
+    D,
+    /// `cublasCdotc`: `sum(conj(x) * y)` in `c32`.
+    C,
+    /// `cublasZdotc`: `sum(conj(x) * y)` in `c64`.
+    Z,
+}
+
+impl DotEntry {
+    /// `None` for a dtype cuBLAS has no dot for; the caller reports the refusal.
+    const fn of(dtype: DType) -> Option<DotEntry> {
+        match dtype {
+            DType::F32 => Some(DotEntry::S),
+            DType::F64 => Some(DotEntry::D),
+            DType::C32 => Some(DotEntry::C),
+            DType::C64 => Some(DotEntry::Z),
+            DType::I32 | DType::I64 | DType::Bool => None,
+        }
+    }
+
+    /// Run this entry over `n` unit-stride elements.
+    ///
+    /// # Safety
+    ///
+    /// `x` and `y` must address `n` device elements and `result` one result element of this
+    /// entry's dtype, all registered in the raw scope that is running the call.
+    unsafe fn call(
+        self,
+        handle: cublas::cublasHandle_t,
+        n: i32,
+        x: *const std::ffi::c_void,
+        y: *const std::ffi::c_void,
+        result: *mut std::ffi::c_void,
+    ) -> cublas::cublasStatus_t {
+        match self {
+            DotEntry::S => {
+                cublas::cublasSdot_v2(handle, n, x.cast(), 1, y.cast(), 1, result.cast())
+            }
+            DotEntry::D => {
+                cublas::cublasDdot_v2(handle, n, x.cast(), 1, y.cast(), 1, result.cast())
+            }
+            DotEntry::C => {
+                cublas::cublasCdotc_v2(handle, n, x.cast(), 1, y.cast(), 1, result.cast())
+            }
+            DotEntry::Z => {
+                cublas::cublasZdotc_v2(handle, n, x.cast(), 1, y.cast(), 1, result.cast())
+            }
         }
     }
 }
