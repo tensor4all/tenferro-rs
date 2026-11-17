@@ -209,6 +209,13 @@ layer, generated from a per-family registry. The operation list, options,
 
 ### Fixed
 
+- **`Runtime::prepare` no longer blows up on deep reverse-mode graphs**
+(#2643). The compiler's analysis shape stream combined a constant extent
+baked in by the AD transform with an input-derived one into a `Max` at every
+broadcast, and the tree roughly doubled per sequential op: a 10-step unrolled
+RK4 `value_and_grad` graph never finished preparing and three steps were
+OOM-killed at 20 GB. Nested `Max` operands are now flattened, deduplicated and
+their constants folded, so that graph prepares in milliseconds.
 - **Duplicate-axis validation reports one payload on the concrete, eager and
 traced surfaces.** The same repeated axis in a reduction, `reverse` or
 `transpose` argument reached a different validator on each layer, so

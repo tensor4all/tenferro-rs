@@ -21,6 +21,8 @@ mod checkpoint_truncate_integration;
 mod convenience_api;
 #[path = "integration/cpu_backend.rs"]
 mod cpu_backend;
+#[path = "integration/deep_reverse_mode_prepare.rs"]
+mod deep_reverse_mode_prepare;
 #[path = "integration/dot_general_validation.rs"]
 mod dot_general_validation;
 #[path = "integration/dtype_propagation.rs"]

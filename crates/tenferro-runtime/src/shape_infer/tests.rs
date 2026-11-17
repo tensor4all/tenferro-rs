@@ -952,3 +952,36 @@ fn div_binary_op_keeps_integer_dtype() {
         DType::I64
     );
 }
+
+#[test]
+fn repeated_broadcasts_keep_the_max_expression_flat() {
+    // tenferro-rs#2643: a constant extent broadcast against an input-derived
+    // one at every step used to double the expression per step.
+    let input = DimExpr::InputDim {
+        input_idx: 4,
+        axis: 0,
+    };
+    let mut lhs = input.clone();
+    let mut rhs = DimExpr::Const(64);
+    for _ in 0..64 {
+        let next = broadcast_dim(lhs.clone(), rhs.clone()).unwrap();
+        lhs = broadcast_dim(next.clone(), DimExpr::Const(64)).unwrap();
+        rhs = broadcast_dim(input.clone(), next).unwrap();
+    }
+    let flat = DimExpr::max(input.clone(), DimExpr::Const(64));
+    assert_eq!(lhs, flat);
+    assert_eq!(rhs, flat);
+    assert_eq!(
+        dim_max(
+            DimExpr::Const(3),
+            DimExpr::max(DimExpr::Const(5), input.clone())
+        ),
+        DimExpr::max(DimExpr::Const(5), input.clone())
+    );
+    assert_eq!(
+        flat.eval(&[&[], &[], &[], &[], &[64]]).unwrap(),
+        dim_max(lhs, rhs)
+            .eval(&[&[], &[], &[], &[], &[64]])
+            .unwrap()
+    );
+}
