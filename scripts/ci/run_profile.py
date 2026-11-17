@@ -61,6 +61,16 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         # crates' tests on a second architecture and libc.
         "cargo nextest run -p tenferro-gpu -p tenferro-fft -p tenferro-linalg "
         f"{_NEXTEST_PROFILE} --features tenferro-linalg/autodiff --no-fail-fast",
+        # The Metal engine (#2402) runs on the hosted macOS runner's Apple GPU.
+        # `TENFERRO_REQUIRE_METAL=1` turns a missing device into a failure, so this step
+        # cannot pass on a host without one; the second step proves nothing links Metal,
+        # MetalPerformanceShaders or Accelerate at build time (both are opened with dlopen).
+        "TENFERRO_REQUIRE_METAL=1 cargo nextest run -p tenferro-gpu --features metal "
+        f"{_NEXTEST_PROFILE} --test metal_engine --no-fail-fast",
+        "scripts/check-macos-no-framework-link.sh",
+        # The Metal MSL is compiled at run time, so the source set is only ever exercised by
+        # a launch: the doctests above already opened a context when the device is present.
+        "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-gpu --features metal --no-deps",
     ),
     # #2612: the MPI transport adapter. Both backends are features of the workspace
     # member `tenferro-mpi`; its default features select neither, so the root

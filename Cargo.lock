@@ -1643,8 +1643,9 @@ dependencies = [
 
 [[package]]
 name = "t4a-cuda-kernels"
-version = "0.1.2"
-source = "git+https://github.com/tensor4all/t4a-cuda-kernels?rev=ab7395c3757c50e2214e4c796946b2bc34dcb1e6#ab7395c3757c50e2214e4c796946b2bc34dcb1e6"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e240fd21fb450bd4d2df4ff4453cc51a5439512e2a15df127ed7260bb492a8da"
 
 [[package]]
 name = "t4a-cuda-runtime"
@@ -1812,6 +1813,27 @@ dependencies = [
  "raw-cpuid",
  "seq-macro",
  "t4a-gemm-common",
+]
+
+[[package]]
+name = "t4a-metal-runtime"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06f1b77f0f26d450afcaf0d8b28ae4e90f4f8119d606bdb4b21497cb143991d4"
+dependencies = [
+ "sha2",
+ "t4a-metal-sys",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "t4a-metal-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c69c4f5771fca5de7d691b056196351af0aabe7b1c93190b0a2b169901e59b6"
+dependencies = [
+ "libc",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2068,6 +2090,7 @@ dependencies = [
  "strided-perm",
  "t4a-cuda-kernels",
  "t4a-cuda-runtime",
+ "t4a-metal-runtime",
  "tenferro-core-ops",
  "tenferro-cpu",
  "tenferro-runtime",

@@ -1,0 +1,189 @@
+pub mod tenferro_gpu
+pub mod tenferro_gpu::gpu
+pub trait tenferro_gpu::gpu::Backend: core::marker::Send + 'static
+pub type tenferro_gpu::gpu::Backend::Allocation: core::marker::Send + 'static
+pub mod tenferro_gpu::metal
+#[non_exhaustive] pub enum tenferro_gpu::metal::MetalDeviceError
+pub tenferro_gpu::metal::MetalDeviceError::Unavailable
+pub tenferro_gpu::metal::MetalDeviceError::Unavailable::detail: alloc::string::String
+pub tenferro_gpu::metal::MetalDeviceError::Unavailable::what: alloc::string::String
+impl core::clone::Clone for tenferro_gpu::metal::MetalDeviceError
+pub fn tenferro_gpu::metal::MetalDeviceError::clone(&self) -> tenferro_gpu::metal::MetalDeviceError
+impl core::cmp::Eq for tenferro_gpu::metal::MetalDeviceError
+impl core::cmp::PartialEq for tenferro_gpu::metal::MetalDeviceError
+pub fn tenferro_gpu::metal::MetalDeviceError::eq(&self, &tenferro_gpu::metal::MetalDeviceError) -> bool
+impl core::convert::From<tenferro_gpu::metal::MetalDeviceError> for tenferro_gpu::metal::MetalError
+pub fn tenferro_gpu::metal::MetalError::from(tenferro_gpu::metal::MetalDeviceError) -> Self
+impl core::error::Error for tenferro_gpu::metal::MetalDeviceError
+impl core::fmt::Debug for tenferro_gpu::metal::MetalDeviceError
+pub fn tenferro_gpu::metal::MetalDeviceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_gpu::metal::MetalDeviceError
+pub fn tenferro_gpu::metal::MetalDeviceError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_gpu::metal::MetalDeviceError
+#[non_exhaustive] pub enum tenferro_gpu::metal::MetalError
+pub tenferro_gpu::metal::MetalError::Runtime
+pub tenferro_gpu::metal::MetalError::Runtime::detail: alloc::string::String
+pub tenferro_gpu::metal::MetalError::Runtime::op: &'static str
+pub tenferro_gpu::metal::MetalError::Unavailable
+pub tenferro_gpu::metal::MetalError::Unavailable::detail: alloc::string::String
+pub tenferro_gpu::metal::MetalError::Unavailable::what: alloc::string::String
+impl core::convert::From<tenferro_gpu::metal::MetalDeviceError> for tenferro_gpu::metal::MetalError
+pub fn tenferro_gpu::metal::MetalError::from(tenferro_gpu::metal::MetalDeviceError) -> Self
+impl core::convert::From<tenferro_gpu::metal::MetalError> for tenferro_tensor::error::Error
+pub fn tenferro_tensor::error::Error::from(tenferro_gpu::metal::MetalError) -> Self
+impl core::error::Error for tenferro_gpu::metal::MetalError
+impl core::fmt::Debug for tenferro_gpu::metal::MetalError
+pub fn tenferro_gpu::metal::MetalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for tenferro_gpu::metal::MetalError
+pub fn tenferro_gpu::metal::MetalError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_gpu::metal::MetalAllocationDomain
+impl core::clone::Clone for tenferro_gpu::metal::MetalAllocationDomain
+pub fn tenferro_gpu::metal::MetalAllocationDomain::clone(&self) -> tenferro_gpu::metal::MetalAllocationDomain
+impl core::fmt::Debug for tenferro_gpu::metal::MetalAllocationDomain
+pub fn tenferro_gpu::metal::MetalAllocationDomain::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl tenferro_tensor::types::SharedTensorAllocationDomain for tenferro_gpu::metal::MetalAllocationDomain
+pub fn tenferro_gpu::metal::MetalAllocationDomain::allocate(&self, tenferro_tensor_core::DType, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalAllocationDomain::id(&self) -> tenferro_tensor::types::AllocationDomainId
+pub struct tenferro_gpu::metal::MetalConfig
+pub tenferro_gpu::metal::MetalConfig::runtime: t4a_metal_runtime::runtime::Config
+impl core::clone::Clone for tenferro_gpu::metal::MetalConfig
+pub fn tenferro_gpu::metal::MetalConfig::clone(&self) -> tenferro_gpu::metal::MetalConfig
+impl core::cmp::Eq for tenferro_gpu::metal::MetalConfig
+impl core::cmp::PartialEq for tenferro_gpu::metal::MetalConfig
+pub fn tenferro_gpu::metal::MetalConfig::eq(&self, &tenferro_gpu::metal::MetalConfig) -> bool
+impl core::default::Default for tenferro_gpu::metal::MetalConfig
+pub fn tenferro_gpu::metal::MetalConfig::default() -> tenferro_gpu::metal::MetalConfig
+impl core::fmt::Debug for tenferro_gpu::metal::MetalConfig
+pub fn tenferro_gpu::metal::MetalConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_gpu::metal::MetalConfig
+pub struct tenferro_gpu::metal::MetalContext
+impl tenferro_gpu::metal::MetalContext
+pub fn tenferro_gpu::metal::MetalContext::allocation_domain(&self) -> tenferro_tensor::types::AllocationDomainId
+pub fn tenferro_gpu::metal::MetalContext::cpu_engine(&self) -> &tenferro_cpu::engine::CpuEngine
+pub fn tenferro_gpu::metal::MetalContext::device(&self) -> tenferro_gpu::metal::MetalDeviceInfo
+pub fn tenferro_gpu::metal::MetalContext::domain(&self) -> &alloc::sync::Arc<tenferro_gpu::metal::MetalAllocationDomain>
+pub fn tenferro_gpu::metal::MetalContext::download(&self, tenferro_tensor::types::TensorRead<'_>) -> core::result::Result<tenferro_tensor::types::Tensor, tenferro_tensor::error::Error>
+pub fn tenferro_gpu::metal::MetalContext::engine(&self) -> tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalContext::open(tenferro_gpu::metal::MetalConfig) -> core::result::Result<Self, tenferro_gpu::metal::MetalError>
+pub fn tenferro_gpu::metal::MetalContext::stats(&self) -> tenferro_gpu::metal::MetalStats
+pub fn tenferro_gpu::metal::MetalContext::synchronize(&self) -> core::result::Result<(), tenferro_tensor::error::Error>
+pub fn tenferro_gpu::metal::MetalContext::upload(&self, tenferro_tensor::types::TensorRead<'_>) -> core::result::Result<tenferro_tensor::types::Tensor, tenferro_tensor::error::Error>
+impl core::clone::Clone for tenferro_gpu::metal::MetalContext
+pub fn tenferro_gpu::metal::MetalContext::clone(&self) -> tenferro_gpu::metal::MetalContext
+impl core::fmt::Debug for tenferro_gpu::metal::MetalContext
+pub fn tenferro_gpu::metal::MetalContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct tenferro_gpu::metal::MetalDeviceInfo
+pub tenferro_gpu::metal::MetalDeviceInfo::bf16: bool
+pub tenferro_gpu::metal::MetalDeviceInfo::c32: bool
+pub tenferro_gpu::metal::MetalDeviceInfo::f32: bool
+pub tenferro_gpu::metal::MetalDeviceInfo::f64: bool
+pub tenferro_gpu::metal::MetalDeviceInfo::f64_diagnostic: core::option::Option<alloc::string::String>
+pub tenferro_gpu::metal::MetalDeviceInfo::fp16: bool
+pub tenferro_gpu::metal::MetalDeviceInfo::max_buffer_length: u64
+pub tenferro_gpu::metal::MetalDeviceInfo::mps_framework: bool
+pub tenferro_gpu::metal::MetalDeviceInfo::mps_matrix_multiplication: bool
+pub tenferro_gpu::metal::MetalDeviceInfo::mpsgraph_class: bool
+pub tenferro_gpu::metal::MetalDeviceInfo::mpsgraph_framework: bool
+pub tenferro_gpu::metal::MetalDeviceInfo::name: alloc::string::String
+pub tenferro_gpu::metal::MetalDeviceInfo::recommended_max_working_set: u64
+pub tenferro_gpu::metal::MetalDeviceInfo::unified_memory: bool
+impl core::clone::Clone for tenferro_gpu::metal::MetalDeviceInfo
+pub fn tenferro_gpu::metal::MetalDeviceInfo::clone(&self) -> tenferro_gpu::metal::MetalDeviceInfo
+impl core::cmp::Eq for tenferro_gpu::metal::MetalDeviceInfo
+impl core::cmp::PartialEq for tenferro_gpu::metal::MetalDeviceInfo
+pub fn tenferro_gpu::metal::MetalDeviceInfo::eq(&self, &tenferro_gpu::metal::MetalDeviceInfo) -> bool
+impl core::fmt::Debug for tenferro_gpu::metal::MetalDeviceInfo
+pub fn tenferro_gpu::metal::MetalDeviceInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for tenferro_gpu::metal::MetalDeviceInfo
+pub struct tenferro_gpu::metal::MetalEngine
+impl tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::context(&self) -> &tenferro_gpu::metal::MetalContext
+impl core::clone::Clone for tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::clone(&self) -> tenferro_gpu::metal::MetalEngine
+impl core::fmt::Debug for tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl tenferro_tensor::backend::Engine for tenferro_gpu::metal::MetalEngine
+impl tenferro_tensor::backend::SessionCachedDot for tenferro_gpu::metal::MetalEngine
+impl tenferro_tensor::backend::TensorAnalytic for tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::cos_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::erf_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::exp_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::expm1_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::log1p_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::log_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::pow_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::rsqrt_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::sin_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::sqrt_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::tanh_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorBuffer for tenferro_gpu::metal::MetalEngine
+impl tenferro_tensor::backend::TensorDeviceTransfer for tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::download_to_host(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::upload_host_tensor(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorDot for tenferro_gpu::metal::MetalEngine
+impl tenferro_tensor::backend::TensorElementwise for tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::abs_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::add_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::clamp_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::compare_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, &tenferro_tensor::config::CompareDir) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::conj_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::div_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::elementwise_read_into(&mut self, tenferro_tensor::backend::ElementwiseReadOp, &[tenferro_tensor::types::TensorRead<'_>], tenferro_tensor::types::TensorWrite<'_>) -> tenferro_tensor::error::Result<()>
+pub fn tenferro_gpu::metal::MetalEngine::maximum_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::minimum_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::mul_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::neg_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::select_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::sign_read(&mut self, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::sub_read(&mut self, tenferro_tensor::types::TensorRead<'_>, tenferro_tensor::types::TensorRead<'_>) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorFusion for tenferro_gpu::metal::MetalEngine
+impl tenferro_tensor::backend::TensorIndexing for tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::concatenate(&mut self, &[&tenferro_tensor::types::Tensor], usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::dynamic_slice(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::dynamic_update_slice(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::gather(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &tenferro_tensor::config::GatherConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::pad(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::config::PadConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::reverse(&mut self, &tenferro_tensor::types::Tensor, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::scatter(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &tenferro_tensor::types::Tensor, &tenferro_tensor::config::ScatterConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::slice(&mut self, &tenferro_tensor::types::Tensor, &tenferro_tensor::config::SliceConfig) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorReduction for tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::reduce_max_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::reduce_min_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::reduce_prod_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::reduce_sum_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::backend::TensorStructural for tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::broadcast_in_dim_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize], &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::cast(&mut self, &tenferro_tensor::types::Tensor, tenferro_tensor_core::DType) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::embed_diagonal(&mut self, &tenferro_tensor::types::Tensor, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::extract_diagonal(&mut self, &tenferro_tensor::types::Tensor, usize, usize) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::reshape_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::transpose_read(&mut self, tenferro_tensor::types::TensorRead<'_>, &[usize]) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::tril(&mut self, &tenferro_tensor::types::Tensor, i64) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+pub fn tenferro_gpu::metal::MetalEngine::triu(&mut self, &tenferro_tensor::types::Tensor, i64) -> tenferro_tensor::error::Result<tenferro_tensor::types::Tensor>
+impl tenferro_tensor::capability::TensorBackendCapability for tenferro_gpu::metal::MetalEngine
+pub fn tenferro_gpu::metal::MetalEngine::backend_id(&self) -> tenferro_tensor::capability::BackendId
+pub fn tenferro_gpu::metal::MetalEngine::capabilities(&self) -> &'static [tenferro_tensor::capability::OperationCapability]
+pub struct tenferro_gpu::metal::MetalStats
+pub tenferro_gpu::metal::MetalStats::allocations: u64
+pub tenferro_gpu::metal::MetalStats::download_bytes: u64
+pub tenferro_gpu::metal::MetalStats::downloads: u64
+pub tenferro_gpu::metal::MetalStats::launches: u64
+pub tenferro_gpu::metal::MetalStats::live_bytes: u64
+pub tenferro_gpu::metal::MetalStats::submissions: u64
+pub tenferro_gpu::metal::MetalStats::upload_bytes: u64
+pub tenferro_gpu::metal::MetalStats::uploads: u64
+pub tenferro_gpu::metal::MetalStats::waits: u64
+impl core::clone::Clone for tenferro_gpu::metal::MetalStats
+pub fn tenferro_gpu::metal::MetalStats::clone(&self) -> tenferro_gpu::metal::MetalStats
+impl core::cmp::Eq for tenferro_gpu::metal::MetalStats
+impl core::cmp::PartialEq for tenferro_gpu::metal::MetalStats
+pub fn tenferro_gpu::metal::MetalStats::eq(&self, &tenferro_gpu::metal::MetalStats) -> bool
+impl core::default::Default for tenferro_gpu::metal::MetalStats
+pub fn tenferro_gpu::metal::MetalStats::default() -> tenferro_gpu::metal::MetalStats
+impl core::fmt::Debug for tenferro_gpu::metal::MetalStats
+pub fn tenferro_gpu::metal::MetalStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for tenferro_gpu::metal::MetalStats
+impl core::marker::StructuralPartialEq for tenferro_gpu::metal::MetalStats
+pub fn tenferro_gpu::metal::metal_available() -> bool
+pub fn tenferro_gpu::metal::metal_capabilities() -> &'static [tenferro_tensor::capability::OperationCapability]
+pub fn tenferro_gpu::metal::metal_devices() -> core::result::Result<alloc::vec::Vec<tenferro_gpu::metal::MetalDeviceInfo>, tenferro_gpu::metal::MetalDeviceError>

@@ -221,6 +221,11 @@ host	tenferro-ad::integration	dtype_propagation::test_integer_div_rem_pow_preser
 host	tenferro-ad::integration	dtype_propagation::test_integer_order_and_sign_ops_preserve_dtype
 host	tenferro-ad::integration	dtype_propagation::test_reduce_sum_preserves_dtype
 host	tenferro-ad::integration	dtype_propagation::test_sub_preserves_integer_dtype
+host	tenferro-ad::integration	duplicate_axis_payload_parity::reduce_mean_reports_invalid_axes_before_the_dtype
+host	tenferro-ad::integration	duplicate_axis_payload_parity::reduction_duplicate_axis_payload_matches_across_surfaces
+host	tenferro-ad::integration	duplicate_axis_payload_parity::reverse_duplicate_axis_payload_matches_across_surfaces
+host	tenferro-ad::integration	duplicate_axis_payload_parity::transpose_duplicate_axis_payload_matches_across_surfaces
+host	tenferro-ad::integration	duplicate_axis_payload_parity::valid_reduction_reverse_transpose_values_match_across_surfaces
 host	tenferro-ad::integration	dynamic_truncate::dynamic_truncate_2d_axis1
 host	tenferro-ad::integration	dynamic_truncate::dynamic_truncate_accepts_i64_size
 host	tenferro-ad::integration	dynamic_truncate::dynamic_truncate_basic
@@ -369,6 +374,8 @@ host	tenferro-ad::integration	iterative_ad::eval_all_evaluates_primal_and_gradie
 host	tenferro-ad::integration	iterative_ad::eval_mid_loop_preserves_graph_connectivity
 host	tenferro-ad::integration	iterative_ad::graph_size_grows_linearly
 host	tenferro-ad::integration	iterative_ad::iterative_ad_gradient_matches_finite_diff
+host	tenferro-ad::integration	kdv_pinn_end_to_end::kdv_pinn_loss_gradients_run_and_match_finite_differences
+host	tenferro-ad::integration	kdv_pinn_end_to_end::kdv_residual_vanishes_on_exact_soliton
 host	tenferro-ad::integration	memory_order_api::tensor_col_major_constructor_is_the_facade_import_path
 host	tenferro-ad::integration	memory_order_api::traced_tensor_col_major_constructor_keeps_physical_order
 host	tenferro-ad::integration	memory_order_api::traced_tensor_col_major_constructor_preserves_shape_and_storage
