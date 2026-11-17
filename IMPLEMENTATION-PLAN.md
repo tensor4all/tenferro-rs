@@ -2,7 +2,7 @@
 
 Tracking issue: tensor4all/tenferro-rs#2402.
 Design: tensor4all-meta `8befe98`, `docs/design/metal-backend.md` §4, §5, §6, §8, §10 (U4).
-Worktree: `~/projects/tensor4all/tenferro-rs-metal-u4` (branch `feat/2402-metal-u4`, from `origin/main` `a6ca543e7`).
+Worktree: `~/projects/tensor4all/tenferro-rs-metal-u4` (branch `feat/2402-metal-u4`, rebased onto `origin/main` `a76f2f2ee`).
 Host: macOS 26.7.2, Apple M5 Max, no NVIDIA device.
 
 ## 0. What already exists and what this unit adds
@@ -17,7 +17,7 @@ Merged and available to build on:
   `Runtime::open`, `alloc_zeroed`/`alloc_uninit`, `compile`, `bind`, `launch`, `commit -> Completion`,
   `synchronize`, `stats`; `Buffer::{len, allocation_id, domain_id, host_ptr}`;
   `probe()` with per-dtype MSL compile results; `Arg::Buffer/Pod`; `Completion::{poll,wait}`.
-- U3 slice 1 `e870458` (t4a-cuda-kernels): `t4a_cuda_kernels::metal` — `SIMD_WIDTH`,
+- U3 slice 1 (t4a-cuda-kernels, published as `0.3.0`; source base `e870458`): `t4a_cuda_kernels::metal` — `SIMD_WIDTH`,
   `THREADGROUP`, `ABI_REVISION`, `SYMBOLS` (fill_zero, copy_exact, add, sub, mul, div, unary),
   `DTYPES = [F32, C32]`, `UNARY_OPS`, `plan_fill_zero/plan_copy_exact/plan_elementwise/plan_unary`,
   `Plan`/`Dispatch`, `source::{ABI_HEADER, MODULES, module_of, compose}`.
@@ -63,28 +63,27 @@ while every other handle it owns does (`compile.rs:89`, `kernel.rs:182`, `memory
 `Runtime::alloc_zeroed` takes `&mut self` (`runtime.rs:223`), so the context needs
 `Mutex<Runtime>` — and `Mutex<T>: Send + Sync` needs `T: Send`.
 
-Change (t4a-gpu-backend, one small PR, `t4a-metal-runtime` 0.1.1): `unsafe impl Send for
+Change (t4a-gpu-backend, released as `t4a-metal-runtime` 0.1.2): `unsafe impl Send for
 Runtime {}` with the argument the crate already uses for the other four handles — every object the
 runtime owns is an Apple handle usable from any thread, and `&mut self` is what prevents concurrent
-use of one command buffer — plus a `fn assert_send<T: Send>()` contract test. Pin
-`t4a-metal-runtime` at that revision. A local `unsafe impl Send` on a wrapper in `tenferro-gpu`
+use of one command buffer — plus a `fn assert_send<T: Send>()` contract test. 0.1.1 was published
+before the impl existed; 0.1.2 is the `Send` revision (`e695c24`) plus the version bump, and this PR
+requires `=0.1.2` from the registry. A local `unsafe impl Send` on a wrapper in `tenferro-gpu`
 was rejected: the thread-safety claim belongs to the crate that owns the handles.
 
 ### 1.1 Pins and features
 
 `Cargo.toml` (`[workspace.dependencies]`, `:112-122`)
 
-- Add `t4a-metal-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "<the 1.0 rev>", version = "=0.1.1" }`.
-- Bump `t4a-cuda-kernels` from `ab7395c` (=0.1.2) to `e87045817c535c856fa59f7860f1cdac5ab4069b` (=0.2.0, the
-  revision that contains `src/metal.rs`) and update the "ABI revision 13" comment to 14.
-- Neither crate is on crates.io yet (`t4a-metal-runtime` 404; `t4a-cuda-kernels` publishes only
-  up to 0.1.2), so add two entries to `scripts/git-pin-content-exceptions.toml` with the tracked
-  issue `#2402` and the reason "unpublished release for the Metal backend; publish chain is the
-  release follow-up". `scripts/check-git-pin-content.py` warns rather than fails for an exception,
-  and `scripts/check-publish-layout.py`'s docstring explicitly allows a pre-publish git dependency
-  that also declares the registry version — which both pins do. **Consequence to record in the PR
-  body:** `tenferro-gpu` itself cannot be republished to crates.io until the publish chain
-  `t4a-metal-sys` -> `t4a-metal-runtime` 0.1.1 -> `t4a-cuda-kernels` 0.2.0 has run.
+- Add `t4a-metal-runtime = { version = "=0.1.2" }`, the release whose sources contain
+  `unsafe impl Send for Runtime`; 0.1.1 was published before that impl.
+- Bump `t4a-cuda-kernels` from `0.1.2` to `=0.3.0`, the published release that contains
+  `src/metal.rs`, and update the "ABI revision 13" comment to 14.
+- `t4a-metal-sys` `0.1.0` comes in transitively through the Metal runtime.
+- All three resolve from crates.io, so the branch pins no git revision and
+  `scripts/git-pin-content-exceptions.toml` needs no entry: `scripts/check-git-pin-content.py`
+  is green (0 warnings, no content drift) and `tenferro-gpu` can be republished with the same
+  requirements.
 
 `crates/tenferro-gpu/Cargo.toml`
 
@@ -287,10 +286,9 @@ Additivity and off-Apple compilation (this host and the Linux lane):
 5. `cargo clippy -p tenferro-gpu --features metal --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc`.
 6. `cargo check --workspace --all-targets` (no GPU features) and
    `cargo check -p tenferro-gpu --features cuda,metal --all-targets` (both features at once; the
-   0.2.0 catalogue bump must not disturb the CUDA engine).
+   0.3.0 catalogue bump must not disturb the CUDA engine).
 7. `cargo fmt --all -- --check`.
-8. `/opt/homebrew/bin/python3.12 scripts/check-git-pin-content.py` — bar: 0 errors, exactly the two
-   recorded warnings.
+8. `/opt/homebrew/bin/python3.12 scripts/check-git-pin-content.py` — bar: 0 errors, 0 warnings.
 9. `/opt/homebrew/bin/python3.12 scripts/check-publish-layout.py`,
    `/opt/homebrew/bin/python3.12 scripts/api-snapshot.sh --check` (after `--write`).
 10. `python3 scripts/ci/run_profile.py macos` on the M5 Max — bar: the new Metal commands pass and
@@ -352,14 +350,13 @@ Measurement (recorded in the PR body, with the capability dump and the MSL sourc
 
 Risks, each with its mitigation:
 
-1. **Two unpublished pins.** `t4a-metal-runtime 0.1.1` (the `Send` revision) and
-   `t4a-cuda-kernels 0.2.0` are not on crates.io. Mitigation: the reviewed exception mechanism the
-   repository already documents (`scripts/git-pin-content-exceptions.toml`) plus `version = "=..."`
-   so `cargo publish` resolves the registry form; the publish chain (t4a-metal-sys →
-   t4a-metal-runtime → t4a-cuda-kernels) is named as the release follow-up. Without this, U4 cannot
-   use the runtime or the MSL at all. **Recorded consequence:** `tenferro-gpu`'s own release is
-   blocked until that chain has run — stated in the PR body so the release operator sees it.
-2. **Catalogue 0.1.2 → 0.2.0.** The catalogue moved its CUDA ABI to revision 14 and changed
+1. **Release chain (resolved).** The branch originally pinned unpublished siblings:
+   `t4a-metal-runtime` 0.1.1 lacked the `Send` impl and `t4a-cuda-kernels` 0.2.0 was not on
+   crates.io. Both are now published: the runtime as `0.1.2` (from `e695c24` plus the version
+   bump) and the catalogue as `0.3.0`, with `t4a-metal-sys` `0.1.0` transitive. The pins are
+   registry requirements, the exception entries are gone, and `tenferro-gpu`'s own release is
+   no longer blocked by this dependency.
+2. **Catalogue 0.1.2 → 0.3.0.** The catalogue moved its CUDA ABI to revision 14 and changed
    reduction entries. Mitigation: `cargo check --features cuda,metal` locally plus the hosted Linux
    CUDA-compile lane; the CUDA *runtime* tests cannot run here (no NVIDIA device) and the GPU lane
    is spent once on the finished PR.
@@ -442,11 +439,10 @@ U4 slice 1 is implemented in this worktree. What ran, on the Apple M5 Max:
 - `scripts/api-snapshot.sh --check` — ok, with a new `tenferro-gpu+metal` profile written to
   `api/tenferro-gpu+metal.txt`; `scripts/check-publish-layout.py` — ok;
   `scripts/check-macos-no-framework-link.sh` — ok on the built `metal_engine` binary.
-- `scripts/check-git-pin-content.py` — **fails, correctly**: `no crates.io version of
-  t4a-cuda-kernels satisfies '=0.2.0'`. The pin cannot be excepted by design (the checker's
-  hard error means "this branch cannot be published yet"); the release of
-  `t4a-metal-runtime 0.1.1` and `t4a-cuda-kernels 0.2.0` is the follow-up recorded in §1.1,
-  §4.1 and the PR body.
+- `scripts/check-git-pin-content.py` — **passes**: `0 warning(s), no content drift`. The
+  registry requirements (`t4a-metal-runtime =0.1.2`, `t4a-cuda-kernels =0.3.0`,
+  `t4a-metal-sys =0.1.0` transitive) replaced the temporary git pins, so §1.1 and §4.1 record
+  no remaining release follow-up.
 - Benchmark (`cargo bench -p tenferro-gpu --features metal --bench metal_engine`): recorded in
   `docs/worklogs/2026-11-15-metal-u4-slice1-engine.md` and the PR body.
 
@@ -476,10 +472,10 @@ tree; all five were real, and all five are fixed in the worktree:
    `CARGO_TARGET_DIR`), and it was verified against a real `--profile ci` build
    (`target/ci/build/tenferro-gpu/.../metal_engine-...`: links no Apple GPU framework).
 4. IMPORTANT — the pin exceptions cannot rescue the gate and the file still said "no exceptions
-   are current". The header now states both facts: the two pins are recorded for review, they do
-   not make the check pass, and the hard error is the correct signal that the workspace cannot be
-   published until the publish chain runs. The branches cannot be merged until that release;
-   §6 and the PR body say so.
+   are current". The review round recorded the two pins as a temporary deviation, but the final
+   state removes them: `t4a-metal-runtime 0.1.2` and `t4a-cuda-kernels 0.3.0` are published and
+   the workspace depends on the registry directly, so the exception file is back to "no
+   exceptions are current" and the gate passes.
 5. IMPORTANT — two bars could pass without the protection they claim. Fixed: `PendingTouches`
    counts only a wait that had a submission to wait for, so `MetalStats::waits` now evidences a
    recorded completion; `a_gpu_write_after_a_read_only_launch_waits` proves the rule with values

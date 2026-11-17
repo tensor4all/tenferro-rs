@@ -113,14 +113,14 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 # catalogue with its NVRTC sources (tensor4all/t4a-cuda-kernels, ABI revision
 # 14) that tenferro-gpu's CUDA engine is built on (#2208), plus the Metal
 # runtime and the Metal source set the Metal engine is built on (#2402 U4).
-# Each pin is the commit its crates.io release was published from, with the
-# exact registry version `cargo publish` keeps; scripts/check-git-pin-content.py
-# checks that the two agree. The two Metal pins have no published release yet,
-# so that check records them as reviewed exceptions (#2402) until the publish
-# chain t4a-metal-sys -> t4a-metal-runtime -> t4a-cuda-kernels 0.2.0 has run.
+# The CUDA runtime keeps the git pin whose revision is the one its crates.io
+# release (0.1.1) was published from; scripts/check-git-pin-content.py checks
+# that the two agree. The kernel catalogue and the Metal runtime resolve from
+# crates.io at exact versions, so `cargo publish` keeps the same dependency;
+# `t4a-metal-sys` 0.1.0 comes in transitively through the Metal runtime.
 t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "147af9e03e5169ec7cef6f6d869e27ed70a43a05", version = "=0.1.1" }
-t4a-cuda-kernels = { git = "https://github.com/tensor4all/t4a-cuda-kernels", rev = "e87045817c535c856fa59f7860f1cdac5ab4069b", version = "=0.2.0" }
-t4a-metal-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "e695c24b756fd027144023a1cfa80920f6ba0e8f", version = "=0.1.1" }
+t4a-cuda-kernels = { version = "=0.3.0" }
+t4a-metal-runtime = { version = "=0.1.2" }
 sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = "0.1.0"

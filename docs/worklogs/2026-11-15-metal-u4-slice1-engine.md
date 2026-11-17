@@ -20,8 +20,10 @@
   `Completion` on every allocation it named (read or write) and the host touch waits on the
   newest one, which on an in-order queue is waiting for everything earlier. `Runtime` had to
   become `Send` for the context to be `Sync`; that is the sibling change in
-  `t4a-gpu-backend` (`t4a-metal-runtime` 0.1.1, PR
-  [t4a-gpu-backend#17](https://github.com/tensor4all/t4a-gpu-backend/pull/17)).
+  `t4a-gpu-backend` (`t4a-metal-runtime` 0.1.2, published from
+  [t4a-gpu-backend@1a8e409](https://github.com/tensor4all/t4a-gpu-backend/commit/1a8e4096b632fd176a29bbb73fb49ee246810e99),
+  PR [t4a-gpu-backend#17](https://github.com/tensor4all/t4a-gpu-backend/pull/17); 0.1.1
+  shipped before the `Send` impl).
 - A GPU submission is admitted only when no live `map_read`/`map_write` guard names an operand;
   otherwise it returns `MappedForHost` and commits nothing. The admission check and the commit
   hold the same lock, so no guard can appear between them. `shared_host_slice` cannot raise
@@ -40,7 +42,8 @@ Review: the plan was reviewed by `ollama-cloud/glm-5.3-flash` before implementat
 (VERDICT: CHANGES, seven findings, all addressed) and the finished diff by `gpt-6.1-sol`
 (VERDICT: CHANGES, five IMPORTANT findings, all fixed): the host-admission check moved inside the
 runtime lock, host waits moved outside it, the framework-link check now finds the `ci`-profile
-binary, the pin-exception header states that it does not make the gate pass, and the
+binary, the temporary git pins gave way to registry requirements once the runtime and catalogue
+releases landed, and the
 synchronization bars now prove what they claim (a wait counts only when there was a completion to
 wait for, and a host overwrite after a read-only launch is checked by value). The review also led
 to refusing overlapping host mappings (`OverlappingHostMapping`), which the draft allowed.
@@ -60,25 +63,24 @@ to refusing overlapping host mappings (`OverlappingHostMapping`), which the draf
   `max(|re|, |im|)`), so its agreement with the platform `hypot` is asserted within 4 ulp, not
   bit-exactly. That is a property of the catalogue entry, not of this engine.
 - Benchmark (M5 Max, shared buffers, one op then one wait; `cargo bench -p tenferro-gpu
-  --features metal --bench metal_engine`). f32 add 1e7 elements: 2.42 ms Metal vs 0.93 ms CPU on
-  the same buffers; ten submissions then one wait: 9.21 ms, i.e. 0.92 ms per op and about
-  65 GB/s of shared-memory traffic. Single-op latency below about 1e6 elements is dominated by
-  roughly 0.3 ms of submission/wait overhead (1e3 elements: 0.29 ms Metal vs 0.5 µs CPU).
-  Upload 16–18 GB/s, download 74–85 GB/s at 1e6–1e7 elements. Elementwise work is therefore not
-  where this backend wins on a shared-memory architecture; it is the correctness boundary the
-  MPS GEMM/FFT/reduction slices (U5 in part, U4 slice 3) and fusion (U6) build on.
+  --features metal --bench metal_engine`, rerun at the registry-pinned head). f32 add 1e7
+  elements: 3.28 ms Metal vs 0.91 ms CPU on the same buffers (3.05 vs 11.02 GFLOP/s); ten
+  submissions then one wait: 9.10 ms, i.e. 0.91 ms per op. Single-op latency below about 1e6
+  elements is dominated by roughly 0.5 ms of submission/wait overhead (1e3 elements: 0.52 ms
+  Metal vs 0.5 µs CPU). Upload 17–19 GB/s, download 72–76 GB/s at 1e6–1e7 elements. Elementwise
+  work is therefore not where this backend wins on a shared-memory architecture; it is the
+  correctness boundary the MPS GEMM/FFT/reduction slices (U5 in part, U4 slice 3) and fusion
+  (U6) build on.
 - Remaining residuals, each recorded in the plan: f64/BF16 are out of scope by the issue;
   non-compact operands and borrowed views are refused rather than staged (slice 2); Metal's
   fast-math subnormal flush needs a cross-repo compile-options seam to change and is not
   measured here; `Runtime` is `Send` but deliberately not `Sync`.
-- Repo gate that cannot pass yet: `scripts/check-git-pin-content.py` fails closed with
-  `no crates.io version of t4a-cuda-kernels satisfies '=0.2.0'`. `t4a-metal-runtime 0.1.1` and
-  `t4a-cuda-kernels 0.2.0` are unpublished siblings; the publish chain
-  (`t4a-metal-sys 0.1.0` → `t4a-metal-runtime 0.1.1` → `t4a-cuda-kernels 0.2.0`, then the
-  `tenferro-rs` pin removal and `tenferro-gpu` republish) is the release follow-up on #2402.
-  The exception entries in `scripts/git-pin-content-exceptions.toml` record the deviation and
-  stay visible as warnings; the checker's hard error is the correct signal that this branch
-  cannot be published yet.
+- Repo gate now passes: `scripts/check-git-pin-content.py` reports `0 warning(s), no content
+  drift` with the registry requirements `t4a-metal-runtime =0.1.2`,
+  `t4a-cuda-kernels =0.3.0` and transitive `t4a-metal-sys =0.1.0`. The release chain that was
+  the follow-up on #2402 has run: [`t4a-metal-runtime 0.1.2`](https://crates.io/crates/t4a-metal-runtime/0.1.2)
+  was published from `t4a-gpu-backend@1a8e409` (the `Send` revision plus the version bump), and
+  the temporary exception entries are gone.
 - Not checked here: the hosted macOS lane (it runs on PR, this is macOS with a device but the
   workflow's `macos-15` runner is not exercised locally), and the GPU pods, which this diff does
   not touch.
