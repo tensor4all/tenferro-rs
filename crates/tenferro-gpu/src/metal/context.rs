@@ -607,11 +607,17 @@ pub(crate) fn element_bytes(tensor: &Tensor) -> usize {
     } else {
         1
     };
+    // `DType::Bool` declares width 0 (its kind carries the fact), but its storage element
+    // is one byte, which is what the transfer counters moved.
+    let component_bytes = match dtype {
+        DType::Bool => std::mem::size_of::<bool>(),
+        other => other.spec().width as usize / 8,
+    };
     tensor
         .shape()
         .iter()
         .product::<usize>()
-        .saturating_mul(dtype.spec().width as usize / 8 * components)
+        .saturating_mul(component_bytes.saturating_mul(components))
 }
 
 /// Refuse a tensor that is not in this context's domain.

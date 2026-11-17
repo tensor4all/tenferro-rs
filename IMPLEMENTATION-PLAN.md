@@ -422,7 +422,7 @@ and are addressed here:
 U4 slice 1 is implemented in this worktree. What ran, on the Apple M5 Max:
 
 - `TENFERRO_REQUIRE_METAL=1 cargo test -p tenferro-gpu --features metal --test metal_engine`
-  — 22 passed, 0 failed.
+  — 24 passed, 0 failed.
 - `cargo test -p tenferro-gpu --features metal --lib` — 6 passed (3 of them new Metal table
   tests).
 - `cargo clippy -p tenferro-gpu --features metal --all-targets -- -D warnings

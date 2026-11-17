@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use tenferro_gpu::metal::{metal_available, MetalContext, MetalStats};
+use tenferro_gpu::metal::{metal_available, MetalConfig, MetalContext, MetalStats};
 use tenferro_tensor::{
     DType, Error, HostAccessError, Tensor, TensorElementwise, TensorRead, TensorReduction,
     TensorStructural,
@@ -35,7 +35,7 @@ fn allocation(tensor: &Tensor) -> tenferro_tensor::AllocationId {
 }
 
 /// The testing context, or `None` on a host that has no device and does not require one.
-fn context() -> Option<MetalContext> {
+fn context_with(config: MetalConfig) -> Option<MetalContext> {
     if !metal_available() {
         assert!(
             std::env::var("TENFERRO_REQUIRE_METAL").as_deref() != Ok("1"),
@@ -43,7 +43,11 @@ fn context() -> Option<MetalContext> {
         );
         return None;
     }
-    Some(MetalContext::open(Default::default()).expect("the probe reported a device"))
+    Some(MetalContext::open(config).expect("the probe reported a device"))
+}
+
+fn context() -> Option<MetalContext> {
+    context_with(MetalConfig::default())
 }
 
 /// A host tensor of `len` f32 values.
@@ -101,6 +105,35 @@ fn a_round_trip_counts_its_bytes() {
     assert_eq!(after.upload_bytes - before.upload_bytes, 4096 * 4);
     assert_eq!(after.download_bytes - before.download_bytes, 4096 * 4);
     assert!(after.allocations > before.allocations);
+}
+
+#[test]
+fn bool_transfers_count_one_byte_per_element() {
+    let Some(context) = context() else { return };
+    let before = stats_of(&context);
+    let values = vec![true, false, true, true, false, true];
+    let host =
+        Tensor::from_vec_col_major(vec![values.len()], values.clone()).expect("a host tensor");
+    let shared = context
+        .upload(TensorRead::from_tensor(&host))
+        .expect("upload");
+    let back = context
+        .download(TensorRead::from_tensor(&shared))
+        .expect("download");
+    let after = stats_of(&context);
+    assert_eq!(
+        after.upload_bytes - before.upload_bytes,
+        values.len() as u64,
+        "Bool has a one-byte storage element even though its spec width is zero"
+    );
+    assert_eq!(
+        after.download_bytes - before.download_bytes,
+        values.len() as u64
+    );
+    assert_eq!(
+        back.as_slice::<bool>().expect("bool elements"),
+        values.as_slice()
+    );
 }
 
 #[test]
@@ -617,6 +650,63 @@ fn a_second_host_mapping_is_refused_as_overlapping() {
     assert!(
         matches!(error, HostAccessError::OverlappingHostMapping),
         "expected OverlappingHostMapping, got {error}"
+    );
+}
+
+#[test]
+fn a_commit_timeout_poisons_the_allocations_it_named() {
+    let Some(context) = context_with(MetalConfig {
+        runtime: t4a_metal_runtime::Config {
+            max_submissions_in_flight: 1,
+            completion_timeout_ms: 1,
+            ..Default::default()
+        },
+    }) else {
+        return;
+    };
+    let mut engine = context.engine();
+    // Long enough to outlast the 1 ms completion budget even on this GPU.
+    let len = 40_000_000;
+    let left = context
+        .upload(TensorRead::from_tensor(&host_f32(len)))
+        .expect("upload");
+    let right = context
+        .upload(TensorRead::from_tensor(&host_f32(len)))
+        .expect("upload");
+
+    // The first commit leaves one submission in flight and does not wait (`1 > 1` is false).
+    let _first = engine
+        .add_read(
+            TensorRead::from_tensor(&left),
+            TensorRead::from_tensor(&right),
+        )
+        .expect("the first submission is admitted");
+
+    // The second commit submits, then waits on the first with the 1 ms budget and times out
+    // after the command buffer is already on the queue.
+    let error = engine
+        .add_read(
+            TensorRead::from_tensor(&left),
+            TensorRead::from_tensor(&right),
+        )
+        .expect_err("the back-pressure wait times out");
+    assert!(
+        matches!(error, Error::RuntimeState { .. }),
+        "expected the commit failure, got {error}"
+    );
+
+    // The second launch named `left` but its completion is unknown. A host read must refuse
+    // rather than wait only on the first completion and read bytes the launch still reads.
+    let error = context
+        .download(TensorRead::from_tensor(&left))
+        .expect_err("a poisoned allocation refuses host access");
+    assert!(
+        matches!(error, Error::RuntimeState { .. }),
+        "expected a typed host-access failure, got {error}"
+    );
+    assert!(
+        format!("{error}").contains("pending work is unknown"),
+        "expected the poison marker rather than a stale-completion wait, got {error}"
     );
 }
 

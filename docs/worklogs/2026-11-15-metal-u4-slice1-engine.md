@@ -54,15 +54,22 @@ now subtracts on storage drop (`live_bytes_track_live_tensors`), the C32 element
 value-tested (`complex_elementwise_matches_the_cpu_reference`,
 `complex_sign_matches_the_unit_direction`), and the synchronization wording now states that
 `commit` can back-pressure-wait under the lock while host completion waits run outside it.
+A third review at `2b5ffa53` found that `commit` can fail *after* the command buffer was
+submitted, leaving the newest completion unrecorded. `submit` now synchronises the runtime on
+that path and, when idleness cannot be proven, poisons every allocation the call named so a
+later host access reports a backend failure instead of overwriting bytes the launch still
+reads (`a_commit_timeout_poisons_the_allocations_it_named`). The same round made Bool transfer
+bytes count one byte per element (`bool_transfers_count_one_byte_per_element`).
 
 ## Verification conclusions and constraints
 
 - `TENFERRO_REQUIRE_METAL=1 cargo nextest run --cargo-profile ci -p tenferro-gpu --features
-  metal --test metal_engine` (the hosted-lane command): 22 passed on the Apple M5 Max. The bars that matter: bit-exact
+  metal --test metal_engine` (the hosted-lane command): 24 passed on the Apple M5 Max. The bars that matter: bit-exact
   round trips at lengths {0, 1, 3, 255, 256, 257, 4096, 100_003}; elementwise equality with the
   CPU reference (0 ulp for f32 add/sub/neg/conj on the same inputs, bit-exact division;
   bit-exact C32 add/sub/mul/neg/conj and exact axis `sign`); `live_bytes` returns to its
-  baseline after the last tensor drops; a live
+  baseline after the last tensor drops; a commit-timeout error poisons the named allocations
+  so host access refuses, and Bool transfers count one byte per element; a live
   host guard refusing a submission with `MappedForHost`; a host map waiting on the launch that
   read the allocation; f64 on the paired `CpuEngine` over the shared domain with no upload; a
   foreign context's allocation refused; a second host mapping refused as overlapping; no deadlock

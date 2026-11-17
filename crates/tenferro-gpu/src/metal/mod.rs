@@ -45,7 +45,10 @@
 //! Those completion waits run outside the context lock. `MetalEngine::submit` does hold
 //! the lock across `Runtime::commit`, which can itself wait when the runtime is at its
 //! in-flight bound; the lock therefore serialises back-pressure as well as encoding, and
-//! it is not held across a host completion wait.
+//! it is not held across a host completion wait. A `commit` error is therefore handled
+//! before the caller sees it: the engine synchronises the runtime, and if that cannot
+//! prove the queue idle it poisons every allocation the call named, so a later host access
+//! reports a backend failure instead of waiting on a stale completion.
 //!
 //! A GPU submission that names an allocation holding a live `BackendStorage::map_write`
 //! or `BackendStorage::map_read` guard returns [`tenferro_tensor::Error`] with the

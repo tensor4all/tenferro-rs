@@ -20,17 +20,31 @@ use tenferro_tensor::HostAccessError;
 /// The newest submission that named one allocation, read or write.
 #[derive(Debug)]
 pub(crate) struct PendingTouches {
-    /// The newest submission, once one has been committed on this allocation.
-    last: Mutex<Option<Completion>>,
+    /// The newest submission, once one has been committed on this allocation, or a poison
+    /// marker when a commit failed after the runtime may already have submitted it.
+    last: Mutex<LastTouch>,
     /// Domain-wide wait count, shared with the context's statistics.
     waits: Arc<AtomicU64>,
+}
+
+/// What the host may assume about the newest submission on one allocation.
+#[derive(Clone, Debug)]
+enum LastTouch {
+    /// No submission has named the allocation.
+    Idle,
+    /// The newest submitted completion; waiting on it covers every earlier submission.
+    Submitted(Completion),
+    /// A commit failed after the runtime may have submitted its command buffer and the
+    /// runtime could not be synchronised afterwards. The completion that would prove the
+    /// work finished is unknown, so host access must fail rather than wait on a stale one.
+    Poisoned(String),
 }
 
 impl PendingTouches {
     /// Bookkeeping for one allocation, counting waits in the domain's counter.
     pub(crate) fn new(waits: Arc<AtomicU64>) -> Self {
         Self {
-            last: Mutex::new(None),
+            last: Mutex::new(LastTouch::Idle),
             waits,
         }
     }
@@ -39,9 +53,21 @@ impl PendingTouches {
     ///
     /// The engine calls this once per named allocation after a successful commit, under
     /// the same runtime lock that serialised the commit, so submissions are recorded in
-    /// the order they were committed.
+    /// the order they were committed. Recording also clears a poison marker: a later
+    /// completion on the in-order queue proves the poisoned submission finished.
     pub(crate) fn record(&self, completion: &Completion) {
-        *self.lock() = Some(completion.clone());
+        *self.lock() = LastTouch::Submitted(completion.clone());
+    }
+
+    /// Refuse later host access because a submitted completion is unknown.
+    ///
+    /// The engine calls this only when `commit` failed after the runtime may have submitted
+    /// the command buffer and a following `synchronize` also failed, so neither the
+    /// completion nor an idle queue can be demonstrated. A poison marker is replaced by the
+    /// next successful `record`, whose completion covers every earlier submission on the
+    /// in-order queue.
+    pub(crate) fn poison(&self, reason: impl Into<String>) {
+        *self.lock() = LastTouch::Poisoned(reason.into());
     }
 
     /// Wait for every submission that has named this allocation.
@@ -54,31 +80,31 @@ impl PendingTouches {
     /// # Errors
     ///
     /// [`HostAccessError::BackendFailure`] when the submission completed with an error or
-    /// did not complete within the runtime's timeout.
+    /// did not complete within the runtime's timeout, or when a failed commit left the
+    /// newest submitted completion unknown (a poisoned allocation).
     pub(crate) fn wait(&self) -> Result<(), HostAccessError> {
         // Clone out of the lock and drop it before waiting: `Completion::wait` polls the
         // GPU and may block for the runtime's timeout, and a submission on another thread
         // records its completion here.
         let pending = self.lock().clone();
-        if pending.is_some() {
-            self.waits.fetch_add(1, Ordering::Relaxed);
-        }
         match pending {
-            Some(completion) => {
+            LastTouch::Idle => Ok(()),
+            LastTouch::Submitted(completion) => {
+                self.waits.fetch_add(1, Ordering::Relaxed);
                 completion
                     .wait()
                     .map_err(|error| HostAccessError::BackendFailure {
                         message: error.to_string(),
                     })
             }
-            None => Ok(()),
+            LastTouch::Poisoned(reason) => Err(HostAccessError::BackendFailure { message: reason }),
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Completion>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, LastTouch> {
         // A panicking holder could leave the value half-updated, but the value is one
-        // `Option<Completion>` whose only invariant is "newest wins", so a poisoned lock is
-        // still readable: recover it rather than stranding every later wait.
+        // `LastTouch` whose only invariant is "newest wins", so a poisoned lock is still
+        // readable: recover it rather than stranding every later wait.
         self.last
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

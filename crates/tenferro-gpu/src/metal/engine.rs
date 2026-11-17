@@ -99,7 +99,11 @@ impl MetalEngine {
     /// The runtime lock is held across the admission check and the commit: a host guard
     /// takes the same lock to raise an allocation's live count, so a guard cannot appear
     /// between them. Every allocation the submission named records the completion, so a
-    /// later host touch of any of them waits for this launch.
+    /// later host touch of any of them waits for this launch. A `commit` error is handled
+    /// before returning: the runtime is synchronised, and when that cannot prove the queue
+    /// idle the named allocations are poisoned so host access fails instead of trusting a
+    /// stale completion (`commit` submits before it back-pressure-waits, so an error there
+    /// does not prove the command buffer never ran).
     fn submit(
         &self,
         op: &'static str,
@@ -120,9 +124,28 @@ impl MetalEngine {
         // `commit` runs under the lock and may wait for the runtime's in-flight bound
         // (back-pressure). Only host completion waits leave the lock; keeping encoding and
         // commit on the one runtime is what orders submissions.
-        let completion = runtime.commit().map_err(|error| {
-            Error::runtime_state(op, format!("the Metal submission failed: {error}"))
-        })?;
+        let completion = match runtime.commit() {
+            Ok(completion) => completion,
+            Err(error) => {
+                let failure = format!("the Metal submission failed: {error}");
+                // `commit` submits the command buffer *before* it back-pressure-waits, so
+                // this error does not prove the work is unsubmitted. Prove the queue idle
+                // before the caller can touch the buffers; when that cannot be proven,
+                // poison every allocation this call named so a later host access reports a
+                // backend failure instead of waiting on a stale completion and overwriting
+                // bytes the unrecorded launch still reads.
+                if let Err(sync_error) = runtime.synchronize() {
+                    let reason = format!(
+                        "{failure}; the runtime could not be synchronized afterwards \
+                         ({sync_error}), so this allocation's pending work is unknown"
+                    );
+                    for pending in touched {
+                        pending.poison(reason.clone());
+                    }
+                }
+                return Err(Error::runtime_state(op, failure));
+            }
+        };
         for pending in touched {
             pending.record(&completion);
         }
