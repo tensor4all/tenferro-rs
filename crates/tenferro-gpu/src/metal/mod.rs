@@ -42,6 +42,11 @@
 //! exactly waiting for everything earlier on it. A CPU read therefore waits for pending
 //! GPU writes and a CPU write also waits for pending GPU reads, as design §5 requires.
 //!
+//! Those completion waits run outside the context lock. `MetalEngine::submit` does hold
+//! the lock across `Runtime::commit`, which can itself wait when the runtime is at its
+//! in-flight bound; the lock therefore serialises back-pressure as well as encoding, and
+//! it is not held across a host completion wait.
+//!
 //! A GPU submission that names an allocation holding a live `BackendStorage::map_write`
 //! or `BackendStorage::map_read` guard returns [`tenferro_tensor::Error`] with the
 //! `MappedForHost` cause and commits nothing. The shared borrow that

@@ -16,9 +16,11 @@
   operation with no transfer (design §4.3, §9); it is `MetalEngine` that returns
   `Unsupported` naming `MetalContext::cpu_engine`, because MSL rejects `double`.
 - One `Mutex<Runtime>` serialises allocation, MSL compile, pipeline bind, launch encoding,
-  commit and the host-admission check. Waits do not happen under it: a submission records its
-  `Completion` on every allocation it named (read or write) and the host touch waits on the
-  newest one, which on an in-order queue is waiting for everything earlier. `Runtime` had to
+  commit and the host-admission check. Completion waits do not happen under it: a submission
+  records its `Completion` on every allocation it named (read or write) and the host touch
+  waits on the newest one after releasing the lock, which on an in-order queue is waiting for
+  everything earlier. `commit` itself still runs under the lock and can wait when the runtime
+  is at its in-flight bound (back-pressure), so the lock serialises that wait too. `Runtime` had to
   become `Send` for the context to be `Sync`; that is the sibling change in
   `t4a-gpu-backend` (`t4a-metal-runtime` 0.1.2, published from
   [t4a-gpu-backend@1a8e409](https://github.com/tensor4all/t4a-gpu-backend/commit/1a8e4096b632fd176a29bbb73fb49ee246810e99),
@@ -47,13 +49,20 @@ releases landed, and the
 synchronization bars now prove what they claim (a wait counts only when there was a completion to
 wait for, and a host overwrite after a read-only launch is checked by value). The review also led
 to refusing overlapping host mappings (`OverlappingHostMapping`), which the draft allowed.
+A second adversarial review at `abf4b2a3` (2 NEEDS_CHANGES) led to three fixes: `live_bytes`
+now subtracts on storage drop (`live_bytes_track_live_tensors`), the C32 elementwise rows are
+value-tested (`complex_elementwise_matches_the_cpu_reference`,
+`complex_sign_matches_the_unit_direction`), and the synchronization wording now states that
+`commit` can back-pressure-wait under the lock while host completion waits run outside it.
 
 ## Verification conclusions and constraints
 
 - `TENFERRO_REQUIRE_METAL=1 cargo nextest run --cargo-profile ci -p tenferro-gpu --features
-  metal --test metal_engine` (the hosted-lane command): 19 passed on the Apple M5 Max. The bars that matter: bit-exact
+  metal --test metal_engine` (the hosted-lane command): 22 passed on the Apple M5 Max. The bars that matter: bit-exact
   round trips at lengths {0, 1, 3, 255, 256, 257, 4096, 100_003}; elementwise equality with the
-  CPU reference (0 ulp for add/sub/neg/conj on the same inputs, bit-exact division); a live
+  CPU reference (0 ulp for f32 add/sub/neg/conj on the same inputs, bit-exact division;
+  bit-exact C32 add/sub/mul/neg/conj and exact axis `sign`); `live_bytes` returns to its
+  baseline after the last tensor drops; a live
   host guard refusing a submission with `MappedForHost`; a host map waiting on the launch that
   read the allocation; f64 on the paired `CpuEngine` over the shared domain with no upload; a
   foreign context's allocation refused; a second host mapping refused as overlapping; no deadlock

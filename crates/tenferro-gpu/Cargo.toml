@@ -32,8 +32,8 @@ cuda = [
 ]
 # The Metal engine: the operation surface over the same kernel catalogue's Metal source
 # set, run through t4a-metal-runtime. Additive with `cuda`: nothing selects a vendor
-# through `cfg(not(...))`, and on a non-Apple target this code compiles out and discovery
-# lists no Metal device.
+# through `cfg(not(...))`. On a non-Apple target the module still compiles; the runtime's
+# probe refuses at run time, so `metal_available` is false and discovery lists no device.
 metal = ["dep:t4a-metal-runtime", "dep:t4a-cuda-kernels"]
 
 [dependencies]

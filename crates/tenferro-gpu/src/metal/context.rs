@@ -113,7 +113,12 @@ impl From<MetalError> for Error {
 pub struct MetalStats {
     /// Allocations handed out by the domain, including zero-length ones.
     pub allocations: u64,
-    /// Bytes currently alive in the domain.
+    /// Bytes held by live tensors allocated in this domain.
+    ///
+    /// A storage counts once when it is created and subtracts the same bytes when it is
+    /// dropped, so the value returns to its baseline after the last tensor is released. A
+    /// buffer allocated inside an operation but not yet wrapped (a launch destination) is
+    /// not counted; it is not reachable by the caller.
     pub live_bytes: u64,
     /// Explicit uploads.
     pub uploads: u64,
@@ -256,7 +261,6 @@ impl RuntimeCell {
             })
         })?;
         self.allocations.fetch_add(1, Ordering::Relaxed);
-        self.live_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
         Ok(buffer)
     }
 
@@ -321,13 +325,26 @@ impl RuntimeCell {
             })
         })?;
         self.allocations.fetch_add(1, Ordering::Relaxed);
-        self.live_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
         self.wrap::<T>(
             op,
             shape.to_vec(),
             buffer,
             Arc::new(PendingTouches::new(Arc::clone(&self.waits))),
         )
+    }
+
+    /// Record the bytes of a storage just created in this domain.
+    pub(crate) fn note_live_allocation(&self, bytes: usize) {
+        self.live_bytes.fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    /// Record the bytes released with a storage that just dropped.
+    pub(crate) fn note_live_deallocation(&self, bytes: usize) {
+        let previous = self.live_bytes.fetch_sub(bytes as u64, Ordering::Relaxed);
+        debug_assert!(
+            previous >= bytes as u64,
+            "live_bytes would underflow: {previous} < {bytes}"
+        );
     }
 
     fn note_upload(&self, bytes: usize) {

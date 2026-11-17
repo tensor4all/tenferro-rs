@@ -117,6 +117,9 @@ impl MetalEngine {
             }
         }
         encode(&mut runtime)?;
+        // `commit` runs under the lock and may wait for the runtime's in-flight bound
+        // (back-pressure). Only host completion waits leave the lock; keeping encoding and
+        // commit on the one runtime is what orders submissions.
         let completion = runtime.commit().map_err(|error| {
             Error::runtime_state(op, format!("the Metal submission failed: {error}"))
         })?;

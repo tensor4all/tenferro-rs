@@ -43,6 +43,9 @@ impl<T: Copy> MetalStorage<T> {
         cell: Arc<RuntimeCell>,
         len: usize,
     ) -> Self {
+        // The allocation becomes caller-visible only through this storage, so the live
+        // byte count is opened here and closed by `Drop`, not when the raw buffer exists.
+        cell.note_live_allocation(buffer.len());
         Self {
             buffer,
             touches,
@@ -127,6 +130,12 @@ impl<T: Copy> MetalStorage<T> {
         // caller waited for the last submission that named it, and the allocation holds at
         // least `len` elements (its byte length was computed from that count).
         unsafe { std::slice::from_raw_parts(ptr, self.len) }
+    }
+}
+
+impl<T> Drop for MetalStorage<T> {
+    fn drop(&mut self) {
+        self.cell.note_live_deallocation(self.buffer.len());
     }
 }
 

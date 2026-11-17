@@ -17,6 +17,14 @@ fn floats(tensor: &Tensor) -> Vec<f32> {
     tensor.as_slice::<f32>().expect("f32 elements").to_vec()
 }
 
+/// The `Complex32` elements of a tensor, read through its host-visible slice.
+fn complexes(tensor: &Tensor) -> Vec<num_complex::Complex32> {
+    tensor
+        .as_slice::<num_complex::Complex32>()
+        .expect("Complex32 elements")
+        .to_vec()
+}
+
 /// The allocation identity behind a tensor, for "a fresh allocation" assertions.
 fn allocation(tensor: &Tensor) -> tenferro_tensor::AllocationId {
     tensor
@@ -93,6 +101,44 @@ fn a_round_trip_counts_its_bytes() {
     assert_eq!(after.upload_bytes - before.upload_bytes, 4096 * 4);
     assert_eq!(after.download_bytes - before.download_bytes, 4096 * 4);
     assert!(after.allocations > before.allocations);
+}
+
+#[test]
+fn live_bytes_track_live_tensors() {
+    let Some(context) = context() else { return };
+    let before = stats_of(&context).live_bytes;
+    let bytes = 4096 * 4;
+
+    let first = context
+        .upload(TensorRead::from_tensor(&host_f32(4096)))
+        .expect("upload");
+    assert_eq!(
+        stats_of(&context).live_bytes,
+        before + bytes,
+        "one live tensor contributes its bytes"
+    );
+
+    let second = context
+        .upload(TensorRead::from_tensor(&host_f32(4096)))
+        .expect("upload");
+    assert_eq!(
+        stats_of(&context).live_bytes,
+        before + 2 * bytes,
+        "a second tensor adds its bytes"
+    );
+
+    drop(second);
+    assert_eq!(
+        stats_of(&context).live_bytes,
+        before + bytes,
+        "dropping a tensor removes its bytes"
+    );
+    drop(first);
+    assert_eq!(
+        stats_of(&context).live_bytes,
+        before,
+        "the counter returns to its baseline"
+    );
 }
 
 #[test]
@@ -226,6 +272,176 @@ fn elementwise_matches_the_cpu_reference() {
         .expect("conj");
     assert_ne!(allocation(&conj), allocation(&left));
     expect("conj", conj, left_values.clone());
+}
+
+#[test]
+fn complex_elementwise_matches_the_cpu_reference() {
+    let Some(context) = context() else { return };
+    let mut engine = context.engine();
+    let left_values = vec![
+        num_complex::Complex32::new(1.0, 2.0),
+        num_complex::Complex32::new(-3.0, 4.0),
+        num_complex::Complex32::new(0.5, -0.25),
+        num_complex::Complex32::new(0.0, 0.0),
+    ];
+    let right_values = vec![
+        num_complex::Complex32::new(2.0, -1.0),
+        num_complex::Complex32::new(0.5, 0.5),
+        num_complex::Complex32::new(-1.0, 3.0),
+        num_complex::Complex32::new(7.0, 7.0),
+    ];
+    let upload = |values: &[num_complex::Complex32]| {
+        let host =
+            Tensor::from_vec_col_major(vec![values.len()], values.to_vec()).expect("a host tensor");
+        context
+            .upload(TensorRead::from_tensor(&host))
+            .expect("upload")
+    };
+    let left = upload(&left_values);
+    let right = upload(&right_values);
+
+    let expect = |name: &str, actual: Tensor, reference: Vec<num_complex::Complex32>| {
+        let host = context
+            .download(TensorRead::from_tensor(&actual))
+            .expect(name);
+        assert_eq!(
+            complexes(&host),
+            reference,
+            "{name} matches the CPU reference bit for bit"
+        );
+    };
+
+    let conj = engine
+        .conj_read(TensorRead::from_tensor(&left))
+        .expect("conj");
+    expect(
+        "conj",
+        conj,
+        left_values.iter().map(|value| value.conj()).collect(),
+    );
+
+    let add = engine
+        .add_read(
+            TensorRead::from_tensor(&left),
+            TensorRead::from_tensor(&right),
+        )
+        .expect("add");
+    expect(
+        "add",
+        add,
+        left_values
+            .iter()
+            .zip(&right_values)
+            .map(|(l, r)| *l + *r)
+            .collect(),
+    );
+
+    let sub = engine
+        .sub_read(
+            TensorRead::from_tensor(&left),
+            TensorRead::from_tensor(&right),
+        )
+        .expect("sub");
+    expect(
+        "sub",
+        sub,
+        left_values
+            .iter()
+            .zip(&right_values)
+            .map(|(l, r)| *l - *r)
+            .collect(),
+    );
+
+    let mul = engine
+        .mul_read(
+            TensorRead::from_tensor(&left),
+            TensorRead::from_tensor(&right),
+        )
+        .expect("mul");
+    expect(
+        "mul",
+        mul,
+        left_values
+            .iter()
+            .zip(&right_values)
+            .map(|(l, r)| *l * *r)
+            .collect(),
+    );
+
+    let neg = engine
+        .neg_read(TensorRead::from_tensor(&left))
+        .expect("neg");
+    expect(
+        "neg",
+        neg,
+        left_values.iter().map(|value| -*value).collect(),
+    );
+
+    // The composed case the review asked for: a wrong imaginary sign in `conj` or a wrong
+    // operand offset in `add` changes this result, so neither claimed row can stay green
+    // while broken.
+    let conj_left = engine
+        .conj_read(TensorRead::from_tensor(&left))
+        .expect("conj");
+    let conj_add = engine
+        .add_read(
+            TensorRead::from_tensor(&conj_left),
+            TensorRead::from_tensor(&right),
+        )
+        .expect("conj + add");
+    expect(
+        "conj + add",
+        conj_add,
+        left_values
+            .iter()
+            .zip(&right_values)
+            .map(|(l, r)| l.conj() + *r)
+            .collect(),
+    );
+}
+
+#[test]
+fn complex_sign_matches_the_unit_direction() {
+    let Some(context) = context() else { return };
+    let mut engine = context.engine();
+    // Axis vectors keep |z| exact, so z / |z| is bit-comparable; (0, 0) is the documented
+    // zero result.
+    let values = vec![
+        num_complex::Complex32::new(1.0, 0.0),
+        num_complex::Complex32::new(0.0, 1.0),
+        num_complex::Complex32::new(-1.0, 0.0),
+        num_complex::Complex32::new(0.0, -1.0),
+        num_complex::Complex32::new(3.0, 0.0),
+        num_complex::Complex32::new(0.0, -4.0),
+        num_complex::Complex32::new(0.0, 0.0),
+    ];
+    let host =
+        Tensor::from_vec_col_major(vec![values.len()], values.clone()).expect("a host tensor");
+    let shared = context
+        .upload(TensorRead::from_tensor(&host))
+        .expect("upload");
+    let sign = engine
+        .sign_read(TensorRead::from_tensor(&shared))
+        .expect("sign");
+    let back = context
+        .download(TensorRead::from_tensor(&sign))
+        .expect("download");
+    let reference: Vec<num_complex::Complex32> = values
+        .iter()
+        .map(|value| {
+            if value.re == 0.0 && value.im == 0.0 {
+                num_complex::Complex32::new(0.0, 0.0)
+            } else {
+                let magnitude = value.re.hypot(value.im);
+                num_complex::Complex32::new(value.re / magnitude, value.im / magnitude)
+            }
+        })
+        .collect();
+    assert_eq!(
+        complexes(&back),
+        reference,
+        "sign is the unit direction for the exact axis cases"
+    );
 }
 
 #[test]

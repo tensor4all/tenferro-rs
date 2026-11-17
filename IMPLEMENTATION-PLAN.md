@@ -221,11 +221,11 @@ error.
 - `scripts/ci/run_profile.py` `"macos"` (`:59-64`): add, after the existing nextest run,
   1. `TENFERRO_REQUIRE_METAL=1 cargo nextest run -p tenferro-gpu --features metal <profile> --no-fail-fast`,
   2. a no-link check on the built test binary — `otool -L target/debug/deps/metal_engine-* | grep -Ei 'Metal|MetalPerformanceShaders|Accelerate'` must print nothing (issue #2402 "Checks to require").
-  The Linux lanes keep compiling the crate with `metal` enabled but no Apple target
-  (`crates/tenferro-gpu/src/metal` is `#[cfg(all(feature = "metal", target_vendor = "apple"))]`;
-  elsewhere a stub module provides `metal_devices()` returning an empty list and
-  `metal_available() == false`, satisfying design requirement 6 "on non-Apple targets the metal
-  code compiles out and discovery lists no Metal device").
+  The Linux lanes keep compiling the crate with `metal` enabled but no Apple target:
+  `crates/tenferro-gpu/src/metal` is gated on `feature = "metal"` for every target, so the
+  module compiles everywhere; the runtime's probe refuses at run time, so `metal_devices()`
+  is empty and `metal_available() == false`. That gives design requirement 6's observable
+  result (no Metal device on non-Apple) without the literal compile-out its wording implies.
 - `docs/guides/devices-and-gpu.md`: replace the "WebGPU / Metal / Apple shared CPU/Metal" row with
   a `Metal (experimental)` row naming the `metal` feature and exactly what slice 1 serves; add a
   "Metal coverage" table rendered from `metal_capabilities()` plus a default-features test that
@@ -422,7 +422,7 @@ and are addressed here:
 U4 slice 1 is implemented in this worktree. What ran, on the Apple M5 Max:
 
 - `TENFERRO_REQUIRE_METAL=1 cargo test -p tenferro-gpu --features metal --test metal_engine`
-  — 18 passed, 0 failed.
+  — 22 passed, 0 failed.
 - `cargo test -p tenferro-gpu --features metal --lib` — 6 passed (3 of them new Metal table
   tests).
 - `cargo clippy -p tenferro-gpu --features metal --all-targets -- -D warnings
@@ -461,7 +461,10 @@ tree; all five were real, and all five are fixed in the worktree:
 2. IMPORTANT — `map_read`, `map_write` and `write_from_slice` waited for pending work while
    holding the runtime mutex, stalling the whole context for up to the completion timeout.
    Fixed: the live count is raised under the lock, the lock is released, then the wait runs
-   (`storage.rs`), so the ordering argument holds without the lock being held across a GPU wait.
+   (`storage.rs`), so the ordering argument holds without the lock being held across a host
+   completion wait. `commit` itself remains under the lock and can wait on the runtime's
+   in-flight bound; `mod.rs` states that back-pressure case instead of claiming every wait is
+   outside the lock.
    The same change fixed a real defect the review did not name: two host mappings of one
    allocation were allowed to overlap, including a write next to a read. The count is now an
    exclusive slot (compare-exchange) and a second mapping returns
