@@ -1276,11 +1276,35 @@ fn dim_min(lhs: DimExpr, rhs: DimExpr) -> DimExpr {
     }
 }
 
+/// `max` is associative, commutative and idempotent, so nested `Max` operands are
+/// flattened, repeated operands dropped and constants folded into one. Without
+/// this, the analysis shape stream of a deep reverse-mode graph builds a `Max`
+/// tree that doubles with every sequential broadcast (tenferro-rs#2643).
 fn dim_max(lhs: DimExpr, rhs: DimExpr) -> DimExpr {
-    match (lhs, rhs) {
-        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => DimExpr::Const(lhs.max(rhs)),
-        (lhs, rhs) => DimExpr::max(lhs, rhs),
+    fn collect(expr: DimExpr, operands: &mut Vec<DimExpr>) {
+        match expr {
+            DimExpr::Max(a, b) => {
+                collect(*a, operands);
+                collect(*b, operands);
+            }
+            DimExpr::Const(value) => match operands.iter_mut().find(|operand| operand.is_const()) {
+                Some(DimExpr::Const(folded)) => *folded = (*folded).max(value),
+                _ => operands.push(DimExpr::Const(value)),
+            },
+            other => {
+                if !operands.contains(&other) {
+                    operands.push(other);
+                }
+            }
+        }
     }
+    let mut operands = Vec::new();
+    collect(lhs, &mut operands);
+    collect(rhs, &mut operands);
+    operands
+        .into_iter()
+        .reduce(DimExpr::max)
+        .expect("dim_max collects at least one operand")
 }
 
 #[cfg(test)]
