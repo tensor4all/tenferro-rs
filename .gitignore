@@ -123,3 +123,15 @@ docs/superpowers/plans/
 
 # LLVM profile data left by instrumented test runs
 *.profraw
+# Root-level markdown policy: keep only canonical project files here.
+# Design notes, worklogs and implementation plans belong under docs/.
+/*.md
+!/README.md
+!/CHANGELOG.md
+!/CONTRIBUTING.md
+!/CODE_OF_CONDUCT.md
+!/SECURITY.md
+!/AGENTS.md
+!/CLAUDE.md
+!/REPOSITORY_RULES.md
+!/SUPPORT.md
