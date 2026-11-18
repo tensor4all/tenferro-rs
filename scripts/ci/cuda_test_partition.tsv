@@ -243,6 +243,8 @@ host	tenferro-ad::integration	dynamic_truncate::pad_to_match_jvp_correct
 host	tenferro-ad::integration	dynamic_truncate::pad_to_match_no_op_when_same_size
 host	tenferro-ad::integration	dynamic_truncate::pad_to_match_preserves_data_dtype_and_infers_output_shape
 host	tenferro-ad::integration	dynamic_truncate::pad_to_match_vjp_correct
+host	tenferro-ad::integration	empty_fold_ad::eager_and_traced_prod_over_empty_axis_agree
+host	tenferro-ad::integration	empty_fold_ad::eager_and_traced_sum_over_empty_axis_agree
 compile-only	tenferro-ad::integration	eager_backend_capability_contract::eager_backend_capability_boundary
 host	tenferro-ad::integration	eager_device_placement_contract::eager_ad_seed_and_missing_tangent_zeroes_are_uploaded
 host	tenferro-ad::integration	eager_device_placement_contract::eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops
