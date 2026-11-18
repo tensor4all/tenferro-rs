@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/tensor4all/tensor4all-meta/main/branding/tenferro/svg/tenferro-wordmark-dark.svg">
+  <img alt="tenferro" src="https://raw.githubusercontent.com/tensor4all/tensor4all-meta/main/branding/tenferro/svg/tenferro-wordmark.svg" height="64">
+</picture>
+
 # tenferro-rs
 
 > **[Where tenferro-rs fits in the tensor4all Rust stack →](https://tensor4all.org/tensor4all-meta/stack/)**
