@@ -645,6 +645,38 @@ fn slice_view_positive_step_and_empty_slice() {
 }
 
 #[test]
+fn slice_view_empty_axis_with_nonzero_start_on_another_axis() {
+    // Issue #2657: an empty axis keeps its endpoint `start` (up to `axis_len`)
+    // and another axis' nonzero start is added to the offset. The result has no
+    // elements, so the accumulated offset must not push it past `buffer_len`.
+    let tensor =
+        TypedTensor::<_, DynRank, Host>::from_host_vec_col_major(vec![2, 3], vec![0_i64; 6])
+            .unwrap();
+    let empty = tensor
+        .as_view()
+        .slice_view(&[
+            StridedSliceSpec::new(1, Some(2), 1),
+            StridedSliceSpec::new(3, Some(3), 1),
+        ])
+        .unwrap();
+    assert_eq!(empty.shape(), &[1, 0]);
+    assert_eq!(empty.n_elements(), 0);
+    assert_eq!(empty.offset(), 0);
+    assert_eq!(empty.as_slice().unwrap(), &[] as &[i64]);
+
+    // Both axes empty at their ends: the raw offset would be 8 > 6.
+    let both = tensor
+        .as_view()
+        .slice_view(&[
+            StridedSliceSpec::new(2, Some(2), 1),
+            StridedSliceSpec::new(3, Some(3), 1),
+        ])
+        .unwrap();
+    assert_eq!(both.shape(), &[0, 0]);
+    assert_eq!(both.n_elements(), 0);
+}
+
+#[test]
 fn slice_view_negative_step_empty_at_axis_end_is_not_rejected() {
     // An empty selection is step-sign independent: `start == axis_len` must
     // behave exactly like the positive-step empty case and the
