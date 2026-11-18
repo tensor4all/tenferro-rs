@@ -194,6 +194,7 @@ host	tenferro-ad::integration	cpu_backend::test_faer_gemm_basic_f64
 host	tenferro-ad::integration	cpu_backend::test_faer_gemm_identity
 host	tenferro-ad::integration	cpu_backend::test_strided_input_via_transpose_and_dot_general
 host	tenferro-ad::integration	cpu_backend::test_vector_dot_product
+host	tenferro-ad::integration	deep_reverse_mode_prepare::unrolled_rk4_value_and_grad_prepares_and_runs
 host	tenferro-ad::integration	dot_general_validation::dot_general_config_validate_dims_batch_count_mismatch
 host	tenferro-ad::integration	dot_general_validation::dot_general_config_validate_dims_contracting_count_mismatch
 host	tenferro-ad::integration	dot_general_validation::dot_general_config_validate_dims_duplicate_batch_dims
