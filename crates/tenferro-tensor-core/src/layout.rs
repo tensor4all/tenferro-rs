@@ -458,6 +458,15 @@ impl<R: TensorRank> TensorLayout<R> {
                     .ok_or(ValidationError::IntegerOverflow)?,
             );
         }
+        if shape.contains(&0) {
+            // An empty view selects no element, so the accumulated offset has no
+            // meaning. A positive-step empty axis keeps the caller-provided
+            // `start` (up to `axis_len`, a legal bound), and adding it to another
+            // axis' nonzero start can exceed `buffer_len` even though the result
+            // is empty (issue #2657). Normalize so the zero-size bounds rule does
+            // not reject a valid selection.
+            offset = 0;
+        }
         layout_from_vecs(shape, strides, offset, buffer_len)
     }
 
