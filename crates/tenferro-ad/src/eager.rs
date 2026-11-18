@@ -27,7 +27,7 @@ use tenferro_ops::dim_expr::DimExpr;
 #[cfg(test)]
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::{std_tensor_op::StdTensorOp, SymDim, TensorMeta};
-use tenferro_runtime::ad_support::{ones_tensor, RetainedValue};
+use tenferro_runtime::ad_support::RetainedValue;
 use tenferro_runtime::program::{ProgramValueMetadata, SemanticFingerprint, SemanticProgram};
 use tenferro_runtime::{
     CompiledGraph, EngineId, EngineTarget, ErrorPhase, ExecutionContextIdentity, ExecutionEngine,
@@ -1923,6 +1923,86 @@ impl EagerSession<'_> {
             .upload_host_tensor(TensorRead::from_tensor(&tensor))
             .map_err(Error::from)?;
         self.constant_from(uploaded)
+    }
+
+    /// A zero-filled untracked tensor of `dtype` and `shape` on this session's backend.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{DType, EagerRuntime};
+    /// let ctx = EagerRuntime::new()?;
+    /// let z = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let z = s.zeros(DType::F64, [2])?;
+    ///     s.duplicate_value(&z)
+    /// })?;
+    /// assert_eq!(z.as_slice::<f64>()?, &[0.0, 0.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns [`Error::TensorRuntime`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
+    /// externally defined scalar, or a backend error from the upload or broadcast.
+    pub fn zeros(&mut self, dtype: DType, shape: impl IntoShapeVec) -> Result<EagerTensor> {
+        self.full(dtype, shape, 0.0)
+    }
+
+    /// A one-filled untracked tensor of `dtype` and `shape` on this session's backend.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{DType, EagerRuntime};
+    /// let ctx = EagerRuntime::new()?;
+    /// let o = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let o = s.ones(DType::I64, [3])?;
+    ///     s.duplicate_value(&o)
+    /// })?;
+    /// assert_eq!(o.as_slice::<i64>()?, &[1, 1, 1]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns [`Error::TensorRuntime`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
+    /// externally defined scalar, or a backend error from the upload or broadcast.
+    pub fn ones(&mut self, dtype: DType, shape: impl IntoShapeVec) -> Result<EagerTensor> {
+        self.full(dtype, shape, 1.0)
+    }
+
+    /// An untracked tensor of `dtype` and `shape` on this session's backend with every
+    /// element `value`.
+    ///
+    /// Only a rank-0 value crosses the host/device boundary, and the result is a
+    /// broadcast view of it, like [`Self::broadcast_in_dim`];
+    /// [`Self::duplicate_value`] returns compact storage.
+    /// `value` converts as in [`Tensor::full`].
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{DType, EagerRuntime};
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let x = s.full(DType::F32, [2, 2], 0.5)?;
+    ///     s.duplicate_value(&x)
+    /// })?;
+    /// assert_eq!(x.as_slice::<f32>()?, &[0.5; 4]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns [`Error::TensorRuntime`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `value` is not
+    /// representable in `dtype` or `dtype` is an externally defined scalar, or a
+    /// backend error from the upload or broadcast.
+    pub fn full(
+        &mut self,
+        dtype: DType,
+        shape: impl IntoShapeVec,
+        value: f64,
+    ) -> Result<EagerTensor> {
+        let shape = shape.into_shape_vec();
+        let scalar = self.constant_from_host(Tensor::full(dtype, [0_usize; 0], value)?)?;
+        if shape.is_empty() {
+            return Ok(scalar);
+        }
+        self.broadcast_in_dim(&scalar, &shape, &[])
     }
 
     /// Import a trainable leaf within this borrowed session.
@@ -5696,7 +5776,7 @@ pub(crate) fn zero_like_tensor(input: &Tensor, backend: &mut dyn Engine) -> Resu
 }
 
 pub(crate) fn one_like_tensor(input: &Tensor, session: &mut dyn Engine) -> Result<Tensor> {
-    let host = ones_tensor(input.dtype(), input.shape().to_vec())?;
+    let host = Tensor::ones(input.dtype(), input.shape())?;
     session
         .upload_host_tensor(TensorRead::from_tensor(&host))
         .map_err(Error::from)

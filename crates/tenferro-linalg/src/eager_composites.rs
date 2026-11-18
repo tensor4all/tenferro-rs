@@ -159,7 +159,7 @@ pub(crate) fn pinv_with_rtol(
     let threshold = broadcast_batch_scalar_to_leading_axis(session, &threshold, s.shape())?;
     let compare = session.compare(&abs_s, &threshold, CompareDir::Gt)?;
     let mask = session.convert(&compare, s.dtype())?;
-    let ones = ones_like(session, &s)?;
+    let ones = session.ones(s.dtype(), s.shape())?;
     let neg_mask = session.neg(&mask)?;
     let denominator_offset = session.add(&ones, &neg_mask)?;
     let denom = session.add(&s, &denominator_offset)?;
@@ -271,11 +271,6 @@ fn validate_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<()> {
         .map_err(Error::TensorRuntime)
 }
 
-fn ones_like(session: &mut EagerSession<'_>, input: &EagerTensor) -> Result<EagerTensor> {
-    let scalar = session.constant_from_host(scalar_real_tensor(input.dtype(), 1.0)?)?;
-    broadcast_scalar(session, &scalar, input.shape())
-}
-
 fn eye_like(
     session: &mut EagerSession<'_>,
     anchor: &EagerTensor,
@@ -283,8 +278,7 @@ fn eye_like(
 ) -> Result<EagerTensor> {
     let mut vector_shape = vec![size];
     vector_shape.extend_from_slice(&anchor.shape()[2..]);
-    let scalar = session.constant_from_host(scalar_real_tensor(anchor.dtype(), 1.0)?)?;
-    let ones = session.broadcast_in_dim(&scalar, &vector_shape, &[])?;
+    let ones = session.ones(anchor.dtype(), vector_shape)?;
     session.embed_diag(&ones, 0, 1)
 }
 
@@ -449,7 +443,7 @@ fn count_nonzero(
     let zero = scalar_real(session, abs, 0.0)?;
     let is_zero = session.compare(abs, &zero, CompareDir::Eq)?;
     let is_zero = session.convert(&is_zero, abs.dtype())?;
-    let ones = ones_like(session, abs)?;
+    let ones = session.ones(abs.dtype(), abs.shape())?;
     let mask = session.sub(&ones, &is_zero)?;
     session.reduce_sum(&mask, Some(&signed(axes)[..]))
 }

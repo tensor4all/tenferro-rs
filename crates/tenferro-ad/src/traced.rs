@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::TensorMeta;
-use tenferro_runtime::ad_support::{ones_tensor, RetainedValue};
+use tenferro_runtime::ad_support::RetainedValue;
 use tenferro_runtime::program::{FrozenProgram, ProgramImport, ProgramValue};
 use tenferro_runtime::{
     Error, ErrorPhase, ExecutionEngine, GraphCompiler, Result, Runtime, Tensor, TraceValue,
@@ -521,7 +521,7 @@ pub(crate) fn grad_optional_with_rules_and_cache(
             shape: error_shape_hint(output),
         });
     }
-    let ones = ones_tensor(output.dtype(), vec![])?;
+    let ones = Tensor::ones(output.dtype(), [0_usize; 0])?;
     let seed = output
         .context()
         .from_tensor_concrete_shape(ones)
@@ -1096,7 +1096,7 @@ impl TracedTensorAdExt for TracedTensor {
                 shape: error_shape_hint(self),
             });
         }
-        let ones = ones_tensor(self.dtype(), vec![])?;
+        let ones = Tensor::ones(self.dtype(), [0_usize; 0])?;
         let seed = self
             .context()
             .from_tensor_concrete_shape(ones)

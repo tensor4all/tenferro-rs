@@ -422,4 +422,88 @@ impl TraceContext {
         let tensor = Tensor::from_vec_col_major(shape, data)?;
         self.from_tensor_concrete_shape(tensor)
     }
+
+    /// A zero-filled traced constant of `dtype` and concrete `shape`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{DType, TraceContext};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.zeros(DType::F64, [2, 3])?;
+    /// assert_eq!(x.concrete_shape()?, vec![2, 3]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
+    /// externally defined scalar, and the [`TracedTensor::broadcast_in_dim`] errors
+    /// for an invalid `shape`.
+    pub fn zeros(&self, dtype: DType, shape: impl IntoShapeVec) -> Result<TracedTensor> {
+        self.full(dtype, shape, 0.0)
+    }
+
+    /// A one-filled traced constant of `dtype` and concrete `shape`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{DType, TraceContext};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.ones(DType::F32, [4])?;
+    /// assert_eq!(x.dtype(), DType::F32);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
+    /// externally defined scalar, and the [`TracedTensor::broadcast_in_dim`] errors
+    /// for an invalid `shape`.
+    pub fn ones(&self, dtype: DType, shape: impl IntoShapeVec) -> Result<TracedTensor> {
+        self.full(dtype, shape, 1.0)
+    }
+
+    /// A traced constant of `dtype` and concrete `shape` with every element `value`.
+    ///
+    /// The graph holds one rank-0 constant broadcast to `shape`, not a
+    /// full-size buffer. `value` converts as in [`Tensor::full`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{DType, TraceContext};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.full(DType::F64, [2, 2], 0.5)?;
+    /// assert_eq!(x.concrete_shape()?, vec![2, 2]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `value` is not
+    /// representable in `dtype` or `dtype` is an externally defined scalar, and the
+    /// [`TracedTensor::broadcast_in_dim`] errors for an invalid `shape`.
+    pub fn full(&self, dtype: DType, shape: impl IntoShapeVec, value: f64) -> Result<TracedTensor> {
+        let shape = shape.into_shape_vec();
+        let bytes = crate::composite::scalar_bytes(dtype, value)?;
+        let scalar = crate::traced::apply_nullary(
+            StdTensorOp::Constant { dtype, bytes },
+            0,
+            dtype,
+            Some(vec![]),
+            self,
+        )?;
+        if shape.is_empty() {
+            return Ok(scalar);
+        }
+        scalar.broadcast_in_dim(&shape, &[])
+    }
 }

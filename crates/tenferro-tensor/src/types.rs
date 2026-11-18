@@ -12295,6 +12295,124 @@ impl Tensor {
         )?))
     }
 
+    /// Create a zero-filled host tensor of a runtime `dtype`.
+    ///
+    /// `Bool` zeros are `false`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, Tensor};
+    ///
+    /// let t = Tensor::zeros(DType::I32, [2, 3])?;
+    /// assert_eq!(t.as_slice::<i32>()?, &[0; 6]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the shape
+    /// product overflows or `dtype` is an externally defined scalar.
+    pub fn zeros(
+        dtype: DType,
+        shape: impl tenferro_tensor_core::IntoShapeVec,
+    ) -> crate::Result<Self> {
+        Self::full(dtype, shape, 0.0)
+    }
+
+    /// Create a one-filled host tensor of a runtime `dtype`.
+    ///
+    /// `Bool` ones are `true`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, Tensor};
+    ///
+    /// let t = Tensor::ones(DType::F64, [2])?;
+    /// assert_eq!(t.as_slice::<f64>()?, &[1.0, 1.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the shape
+    /// product overflows or `dtype` is an externally defined scalar.
+    pub fn ones(
+        dtype: DType,
+        shape: impl tenferro_tensor_core::IntoShapeVec,
+    ) -> crate::Result<Self> {
+        Self::full(dtype, shape, 1.0)
+    }
+
+    /// Create a host tensor of a runtime `dtype` with every element `value`.
+    ///
+    /// `value` is rounded to `f32` for `F32` and `C32` and becomes the real part
+    /// of a complex dtype. An integer dtype takes it only when it is an exact
+    /// integer in range, and `Bool` only when it is `0` or `1`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{Complex64, DType, Tensor};
+    ///
+    /// let t = Tensor::full(DType::C64, [2], 0.5)?;
+    /// assert_eq!(t.as_slice::<Complex64>()?, &[Complex64::new(0.5, 0.0); 2]);
+    /// assert!(Tensor::full(DType::I64, [2], 0.5).is_err());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the shape
+    /// product overflows, `value` is not representable in `dtype`, or `dtype` is
+    /// an externally defined scalar.
+    pub fn full(
+        dtype: DType,
+        shape: impl tenferro_tensor_core::IntoShapeVec,
+        value: f64,
+    ) -> crate::Result<Self> {
+        let shape = shape.into_shape_vec();
+        let len = crate::validate::checked_shape_product("Tensor::full", "shape", &shape)?;
+        let not_representable = || {
+            crate::Error::invalid_argument(
+                "Tensor::full",
+                "value",
+                format!("{value} is not representable in {dtype:?}"),
+            )
+        };
+        // Below 2^53 (~9.007e15) every integer is exact in f64, so `as i64` loses nothing.
+        let integer = (value.fract() == 0.0 && value.abs() < 9.0e15)
+            .then_some(value as i64)
+            .ok_or_else(not_representable);
+        match dtype {
+            DType::F32 => Self::from_vec_col_major(shape, vec![value as f32; len]),
+            DType::F64 => Self::from_vec_col_major(shape, vec![value; len]),
+            DType::I32 => {
+                let value = i32::try_from(integer?).map_err(|_| not_representable())?;
+                Self::from_vec_col_major(shape, vec![value; len])
+            }
+            DType::I64 => Self::from_vec_col_major(shape, vec![integer?; len]),
+            DType::Bool => match integer? {
+                0 => Self::from_vec_col_major(shape, vec![false; len]),
+                1 => Self::from_vec_col_major(shape, vec![true; len]),
+                _ => Err(not_representable()),
+            },
+            DType::C32 => {
+                Self::from_vec_col_major(shape, vec![Complex32::new(value as f32, 0.0); len])
+            }
+            DType::C64 => Self::from_vec_col_major(shape, vec![Complex64::new(value, 0.0); len]),
+            DType::External(_) => Err(crate::Error::invalid_argument(
+                "Tensor::full",
+                "dtype",
+                "an externally defined scalar has no core value to fill with",
+            )),
+        }
+    }
+
     /// Tensor shape.
     ///
     /// # Examples

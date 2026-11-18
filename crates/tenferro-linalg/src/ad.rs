@@ -1482,7 +1482,6 @@ mod tests {
     fn supported_one_input_semantic_rules_execute_jvp_vjp_adjoint_parity() {
         use tenferro_ad::AdContext;
         use tenferro_ops::dim_expr::DimExpr;
-        use tenferro_runtime::ad_support::ones_tensor;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
         use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
@@ -1626,7 +1625,7 @@ mod tests {
             let primal_outputs = run_compiled_cpu(&runtime, &primal, &[&matrix]).unwrap();
             let cotangents: Vec<_> = primal_outputs
                 .iter()
-                .map(|output| ones_tensor(output.dtype(), output.shape().to_vec()).unwrap())
+                .map(|output| Tensor::ones(output.dtype(), output.shape()).unwrap())
                 .collect();
 
             let jvp = ad.jvp_program(&source, &[true]).unwrap();
@@ -1673,7 +1672,6 @@ mod tests {
         use num_complex::Complex64;
         use tenferro_ad::AdContext;
         use tenferro_ops::dim_expr::DimExpr;
-        use tenferro_runtime::ad_support::ones_tensor;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
         use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
@@ -1786,8 +1784,7 @@ mod tests {
                                 &[&matrix, &rhs, &matrix_tangent, &rhs_tangent],
                             )
                             .unwrap();
-                            let cotangent =
-                                ones_tensor(dtype, tangent_output.shape().to_vec()).unwrap();
+                            let cotangent = Tensor::ones(dtype, tangent_output.shape()).unwrap();
 
                             let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
                             let vjp = GraphCompiler::new()
@@ -1822,7 +1819,6 @@ mod tests {
         use num_complex::Complex64;
         use tenferro_ad::AdContext;
         use tenferro_ops::dim_expr::DimExpr;
-        use tenferro_runtime::ad_support::ones_tensor;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
         use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
@@ -2000,7 +1996,7 @@ mod tests {
                 let tangent_output = run_one(&runtime, &jvp, &jvp_inputs).unwrap_or_else(|error| {
                     panic!("{name} complex={complex} semantic JVP execution: {error}")
                 });
-                let cotangent = ones_tensor(dtype, tangent_output.shape().to_vec()).unwrap();
+                let cotangent = Tensor::ones(dtype, tangent_output.shape()).unwrap();
 
                 let vjp = ad.vjp_program(&source, active_inputs, &[true]).unwrap();
                 let vjp = GraphCompiler::new()
@@ -2030,7 +2026,6 @@ mod tests {
     fn symbolic_rectangular_lu_qr_execute_tall_and_wide_semantic_adjoint_parity() {
         use tenferro_ad::AdContext;
         use tenferro_ops::dim_expr::DimExpr;
-        use tenferro_runtime::ad_support::ones_tensor;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
         use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
@@ -2138,7 +2133,7 @@ mod tests {
                         });
                 let cotangents: Vec<_> = primal_outputs
                     .iter()
-                    .map(|output| ones_tensor(output.dtype(), output.shape().to_vec()).unwrap())
+                    .map(|output| Tensor::ones(output.dtype(), output.shape()).unwrap())
                     .collect();
                 let tangent_outputs = run_compiled_cpu(
                     &runtime,

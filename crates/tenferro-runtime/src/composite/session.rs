@@ -10,9 +10,7 @@ use tenferro_tensor::{
     CompareDir, DType, Engine, Error, GatherConfig, Result, Tensor, TensorRead, TensorValue,
 };
 
-use super::{
-    scalar_tensor, zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce, CompositeUnary,
-};
+use super::{zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce, CompositeUnary};
 use crate::typed_tensor::{broadcast_error, broadcast_to_in_read, ReadInput};
 
 /// Run one composite in `session` and return its owned result.
@@ -78,7 +76,7 @@ impl<'a> CompositeOps for SessionComposite<'_, 'a> {
     }
 
     fn scalar(&mut self, dtype: DType, value: f64) -> Result<ReadInput<'a>> {
-        self.upload(&scalar_tensor(dtype, value)?)
+        self.upload(&Tensor::full(dtype, [0_usize; 0], value)?)
     }
 
     fn unary(&mut self, op: CompositeUnary, value: &ReadInput<'a>) -> Result<ReadInput<'a>> {

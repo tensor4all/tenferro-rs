@@ -46,3 +46,55 @@ fn eager_runtime_grad_accumulation_keeps_slot_locked_through_update() {
         "gradient accumulation must not stage slot updates after releasing the per-slot lock"
     );
 }
+
+#[test]
+fn eager_filled_constants_hold_the_value_and_take_no_gradient() {
+    use tenferro_ad::DType;
+
+    let runtime = EagerRuntime::new().unwrap();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+    // The filled values are broadcast views of one element; `duplicate_value` compacts them.
+    let (zeros, ones, scalar) = runtime
+        .with_eager_session(&mut engine, |s| {
+            let zeros = s.zeros(DType::Bool, [2])?;
+            let ones = s.ones(DType::C64, [2, 2])?;
+            let scalar = s.full(DType::I32, [0_usize; 0], -3.0)?;
+            tenferro_ad::Result::Ok((
+                s.duplicate_value(&zeros)?,
+                s.duplicate_value(&ones)?,
+                s.duplicate_value(&scalar)?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(zeros.as_slice::<bool>().unwrap(), &[false, false]);
+    assert_eq!(
+        ones.as_slice::<tenferro_tensor::Complex64>().unwrap(),
+        &[tenferro_tensor::Complex64::new(1.0, 0.0); 4]
+    );
+    assert_eq!(scalar.as_slice::<i32>().unwrap(), &[-3]);
+
+    // `sum(x * c)` with a filled `c` differentiates to `c` and leaves `c` untracked.
+    let x = runtime
+        .variable_from(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap())
+        .unwrap();
+    let c = runtime
+        .with_eager_session(&mut engine, |s| s.full(DType::F64, [3], 0.25))
+        .unwrap();
+    // One uploaded element broadcast on the backend, not a full-size host buffer.
+    assert!(c.value().unwrap().as_slice::<f64>().is_err());
+    runtime
+        .with_eager_session(&mut engine, |s| {
+            let product = s.mul(&x, &c)?;
+            let loss = s.reduce_sum(&product, Some(&[0]))?;
+            s.backward(&loss)
+        })
+        .unwrap();
+    assert_eq!(
+        x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(),
+        &[0.25; 3]
+    );
+    assert!(c.grad().unwrap().is_none());
+
+    let error = runtime.with_eager_session(&mut engine, |s| s.full(DType::Bool, [2], 0.5));
+    assert!(error.is_err());
+}

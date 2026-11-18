@@ -12,6 +12,7 @@
 //! for its eager session; it is not a user-facing API.
 
 use num_complex::{Complex32, Complex64};
+use tenferro_ops::std_tensor_op::ConstantScalar;
 use tenferro_tensor::{CompareDir, DType, Error, GatherConfig, PadConfig, Tensor};
 
 pub(crate) mod session;
@@ -313,7 +314,8 @@ pub fn zero_pad_config(low: &[usize], high: &[usize]) -> PadConfig {
     }
 }
 
-/// Little-endian bytes of the scalar `value` in a float or complex `dtype`.
+/// Little-endian bytes of the scalar `value` in `dtype`, converted as by
+/// [`Tensor::full`].
 ///
 /// # Examples
 ///
@@ -326,84 +328,26 @@ pub fn zero_pad_config(low: &[usize], high: &[usize]) -> PadConfig {
 ///
 /// # Errors
 ///
-/// Returns [`Error::UnsupportedDType`] for a `Bool` or external dtype, and
-/// `InvalidArgument` for an integer dtype when `value` is not an integer in
-/// its range.
+/// Returns [`Error::Validation`] with
+/// [`tenferro_tensor::ValidationError::InvalidArgument`] when `value` is
+/// not representable in `dtype` or `dtype` is an externally defined scalar.
 pub fn scalar_bytes(dtype: DType, value: f64) -> Result<Vec<u8>, Error> {
-    Ok(match dtype {
-        DType::F32 => (value as f32).to_le_bytes().to_vec(),
-        DType::F64 => value.to_le_bytes().to_vec(),
-        DType::I32 => integer_scalar::<i32>(dtype, value)?.to_le_bytes().to_vec(),
-        DType::I64 => integer_scalar::<i64>(dtype, value)?.to_le_bytes().to_vec(),
-        DType::C32 => {
-            let mut bytes = (value as f32).to_le_bytes().to_vec();
-            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
-            bytes
-        }
-        DType::C64 => {
-            let mut bytes = value.to_le_bytes().to_vec();
-            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
-            bytes
-        }
-        other => return Err(no_scalar_embedding(other)),
-    })
-}
-
-/// A rank-0 host tensor holding `value` in a float or complex `dtype`.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::composite::scalar_tensor;
-/// use tenferro_tensor::DType;
-/// let t = scalar_tensor(DType::F32, f64::NEG_INFINITY)?;
-/// assert_eq!(t.as_slice::<f32>()?, &[f32::NEG_INFINITY]);
-/// # Ok::<(), tenferro_tensor::Error>(())
-/// ```
-///
-/// # Errors
-///
-/// Returns [`Error::UnsupportedDType`] for a `Bool` or external dtype, and
-/// `InvalidArgument` for an integer dtype when `value` is not an integer in
-/// its range.
-pub fn scalar_tensor(dtype: DType, value: f64) -> Result<Tensor, Error> {
-    match dtype {
-        DType::F32 => Tensor::from_vec_col_major(vec![], vec![value as f32]),
-        DType::F64 => Tensor::from_vec_col_major(vec![], vec![value]),
-        DType::I32 => {
-            Tensor::from_vec_col_major(vec![], vec![integer_scalar::<i32>(dtype, value)?])
-        }
-        DType::I64 => {
-            Tensor::from_vec_col_major(vec![], vec![integer_scalar::<i64>(dtype, value)?])
-        }
-        DType::C32 => Tensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)]),
-        DType::C64 => Tensor::from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)]),
-        other => Err(no_scalar_embedding(other)),
+    fn bytes<T: ConstantScalar>(scalar: &Tensor) -> Result<Vec<u8>, Error> {
+        // INVARIANT: `scalar` is rank 0, built by `Tensor::full` below, so it holds one element.
+        Ok(scalar.as_slice::<T>()?[0].constant_bytes())
     }
-}
-
-/// An exactly representable integer constant (composites use small counts
-/// and coordinates bounded by a tensor extent).
-fn integer_scalar<T: TryFrom<i64>>(dtype: DType, value: f64) -> Result<T, Error> {
-    let exact = value.is_finite() && value.fract() == 0.0 && value.abs() < 9.0e15;
-    exact
-        .then(|| T::try_from(value as i64).ok())
-        .flatten()
-        .ok_or_else(|| {
-            Error::invalid_argument(
-                "composite_scalar",
-                "value",
-                format!("{value} is not representable in {dtype:?}"),
-            )
-        })
-}
-
-fn no_scalar_embedding(dtype: DType) -> Error {
-    Error::unsupported_dtype(
-        "composite_scalar",
-        dtype,
-        "composite constants exist only for numeric dtypes",
-    )
+    let scalar = Tensor::full(dtype, [0_usize; 0], value)?;
+    match dtype {
+        DType::F32 => bytes::<f32>(&scalar),
+        DType::F64 => bytes::<f64>(&scalar),
+        DType::I32 => bytes::<i32>(&scalar),
+        DType::I64 => bytes::<i64>(&scalar),
+        DType::Bool => bytes::<bool>(&scalar),
+        DType::C32 => bytes::<Complex32>(&scalar),
+        DType::C64 => bytes::<Complex64>(&scalar),
+        // INVARIANT: `Tensor::full` above returns an error for every external dtype.
+        DType::External(_) => unreachable!("Tensor::full rejects external dtypes"),
+    }
 }
 
 fn require_real_float(op: &'static str, dtype: DType) -> Result<(), Error> {

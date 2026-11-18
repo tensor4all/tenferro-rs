@@ -176,3 +176,34 @@ fn single_input_stack_and_concatenate_compile() {
         assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 3.0, 4.0]);
     }
 }
+
+#[test]
+fn filled_constants_are_graph_constants_that_run_to_the_filled_value() {
+    let trace = TraceContext::new();
+    let zeros = trace.zeros(DType::I32, [2, 3]).unwrap();
+    let ones = trace.ones(DType::Bool, [2]).unwrap();
+    let full = trace.full(DType::F64, [3], -0.5).unwrap();
+    let scalar = trace.full(DType::F32, [0_usize; 0], 2.0).unwrap();
+    assert_eq!(zeros.concrete_shape().unwrap(), vec![2, 3]);
+    assert_eq!(scalar.rank(), 0);
+
+    // A constant, not a bound input: the program needs nothing from the host.
+    let values = [&zeros, &ones, &full, &scalar].map(TracedTensor::trace_value);
+    assert!(trace.finish(&values).unwrap().program().inputs().is_empty());
+
+    let mut compiler = GraphCompiler::new();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
+    let mut run = |value: &TracedTensor| {
+        let compiled = compiler.compile(value).unwrap();
+        let prepared = runtime.prepare(&compiled, &[], &[engine.target()]).unwrap();
+        let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[]).unwrap();
+        outputs.remove(0).into_tensor(&mut engine).unwrap()
+    };
+    assert_eq!(run(&zeros).as_slice::<i32>().unwrap(), &[0; 6]);
+    assert_eq!(run(&ones).as_slice::<bool>().unwrap(), &[true, true]);
+    assert_eq!(run(&full).as_slice::<f64>().unwrap(), &[-0.5; 3]);
+    assert_eq!(run(&scalar).as_slice::<f32>().unwrap(), &[2.0]);
+
+    assert!(trace.full(DType::I64, [2], 0.5).is_err());
+}

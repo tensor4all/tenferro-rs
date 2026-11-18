@@ -1,13 +1,11 @@
 //! Traced composite operations (activations, normalizations, softmax,
 //! `take_along_axis`), built from primitives by [`crate::composite`].
 
-use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{CompareDir, DType, GatherConfig};
 
-use super::{apply_nullary, validate_traced_axes, TracedTensor};
+use super::{validate_traced_axes, TracedTensor};
 use crate::composite::{
-    self, scalar_bytes, zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce,
-    CompositeUnary,
+    self, zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce, CompositeUnary,
 };
 use crate::error::{Error, Result};
 
@@ -29,14 +27,7 @@ impl CompositeOps for TracedComposite<'_> {
     }
 
     fn scalar(&mut self, dtype: DType, value: f64) -> Result<TracedTensor> {
-        let bytes = scalar_bytes(dtype, value)?;
-        apply_nullary(
-            StdTensorOp::Constant { dtype, bytes },
-            0,
-            dtype,
-            Some(vec![]),
-            self.ctx,
-        )
+        self.ctx.full(dtype, [0_usize; 0], value)
     }
 
     fn unary(&mut self, op: CompositeUnary, value: &TracedTensor) -> Result<TracedTensor> {
