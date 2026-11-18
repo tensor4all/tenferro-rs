@@ -219,6 +219,15 @@ layer, generated from a per-family registry. The operation list, options,
 
 ### Fixed
 
+- **AD differentiates through an FFT that is not the last operation** (#2647,
+  #2648). `SemanticProgramBuilder::resolved_extent` now evaluates an
+  extent that names no input, so a core `slice` VJP after `rfft` no longer
+  rejects an extent such as `n / 2 + 1`. The adjoint FFT length restore now
+  truncates a zero-padded tail with a static slice that publishes the input
+  extent, so `grad` through `mul -> fft(n > extent)` builds and matches finite
+  differences instead of failing the upstream `mul` VJP with a `ShapeMismatch`
+  on `max(n, extent)`. The `rfft` analogue and multi-axis `fftn` restores are
+  covered by the same change.
 - **`Runtime::prepare` no longer blows up on deep reverse-mode graphs**
 (#2643). The compiler's analysis shape stream combined a constant extent
 baked in by the AD transform with an input-derived one into a `Max` at every

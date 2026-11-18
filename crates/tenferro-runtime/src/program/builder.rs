@@ -755,6 +755,10 @@ impl SemanticProgramBuilder {
     /// nodes, `R` referenced inputs, `K` bindings and `B` bound axes; a constant
     /// expression returns without either.
     ///
+    /// An expression that names no input after resolution is evaluated and returned
+    /// as a `Const`, so a caller that needs a literal extent does not have to
+    /// evaluate it again.
+    ///
     /// # Examples
     ///
     /// ```
@@ -772,6 +776,19 @@ impl SemanticProgramBuilder {
     /// assert_eq!(
     ///     extent,
     ///     tenferro_ops::ShapeExtent::Exact(DimExpr::InputDim { input_idx: 0, axis: 0 })
+    /// );
+    ///
+    /// // An expression with no input is folded, not left as `8 / 2 + 1`.
+    /// let folded = builder.input(ProgramInputSpec::new(
+    ///     DType::F64,
+    ///     [DimExpr::add(
+    ///         DimExpr::floor_div(DimExpr::Const(8), DimExpr::Const(2)),
+    ///         DimExpr::Const(1),
+    ///     )],
+    /// ))?;
+    /// assert_eq!(
+    ///     builder.resolved_extent(folded, 0)?,
+    ///     tenferro_ops::ShapeExtent::Exact(DimExpr::Const(5))
     /// );
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
@@ -825,8 +842,10 @@ impl SemanticProgramBuilder {
             resolved
         };
         Ok(match extent {
-            ShapeExtent::Exact(expr) => ShapeExtent::Exact(resolve(expr)),
-            ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(resolve(expr)),
+            ShapeExtent::Exact(expr) => ShapeExtent::Exact(fold_input_free_extent(resolve(expr))),
+            ShapeExtent::UpperBound(expr) => {
+                ShapeExtent::UpperBound(fold_input_free_extent(resolve(expr)))
+            }
             ShapeExtent::Unknown => ShapeExtent::Unknown,
         })
     }
@@ -1683,6 +1702,22 @@ impl ImportTransaction {
             .ok_or(ProgramBuildError::TooManyValues)?;
         let slot = u32::try_from(slot).map_err(|_| ProgramBuildError::TooManyValues)?;
         Ok(ProgramValue::new(slot, owner))
+    }
+}
+
+/// Evaluate an extent that names no input into a constant (#2647).
+///
+/// A bound program can leave an expression such as `8 / 2 + 1` unfolded. Its value is
+/// fixed, and callers that need a literal extent cannot use the expression, so fold
+/// it here rather than making every caller evaluate it again.
+fn fold_input_free_extent(expr: DimExpr) -> DimExpr {
+    if expr.max_input_idx().is_some() {
+        return expr;
+    }
+    match expr.eval(&[]) {
+        Ok(value) => DimExpr::Const(value),
+        // An unevaluable expression (zero divisor, overflow) keeps its form.
+        Err(_) => expr,
     }
 }
 

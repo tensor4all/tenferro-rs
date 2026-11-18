@@ -132,6 +132,79 @@ fn tokens_and_metadata_reject_foreign_values_and_hide_identity() {
 }
 
 #[test]
+fn resolved_extent_folds_a_literal_expression() {
+    let half_plus_one = |dim: DimExpr| {
+        DimExpr::add(
+            DimExpr::floor_div(dim, DimExpr::Const(2)),
+            DimExpr::Const(1),
+        )
+    };
+
+    let mut builder = SemanticProgramBuilder::new();
+    let literal = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [half_plus_one(DimExpr::Const(8))],
+        ))
+        .unwrap();
+    assert_eq!(
+        builder.resolved_extent(literal, 0).unwrap(),
+        ShapeExtent::Exact(DimExpr::Const(5))
+    );
+
+    let symbolic_input = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ))
+        .unwrap();
+    let dependent = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [half_plus_one(DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            })],
+        ))
+        .unwrap();
+    // Unbound, the expression keeps the input it names.
+    assert_eq!(
+        builder.resolved_extent(dependent, 0).unwrap(),
+        ShapeExtent::Exact(half_plus_one(DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0,
+        }))
+    );
+
+    // Bound, substitution leaves an input-free expression, which folds.
+    builder
+        .bind_input(
+            symbolic_input,
+            Tensor::from_vec_col_major(vec![8], vec![0.0_f64; 8]).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        builder.resolved_extent(dependent, 0).unwrap(),
+        ShapeExtent::Exact(DimExpr::Const(5))
+    );
+
+    // An input-free expression that cannot evaluate keeps its form.
+    let unevaluable = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::floor_div(DimExpr::Const(1), DimExpr::Const(0))],
+        ))
+        .unwrap();
+    assert_eq!(
+        builder.resolved_extent(unevaluable, 0).unwrap(),
+        ShapeExtent::Exact(DimExpr::floor_div(DimExpr::Const(1), DimExpr::Const(0)))
+    );
+}
+
+#[test]
 fn tokens_and_metadata_cover_guards_effects_aliases_and_placement() {
     let metadata = ProgramValueMetadata::new(
         DType::F32,

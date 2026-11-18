@@ -925,3 +925,134 @@ fn outer_product_of_a_truncated_fft_uses_the_truncated_length() {
 
     assert_eq!(output.shape(), &[2, 3]);
 }
+
+/// Coordinate-wise central difference of a real scalar in a complex tensor, in
+/// the `d/dRe + i d/dIm` convention `AdContext::grad` returns.
+#[cfg(feature = "autodiff")]
+fn complex_scalar_gradient(
+    base: &[Complex64],
+    scalar: impl Fn(&[Complex64]) -> f64,
+) -> Vec<Complex64> {
+    const STEP: f64 = 1.0e-6;
+    (0..base.len())
+        .map(|index| {
+            let mut plus = base.to_vec();
+            plus[index].re += STEP;
+            let mut minus = base.to_vec();
+            minus[index].re -= STEP;
+            let real = (scalar(&plus) - scalar(&minus)) / (2.0 * STEP);
+            let mut plus = base.to_vec();
+            plus[index].im += STEP;
+            let mut minus = base.to_vec();
+            minus[index].im -= STEP;
+            let imaginary = (scalar(&plus) - scalar(&minus)) / (2.0 * STEP);
+            Complex64::new(real, imaginary)
+        })
+        .collect()
+}
+
+/// #2648, c2c half: the adjoint of a zero-padded `fft` in the middle of a chain
+/// publishes the input extent, so the upstream `mul` differentiates. The
+/// truncating direction (`n` smaller than the extent) keeps the padding path.
+#[cfg(feature = "autodiff")]
+#[test]
+fn c2c_fft_after_mul_gradient_matches_finite_differences() {
+    for (extent, n) in [(3, 4), (5, 6), (6, 4)] {
+        let shape = [extent];
+        let base = complex_grid(&shape, 24);
+        let weights = complex_grid(&shape, 25);
+        let options = FftOptions::default().n(Some(n));
+        let loss_at = |x_data: &[Complex64], w_data: &[Complex64]| {
+            let trace = TraceContext::new();
+            let x = trace
+                .from_vec_col_major(shape.to_vec(), x_data.to_vec())
+                .unwrap();
+            let w = trace
+                .from_vec_col_major(shape.to_vec(), w_data.to_vec())
+                .unwrap();
+            let y = x.mul(&w).unwrap().fft_with(&options).unwrap();
+            let magnitude = y.abs().unwrap();
+            let loss = magnitude.mul(&magnitude).unwrap().reduce_sum(None).unwrap();
+            run_traced(&loss).as_slice::<f64>().unwrap()[0]
+        };
+
+        let trace = TraceContext::new();
+        let x = trace
+            .from_vec_col_major(shape.to_vec(), base.clone())
+            .unwrap();
+        let w = trace
+            .from_vec_col_major(shape.to_vec(), weights.clone())
+            .unwrap();
+        let y = x.mul(&w).unwrap().fft_with(&options).unwrap();
+        let magnitude = y.abs().unwrap();
+        let loss = magnitude.mul(&magnitude).unwrap().reduce_sum(None).unwrap();
+        let ad = fft_ad_context();
+        let x_grad = run_traced(&ad.grad(&loss, &x).unwrap());
+        let w_grad = run_traced(&ad.grad(&loss, &w).unwrap());
+
+        let expected_x = complex_scalar_gradient(&base, |x| loss_at(x, &weights));
+        assert_c64_close_within(
+            x_grad.as_slice::<Complex64>().unwrap(),
+            &expected_x,
+            1.0e-8,
+            &format!("fft extent {extent} n {n}: d loss / d x"),
+        );
+        let expected_w = complex_scalar_gradient(&weights, |w| loss_at(&base, w));
+        assert_c64_close_within(
+            w_grad.as_slice::<Complex64>().unwrap(),
+            &expected_w,
+            1.0e-8,
+            &format!("fft extent {extent} n {n}: d loss / d w"),
+        );
+    }
+}
+
+/// The multi-axis restore decides pad or truncate per axis: each case pads one
+/// axis and truncates the other, and both must restore the input shape before
+/// the upstream `mul` differentiates.
+#[cfg(feature = "autodiff")]
+#[test]
+fn c2c_fftn_after_mul_gradient_matches_finite_differences() {
+    for lengths in [[4usize, 2], [2, 5]] {
+        let shape = [3usize, 4];
+        let base = complex_grid(&shape, 26);
+        let weights = complex_grid(&shape, 27);
+        let options = FftnOptions::default()
+            .axes(vec![0, 1])
+            .shape(Some(lengths.to_vec()));
+        let loss_at = |x_data: &[Complex64], w_data: &[Complex64]| {
+            let trace = TraceContext::new();
+            let x = trace
+                .from_vec_col_major(shape.to_vec(), x_data.to_vec())
+                .unwrap();
+            let w = trace
+                .from_vec_col_major(shape.to_vec(), w_data.to_vec())
+                .unwrap();
+            let y = x.mul(&w).unwrap().fftn_with(&options).unwrap();
+            let magnitude = y.abs().unwrap();
+            let loss = magnitude.mul(&magnitude).unwrap().reduce_sum(None).unwrap();
+            run_traced(&loss).as_slice::<f64>().unwrap()[0]
+        };
+
+        let trace = TraceContext::new();
+        let x = trace
+            .from_vec_col_major(shape.to_vec(), base.clone())
+            .unwrap();
+        let w = trace
+            .from_vec_col_major(shape.to_vec(), weights.clone())
+            .unwrap();
+        let y = x.mul(&w).unwrap().fftn_with(&options).unwrap();
+        let magnitude = y.abs().unwrap();
+        let loss = magnitude.mul(&magnitude).unwrap().reduce_sum(None).unwrap();
+        let ad = fft_ad_context();
+        let x_grad = run_traced(&ad.grad(&loss, &x).unwrap());
+
+        let expected_x = complex_scalar_gradient(&base, |x| loss_at(x, &weights));
+        assert_c64_close_within(
+            x_grad.as_slice::<Complex64>().unwrap(),
+            &expected_x,
+            1.0e-8,
+            &format!("fftn lengths {lengths:?}: d loss / d x"),
+        );
+    }
+}
