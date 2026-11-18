@@ -1487,22 +1487,45 @@ fn restore_semantic_adjoint_input_length(
          declare it; declare it in the fft rule's residual mask"
     );
     let mut adjoint = adjoint;
+    // The adjoint's literal shape, advanced by every restore step: a slice names a
+    // literal limit on every axis, and a pad step changes what the next step sees.
+    let mut adjoint_extents = concrete_extents(builder, adjoint)?;
     for (index, (&axis, &transform_len)) in fft_op.axes.iter().zip(lengths).enumerate() {
         // The one-sided spectrum of an irfft already has its input extent.
         if fft_op.operation.step_operation(index, lengths.len()) == FftOperation::C2r {
             continue;
         }
-        let input_len = builder
-            .value_metadata(primal_input)?
-            .shape()
-            .get(axis)
-            .and_then(|extent| extent.as_exact())
-            .and_then(|dim| match dim {
-                tenferro_ops::dim_expr::DimExpr::Const(value) => Some(*value),
-                _ => None,
-            });
+        // A bound extent can still be an unfolded expression such as `8 / 2 + 1`,
+        // so resolve it like the real-transform adjoints do.
+        let input_len = match builder.resolved_extent(primal_input, axis)? {
+            tenferro_ops::ShapeExtent::Exact(tenferro_ops::dim_expr::DimExpr::Const(value)) => {
+                Some(value)
+            }
+            _ => None,
+        };
         if input_len == Some(transform_len) {
             continue;
+        }
+
+        // A zero-padded transform leaves the adjoint longer than the input; one
+        // static slice publishes the input extent, where the dynamic pair below
+        // publishes `max(n, extent)` (#2648).
+        if let Some(input_len) = input_len {
+            if transform_len > input_len {
+                if let Some(limits) = adjoint_extents.as_mut() {
+                    limits[axis] = input_len;
+                    let rank = limits.len();
+                    adjoint = builder.add_op(
+                        CoreSemanticOp::Slice(SliceConfig {
+                            starts: vec![0; rank],
+                            limits: limits.clone(),
+                            strides: vec![1; rank],
+                        }),
+                        &[adjoint],
+                    )?[0];
+                    continue;
+                }
+            }
         }
 
         let size = builder.add_op(CoreSemanticOp::ShapeOf { axis }, &[primal_input])?[0];
@@ -1512,8 +1535,39 @@ fn restore_semantic_adjoint_input_length(
             CoreSemanticOp::PadToMatch { axis },
             &[truncated, primal_input],
         )?[0];
+        // The dynamic pair restores the runtime extent, but publishes a bound; keep
+        // tracking the literal shape only while the axis length is known.
+        match input_len {
+            Some(input_len) => {
+                if let Some(limits) = adjoint_extents.as_mut() {
+                    limits[axis] = input_len;
+                }
+            }
+            None => adjoint_extents = None,
+        }
     }
     Ok(adjoint)
+}
+
+/// Literal extents of `value`, or `None` when any of them is not a constant.
+///
+/// A `SliceConfig` names a literal limit for every axis, so a slice-based restore
+/// needs the whole shape, not only the resized axis.
+#[cfg(feature = "autodiff")]
+fn concrete_extents(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+) -> std::result::Result<Option<Vec<usize>>, SemanticAdError> {
+    let mut extents = Vec::new();
+    for extent in builder.resolved_extents(value)? {
+        match extent {
+            tenferro_ops::ShapeExtent::Exact(tenferro_ops::dim_expr::DimExpr::Const(value)) => {
+                extents.push(value);
+            }
+            _ => return Ok(None),
+        }
+    }
+    Ok(Some(extents))
 }
 
 #[cfg(feature = "autodiff")]

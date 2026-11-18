@@ -693,3 +693,132 @@ fn eager_rfft_and_irfft_vjps_match_the_traced_vjps() {
         "eager irfft vjp versus traced",
     );
 }
+
+/// #2647: the core `slice` VJP reads its input extent from the program, and an
+/// `rfft` output carries `n / 2 + 1` folded from constants. Truncating the modes
+/// (the FNO pattern) must differentiate against finite differences.
+#[test]
+fn truncated_rfft_modes_gradient_matches_finite_differences() {
+    for (len, modes) in [(8, 3), (7, 2)] {
+        let x_data = grid(len, 11, false);
+        let truncated = |x: &TracedTensor| {
+            let spectrum = x.rfft().unwrap();
+            spectrum
+                .slice(SliceConfig {
+                    starts: vec![0],
+                    limits: vec![modes],
+                    strides: vec![1],
+                })
+                .unwrap()
+        };
+        let loss_at = |x_data: &[Complex64]| {
+            let trace = TraceContext::new();
+            let x = traced(&trace, &[len], false, x_data);
+            let low_modes = truncated(&x);
+            let loss = low_modes
+                .mul(&low_modes.conj().unwrap())
+                .unwrap()
+                .reduce_sum(None)
+                .unwrap();
+            values(&run(&loss))[0].re
+        };
+
+        let trace = TraceContext::new();
+        let x = traced(&trace, &[len], false, &x_data);
+        let low_modes = truncated(&x);
+        let loss = low_modes
+            .mul(&low_modes.conj().unwrap())
+            .unwrap()
+            .reduce_sum(None)
+            .unwrap();
+        let x_grad = run(&ad().grad(&loss, &x).unwrap());
+        assert_eq!(x_grad.dtype(), DType::F64);
+        let expected = finite_difference_gradient(&x_data, false, |x| loss_at(x));
+        assert_close(
+            &values(&x_grad),
+            &expected,
+            FINITE_DIFFERENCE_TOLERANCE,
+            &format!("rfft length {len} truncated to {modes} modes: d loss / d x"),
+        );
+    }
+}
+
+/// #2648, real-FFT half: a zero-padded `rfft` in the middle of a chain restores
+/// the cotangent to the input extent, so the upstream `mul` differentiates. The
+/// truncating direction (`n` smaller than the extent) keeps the padding path.
+#[test]
+fn rfft_after_mul_gradient_matches_finite_differences() {
+    for (len, n) in [(3, 4), (5, 6), (6, 4)] {
+        let x_data = grid(len, 12, false);
+        let w_data = grid(len, 13, false);
+        let options = FftOptions::default().n(Some(n));
+        let loss_at = |x_data: &[Complex64], w_data: &[Complex64]| {
+            let trace = TraceContext::new();
+            let x = traced(&trace, &[len], false, x_data);
+            let w = traced(&trace, &[len], false, w_data);
+            let y = x.mul(&w).unwrap().rfft_with(&options).unwrap();
+            let loss = y.mul(&y.conj().unwrap()).unwrap().reduce_sum(None).unwrap();
+            values(&run(&loss))[0].re
+        };
+
+        let trace = TraceContext::new();
+        let x = traced(&trace, &[len], false, &x_data);
+        let w = traced(&trace, &[len], false, &w_data);
+        let y = x.mul(&w).unwrap().rfft_with(&options).unwrap();
+        let loss = y.mul(&y.conj().unwrap()).unwrap().reduce_sum(None).unwrap();
+        let ad = ad();
+        let x_grad = run(&ad.grad(&loss, &x).unwrap());
+        let w_grad = run(&ad.grad(&loss, &w).unwrap());
+
+        let expected_x = finite_difference_gradient(&x_data, false, |x| loss_at(x, &w_data));
+        assert_close(
+            &values(&x_grad),
+            &expected_x,
+            FINITE_DIFFERENCE_TOLERANCE,
+            &format!("rfft len {len} n {n}: d loss / d x"),
+        );
+        let expected_w = finite_difference_gradient(&w_data, false, |w| loss_at(&x_data, w));
+        assert_close(
+            &values(&w_grad),
+            &expected_w,
+            FINITE_DIFFERENCE_TOLERANCE,
+            &format!("rfft len {len} n {n}: d loss / d w"),
+        );
+    }
+}
+
+/// The real n-dimensional restore mixes a truncating and a padding axis with the
+/// one-sided real axis, so the upstream `mul` must still see the input extent.
+#[test]
+fn rfftn_after_mul_gradient_matches_finite_differences() {
+    let shape = [3usize, 4];
+    let lengths = [2usize, 5];
+    let x_data = grid(12, 14, false);
+    let w_data = grid(12, 15, false);
+    let options = FftnOptions::default()
+        .axes(vec![0, 1])
+        .shape(Some(lengths.to_vec()));
+    let loss_at = |x_data: &[Complex64], w_data: &[Complex64]| {
+        let trace = TraceContext::new();
+        let x = traced(&trace, &shape, false, x_data);
+        let w = traced(&trace, &shape, false, w_data);
+        let y = x.mul(&w).unwrap().rfftn_with(&options).unwrap();
+        let loss = y.mul(&y.conj().unwrap()).unwrap().reduce_sum(None).unwrap();
+        values(&run(&loss))[0].re
+    };
+
+    let trace = TraceContext::new();
+    let x = traced(&trace, &shape, false, &x_data);
+    let w = traced(&trace, &shape, false, &w_data);
+    let y = x.mul(&w).unwrap().rfftn_with(&options).unwrap();
+    let loss = y.mul(&y.conj().unwrap()).unwrap().reduce_sum(None).unwrap();
+    let x_grad = run(&ad().grad(&loss, &x).unwrap());
+
+    let expected = finite_difference_gradient(&x_data, false, |x| loss_at(x, &w_data));
+    assert_close(
+        &values(&x_grad),
+        &expected,
+        FINITE_DIFFERENCE_TOLERANCE,
+        &format!("rfftn shape {lengths:?}: d loss / d x"),
+    );
+}
