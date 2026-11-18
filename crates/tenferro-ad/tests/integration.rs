@@ -43,6 +43,8 @@ mod eager_runtime_api;
 mod eager_session_ad_contract;
 #[path = "integration/eager_tensor.rs"]
 mod eager_tensor;
+#[path = "integration/empty_fold_ad.rs"]
+mod empty_fold_ad;
 #[path = "integration/engine_eval.rs"]
 mod engine_eval;
 #[path = "integration/fallible_api.rs"]
