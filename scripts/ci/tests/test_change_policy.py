@@ -692,6 +692,14 @@ class LocalGateTests(unittest.TestCase):
         # mechanisms with no recorded sites (the real entries would all read as
         # stale).
         shutil.copy2(ROOT / "scripts" / "audit-engine-entry.py", self.repo / "scripts")
+        # The gate runs the registry-conformance checker self-test on every code
+        # change (#2663); the real test needs the crates' api_ops! registries,
+        # which this fixture does not have, so it gets a stub that succeeds,
+        # like the stub cargo.
+        (self.repo / "scripts" / "test-check-api-registry-conformance.py").write_text(
+            "#!/usr/bin/env python3\nprint('api-registry-conformance self-test: ok (fixture stub)')\n",
+            encoding="utf-8",
+        )
         # The gate asserts one version per dependency identity on every non-docs
         # change; the fixture's stub cargo prints no tree, so it passes.
         shutil.copy2(ROOT / "scripts" / "check-single-versions.sh", self.repo / "scripts")

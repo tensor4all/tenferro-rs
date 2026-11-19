@@ -1530,8 +1530,8 @@ assert_eq!(y.shape(), &[2, 2]);
             scope: "trace, compile, prepare and run lifecycle";
             category: "lifecycle | builder";
             owner_module: "tenferro_runtime::{trace, graph, runtime}";
-            reason: "program construction and execution are not tensor operations; their shapes are fixed by the public API snapshot (api/)";
-            verification: "scripts/api-snapshot.sh --check and the runtime lifecycle tests";
+            reason: "program construction and execution are not tensor operations; their shapes are fixed by the runtime lifecycle tests";
+            verification: "the runtime lifecycle tests; no automated signature gate (the former snapshot diff was removed in #2663)";
             exit_condition: "kept";
             status: retained;
         }

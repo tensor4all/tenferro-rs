@@ -76,6 +76,7 @@ concrete engine) must be a declared or exact-signature exception. The
 exceptions of this scope list exact signatures, so an excepted name cannot come
 back with an engine argument. CI runs the check, together with the trybuild
 compile contracts, inside a job the required `CI gate (PR workspace tests)`
-depends on: on the surface compiled from the PR's merge commit when Rust code
-changed, and on the committed `api/` otherwise. Regenerating `api/` does not
-make an undeclared spelling pass.
+depends on: `scripts/api-snapshot.sh` compiles the surface from the PR's
+merge commit into a temporary directory (#2663) and the check runs on that
+generated surface; no snapshot files are committed. Regenerating the surface
+does not make an undeclared spelling pass.

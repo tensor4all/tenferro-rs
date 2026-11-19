@@ -50,7 +50,7 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check bans
-      # The public API snapshot and its registry conformance run in the
+      # The public API surface and its registry conformance run in the
       # `api-surface` job of ci-pr-workspace-tests.yml, which the required
       # `CI gate (PR workspace tests)` depends on (#2602).
       # Pinned: rustdoc JSON rendering changes between nightlies, and

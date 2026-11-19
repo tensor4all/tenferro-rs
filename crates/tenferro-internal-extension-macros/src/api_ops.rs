@@ -89,9 +89,9 @@ pub(crate) struct Op {
     pub omissions: Vec<LitStr>,
     pub examples: Vec<(Ident, LitStr)>,
     /// `signature <layer>: "..."`: the canonical compiled signature of the
-    /// op on a described layer, exactly as the public-API snapshot renders it
-    /// (`api/*.txt`). `scripts/check-api-registry-conformance.py` requires the
-    /// snapshot to contain it (#2602).
+    /// op on a described layer, exactly as `cargo public-api` renders it.
+    /// `scripts/check-api-registry-conformance.py` requires the compiled
+    /// surface to contain it (#2602).
     pub signatures: Vec<(Ident, LitStr)>,
 }
 

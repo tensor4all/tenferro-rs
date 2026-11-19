@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Self-test of scripts/check-api-registry-conformance.py (#2602).
 
-Each case copies the committed snapshots (the compiled surface), reintroduces
-one forbidden shape exactly as `cargo public-api` would render it after a
-regeneration, and requires the conformance check to fail. The unmodified copy
-must pass.
+Each case synthesizes a conforming surface from the `api_ops!` registries
+themselves (there are no committed snapshot files, #2663), reintroduces one
+forbidden shape exactly as `cargo public-api` would render it after a
+regeneration, and requires the conformance check to fail. The unmodified
+baseline must pass.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import pathlib
-import shutil
 import sys
 import tempfile
 
@@ -62,9 +62,31 @@ REINTRODUCED = {
 }
 
 
-def copy_surface(tmp: pathlib.Path) -> pathlib.Path:
-    surface = tmp / "api"
-    shutil.copytree(ROOT / "api", surface)
+def baseline_surface(tmp: pathlib.Path) -> pathlib.Path:
+    """A conforming surface synthesized from the parsed registries.
+
+    Rule 1 applies per profile, so every declared signature of a crate goes
+    into each profile of that crate; rule 4 requires every `tenferro_ad`
+    exception line in every `tenferro-ad*.txt` profile. `tenferro-linalg.txt`
+    stays empty: no registry declares a `tenferro_linalg::` signature, and the
+    extension-trait case below edits it.
+    """
+    reg = CHECKER.parse_registries(ROOT)
+    surface = tmp / "surface"
+    surface.mkdir()
+    profiles: dict[str, list[str]] = {"tenferro-linalg.txt": []}
+    for sig in reg.signatures:
+        crate = sig.removeprefix("pub fn ").split("::", 1)[0].replace("_", "-")
+        profiles.setdefault(f"{crate}.txt", []).append(sig)
+    ad = sorted(
+        s
+        for s in list(reg.signatures) + list(reg.exception_lines)
+        if s.startswith("pub fn tenferro_ad::")
+    )
+    for profile in ("tenferro-ad.txt", "tenferro-ad+cuda.txt"):
+        profiles[profile] = list(ad)
+    for name, lines in profiles.items():
+        (surface / name).write_text("\n".join(sorted(lines)) + "\n", encoding="utf-8")
     return surface
 
 
@@ -79,13 +101,15 @@ def edit(path: pathlib.Path, add: list[str] = (), remove: list[str] = ()) -> Non
 
 def errors_after(add: list[str] = (), remove: list[str] = (), file: str = "tenferro-ad.txt") -> list[str]:
     with tempfile.TemporaryDirectory() as tmp:
-        surface = copy_surface(pathlib.Path(tmp))
+        surface = baseline_surface(pathlib.Path(tmp))
         edit(surface / file, add=add, remove=remove)
         return CHECKER.check(surface, ROOT)
 
 
-def test_committed_surface_conforms() -> None:
-    assert CHECKER.check(ROOT / "api", ROOT) == []
+def test_baseline_surface_conforms() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        surface = baseline_surface(pathlib.Path(tmp))
+        assert CHECKER.check(surface, ROOT) == []
 
 
 def test_reintroduced_shapes_fail_in_every_profile() -> None:
