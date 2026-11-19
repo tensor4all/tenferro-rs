@@ -2,7 +2,7 @@
 //! [`Tensor`], typed inputs return typed tensors of the transform's dtype.
 
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::{Erased, Repr, Tensor, TensorScalar, Typed, TypedTensor};
+use tenferro_tensor::{AsView, Erased, Repr, Tensor, TensorScalar, Typed, TypedTensor};
 
 mod sealed {
     pub trait Sealed {}
@@ -67,9 +67,9 @@ impl FftScalar for Complex64 {
 /// ```
 pub trait FftRepr: Repr {
     /// The complex result type.
-    type Complex;
+    type Complex: AsView;
     /// The real result type.
-    type Real;
+    type Real: AsView;
 
     /// Wrap an erased complex result; typed representations downcast with a
     /// check.

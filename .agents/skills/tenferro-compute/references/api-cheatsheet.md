@@ -27,8 +27,8 @@ Every operation family (core, linalg, einsum, FFT) uses one grammar:
   `DotGeneralOptions::default().lhs(Conj::Yes)`.
 - `_into` writes into a `tenferro_tensor::Dest` (`Dest::overwrite(out)`,
   accumulate, or scaled by `alpha`/`beta`) and exists only where the registry
-  declares it: `add_into` and `solve_into` (overwrite only), `einsum_into`
-  (overwrite, accumulate, scaled).
+  declares it: `add_into`, `solve_into`, and the eight FFT operations
+  (overwrite only), `einsum_into` (overwrite, accumulate, scaled).
 - Axes are `isize`; a negative axis counts from the end (`-1` is the last).
 - Multi-output factorizations return structs with named fields:
   `let Svd { u, s, vh } = a.svd(exec)?;` (also `Qr`, `Lu`, `FullPivLu`,

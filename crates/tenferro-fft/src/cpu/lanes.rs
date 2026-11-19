@@ -24,13 +24,12 @@ unsafe impl<T: Send> Send for JobSlots<T> {}
 unsafe impl<T: Send> Sync for JobSlots<T> {}
 impl<T> JobSlots<T> {
     /// # Safety
-    /// `job` must be in bounds and must not be accessed by any other job.
-    // INVARIANT: the exclusive access is per job index, proven by the caller; a shared
-    // receiver is what lets every forked job reach its own element.
+    /// The requested range must be in bounds and exclusive to this job.
     #[allow(clippy::mut_from_ref)]
-    unsafe fn get(&self, job: usize) -> &mut T {
-        // SAFETY: the caller proves bounds and exclusivity.
-        unsafe { &mut *self.0.add(job) }
+    // INVARIANT: fork assigns each disjoint range to exactly one job.
+    unsafe fn slice(&self, start: usize, len: usize) -> &mut [T] {
+        // SAFETY: the caller proves range bounds and exclusive access.
+        unsafe { std::slice::from_raw_parts_mut(self.0.add(start), len) }
     }
 }
 
@@ -102,7 +101,19 @@ where
         input_len,
         output_len,
     } = LaneLayout::new(in_shape, axis, out_axis_len)?;
+    if fft_len == 0 || out_axis_len > fft_len {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "fft",
+            "transform lengths",
+            "FFT length must be positive and cover the output lane",
+        ));
+    }
     let in_len = in_shape[axis];
+    if operation == FftOperation::C2r {
+        // Mirror reads must stay inside the gathered initialized spectrum.
+        crate::validate_c2r_spectrum_len(in_len, fft_len)?;
+    }
+
     let input_actual = match &input {
         Some(Input::Complex(x)) => x.len(),
         Some(Input::Real(x)) => x.len(),
@@ -130,23 +141,37 @@ where
         pointer: output.as_mut_ptr(),
         _borrow: PhantomData,
     };
-    // INVARIANT: each job writes every element of its own lane before
-    // `plan.process_with_scratch` reads it -- the gather fills `copy_len` slots
-    // and the padding or conjugate-mirror fill covers the rest -- so a lane
-    // buffer may be taken from the pool with uninitialized capacity. Taking
-    // capacity instead of a zero-filled full-length vector removes the
-    // per-call lane allocation and its zero fill.
-    let mut lane_buffers: Vec<Vec<Complex<T>>> = Vec::with_capacity(jobs);
-    for _ in 0..jobs {
-        lane_buffers.push(buffers.acquire_with_capacity::<Complex<T>>(fft_len));
-    }
-    let run = |job: usize, lane: &mut Vec<Complex<T>>| {
+    let scratch_len = plan.get_inplace_scratch_len();
+    let job_len = fft_len.checked_add(scratch_len).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument("fft", "scratch length", "overflows usize")
+    })?;
+    let total_len = super::checked_mul("fft", "parallel scratch", jobs, job_len)?;
+    // Both lane and vendor scratch storage are reused as one slab, avoiding
+    // per-job metadata allocations even when the engine changes job count.
+    let mut storage = buffers.acquire_with_capacity::<Complex<T>>(total_len);
+    // SAFETY: capacity covers total_len; MaybeUninit exposes no uninitialized
+    // Complex values, and the owning Vec stays length zero until recycled.
+    let uninit = unsafe {
+        std::slice::from_raw_parts_mut(
+            storage.as_mut_ptr().cast::<MaybeUninit<Complex<T>>>(),
+            total_len,
+        )
+    };
+    let run = |job: usize, storage: &mut [MaybeUninit<Complex<T>>]| {
+        let (lane_storage, scratch_storage) = storage.split_at_mut(fft_len);
+        scratch_storage.fill(MaybeUninit::new(Complex::zero()));
+        // SAFETY: every vendor scratch element was initialized immediately above.
+        let scratch = unsafe {
+            std::slice::from_raw_parts_mut(
+                scratch_storage.as_mut_ptr().cast::<Complex<T>>(),
+                scratch_len,
+            )
+        };
         let start = job * per_job;
         let end = start.saturating_add(per_job).min(lanes);
         if start >= end {
             return;
         }
-        let mut scratch = vec![Complex::<T>::zero(); plan.get_inplace_scratch_len()];
         // INVARIANT: nonzero lanes proves stride > 0. Advance within each
         // checked block rather than divide every lane index by runtime stride.
         let mut outer_index = start / stride;
@@ -155,39 +180,59 @@ where
         let mut output_base = outer_index * out_block + inner;
         let copy_len = in_len.min(fft_len);
         for _ in start..end {
-            lane.clear();
             match &input {
                 None => {
-                    for offset in (input_base..).step_by(stride).take(copy_len) {
+                    for (slot, offset) in lane_storage
+                        .iter_mut()
+                        .zip((input_base..).step_by(stride))
+                        .take(copy_len)
+                    {
                         // SAFETY: the in-place caller proves O=Complex<T> and
                         // initialized input. Jobs read/write only their own lane;
                         // gather completes before that lane is overwritten.
-                        lane.push(unsafe { out.read_complex::<T>(offset) });
+                        slot.write(unsafe { out.read_complex::<T>(offset) });
                     }
                 }
                 Some(Input::Complex(values)) => {
-                    for offset in (input_base..).step_by(stride).take(copy_len) {
-                        lane.push(values[offset]);
+                    for (slot, offset) in lane_storage
+                        .iter_mut()
+                        .zip((input_base..).step_by(stride))
+                        .take(copy_len)
+                    {
+                        slot.write(values[offset]);
                     }
                 }
                 Some(Input::Real(values)) => {
-                    for offset in (input_base..).step_by(stride).take(copy_len) {
-                        lane.push(Complex::new(values[offset], T::zero()));
+                    for (slot, offset) in lane_storage
+                        .iter_mut()
+                        .zip((input_base..).step_by(stride))
+                        .take(copy_len)
+                    {
+                        slot.write(Complex::new(values[offset], T::zero()));
                     }
                 }
             }
             if operation == FftOperation::C2r {
                 for k in copy_len..fft_len {
-                    let mirrored = lane[fft_len - k].conj();
-                    lane.push(mirrored);
+                    // SAFETY: the spectrum prefix is gathered above; later
+                    // mirrored indices refer only to that initialized prefix.
+                    let mirrored = unsafe { lane_storage[fft_len - k].assume_init() }.conj();
+                    lane_storage[k].write(mirrored);
                 }
             } else {
                 // INVARIANT: only missing input positions are padding; the
                 // gathered slots were written above, including real-input
                 // imaginary parts.
-                lane.resize(fft_len, Complex::zero());
+                lane_storage[copy_len..].fill(MaybeUninit::new(Complex::zero()));
             }
-            plan.process_with_scratch(lane.as_mut_slice(), &mut scratch);
+            // SAFETY: gather plus padding/mirroring initialized the entire lane.
+            let lane = unsafe {
+                std::slice::from_raw_parts_mut(
+                    lane_storage.as_mut_ptr().cast::<Complex<T>>(),
+                    fft_len,
+                )
+            };
+            plan.process_with_scratch(lane, scratch);
             // Fold the normalization into the scatter. This is the same single
             // multiply per emitted value as the removed separate full-lane pass,
             // so the numerical result is unchanged; `scale == 1` keeps the
@@ -223,18 +268,15 @@ where
         }
     };
     if jobs == 1 {
-        run(0, &mut lane_buffers[0]);
+        run(0, uninit);
     } else {
-        let slots = JobSlots(lane_buffers.as_mut_ptr());
+        let slots = JobSlots(uninit.as_mut_ptr());
         exec.fork(jobs, |job, _child| {
-            // SAFETY: `job < jobs == lane_buffers.len()`, and `fork` runs each job
-            // index exactly once, so this is the only access to this buffer.
-            run(job, unsafe { slots.get(job) });
+            // SAFETY: job < jobs, and the checked slab has jobs disjoint job_len ranges.
+            run(job, unsafe { slots.slice(job * job_len, job_len) });
         });
     }
-    for lane in lane_buffers {
-        Complex::<T>::pool_release(buffers, lane);
-    }
+    Complex::<T>::pool_release(buffers, storage);
     Ok(())
 }
 
@@ -324,21 +366,21 @@ where
         RealPlan::Forward(plan) => plan.get_scratch_len(),
         RealPlan::Inverse(plan) => plan.get_scratch_len(),
     };
-    // INVARIANT: realfft reads padded lanes and takes initialized scratch.
-    let mut real_lanes: Vec<Vec<T>> = (0..jobs)
-        .map(|_| buffers.acquire_zeroed::<T>(real_len))
-        .collect();
-    let mut complex_lanes: Vec<Vec<Complex<T>>> = (0..jobs)
-        .map(|_| buffers.acquire_zeroed::<Complex<T>>(complex_len))
-        .collect();
-    let mut scratch_lanes: Vec<Vec<Complex<T>>> = (0..jobs)
-        .map(|_| buffers.acquire_zeroed::<Complex<T>>(scratch_len))
-        .collect();
+    let complex_job_len = complex_len.checked_add(scratch_len).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument("fft", "scratch length", "overflows usize")
+    })?;
+    let real_total = super::checked_mul("fft", "parallel real lanes", jobs, real_len)?;
+    let complex_total = super::checked_mul("fft", "parallel complex lanes", jobs, complex_job_len)?;
+    // INVARIANT: realfft's safe API requires initialized mutable output and
+    // scratch slices. Initialize each pooled slab once; per-lane gathering
+    // below only zeroes semantic padding, never the overwritten output.
+    let mut real_lanes = buffers.acquire_zeroed::<T>(real_total);
+    let mut complex_lanes = buffers.acquire_zeroed::<Complex<T>>(complex_total);
     let run = |job: usize,
-               real_lane: &mut Vec<T>,
-               complex_lane: &mut Vec<Complex<T>>,
-               scratch: &mut Vec<Complex<T>>|
+               real_lane: &mut [T],
+               complex_storage: &mut [Complex<T>]|
      -> tenferro_tensor::Result<()> {
+        let (complex_lane, scratch) = complex_storage.split_at_mut(complex_len);
         let start = job * per_job;
         let end = start.saturating_add(per_job).min(lanes);
         if start >= end {
@@ -350,14 +392,11 @@ where
         let mut output_base = outer_index * out_block + inner;
         let copy_len = in_len.min(real_len);
         for _ in start..end {
-            for value in real_lane.iter_mut() {
-                *value = T::zero();
-            }
-            for value in complex_lane.iter_mut() {
-                *value = Complex::zero();
-            }
             match (&input, operation) {
                 (Some(Input::Real(values)), FftOperation::R2cFull | FftOperation::R2cOnesided) => {
+                    // Only missing input samples are semantic padding. Every
+                    // spectrum value is overwritten by realfft or mirroring.
+                    real_lane[copy_len..].fill(T::zero());
                     for (slot, offset) in real_lane
                         .iter_mut()
                         .zip((input_base..).step_by(stride))
@@ -367,9 +406,9 @@ where
                     }
                     if let RealPlan::Forward(plan) = &plan {
                         plan.process_with_scratch(
-                            real_lane.as_mut_slice(),
+                            real_lane,
                             complex_lane[..spectrum_len].as_mut(),
-                            scratch.as_mut_slice(),
+                            scratch,
                         )
                         .map_err(|error| {
                             tenferro_tensor::Error::runtime_state(
@@ -405,6 +444,7 @@ where
                     }
                 }
                 (Some(Input::Complex(values)), FftOperation::C2r) => {
+                    complex_lane[copy_len.min(spectrum_len)..].fill(Complex::zero());
                     for (slot, offset) in complex_lane
                         .iter_mut()
                         .zip((input_base..).step_by(stride))
@@ -424,17 +464,15 @@ where
                         }
                     }
                     if let RealPlan::Inverse(plan) = &plan {
-                        plan.process_with_scratch(
-                            complex_lane.as_mut_slice(),
-                            real_lane.as_mut_slice(),
-                            scratch.as_mut_slice(),
-                        )
-                        .map_err(|error| {
-                            tenferro_tensor::Error::runtime_state(
-                                "fft",
-                                format!("complex-to-real plan rejected the lane buffers: {error}"),
-                            )
-                        })?;
+                        plan.process_with_scratch(complex_lane, real_lane, scratch)
+                            .map_err(|error| {
+                                tenferro_tensor::Error::runtime_state(
+                                    "fft",
+                                    format!(
+                                        "complex-to-real plan rejected the lane buffers: {error}"
+                                    ),
+                                )
+                            })?;
                     }
                     for (value, offset) in real_lane
                         .iter()
@@ -471,26 +509,17 @@ where
         Ok(())
     };
     let result = if jobs == 1 {
-        run(
-            0,
-            &mut real_lanes[0],
-            &mut complex_lanes[0],
-            &mut scratch_lanes[0],
-        )
+        run(0, &mut real_lanes, &mut complex_lanes)
     } else {
         let real_slots = JobSlots(real_lanes.as_mut_ptr());
         let complex_slots = JobSlots(complex_lanes.as_mut_ptr());
-        let scratch_slots = JobSlots(scratch_lanes.as_mut_ptr());
         let first_error = std::sync::Mutex::new(None);
         exec.fork(jobs, |job, _child| {
-            // SAFETY: `job < jobs`, which is the length of all three lane vectors,
-            // and `fork` runs each job index exactly once, so these are the only
-            // accesses to this job's buffers.
+            // SAFETY: each job owns one checked, disjoint range of each slab.
             let outcome = run(
                 job,
-                unsafe { real_slots.get(job) },
-                unsafe { complex_slots.get(job) },
-                unsafe { scratch_slots.get(job) },
+                unsafe { real_slots.slice(job * real_len, real_len) },
+                unsafe { complex_slots.slice(job * complex_job_len, complex_job_len) },
             );
             if let Err(error) = outcome {
                 first_error
@@ -507,14 +536,7 @@ where
             None => Ok(()),
         }
     };
-    for lane in real_lanes {
-        T::pool_release(buffers, lane);
-    }
-    for lane in complex_lanes {
-        Complex::<T>::pool_release(buffers, lane);
-    }
-    for scratch in scratch_lanes {
-        Complex::<T>::pool_release(buffers, scratch);
-    }
+    T::pool_release(buffers, real_lanes);
+    Complex::<T>::pool_release(buffers, complex_lanes);
     result
 }

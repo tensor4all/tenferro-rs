@@ -196,6 +196,14 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
         let exec_param = g.exec.as_ref().map(|e| quote!(exec: #e));
         let exec_name = g.exec.as_ref().map(|_| quote!(exec));
         let opt_param = opts.map(|o| quote!(options: &#o));
+        // `Output` in a destination names this operation's resolved result type.
+        let mut destination_types = g.types.clone();
+        destination_types.push((format_ident!("Output"), syn::parse2(out.clone())?));
+        let dest = g
+            .dest
+            .as_ref()
+            .map(|d| substitute(d.to_token_stream(), &destination_types, op, name))
+            .transpose()?;
 
         let mut build = |form: Form| {
             let mut params = operand_params.clone();
@@ -211,7 +219,7 @@ fn gen_layer(reg: &Registry, name: &Ident, g: &GenLayer) -> syn::Result<TokenStr
                 args.push(a.clone());
             }
             let ret = if form == Form::Into {
-                let dest = g.dest.as_ref().map(|d| quote!(dest: #d));
+                let dest = dest.as_ref().map(|d| quote!(dest: #d));
                 if let Some(d) = dest {
                     params.push(d);
                     args.push(quote!(dest));

@@ -10,11 +10,11 @@
 //! remain stream-managed. Backend choice remains explicit.
 //!
 //! Every operation is declared once in the operation registry (#2552) and
-//! offered on three layers with the same spellings:
+//! offered on three layers; concrete calls also accept caller-owned destinations:
 //!
 //! | Layer | Trait | Receiver | Spellings |
 //! |---|---|---|---|
-//! | concrete | [`FftOps`] | anything that implements [`AsView`](tenferro_tensor::AsView) | `x.fft(exec)`, `x.fft_with(&opts, exec)` |
+//! | concrete | [`FftOps`] | anything that implements [`AsView`](tenferro_tensor::AsView) | `x.fft(exec)`, `x.fft_with(&opts, exec)`, `x.fft_into(&opts, exec, dest)` |
 //! | traced | [`TracedFftOps`] | [`TracedTensor`] | `t.fft()`, `t.fft_with(&opts)` |
 //! | eager (`autodiff`) | `EagerFftOps` | `EagerSession` | `sess.fft(&x)`, `sess.fft_with(&x, &opts)` |
 //!
@@ -23,7 +23,12 @@
 //! `shape`, `axes`, `norm`). Two exceptions keep their own shape: the
 //! consuming eager transforms `sess.fft_in_place(x, &opts)` /
 //! `sess.ifft_in_place(x, &opts)` (E01) and the plan-cache owner
-//! [`FftExecutor`] (`executor.fft_with(&x, &opts, exec)`, E02). The generated
+//! [`FftExecutor`] (`executor.fft_with(&x, &opts, exec)` and
+//! `executor.fft_into(&x, &opts, exec, dest)`, E02). Only
+//! `Dest::Overwrite` is supported. Reusing an executor and engine avoids Rust
+//! heap allocation for warmed compact tensors in plain host storage while the
+//! plans, scratch and multi-axis intermediates fit their cache/pool limits.
+//! The generated
 //! page `docs/spec/generated/api-ops.md` lists layout handling, errors and
 //! omissions per operation.
 //!
@@ -96,21 +101,23 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
-//! Concrete, with options:
+//! Concrete, with options and a caller-owned destination:
 //!
 //! ```
 //! use num_complex::Complex64;
 //! use tenferro_cpu::CpuEngine;
 //! use tenferro_fft::{FftNorm, FftOps, FftOptions};
-//! use tenferro_tensor::Tensor;
+//! use tenferro_tensor::{Dest, Tensor};
 //!
 //! let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
 //! let mut engine = CpuEngine::serial();
-//! let out = x.fft(&mut engine)?;
+//! let mut out = x.fft(&mut engine)?;
 //! assert_eq!(out.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 //!
 //! let ortho = x.fft_with(&FftOptions::default().norm(FftNorm::Ortho), &mut engine)?;
 //! assert_eq!(ortho.as_slice::<Complex64>()?[0], Complex64::new(5.0, 0.0));
+//! x.fft_into(&FftOptions::default().norm(FftNorm::Ortho), &mut engine, Dest::overwrite(&mut out))?;
+//! assert_eq!(out.as_slice::<Complex64>()?[0], Complex64::new(5.0, 0.0));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -154,6 +161,7 @@ mod cuda;
 mod eager_ext;
 #[cfg(feature = "autodiff")]
 mod eager_in_place;
+mod executor_into;
 pub mod prelude;
 mod spec;
 

@@ -32,14 +32,13 @@ use crate::{
 };
 use num_complex::Complex;
 use num_traits::{Float, FromPrimitive};
-#[cfg(feature = "autodiff")]
 use std::mem::MaybeUninit;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar, PooledUninitOutput};
 use tenferro_cpu::CpuEngine;
 use tenferro_tensor::{
     AllocationDomainId, DeviceKind, HostAccessError, MemoryKind, Placement,
     SharedTensorAllocationDomain, Tensor, TensorRead, TensorScalar, TensorStructural, TensorView,
-    TypedTensor,
+    TensorViewMut, TensorWrite, TypedTensor,
 };
 
 impl FftBackend for CpuEngine {
@@ -108,6 +107,105 @@ impl FftBackend for CpuEngine {
                 (operation, other) => Err(crate::tensor_unsupported_dtype(
                     fft_op_name(operation),
                     other.dtype(),
+                    expected_dtype_description(operation),
+                )),
+            }
+        })
+    }
+
+    fn execute_fft_read_into(
+        &mut self,
+        input: TensorRead<'_>,
+        spec: &FftPlanSpec,
+        mut cache: FftExecutionCache<'_>,
+        dest: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        validate_spec_metadata(input.dtype(), input.shape(), spec)?;
+        validate_host_fft_read_input(fft_op_name(spec.operation()), &input)?;
+        validate_into_destination(spec, &dest)?;
+        // INVARIANT: owned Tensor storage is compact column-major by construction;
+        // only a borrowed view needs layout inspection (owned inspection builds metadata).
+        if matches!(&input, TensorRead::View(_)) && !input.is_col_major_contiguous()? {
+            // shortcut: arbitrary-strided reads retain same-placement gathering;
+            // use direct strided lanes when the FFT SPI accepts their layout.
+            let owned = self.to_contiguous_read(input)?;
+            return self.execute_fft_read_into(TensorRead::from_tensor(&owned), spec, cache, dest);
+        }
+        let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
+        self.with_linalg_pool(|exec, buffers| {
+            macro_rules! write {
+                ($input_type:ty, $kind:ident, $output_type:ty, $variant:ident, $project:expr) => {{
+                    let mut execute = |values: &mut [$output_type]| {
+                        // SAFETY: an initialized scalar span may be borrowed as
+                        // MaybeUninit; disjoint lanes overwrite every output slot.
+                        let output = unsafe {
+                            std::slice::from_raw_parts_mut(values.as_mut_ptr().cast(), values.len())
+                        };
+                        let read = match &input {
+                            TensorRead::Tensor(tensor) => tensor.as_slice::<$input_type>()?,
+                            TensorRead::View(view) => view.as_slice::<$input_type>()?,
+                        };
+                        transform_into(
+                            lanes::Input::$kind(read),
+                            input.shape(),
+                            spec,
+                            &mut plans,
+                            buffers,
+                            output,
+                            $project,
+                            exec.token(),
+                        )
+                    };
+                    match dest {
+                        TensorWrite::Tensor(output) => {
+                            execute(output.as_slice_mut::<$output_type>()?)
+                        }
+                        TensorWrite::View(TensorViewMut::$variant(mut output)) => {
+                            let offset = usize::try_from(output.offset()).map_err(|_| {
+                                tenferro_tensor::Error::invalid_argument(
+                                    "fft",
+                                    "destination offset",
+                                    "must be nonnegative",
+                                )
+                            })?;
+                            let len = output.n_elements();
+                            // INVARIANT: compactness plus the mutable view's checked
+                            // reachable range bounds this complete offset span.
+                            execute(&mut output.host_storage_mut()?[offset..offset + len])
+                        }
+                        _ => Err(tenferro_tensor::Error::unsupported(
+                            "fft",
+                            "destination dtype does not match FFT output",
+                        )),
+                    }
+                }};
+            }
+            match (spec.operation(), input.dtype()) {
+                (
+                    FftOperation::C2cForward | FftOperation::C2cInverse,
+                    tenferro_tensor::DType::C64,
+                ) => write!(Complex<f64>, Complex, Complex<f64>, C64, |v| v),
+                (
+                    FftOperation::C2cForward | FftOperation::C2cInverse,
+                    tenferro_tensor::DType::C32,
+                ) => write!(Complex<f32>, Complex, Complex<f32>, C32, |v| v),
+                (
+                    FftOperation::R2cFull | FftOperation::R2cOnesided,
+                    tenferro_tensor::DType::F64,
+                ) => write!(f64, Real, Complex<f64>, C64, |v| v),
+                (
+                    FftOperation::R2cFull | FftOperation::R2cOnesided,
+                    tenferro_tensor::DType::F32,
+                ) => write!(f32, Real, Complex<f32>, C32, |v| v),
+                (FftOperation::C2r, tenferro_tensor::DType::C64) => {
+                    write!(Complex<f64>, Complex, f64, F64, |v: Complex<f64>| v.re)
+                }
+                (FftOperation::C2r, tenferro_tensor::DType::C32) => {
+                    write!(Complex<f32>, Complex, f32, F32, |v: Complex<f32>| v.re)
+                }
+                (operation, dtype) => Err(crate::tensor_unsupported_dtype(
+                    fft_op_name(operation),
+                    dtype,
                     expected_dtype_description(operation),
                 )),
             }
@@ -453,18 +551,145 @@ where
     Complex<T>: PoolScalar,
 {
     let shape = output_shape(in_shape, spec)?;
-    let axis = spec.normalized_axis();
-    let out_axis_len = shape[axis];
-    let fft_len = if spec.operation() == FftOperation::C2r {
-        validate_c2r_spectrum_len(in_shape[axis], out_axis_len)?;
-        out_axis_len
-    } else {
-        transform_len(in_shape, axis, spec.requested_len())?
-    };
     let mut output = PooledUninitOutput::<O>::new(buffers, shape)?;
-    // SAFETY: Some(input) selects the out-of-place path with borrowed reads and
-    // a disjoint fresh destination. Successful execution joins all writers and
-    // initializes every element before the owning handoff.
+    transform_into(
+        input,
+        in_shape,
+        spec,
+        plans,
+        buffers,
+        output.as_uninit_slice_mut(),
+        project,
+        exec,
+    )?;
+    // SAFETY: successful execution initializes the complete output and joins writers.
+    unsafe { output.assume_init_recycled() }
+}
+
+fn validate_into_destination(
+    spec: &FftPlanSpec,
+    dest: &TensorWrite<'_>,
+) -> tenferro_tensor::Result<()> {
+    let op = fft_op_name(spec.operation());
+    let expected_dtype = match spec.operation() {
+        FftOperation::C2r => match spec.input_dtype() {
+            tenferro_tensor::DType::C32 => tenferro_tensor::DType::F32,
+            _ => tenferro_tensor::DType::F64,
+        },
+        _ => match spec.input_dtype() {
+            tenferro_tensor::DType::F32 | tenferro_tensor::DType::C32 => {
+                tenferro_tensor::DType::C32
+            }
+            _ => tenferro_tensor::DType::C64,
+        },
+    };
+    if dest.dtype() != expected_dtype {
+        return Err(tenferro_tensor::Error::dtype_mismatch(
+            op,
+            expected_dtype,
+            dest.dtype(),
+        ));
+    }
+    let axis = spec.normalized_axis();
+    let fft_len = transform_len_for_spec(spec)?;
+    let axis_len = if spec.operation() == FftOperation::R2cOnesided {
+        fft_len / 2 + 1
+    } else {
+        fft_len
+    };
+    if dest.shape().len() != spec.input_shape().len()
+        || dest.shape().iter().enumerate().any(|(i, &n)| {
+            n != if i == axis {
+                axis_len
+            } else {
+                spec.input_shape()[i]
+            }
+        })
+    {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            op,
+            "destination shape",
+            "does not match the FFT output shape",
+        ));
+    }
+    // INVARIANT: an owned Tensor is compact column-major by construction;
+    // inspecting only views avoids constructing synthetic high-rank metadata.
+    if matches!(dest, TensorWrite::View(_)) && !dest.is_col_major_contiguous()? {
+        return Err(tenferro_tensor::Error::unsupported(
+            op,
+            "CPU FFT destination must be compact column-major",
+        ));
+    }
+    match dest {
+        TensorWrite::Tensor(tensor) => validate_host_fft_input(op, tensor),
+        TensorWrite::View(view) => {
+            macro_rules! validate {
+                ($v:expr) => {
+                    validate_host_fft_placement(op, $v.placement(), $v.backend_buffer().is_some())
+                };
+            }
+            match view {
+                TensorViewMut::F32(v) => validate!(v),
+                TensorViewMut::F64(v) => validate!(v),
+                TensorViewMut::I32(v) => validate!(v),
+                TensorViewMut::I64(v) => validate!(v),
+                TensorViewMut::Bool(v) => validate!(v),
+                TensorViewMut::C32(v) => validate!(v),
+                TensorViewMut::C64(v) => validate!(v),
+            }
+        }
+    }
+}
+
+fn transform_len_for_spec(spec: &FftPlanSpec) -> tenferro_tensor::Result<usize> {
+    if spec.operation() == FftOperation::C2r {
+        let input_len = spec.input_shape()[spec.normalized_axis()];
+        let len = match spec.requested_len() {
+            Some(len) => len,
+            None => crate::default_c2r_output_len(input_len)?,
+        };
+        if len == 0 {
+            return Err(tenferro_tensor::Error::invalid_argument(
+                "irfft",
+                "output length",
+                "must be positive",
+            ));
+        }
+        validate_c2r_spectrum_len(input_len, len)?;
+        Ok(len)
+    } else {
+        transform_len(
+            spec.input_shape(),
+            spec.normalized_axis(),
+            spec.requested_len(),
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+// INVARIANT: shared numerical execution accepts validated metadata and borrowed resources.
+fn transform_into<T: CachedFftPlanScalar + PoolScalar, O: Send>(
+    input: lanes::Input<'_, T>,
+    in_shape: &[usize],
+    spec: &FftPlanSpec,
+    plans: &mut (impl FftPlanProvider + ?Sized),
+    buffers: &mut BufferPool,
+    output: &mut [MaybeUninit<O>],
+    project: impl Fn(Complex<T>) -> O + Sync,
+    exec: tenferro_cpu::threadteam::Exec<'_>,
+) -> tenferro_tensor::Result<()>
+where
+    Complex<T>: PoolScalar,
+{
+    let axis = spec.normalized_axis();
+    let fft_len = transform_len_for_spec(spec)?;
+    let out_axis_len = if spec.operation() == FftOperation::R2cOnesided {
+        fft_len / 2 + 1
+    } else {
+        fft_len
+    };
+    // SAFETY: input and writable output are disjoint borrows, and lane execution
+    // validates complete coverage before any writes.
     unsafe {
         if matches!(
             spec.operation(),
@@ -480,10 +705,10 @@ where
                 spec.norm(),
                 plans,
                 buffers,
-                output.as_uninit_slice_mut(),
+                output,
                 project,
                 exec,
-            )?;
+            )
         } else {
             lanes::execute(
                 Some(input),
@@ -495,12 +720,11 @@ where
                 spec.norm(),
                 plans,
                 buffers,
-                output.as_uninit_slice_mut(),
+                output,
                 project,
                 exec,
-            )?;
+            )
         }
-        output.assume_init_recycled()
     }
 }
 

@@ -57,6 +57,15 @@ mod dummy {
         pub fn norm<X: AsView + ?Sized>(a: &X, o: &NormOptions, e: &mut dyn Engine) -> Result<f64> {
             Ok(o.scale * a.values().iter().map(|v| v.abs()).sum::<f64>() + f64::from(e.id()))
         }
+        pub fn norm_into<X: AsView + ?Sized>(
+            a: &X,
+            o: &NormOptions,
+            e: &mut dyn Engine,
+            dest: &mut f64,
+        ) -> Result<()> {
+            *dest = norm(a, o, e)?;
+            Ok(())
+        }
         pub fn add<X: AsView + ?Sized>(
             a: &X,
             b: &impl AsView<Repr = X::Repr>,
@@ -159,7 +168,7 @@ mod dummy {
             receiver: self;
             tensor_arg: &impl AsView<Repr = Self::Repr>;
             exec: &mut dyn Engine;
-            dest: &mut Vec<f64>;
+            dest: &mut Output;
             result: Result;
             types { V = Vec<f64>, R = f64 }
             forward: self::forward_concrete;
@@ -185,7 +194,7 @@ mod dummy {
             output: R;
             dtypes: "real";
             layers: [concrete, session];
-            into: [];
+            into: [overwrite];
             layout: "Any strided layout.";
             errors: [Validation, NumericalFailure(NonConvergence)];
             omissions: [];
@@ -739,4 +748,18 @@ fn options_none_generics_and_associated_forms() {
     assert!(md.contains("| `double` | ShapeOps | `double` |"), "{md}");
     assert!(md.contains("- Options: none"));
     assert!(!md.contains("double_with"));
+}
+
+#[test]
+fn destination_output_placeholder_follows_each_operation_result() {
+    let input = v(&[1.0, -2.0]);
+    let mut engine = Cpu(0);
+    let mut scalar = 0.0_f64;
+    input
+        .norm_into(&NormOptions::default(), &mut engine, &mut scalar)
+        .unwrap();
+    assert_eq!(scalar, 3.0);
+    let mut vector = Vec::new();
+    input.negate_into(&mut engine, &mut vector).unwrap();
+    assert_eq!(vector, vec![-1.0, 2.0]);
 }

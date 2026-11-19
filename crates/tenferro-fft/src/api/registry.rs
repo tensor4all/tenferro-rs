@@ -20,6 +20,7 @@ api_ops! {
         receiver: self;
         tensor_arg: &impl tenferro_tensor::AsView<Repr = Self::Repr>;
         exec: &mut dyn tenferro_tensor::Engine;
+        dest: tenferro_tensor::Dest<<<Output as tenferro_tensor::AsView>::Repr as tenferro_tensor::Repr>::Write<'_>>;
         result: tenferro_tensor::Result;
         types {
             C = <Self::Repr as crate::FftRepr>::Complex,
@@ -164,8 +165,8 @@ api_ops! {
         output: C;
         dtypes: "`a`: f32, f64, Complex32 or Complex64. The result is complex (Complex32 for f32/Complex32 inputs, Complex64 otherwise); a real input is transformed as a complex one with zero imaginary part.";
         layers: [concrete, traced, eager];
-        into: [];
-        layout: "On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred.";
+        into: [overwrite];
+        layout: "On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred.";
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`"];
         example concrete: r#"use num_complex::Complex64;
@@ -181,6 +182,10 @@ assert_eq!(y.shape(), &[4]);
 assert_eq!(z.shape(), &[4]);
 let v = y.as_slice::<Complex64>()?[0];
 assert!((v - Complex64::new(10.0, 0.0)).norm() < 1e-12);
+
+let mut out = z.duplicate()?;
+x.fft_into(&FftOptions::default().axis(0), &mut engine, tenferro_tensor::Dest::overwrite(&mut out))?;
+assert_eq!(out.shape(), z.shape());
 # let _ = Complex64::new(0.0, 0.0);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use num_complex::Complex64;
@@ -243,8 +248,8 @@ assert!((v - Complex64::new(10.0, 0.0)).norm() < 1e-12);
         output: C;
         dtypes: "`a`: Complex32 or Complex64. The result has the dtype of `a`.";
         layers: [concrete, traced, eager];
-        into: [];
-        layout: "On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred.";
+        into: [overwrite];
+        layout: "On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred.";
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`"];
         example concrete: r#"use num_complex::Complex64;
@@ -260,6 +265,10 @@ assert_eq!(y.shape(), &[4]);
 assert_eq!(z.shape(), &[4]);
 let v = y.as_slice::<Complex64>()?[0];
 assert!((v - Complex64::new(2.5, 0.0)).norm() < 1e-12);
+
+let mut out = z.duplicate()?;
+x.ifft_into(&FftOptions::default().axis(0), &mut engine, tenferro_tensor::Dest::overwrite(&mut out))?;
+assert_eq!(out.shape(), z.shape());
 # let _ = Complex64::new(0.0, 0.0);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use num_complex::Complex64;
@@ -322,8 +331,8 @@ assert!((v - Complex64::new(2.5, 0.0)).norm() < 1e-12);
         output: C;
         dtypes: "`a`: f32 or f64. The result is the one-sided complex spectrum (Complex32 or Complex64) of length `n / 2 + 1` along `axis`.";
         layers: [concrete, traced, eager];
-        into: [];
-        layout: "On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred.";
+        into: [overwrite];
+        layout: "On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred.";
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`"];
         example concrete: r#"use num_complex::Complex64;
@@ -339,6 +348,10 @@ assert_eq!(y.shape(), &[3]);
 assert_eq!(z.shape(), &[3]);
 let v = y.as_slice::<Complex64>()?[0];
 assert!((v - Complex64::new(10.0, 0.0)).norm() < 1e-12);
+
+let mut out = z.duplicate()?;
+x.rfft_into(&FftOptions::default().axis(0), &mut engine, tenferro_tensor::Dest::overwrite(&mut out))?;
+assert_eq!(out.shape(), z.shape());
 # let _ = Complex64::new(0.0, 0.0);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use num_complex::Complex64;
@@ -401,8 +414,8 @@ assert!((v - Complex64::new(10.0, 0.0)).norm() < 1e-12);
         output: R;
         dtypes: "`a`: Complex32 or Complex64 (a one-sided spectrum). The result is real (f32 or f64); its length along `axis` is `n`, by default `2 * (m - 1)`.";
         layers: [concrete, traced, eager];
-        into: [];
-        layout: "On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred.";
+        into: [overwrite];
+        layout: "On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred.";
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`"];
         example concrete: r#"use num_complex::Complex64;
@@ -418,6 +431,10 @@ assert_eq!(y.shape(), &[4]);
 assert_eq!(z.shape(), &[4]);
 let v = y.as_slice::<f64>()?[0];
 assert!((v - 2.0).abs() < 1e-12);
+
+let mut out = z.duplicate()?;
+x.irfft_into(&FftOptions::default().n(Some(4)), &mut engine, tenferro_tensor::Dest::overwrite(&mut out))?;
+assert_eq!(out.shape(), z.shape());
 # let _ = Complex64::new(0.0, 0.0);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use num_complex::Complex64;
@@ -480,8 +497,8 @@ assert!((v - 2.0).abs() < 1e-12);
         output: C;
         dtypes: "`a`: f32, f64, Complex32 or Complex64. The result is complex, as for `fft`.";
         layers: [concrete, traced, eager];
-        into: [];
-        layout: "On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.";
+        into: [overwrite];
+        layout: "On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.";
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`"];
         example concrete: r#"use num_complex::Complex64;
@@ -497,6 +514,10 @@ assert_eq!(y.shape(), &[2, 2]);
 assert_eq!(z.shape(), &[2, 2]);
 let v = y.as_slice::<Complex64>()?[0];
 assert!((v - Complex64::new(10.0, 0.0)).norm() < 1e-12);
+
+let mut out = z.duplicate()?;
+x.fftn_into(&FftnOptions::default().axes(vec![0, 1]), &mut engine, tenferro_tensor::Dest::overwrite(&mut out))?;
+assert_eq!(out.shape(), z.shape());
 # let _ = Complex64::new(0.0, 0.0);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use num_complex::Complex64;
@@ -559,8 +580,8 @@ assert!((v - Complex64::new(10.0, 0.0)).norm() < 1e-12);
         output: C;
         dtypes: "`a`: Complex32 or Complex64. The result has the dtype of `a`.";
         layers: [concrete, traced, eager];
-        into: [];
-        layout: "On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.";
+        into: [overwrite];
+        layout: "On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.";
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`"];
         example concrete: r#"use num_complex::Complex64;
@@ -576,6 +597,10 @@ assert_eq!(y.shape(), &[2, 2]);
 assert_eq!(z.shape(), &[2, 2]);
 let v = y.as_slice::<Complex64>()?[0];
 assert!((v - Complex64::new(2.5, 0.0)).norm() < 1e-12);
+
+let mut out = z.duplicate()?;
+x.ifftn_into(&FftnOptions::default().axes(vec![0, 1]), &mut engine, tenferro_tensor::Dest::overwrite(&mut out))?;
+assert_eq!(out.shape(), z.shape());
 # let _ = Complex64::new(0.0, 0.0);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use num_complex::Complex64;
@@ -638,8 +663,8 @@ assert!((v - Complex64::new(2.5, 0.0)).norm() < 1e-12);
         output: C;
         dtypes: "`a`: f32 or f64. The result is complex; the last transformed axis is one-sided (`n / 2 + 1`).";
         layers: [concrete, traced, eager];
-        into: [];
-        layout: "On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.";
+        into: [overwrite];
+        layout: "On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.";
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`"];
         example concrete: r#"use num_complex::Complex64;
@@ -655,6 +680,10 @@ assert_eq!(y.shape(), &[2, 3]);
 assert_eq!(z.shape(), &[2, 3]);
 let v = y.as_slice::<Complex64>()?[0];
 assert!((v - Complex64::new(36.0, 0.0)).norm() < 1e-12);
+
+let mut out = z.duplicate()?;
+x.rfftn_into(&FftnOptions::default().axes(vec![0, 1]), &mut engine, tenferro_tensor::Dest::overwrite(&mut out))?;
+assert_eq!(out.shape(), z.shape());
 # let _ = Complex64::new(0.0, 0.0);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use num_complex::Complex64;
@@ -717,8 +746,8 @@ assert!((v - Complex64::new(36.0, 0.0)).norm() < 1e-12);
         output: R;
         dtypes: "`a`: Complex32 or Complex64. The result is real (f32 or f64); the last transformed axis has length `2 * (m - 1)` unless `shape` says otherwise.";
         layers: [concrete, traced, eager];
-        into: [];
-        layout: "On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.";
+        into: [overwrite];
+        layout: "On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.";
         errors: [Validation, Unsupported];
         omissions: ["lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`"];
         example concrete: r#"use num_complex::Complex64;
@@ -734,6 +763,10 @@ assert_eq!(y.shape(), &[2, 4]);
 assert_eq!(z.shape(), &[2, 4]);
 let v = y.as_slice::<f64>()?[0];
 assert!((v - 1.0).abs() < 1e-12);
+
+let mut out = z.duplicate()?;
+x.irfftn_into(&FftnOptions::default().shape(Some(vec![2, 4])), &mut engine, tenferro_tensor::Dest::overwrite(&mut out))?;
+assert_eq!(out.shape(), z.shape());
 # let _ = Complex64::new(0.0, 0.0);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use num_complex::Complex64;
@@ -807,13 +840,21 @@ assert!((v - 1.0).abs() < 1e-12);
         E02 {
             symbols: [
                 "tenferro_fft::FftExecutor::fft_with",
+                "tenferro_fft::FftExecutor::fft_into",
                 "tenferro_fft::FftExecutor::ifft_with",
+                "tenferro_fft::FftExecutor::ifft_into",
                 "tenferro_fft::FftExecutor::rfft_with",
+                "tenferro_fft::FftExecutor::rfft_into",
                 "tenferro_fft::FftExecutor::irfft_with",
+                "tenferro_fft::FftExecutor::irfft_into",
                 "tenferro_fft::FftExecutor::fftn_with",
+                "tenferro_fft::FftExecutor::fftn_into",
                 "tenferro_fft::FftExecutor::ifftn_with",
+                "tenferro_fft::FftExecutor::ifftn_into",
                 "tenferro_fft::FftExecutor::rfftn_with",
+                "tenferro_fft::FftExecutor::rfftn_into",
                 "tenferro_fft::FftExecutor::irfftn_with",
+                "tenferro_fft::FftExecutor::irfftn_into",
                 "tenferro_fft::FftExecutor::new",
                 "tenferro_fft::FftExecutor::plan_cache",
                 "tenferro_fft::FftExecutor::plan_cache_mut",

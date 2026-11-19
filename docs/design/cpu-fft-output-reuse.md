@@ -57,6 +57,43 @@ Partition the lane domain, including noncontiguous lanes of the last axis;
 prove disjoint output index sets before parallel execution. Reuse lane and
 RustFFT scratch within each job rather than allocate per lane.
 
+## Caller-owned FFT destinations (#2653)
+
+The concrete FFT family declares overwrite-only `_into` operations. The final
+output's dtype, shape, placement and supported layout are checked before any
+transform runs. Accumulate and scaled destinations are unsupported. Typed
+real-to-complex and complex-to-real calls use the result scalar's destination
+type. The eager and traced layers keep their existing allocating contract.
+
+`FftExecutor` retains prepared requests and reuses its caller-owned
+`FftPlanCache`; reuse the CPU engine as well. For an unchanged request with
+owned dtype-erased `Tensor` input and destination in plain host storage,
+repeated `_into` calls make zero Rust heap allocations after the request, provider plans and engine working
+buffers are warm and remain retained. This includes C2C, full/one-sided R2C,
+C2R, both scalar widths, and multi-axis requests. Changing the request or
+thread budget, clearing a cache/pool, or evicting its working set requires
+warming again. Cache and pool limits remain effective; there is no unbounded
+or global scratch cache. Noncompact inputs keep the documented same-placement
+canonicalization boundary and are outside this allocation guarantee.
+
+A non-leading axis of a compact column-major tensor is not a noncompact
+operand. Its lanes have stride `product(shape[..axis])`; the CPU kernel gathers
+one transform lane per job and scatters directly into the caller's output.
+There is no full-input gather. Typed inputs and compact borrowed views also avoid allocations
+while their metadata fits the inline rank capacity (8); adapters for higher
+ranks may allocate metadata. A noncompact view still gathers its logical
+input once, costing `product(input.shape()) * size_of(input scalar)` bytes of
+compact storage. The allocation regression includes that view as a negative
+control, so a warm pool cannot conceal the distinction.
+
+CPU `_into` accepts host storage destinations; backend-backed destinations,
+including managed providers, are unsupported. The allocating managed-output boundary above is unchanged.
+
+CUDA destinations remain on the executing device. CUDA uses same-device
+intermediate storage and copies the result into the destination on device;
+no Rust allocation guarantee applies there, and neither
+input nor output is implicitly uploaded or downloaded.
+
 ## Consuming eager in-place
 
 Expose explicitly named consuming in-place operations for CPU C32/C64,

@@ -953,7 +953,6 @@ host	tenferro-fft	api::tests::registry::every_input_kind_returns_the_owned_resul
 host	tenferro-fft	api::tests::registry::every_registry_entry_has_a_forwarding_case
 host	tenferro-fft	api::tests::registry::executor_with_forms_equal_fft_ops_and_fill_the_plan_cache
 host	tenferro-fft	api::tests::registry::fftn_default_axes_follow_numpy
-host	tenferro-fft	api::tests::registry::no_operation_declares_into
 host	tenferro-fft	api::tests::registry::op_and_op_with_default_options_agree_bit_for_bit
 host	tenferro-fft::backend_capability	caller_owned_cache_is_backend_neutral_and_reports_reuse_clear_and_stats
 host	tenferro-fft::backend_capability	concrete_cpu_execution_preserves_all_four_scalar_dtypes
@@ -1807,3 +1806,18 @@ host	tenferro-fft::trace_context_fft	a_traced_n_dimensional_transform_records_ex
 host	tenferro-fft::trace_context_fft	a_traced_one_axis_transform_records_exactly_one_node
 host	tenferro-linalg::lane_allocation	lane_entries_make_no_allocation_in_steady_state
 host	tenferro-linalg::lane_allocation	rank_nine_spills_metadata_in_a_lane
+host	tenferro-fft	api::tests::registry::every_operation_declares_only_overwrite_into
+host	tenferro-fft	backend::tests::default_into_is_unsupported_without_allocating_execution
+host	tenferro-fft	backend::tests::cpu_into_rejects_noncompact_destination_before_writes
+host	tenferro-fft	backend::tests::cpu_into_writes_compact_offset_views_for_complex_and_real_transforms
+host	tenferro-fft	cuda::tests::into_placement_rejects_host_before_cuda_work
+gpu	tenferro-fft	cuda::tests::into_device_destinations_match_cpu_without_host_transfers
+host	tenferro-fft::fft_into	typed_real_and_complex_destinations_follow_result_dtype
+host	tenferro-fft::fft_into	every_fft_family_writes_the_existing_destination
+host	tenferro-fft::fft_into	rejected_modes_and_destination_metadata_preserve_output
+host	tenferro-fft::fft_into	executor_reuses_multiaxis_real_schedule_and_can_clear_it
+host	tenferro-fft::fft_into	executor_rejects_strided_final_destination_before_any_axis_executes
+host	tenferro-fft::fft_into	mismatched_input_placement_preserves_destination_without_running_axes
+host	tenferro-fft::into_allocations	warmed_fft_family_and_column_major_gather_contract
+host	tenferro-fft::fft_into	same_device_foreign_domain_is_rejected_before_backend_dispatch
+host	tenferro-fft	cpu::lanes::tests::complex_lane_inverse_rejects_an_incomplete_initialized_spectrum

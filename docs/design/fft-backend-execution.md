@@ -23,6 +23,12 @@ Backend-specific choices such as RustFFT versus cuFFT, algorithm selection,
 workspace size, stream identity, and device handles do not belong in the spec.
 Those choices remain private to each `FftBackend` implementation.
 
+The concrete `_into` surface uses `FftBackend::execute_fft_read_into`. Its
+default reports `Unsupported`, so a backend must explicitly support writes into
+caller-owned storage. It does not allocate a result through an implicit default
+and copy it into the destination. See [caller-owned FFT destinations](cpu-fft-output-reuse.md#caller-owned-fft-destinations-2653)
+for validation, cache ownership, allocation and gather contracts.
+
 ## N-dimensional requests
 
 `FftOp` is the single request descriptor behind the eager, traced, and
@@ -35,9 +41,9 @@ historical one-axis call.
 `FftPlanSpec` carries the same axes. The extension executor splits a multi-axis
 request into one single-axis spec per axis and calls the backend once per step,
 so the `FftBackend` SPI, the plan cache key, and every vendor call stay
-one-dimensional. That loop lives in exactly one place — `execute_fft_op` in
-`tenferro-fft/src/lib.rs` — and the direct `FftExecutor::fftn_with` family and traced
-execution both run through it. It performs no transform arithmetic: it chooses
+one-dimensional. Allocating execution uses `execute_fft_op` in
+`tenferro-fft/src/lib.rs`; caller-owned destinations use a retained, prepared
+schedule with the same axis ordering and per-axis backend capability. It performs no transform arithmetic: it chooses
 the axis order, derives the per-axis operation, and threads the intermediate
 tensor shapes.
 
@@ -77,12 +83,13 @@ the operation, dtype, layout, or placement, it returns `Unsupported`. It must
 not construct another backend, upload or download the tensor, or silently run a
 host implementation.
 
-The CPU implementation uses RustFFT. It accepts ordinary host tensors and, when
-the `CpuBackend` is paired by an Apple `AppleContext`, matching managed tensors
-through guarded host mappings. The WebGPU implementation uses CubeK on the
-configured Metal client. Callers select either backend explicitly; neither
-implementation dispatches to the other. Cross-device movement remains a
-caller-visible operation before or after FFT execution.
+The CPU implementation uses RustFFT and RealFFT on a caller-held `CpuEngine`.
+Allocating calls accept ordinary host tensors and matching managed tensors
+through guarded host mappings. CPU `_into` accepts host storage destinations;
+backend-backed destinations remain unsupported. The CUDA implementation uses
+cuFFT on a caller-held `CudaEngine`. Callers select the engine explicitly;
+neither implementation dispatches to the other. Cross-device movement remains
+a caller-visible operation before or after FFT execution.
 
 ### CUDA/cuFFT execution
 

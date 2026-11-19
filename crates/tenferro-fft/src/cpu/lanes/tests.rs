@@ -109,3 +109,36 @@ fn checked_lane_boundary_rejects_mismatched_spans_and_overflow_before_writes() {
         );
     }
 }
+
+#[test]
+fn complex_lane_inverse_rejects_an_incomplete_initialized_spectrum() {
+    let input = [Complex64::new(1., 0.)];
+    let sentinel = Complex64::new(17., -2.);
+    let mut output = [MaybeUninit::new(sentinel); 4];
+    let mut plans = FftPlanCache::default();
+    let mut buffers = BufferPool::new();
+    // SAFETY: borrowed input/output are disjoint; malformed spectrum metadata
+    // must be refused before any uninitialized mirror slot is inspected.
+    let error = unsafe {
+        execute(
+            Some(Input::Complex(&input)),
+            &[1],
+            0,
+            4,
+            4,
+            FftOperation::C2r,
+            FftNorm::Backward,
+            &mut plans,
+            &mut buffers,
+            &mut output,
+            std::convert::identity,
+            Exec::serial(),
+        )
+    }
+    .unwrap_err();
+    assert!(error.to_string().contains("spectrum"));
+    for value in output {
+        // SAFETY: destination started initialized, and validation precedes writes.
+        assert_eq!(unsafe { value.assume_init() }, sentinel);
+    }
+}
