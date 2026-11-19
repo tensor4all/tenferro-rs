@@ -479,9 +479,11 @@ impl TraceContext {
     /// full-size buffer. `value` converts as in [`Tensor::full`].
     ///
     /// The result is a non-differentiable constant: gradients flow through it to
-    /// the trace inputs it combines with, but it is not a trace input, so AD
-    /// rejects it as `wrt`, and it carries no data, so AD rejects it as a
-    /// tangent or cotangent seed. Both are typed `InvalidArgument` errors.
+    /// the trace inputs it combines with. It is not a trace input, so `grad`,
+    /// `jvp` and `vjp` reject it as `wrt`, while the reverse-mode `_optional` and
+    /// `_many` forms return `None` for it. It carries no data, so `jvp` and `vjp`
+    /// reject it as a tangent or cotangent seed. Each rejection is a typed
+    /// `InvalidArgument` error.
     ///
     /// # Examples
     ///
