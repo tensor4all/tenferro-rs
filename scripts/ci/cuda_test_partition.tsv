@@ -1821,3 +1821,7 @@ host	tenferro-fft::fft_into	mismatched_input_placement_preserves_destination_wit
 host	tenferro-fft::into_allocations	warmed_fft_family_and_column_major_gather_contract
 host	tenferro-fft::fft_into	same_device_foreign_domain_is_rejected_before_backend_dispatch
 host	tenferro-fft	cpu::lanes::tests::complex_lane_inverse_rejects_an_incomplete_initialized_spectrum
+host	tenferro-fft	cpu::lanes::tests::complex_lane_invalid_transform_lengths_preserve_destination
+host	tenferro-fft	cpu::lanes::tests::real_lane_span_validation_preserves_destination_and_execution_resources
+host	tenferro-fft	cpu::lanes::tests::empty_real_batches_do_not_touch_storage_or_create_plans
+host	tenferro-fft	cpu::lanes::tests::real_plan_failure_recycles_both_slabs_after_serial_and_parallel_jobs

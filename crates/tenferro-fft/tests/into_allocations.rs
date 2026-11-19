@@ -82,10 +82,11 @@ macro_rules! no_alloc {
 fn warmed_fft_family_and_column_major_gather_contract() {
     // Keep both pools alive across scalar widths: teardown of a previous pool
     // must not enter another case's process-wide allocation window.
-    let mut engines = [
-        CpuEngine::serial(),
-        CpuEngine::new(tenferro_cpu::Pool::builder().threads(4).build().unwrap()),
-    ];
+    let pool = tenferro_cpu::Pool::builder().threads(4).build().unwrap();
+    // Warm Rayon's first-sleep allocations before reserving workers, as in
+    // threadteam 0.5.1 tests/team_alloc_free.rs::park_workers.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let mut engines = [CpuEngine::serial(), CpuEngine::new(pool)];
     assert_eq!(engines[0].num_threads(), 1);
     assert!((1..=4).contains(&engines[1].num_threads()));
     eprintln!("effective CPU widths: 1, {}", engines[1].num_threads());
