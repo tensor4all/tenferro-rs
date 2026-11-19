@@ -234,15 +234,16 @@ else
   log "docs snippets: skipped"
 fi
 
-# The committed public-API snapshots must conform to the api_ops! registries
-# (#2602); CI repeats this on the freshly compiled surface.
-# The committed snapshots in api/ are the checker's input; a checkout without
-# them (such as the gate's own test fixture) has nothing to check.
-if [[ "${change_class}" == "code" && -d api ]]; then
-  run run_python scripts/check-api-registry-conformance.py
+# The public API surface is generated, never committed (#2663): CI's
+# `api-surface` job compiles it with `scripts/api-snapshot.sh` and runs
+# `scripts/check-api-registry-conformance.py` on it (#2602); locally the same
+# script does both when the pinned nightly and `cargo-public-api` are
+# installed. This gate keeps the checker's logic tested (its self-test) on
+# every code change.
+if [[ "${change_class}" == "code" ]]; then
   run run_python scripts/test-check-api-registry-conformance.py
 else
-  log "api registry conformance: skipped (${change_class} change or no api/ snapshots)"
+  log "api registry conformance: skipped (${change_class} change)"
 fi
 
 # Execution engine entry mechanisms are audited on every code change: the

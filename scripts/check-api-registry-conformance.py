@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Registry conformance of the compiled eager surface (#2602).
 
-The public-API snapshot (`scripts/api-snapshot.sh`) shows *that* a signature
-changed; this check decides whether the new surface is *allowed*, so it still
-fails after the snapshots are regenerated. It reads:
+`scripts/api-snapshot.sh` compiles the public-API surface from the crates as
+built; this check decides whether that surface is *allowed*, so it fails on
+a surface the `api_ops!` registries do not declare. It reads:
 
 - the `api_ops!` registries (`crates/*/src/api/registry.rs`): every op row with
   a `signature <layer>: "..."` line declares a canonical compiled signature,
   and every exception row lists its permitted symbols. An exception symbol
   written as a full `pub fn ...` line permits exactly that signature; a bare
   path permits the name with any signature but never an engine argument;
-- a directory of public-API snapshots (`api/*.txt`, or the freshly generated
-  directory of `scripts/api-snapshot.sh --check`).
+- a directory of generated public-API surface files
+  (`--surface-dir DIR`, the temporary directory of `scripts/api-snapshot.sh`).
 
 Rules, over every snapshot profile in the directory (default and CUDA):
 
@@ -39,7 +39,7 @@ re-export (`pub use EagerSession as Session`) is checked under `EagerSession`;
 a blanket `impl<T> Trait for T` is not attributed to the eager receivers.
 
 Usage:
-    python3 scripts/check-api-registry-conformance.py [--surface-dir api]
+    python3 scripts/check-api-registry-conformance.py --surface-dir DIR
 """
 
 from __future__ import annotations
@@ -297,7 +297,7 @@ def check(surface: pathlib.Path, root: pathlib.Path) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--surface-dir", type=pathlib.Path, default=ROOT / "api")
+    parser.add_argument("--surface-dir", type=pathlib.Path, required=True)
     parser.add_argument("--root-dir", type=pathlib.Path, default=ROOT)
     args = parser.parse_args()
     errors = check(args.surface_dir, args.root_dir)

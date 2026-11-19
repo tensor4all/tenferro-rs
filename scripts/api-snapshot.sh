@@ -1,34 +1,31 @@
 #!/usr/bin/env bash
-# Public API snapshot of every published tenferro crate (#2552, S0).
+# Public API surface of every published tenferro crate (#2552, S0; #2663).
 #
-#   scripts/api-snapshot.sh --write   regenerate api/*.txt
-#   scripts/api-snapshot.sh --check   regenerate into a temporary directory and
-#                                     diff against api/; exit 1 on any difference
+#   scripts/api-snapshot.sh    compile the surface into a temporary directory
+#                               and check it against the api_ops! registries
+#
+# Nothing is committed (#2663): the surface is generated, and the verdict is
+# scripts/check-api-registry-conformance.py's (#2602) — an undeclared eager
+# entry point, a duplicate alias or an engine argument outside the session
+# boundary fails whatever the surface contains. The generated files stay in
+# the temporary directory for inspection when the check fails.
 #
 # Needs `cargo-public-api` and the pinned nightly below (rustdoc JSON); the
 # rendering of rustdoc JSON changes between nightlies, so CI installs the same
-# dated toolchain (`.github/workflows/ci.yml`, `placement`). Override with
-# API_SNAPSHOT_TOOLCHAIN only to try a newer nightly, then re-pin both. The feature
-# combinations are fixed below and documented in api/README.md; change both
-# together. A snapshot is review evidence, not a proof of behaviour.
-#
-# Both modes then run scripts/check-api-registry-conformance.py on the surface
-# just compiled (#2602): the snapshot diff shows that a signature changed, the
-# conformance check decides whether the registry allows it, so an undeclared
-# eager entry point still fails after `--write`.
+# dated toolchain (`.github/workflows/ci-pr-workspace-tests.yml`, `api-surface`).
+# Override with API_SNAPSHOT_TOOLCHAIN only to try a newer nightly, then re-pin
+# both. The feature combinations are fixed below and documented in
+# api/README.md; change both together. The surface is review evidence, not a
+# proof of behaviour.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-toolchain="${API_SNAPSHOT_TOOLCHAIN:-nightly-2026-07-18}"
-
-mode="${1:-}"
-case "$mode" in
---write | --check) ;;
-*)
-    echo "usage: $0 --write | --check" >&2
+if [ "$#" -ne 0 ]; then
+    echo "usage: $0" >&2
     exit 2
-    ;;
-esac
+fi
+
+toolchain="${API_SNAPSHOT_TOOLCHAIN:-nightly-2026-07-18}"
 
 # Every root-workspace package that is published (`publish = false` packages,
 # including the standalone ext/sparse and ext/tropical manifests, are excluded).
@@ -65,13 +62,8 @@ COMBOS=(
     "tenferro-fft autodiff-cuda autodiff,cuda"
 )
 
-if [ "$mode" = --write ]; then
-    out_dir=api
-else
-    out_dir=$(mktemp -d)
-    trap 'rm -rf "$out_dir"' EXIT
-fi
-mkdir -p "$out_dir"
+out_dir=$(mktemp -d)
+trap 'rm -rf "$out_dir"' EXIT
 
 for combo in "${COMBOS[@]}"; do
     read -r crate suffix features <<<"$combo"
@@ -88,41 +80,10 @@ for combo in "${COMBOS[@]}"; do
     RUSTUP_TOOLCHAIN="$toolchain" cargo public-api "${args[@]}" >"$file"
 done
 
-conformance_status=0
-python3 scripts/check-api-registry-conformance.py --surface-dir "$out_dir" || conformance_status=1
-
-if [ "$mode" = --check ]; then
-    status=$conformance_status
-    for file in "$out_dir"/*.txt; do
-        name=$(basename "$file")
-        if [ ! -f "api/$name" ]; then
-            echo "api-snapshot: api/$name is missing (run $0 --write)" >&2
-            status=1
-            continue
-        fi
-        if ! diff -u "api/$name" "$file"; then
-            status=1
-        fi
-    done
-    for file in api/*.txt; do
-        name=$(basename "$file")
-        # api/allowlist.txt is the E06 symbol list (#2552), not a snapshot.
-        if [ "$name" = allowlist.txt ]; then
-            continue
-        fi
-        if [ ! -f "$out_dir/$name" ]; then
-            echo "api-snapshot: api/$name is stale (no such crate/feature combination)" >&2
-            status=1
-        fi
-    done
-    if [ "$status" -ne 0 ]; then
-        echo "api-snapshot: the public API differs from api/; review the diff and run $0 --write" >&2
-        exit 1
-    fi
+if python3 scripts/check-api-registry-conformance.py --surface-dir "$out_dir"; then
     echo "api-snapshot: ok" >&2
-fi
-
-if [ "$mode" = --write ] && [ "$conformance_status" -ne 0 ]; then
-    echo "api-snapshot: snapshots written, but the surface does not conform to the api_ops! registries" >&2
+else
+    trap - EXIT
+    echo "api-snapshot: the compiled surface does not conform to the api_ops! registries; surface kept at $out_dir" >&2
     exit 1
 fi

@@ -180,20 +180,19 @@ jobs:
         run: echo "Extension tests not required - ${REASON}"
 
   api-surface:
-    # Public API snapshot (#2552) and its registry conformance (#2602) on the
-    # surface compiled from this commit. The conformance check reads the
-    # api_ops! registries, so an undeclared eager entry point, a duplicate
-    # alias or an engine argument outside the session boundary fails even when
-    # the snapshots in api/ were regenerated to match.
-    name: Public API snapshot and registry conformance
+    # Public API surface (#2552) and its registry conformance (#2602) on the
+    # surface compiled from this commit; no snapshots are committed (#2663).
+    # scripts/api-snapshot.sh compiles the surface into a temporary directory
+    # and scripts/check-api-registry-conformance.py reads the api_ops!
+    # registries, so an undeclared eager entry point, a duplicate alias or an
+    # engine argument outside the session boundary fails.
+    name: Public API surface and registry conformance
     needs: changes
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Registry-conformance checker self-test
         run: python3 scripts/test-check-api-registry-conformance.py
-      - name: Committed snapshots conform to the registries
-        run: python3 scripts/check-api-registry-conformance.py
       # Pinned: rustdoc JSON rendering changes between nightlies, and
       # scripts/api-snapshot.sh uses this exact toolchain (#2552 Q4).
       - uses: dtolnay/rust-toolchain@master
@@ -206,9 +205,9 @@ jobs:
         if: needs.changes.outputs.run_workspace == 'true'
         with:
           tool: cargo-public-api@0.52.0
-      - name: Compiled public API matches api/ and conforms to the registries
+      - name: Compiled public API conforms to the registries
         if: needs.changes.outputs.run_workspace == 'true'
-        run: scripts/api-snapshot.sh --check
+        run: scripts/api-snapshot.sh
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.run_workspace == 'true'
         with:
@@ -223,7 +222,7 @@ jobs:
         if: needs.changes.outputs.run_workspace != 'true'
         env:
           REASON: ${{ needs.changes.outputs.reason }}
-        run: echo "No Rust change; the committed snapshots were checked against the registries - ${REASON}"
+        run: echo "No Rust change; only the conformance self-test ran - ${REASON}"
 
   ci-gate:
     name: CI gate (PR workspace tests)
@@ -250,7 +249,7 @@ jobs:
             exit 1
           fi
           if [ "${API_RESULT}" != success ]; then
-            echo "Expected the public API snapshot and registry conformance to pass; got ${API_RESULT}"
+            echo "Expected the public API surface and registry conformance to pass; got ${API_RESULT}"
             exit 1
           fi
           if [ "${FORK_RESULT}" != success ] && [ "${MAINTAINER_RESULT}" != success ]; then

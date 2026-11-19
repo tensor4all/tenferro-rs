@@ -131,13 +131,12 @@ The concept-family matrices emitted by the checker are review aids. A matrix
 difference becomes a finding only when the relevant spec, design doc, or
 rustdoc contract does not explain the difference.
 
-The script is not run in CI; the public API snapshot (`api/`,
-`scripts/api-snapshot.sh --check` in the `api-surface` job of
+The script is not run in CI; the generated public API surface
+(`scripts/api-snapshot.sh` in the `api-surface` job of
 `ci-pr-workspace-tests.yml`, which the required `CI gate (PR workspace tests)`
 depends on) is the CI gate for public-surface changes. The same job runs
 `scripts/check-api-registry-conformance.py` on the freshly compiled surface, so
-an eager entry point the registry does not declare fails even after the
-snapshots are regenerated (#2602). The release-freeze convention gate is:
+an eager entry point the registry does not declare fails (#2602). The release-freeze convention gate is:
 
 ```bash
 python3 scripts/check-api-consistency.py --fail-on-findings
