@@ -486,6 +486,7 @@ impl MetalContext {
             ));
         }
         require_compact(source, OP)?;
+        let byte_len = element_bytes(source, OP)?;
         let destination = self.cell.allocate(OP, source.dtype(), source.shape())?;
         macro_rules! copy {
             ($t:ty) => {
@@ -506,7 +507,7 @@ impl MetalContext {
                 "the shared domain allocates the tensor dtypes only",
             )),
         }?;
-        self.cell.note_upload(element_bytes(source));
+        self.cell.note_upload(byte_len);
         Ok(destination)
     }
 
@@ -528,6 +529,7 @@ impl MetalContext {
             .ok_or_else(|| Error::unsupported(OP, "the source must be an owned shared tensor"))?;
         check_own_domain(self, source, OP)?;
         require_compact(source, OP)?;
+        let byte_len = element_bytes(source, OP)?;
         macro_rules! copy {
             ($t:ty) => {
                 copy_shared_to_host::<$t>(source, OP)
@@ -547,7 +549,7 @@ impl MetalContext {
                 "the shared domain allocates the tensor dtypes only",
             )),
         }?;
-        self.cell.note_download(element_bytes(source));
+        self.cell.note_download(byte_len);
         Ok(host)
     }
 
@@ -602,7 +604,11 @@ pub(crate) fn require_compact(tensor: &Tensor, op: &'static str) -> Result<(), E
 ///
 /// Every dtype counts here, including the ones only the paired CPU engine computes: the
 /// counters report what moved, not what the GPU was willing to touch.
-pub(crate) fn element_bytes(tensor: &Tensor) -> usize {
+///
+/// # Errors
+///
+/// `Error::RuntimeState` when the element count or the byte length overflows `usize`.
+pub(crate) fn element_bytes(tensor: &Tensor, op: &'static str) -> Result<usize, Error> {
     let dtype = tensor.dtype();
     let components = if matches!(dtype, DType::C32 | DType::C64) {
         2
@@ -615,11 +621,12 @@ pub(crate) fn element_bytes(tensor: &Tensor) -> usize {
         DType::Bool => std::mem::size_of::<bool>(),
         other => other.spec().width as usize / 8,
     };
-    tensor
-        .shape()
-        .iter()
-        .product::<usize>()
-        .saturating_mul(component_bytes.saturating_mul(components))
+    // Checked here rather than left to the copy: the counters are public boundary
+    // metadata, so an overflowing byte length must fail instead of saturating.
+    RuntimeCell::element_count(tensor.shape(), op)?
+        .checked_mul(component_bytes)
+        .and_then(|bytes| bytes.checked_mul(components))
+        .ok_or_else(|| Error::runtime_state(op, "the tensor's byte length overflows usize"))
 }
 
 /// Refuse a tensor that is not in this context's domain.
