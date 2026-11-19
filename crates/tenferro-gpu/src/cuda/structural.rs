@@ -1250,7 +1250,7 @@ impl CudaEngine {
     }
 
     /// A compact device copy of `source` into fresh storage of this runtime, labelled with
-    /// `shape` (which must hold the same element count), complete when it returns.
+    /// `shape` (which must hold the same element count), ordered on the stream when it returns.
     fn copy_to_fresh(
         &mut self,
         source: &Tensor,
@@ -1258,42 +1258,40 @@ impl CudaEngine {
         op: &'static str,
     ) -> crate::Result<Tensor> {
         let output = self.enqueue_copy(source, shape, op)?;
-        // The copy has to be complete before the caller can see it; inside a scheduled run the
-        // run's checkpoint is what orders it, so only a standalone call waits here.
-        self.prove_launch(op)?;
+        // The copy is ordered on this engine's stream, which is what makes it visible to the next
+        // operation and to a download; the caller observes it at its own barrier.
+        self.release_completed_staging();
         Ok(output)
     }
 }
 
 impl CudaEngine {
-    /// Prove that the launch this call just made has completed.
+    /// Finish a launch without waiting for it.
     ///
-    /// A scheduled run enqueues every node, records a stream-ordered checkpoint after each of
-    /// them, and retires the run as that run's barrier, so waiting here would put the host and the
-    /// device back to back on work stream order already covers (#2382). A standalone call has no
-    /// run behind it and waits, which is what makes an operation's result observable when it
-    /// returns.
-    fn prove_launch(&self, op: &'static str) -> crate::Result<()> {
-        if self.runtime().completion_deferred() {
-            return Ok(());
-        }
-        self.launch_completion_syncs
-            .set(self.launch_completion_syncs.get() + 1);
-        self.runtime()
-            .synchronize()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))
+    /// The result is a device-resident handle, so the host observes the work at its own barrier:
+    /// a download waits for its own copy, and a caller that needs a host-side edge calls
+    /// `ExecutionEngine::synchronize` (`docs/guides/devices-and-gpu.md`, "Eager GPU
+    /// Synchronization"). A scheduled run already relied on that (#2382); a standalone eager
+    /// operation paid a `cuStreamSynchronize` plus the completion checkpoint it records, per
+    /// launch, which was most of an elementwise chain's cost (#2666). Detached transfer staging is
+    /// released here once its own completion says the copy is done, so a queued copy keeps its
+    /// source and nothing waits for the stream.
+    fn release_completed_staging(&self) {
+        self.runtime().retire_detached();
     }
 
     /// Launch one planned kernel through this engine's prepared dispatcher.
     ///
     /// The module set and its bound functions are the engine's, so an auxiliary that launches
-    /// in a loop (the RRQR pivot scan, the reflector sequence) prepares and binds once.
+    /// in a loop (the RRQR pivot scan, the reflector sequence) prepares and binds once. `op` names
+    /// the operation at the call site and is otherwise unused here: a launch no longer proves its
+    /// own completion, so it has no failure of its own to attribute (#2666).
     fn launch_planned(
         &self,
         entry: Entry,
         plan: t4a_cuda_kernels::Launch,
         args: &[Arg<'_>],
-        op: &'static str,
+        _op: &'static str,
     ) -> crate::Result<()> {
         if plan.grid[0] == 0 {
             // Nothing to visit: the destination keeps the state the allocation left it in.
@@ -1303,7 +1301,8 @@ impl CudaEngine {
             let mut dispatcher = self.dispatcher(&[entry])?;
             dispatcher.run_planned(entry, plan, args)?;
         }
-        self.prove_launch(op)
+        self.release_completed_staging();
+        Ok(())
     }
 }
 
@@ -1428,7 +1427,8 @@ impl TensorStructural for CudaEngine {
                         source.storage.allocation(),
                     )
                 })?;
-                return self.prove_launch(OP);
+                self.release_completed_staging();
+                return Ok(());
             }
             return self.copy_regions_wide(&source, &destination, OP);
         }
@@ -1444,7 +1444,8 @@ impl TensorStructural for CudaEngine {
                 source.storage.allocation(),
             )
         })?;
-        self.prove_launch(OP)
+        self.release_completed_staging();
+        Ok(())
     }
 
     fn cast(&mut self, input: &Tensor, to: DType) -> crate::Result<Tensor> {
@@ -1485,7 +1486,7 @@ impl TensorStructural for CudaEngine {
                 )
             })
         })?;
-        self.prove_launch("cast")?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -1791,7 +1792,7 @@ impl TensorStructural for CudaEngine {
                 region.storage.allocation(),
             )
         })?;
-        self.prove_launch(OP)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -1898,7 +1899,7 @@ impl CudaEngine {
                 destination,
                 source,
             )?;
-            self.prove_launch(op)?;
+            self.release_completed_staging();
             return Ok(output);
         }
         // A region wider than the by-value layout has no `CLayout` parameter, so its geometry
@@ -1952,7 +1953,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -2027,7 +2028,7 @@ impl CudaEngine {
                 region.storage.allocation(),
             )?;
         }
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -2164,7 +2165,7 @@ impl CudaEngine {
                 },
             )
         }?;
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -2237,7 +2238,7 @@ impl CudaEngine {
             Err(failure) => return Err(seam_error(op, failure.into_error())),
         }
         self.note_vendor_permutation();
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(true)
     }
 
@@ -2379,7 +2380,8 @@ impl CudaEngine {
                 },
             )
         }?;
-        self.prove_launch(op)
+        self.release_completed_staging();
+        Ok(())
     }
 
     /// Scatter the compact `source` into the writable destination region.
@@ -2423,7 +2425,8 @@ impl CudaEngine {
                 self.allocation_of::<T>(source, op)?,
             )
         })?;
-        self.prove_launch(op)
+        self.release_completed_staging();
+        Ok(())
     }
 
     /// `gather` through the general path: three device-resident layouts and the plan's packed
@@ -2563,7 +2566,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -2642,7 +2645,7 @@ impl CudaEngine {
         })?;
         let updates_buffer = with_scalar!(dtype, |T| self.allocation_of::<T>(updates, op))?;
         if launch.grid[0] == 0 {
-            self.prove_launch(op)?;
+            self.release_completed_staging();
             return Ok(output);
         }
         let packed = t4a_cuda_kernels::pack_scatter_plan(plan);
@@ -2709,7 +2712,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -2983,7 +2986,7 @@ impl CudaEngine {
                     }
                 }
             }
-            self.prove_launch(name)?;
+            self.release_completed_staging();
             drop(partials);
             shape = out_shape;
             owned = Some(output);
@@ -3104,7 +3107,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -3198,7 +3201,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -3321,7 +3324,7 @@ impl CudaEngine {
                     .map_err(|error| crate::Error::runtime_state_source(op, error))
             })
         }?;
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -3433,7 +3436,7 @@ impl CudaEngine {
                 crate::Error::invalid_argument(op, "inputs", "the concatenation offset overflows")
             })?;
         }
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -3531,7 +3534,7 @@ impl CudaEngine {
                 },
             )
         }?;
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -3584,8 +3587,8 @@ fn wide_reduce_resources<'a>(
 
 /// The device-resident geometry a general-path launch reads: a layout's extents and strides.
 ///
-/// The allocations stay alive as locals until the caller synchronises, which every
-/// tensor-surface route does before it returns.
+/// The allocations stay alive as locals until the caller synchronises, which is the barrier the
+/// tensor-surface routes leave to their caller.
 struct WideGeometry {
     extents: t4a_cuda_runtime::Buffer,
     strides: t4a_cuda_runtime::Buffer,
@@ -3804,9 +3807,9 @@ impl CudaEngine {
             // its plan-and-launch sequence.
             self.linalg_fill_one(&output, op)?;
         }
-        // The caller observes this tensor as the result of a standalone call, so the enqueued
-        // fill has to be complete when it returns; inside a scheduled run this is a no-op.
-        self.prove_launch(op)?;
+        // The enqueued fill is ordered on this engine's stream; the caller observes it at its own
+        // barrier. Detached staging is released here once its own completion says so.
+        self.release_completed_staging();
         Ok(output)
     }
 }
@@ -4004,7 +4007,7 @@ impl CudaEngine {
             owned = Some(result);
         }
         // Each pass reads the previous one in stream order, so one wait proves them all.
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         Ok(owned.expect("at least one axis was reduced"))
     }
 }
@@ -4097,7 +4100,7 @@ impl CudaEngine {
                 self.allocation_of::<T>(&right, name)?,
             )
         })?;
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
         tensor_from_buffer(self.runtime(), dtype, &shape, output)
@@ -4144,7 +4147,7 @@ impl CudaEngine {
                 &status,
             )
         })?;
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         if matches!(dtype, DType::I32 | DType::I64) {
             let flag = self
                 .runtime()
@@ -4198,7 +4201,7 @@ impl CudaEngine {
                 )
             })
         })?;
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
         tensor_from_buffer(self.runtime(), out_dtype, &shape, output)
@@ -4246,7 +4249,7 @@ impl CudaEngine {
                 &status,
             )
         })?;
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
         tensor_from_buffer(self.runtime(), dtype, &shape, output)
@@ -4306,7 +4309,7 @@ impl CudaEngine {
                 &status,
             )
         })?;
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         let flag = self
             .runtime()
             .download_bytes(&status)
@@ -4411,7 +4414,7 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 self.allocation_of::<T>(&high, name)?,
             )
         })?;
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
         tensor_from_buffer(self.runtime(), dtype, &shape, output)
@@ -4459,7 +4462,7 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 self.allocation_of::<T>(&right, name)?,
             )
         })?;
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
         tensor_from_buffer(self.runtime(), DType::Bool, &shape, output)
@@ -4512,7 +4515,7 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 self.allocation_of::<T>(&when_false, name)?,
             )
         })?;
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
         tensor_from_buffer(self.runtime(), dtype, &shape, output)
@@ -4688,7 +4691,8 @@ impl CudaEngine {
                 })?;
             }
         }
-        self.prove_launch(name)
+        self.release_completed_staging();
+        Ok(())
     }
 }
 
@@ -4750,7 +4754,8 @@ impl CudaEngine {
                 &status,
             )
         })?;
-        self.prove_launch(op)
+        self.release_completed_staging();
+        Ok(())
     }
 
     /// Scale a writable region by `factor`, in place, through its own layout.
@@ -4802,7 +4807,8 @@ impl CudaEngine {
                 scalar_buffer,
             )
         })?;
-        self.prove_launch(op)
+        self.release_completed_staging();
+        Ok(())
     }
 
     /// The one-element device buffer that holds `factor` in `dtype`.
@@ -5423,7 +5429,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 update_region.storage.allocation(),
             )
         })?;
-        self.prove_launch(OP)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -5486,7 +5492,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 region.storage.allocation(),
             )
         })?;
-        self.prove_launch(OP)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -5605,7 +5611,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 starts_pointer,
             )
         })?;
-        self.prove_launch(OP)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -5790,7 +5796,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                     },
                 )
             }?;
-            self.prove_launch(OP)?;
+            self.release_completed_staging();
             return Ok(output);
         }
         let out_layout = Layout::compact(&out_extents)
@@ -5833,7 +5839,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 starts_pointer,
             )
         })?;
-        self.prove_launch(OP)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -5951,7 +5957,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 crate::Error::invalid_argument(op, "inputs", "the concatenation offset overflows")
             })?;
         }
-        self.prove_launch(op)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -6079,7 +6085,7 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                 region.storage.allocation(),
             )
         })?;
-        self.prove_launch(OP)?;
+        self.release_completed_staging();
         Ok(output)
     }
 }
@@ -6332,7 +6338,8 @@ impl CudaEngine {
         cutensor
             .contract(&request)
             .map_err(|error| seam_error(op, error))?;
-        self.prove_launch(op)
+        self.release_completed_staging();
+        Ok(())
     }
 
     /// Allocate the destination of one dot-general, submit it and return it.
@@ -6644,7 +6651,8 @@ impl CudaEngine {
                 Arg::U64(len as u64),
             ],
         )?;
-        self.prove_launch(op)
+        self.release_completed_staging();
+        Ok(())
     }
 
     /// Zero-filled device storage of `shape` for `dtype`.
@@ -6827,7 +6835,7 @@ impl CudaEngine {
         if !integral {
             // The floating entry never touches the status word; reading it back would wait
             // for nothing this route needs.
-            self.prove_launch(name)?;
+            self.release_completed_staging();
             // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
             let output = unsafe { output.assume_init() };
             return tensor_from_buffer(self.runtime(), dtype, &shape, output);
@@ -7060,7 +7068,7 @@ impl tenferro_tensor::Engine for CudaEngine {
                 indices_pointer,
             )
         })?;
-        self.prove_launch(OP)?;
+        self.release_completed_staging();
         Ok(output)
     }
 
@@ -7185,7 +7193,8 @@ impl tenferro_tensor::Engine for CudaEngine {
             destination.storage.allocation(),
             &coefficients,
         )?;
-        self.prove_launch(OP)
+        self.release_completed_staging();
+        Ok(())
     }
 }
 

@@ -103,21 +103,16 @@ fn a_scheduled_run_defers_launch_completion_and_keeps_vendor_handles() {
         "the QR has to create a vendor resource for this test to mean anything"
     );
 
-    // The strong form: count real stream barriers, not the helper that is supposed to skip them,
-    // so a reintroduced `runtime().synchronize()` inside an operation fails this test too.
+    // The strong form: count real stream barriers, so a reintroduced
+    // `runtime().synchronize()` inside an operation fails this test too, whether the operation
+    // was scheduled or standalone (#2666).
     let waits_before = gpu.runtime().stream_waits();
-    let syncs_before = gpu.launch_completion_syncs();
     let second = run_once(&mut gpu);
 
     assert_eq!(
         waits_before + 1,
         gpu.runtime().stream_waits(),
         "a scheduled run must add exactly the caller's barrier, not one drain per launch"
-    );
-    assert_eq!(
-        syncs_before,
-        gpu.launch_completion_syncs(),
-        "a scheduled run owns its nodes' completion; it must not drain the stream per launch"
     );
     assert_eq!(
         inits_after_first,
