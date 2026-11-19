@@ -205,7 +205,7 @@ pub fn define_extension_runtime(input: TokenStream) -> TokenStream {
 ///         omissions: [];
 ///         example concrete: r#"..."#;
 ///         // optional, on a described layer: the canonical compiled signature
-///         // as `api/*.txt` renders it; the registry-conformance check requires it
+///         // as the compiled public-API surface renders it; the registry-conformance check requires it
 ///         signature core_eager: "pub fn tenferro_ad::EagerSession<'_>::svd(..) -> ..";
 ///     }
 ///     exceptions {

@@ -18,7 +18,7 @@ documentation = "https://docs.rs/tenferro-cpu"
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
 # No backend selection: `ledger` and `route-report` are host-check hooks, off by default and
-# `#[doc(hidden)]`, so this documented surface is the default one `api/tenferro-cpu.txt` snapshots.
+# `#[doc(hidden)]`, so this documented surface is the default one the api-surface job compiles.
 all-features = true
 
 [lib]

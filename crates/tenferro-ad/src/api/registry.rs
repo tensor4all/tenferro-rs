@@ -4,7 +4,8 @@
 //!
 //! The layer is described, not generated: the methods are inherent
 //! `EagerSession` methods in `crate::eager`. `scripts/check-api-registry-conformance.py`
-//! checks the compiled public surface (`api/tenferro-ad*.txt`) against the
+//! checks the compiled public surface (the generated profiles of
+//! `scripts/api-snapshot.sh`) against the
 //! `signature eager:` lines and the exception signatures below.
 
 use tenferro_extension_macros::api_ops;
