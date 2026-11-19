@@ -90,7 +90,7 @@ impl MetalEngine {
 
     /// The element count, as the catalogue's `i64`.
     fn len(tensor: &Tensor, op: &'static str) -> TensorResult<i64> {
-        let count: usize = tensor.shape().iter().product();
+        let count = tenferro_tensor::validate::checked_shape_product(op, "shape", tensor.shape())?;
         i64::try_from(count).map_err(|_| Error::unsupported(op, "the element count exceeds i64"))
     }
 

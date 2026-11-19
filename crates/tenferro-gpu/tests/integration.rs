@@ -5,6 +5,8 @@ mod backend_read_contract;
 mod cuda_refused_allocation;
 #[path = "integration/engine_run.rs"]
 mod engine_run;
+#[path = "integration/metal_checked_shape_product.rs"]
+mod metal_checked_shape_product;
 #[path = "integration/public_surface_contract.rs"]
 mod public_surface_contract;
 #[path = "integration/session_contract.rs"]

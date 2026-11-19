@@ -278,8 +278,10 @@ impl RuntimeCell {
     where
         T: TensorScalar + Copy + Send + Sync + 'static,
     {
-        let elements: usize = shape.iter().product();
-        let expected = elements.saturating_mul(std::mem::size_of::<T>());
+        let elements = Self::element_count(&shape, op)?;
+        let expected = elements
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| Error::runtime_state(op, "the allocation size overflows usize"))?;
         if buffer.len() != expected {
             return Err(Error::runtime_state(
                 op,
