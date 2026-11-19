@@ -111,11 +111,14 @@ runtime's submission lock and stream.
 CubeCL launch queue or physical-stream pool to flush or select. Vendor calls
 bind to the stream lent by the engine's raw scope.
 
-A standalone native operation waits once before it returns, which is what makes
-its result observable; a scheduled run defers that wait to its own checkpoint.
-An operation built from several launches still waits once, after the last one,
-because stream order already orders the launches and the stream-ordered frees of
-their scratch. Destinations default to `alloc_zeroed`. A destination that its
+A native operation submits its launches and returns a device-resident handle without
+waiting. The host observes the result through a download, which waits for its own
+copy, or through `CudaRuntime::synchronize()`; an operation built from several
+launches behaves the same way, because stream order already orders the launches and
+the stream-ordered frees of their scratch. A scheduled run's nodes pay no wait
+per node either: the run's retirement is their barrier (#2382), and a standalone
+eager operation now follows the same rule (#2666). Destinations default to
+`alloc_zeroed`. A destination that its
 launches overwrite completely may come from `alloc_uninit` instead, converted
 with `UninitBuffer::assume_init` only after the writing launch is admitted, and
 with an `// INVARIANT:` marker that names the check proving the full overwrite.

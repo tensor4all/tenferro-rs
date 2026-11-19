@@ -90,7 +90,6 @@ impl EventDomainRun for StreamEventDomainRun {
         if self.coalesced && dependencies.is_empty() {
             // Submission order is the only ordering this run needs, so the node's completion is
             // the run's own retirement: launch and hand back the shared domain token.
-            let _deferred = self.runtime.defer_completion();
             launch()?;
             let token = self.shared_token.get_or_insert_with(|| {
                 Arc::new(CoalescedEventToken {
@@ -109,13 +108,10 @@ impl EventDomainRun for StreamEventDomainRun {
                 for token in tokens {
                     token.wait()?;
                 }
-                // The run owns the completion of what it enqueues: the checkpoint recorded below
-                // is this node's stream position, and the run's retirement is the barrier. An
-                // operation inside `launch` therefore does not wait for its own kernel (#2382).
-                {
-                    let _deferred = self.runtime.defer_completion();
-                    launch()?;
-                }
+                // The checkpoint recorded below is this node's stream position and the run's
+                // retirement is the barrier, so an operation inside `launch` does not wait for its
+                // own kernel (#2382).
+                launch()?;
                 let completion = {
                     let mut guard = self.runtime.submit();
                     let completion = guard.checkpoint().map_err(event_domain_error)?;

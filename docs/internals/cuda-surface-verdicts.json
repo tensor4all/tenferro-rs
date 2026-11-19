@@ -126,6 +126,10 @@
       "verdict": "private",
       "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
     },
+    "cuda::dispatch::Dest": {
+      "verdict": "private",
+      "reason": "the destination argument of a planned launch: read only by `cuda/structural.rs` inside the crate, so `pub(crate)` is the widest it is used"
+    },
     "cuda::dispatch::Dispatcher": {
       "verdict": "private",
       "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
@@ -269,10 +273,6 @@
     "cuda::engine::CudaEngine::ensure_healthy": {
       "verdict": "private",
       "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
-    },
-    "cuda::engine::CudaEngine::launch_completion_syncs": {
-      "verdict": "workspace-internal",
-      "reason": "`tenferro-ad` and `tenferro-linalg` tests read the counter"
     },
     "cuda::engine::CudaEngine::note_staged_read": {
       "verdict": "private",
@@ -773,10 +773,6 @@
       "verdict": "private",
       "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
     },
-    "cuda::runtime::CompletionDeferral": {
-      "verdict": "private",
-      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
-    },
     "cuda::runtime::CudaRuntime": {
       "verdict": "public",
       "reason": "the documented runtime: `engine.runtime()` returns it, `tenferro-fft` names it in a signature and the guides document its knobs"
@@ -824,17 +820,9 @@
       "verdict": "private",
       "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
     },
-    "cuda::runtime::CudaRuntime::completion_deferred": {
-      "verdict": "private",
-      "reason": "no reader outside `cuda/`; read by `cuda/structural.rs`"
-    },
     "cuda::runtime::CudaRuntime::copy_to": {
       "verdict": "private",
       "reason": "only this crate's own `examples/`/`tests/` name it, so removing `pub` means porting that suite first (docs/design/cuda-surface.md section 6)"
-    },
-    "cuda::runtime::CudaRuntime::defer_completion": {
-      "verdict": "private",
-      "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
     },
     "cuda::runtime::CudaRuntime::detach": {
       "verdict": "private",
@@ -1201,6 +1189,14 @@
     "cuda::structural::alloc_tensor": {
       "verdict": "private",
       "reason": "already `pub(crate)`/`pub(super)` or module-local: no reader outside `cuda/`"
+    },
+    "cuda::structural::coalesce_compact_view": {
+      "verdict": "private",
+      "reason": "a stride-collapsing helper of the tiled transpose in `cuda/structural.rs`; `pub(super)` is the widest it is used"
+    },
+    "cuda::structural::dense_destination_order": {
+      "verdict": "private",
+      "reason": "the destination-order helper of the tiled transpose in `cuda/structural.rs`; `pub(super)` is the widest it is used"
     },
     "cuda::structural::element_count": {
       "verdict": "private",

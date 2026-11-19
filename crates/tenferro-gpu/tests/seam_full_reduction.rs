@@ -198,7 +198,7 @@ fn unwritten_device_memory_never_reaches_a_result() {
 
 #[test]
 #[ignore = "requires CUDA"]
-fn multi_axis_reductions_squeeze_without_a_copy_and_wait_once() {
+fn multi_axis_reductions_squeeze_without_a_copy_or_a_stream_drain() {
     let Some(mut engine) = engine() else { return };
     // A [rows, axis, cols] column-major input whose middle axis is long enough to split.
     let (rows, axis, cols) = (3usize, 1000usize, 5usize);
@@ -218,12 +218,12 @@ fn multi_axis_reductions_squeeze_without_a_copy_and_wait_once() {
         (&[0, 1, 2], &[]),
     ];
     for (axes, shape) in cases {
-        let syncs = engine.launch_completion_syncs();
+        let waits = engine.runtime().stream_waits();
         let result = reduce(&mut engine, Op::Max, &source, axes);
         assert_eq!(
-            engine.launch_completion_syncs() - syncs,
-            1,
-            "a standalone reduction over {axes:?} waits once, whatever its pass count"
+            engine.runtime().stream_waits() - waits,
+            0,
+            "a standalone reduction over {axes:?} does not drain the stream, whatever its pass count"
         );
         assert_eq!(result.shape(), shape, "axes {axes:?}");
         let back = download_tensor(engine.runtime(), &result).expect("download");

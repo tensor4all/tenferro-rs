@@ -719,8 +719,9 @@ fn test_gpu_softplus_is_one_fused_launch_matching_the_composite() {
         let fused = download_tensor(gpu.runtime(), &fused).unwrap();
         assert_same_bits(&fused, &composite, &format!("hook {dtype:?}"));
 
-        // Concrete surface: one kernel launch and one standalone completion.
-        let (before, syncs) = (launches(&gpu), gpu.launch_completion_syncs());
+        // Concrete surface: one kernel launch and no stream drain of its own; the host observes it
+        // at its own barrier.
+        let (before, waits) = (launches(&gpu), gpu.runtime().stream_waits());
         let direct = {
             let s: &mut dyn tenferro_tensor::Engine = &mut gpu;
             x.softplus(s).unwrap()
@@ -731,31 +732,35 @@ fn test_gpu_softplus_is_one_fused_launch_matching_the_composite() {
             "{dtype:?}: concrete softplus must be one kernel launch"
         );
         assert_eq!(
-            gpu.launch_completion_syncs() - syncs,
-            1,
-            "{dtype:?}: concrete softplus must wait once"
+            gpu.runtime().stream_waits() - waits,
+            0,
+            "{dtype:?}: concrete softplus must not drain the stream"
         );
         let direct = download_tensor(gpu.runtime(), &direct).unwrap();
         assert_same_bits(&direct, &composite, &format!("concrete {dtype:?}"));
 
         // Untracked eager surface: exactly what one eager unary op (`exp`) costs. The
-        // eager surface adds one launch and one completion of its own per op on top of
-        // the kernel's (a direct `exp` is one launch, an eager one two), so the single-op
-        // cost is measured rather than assumed; the kernel itself is pinned to one launch
-        // by the concrete surface above.
+        // eager surface adds one launch of its own per op on top of the kernel's (a direct
+        // `exp` is one launch, an eager one two), so the single-op cost is measured rather than
+        // assumed; the kernel itself is pinned to one launch by the concrete surface above, and
+        // neither surface drains the stream.
         let operand = upload_tensor(gpu.runtime(), &host).unwrap();
         let constant = ctx
             .with_eager_session(&mut gpu, |s| s.constant_from(operand))
             .unwrap();
-        let (before, syncs) = (launches(&gpu), gpu.launch_completion_syncs());
+        let (before, waits) = (launches(&gpu), gpu.runtime().stream_waits());
         let _single = ctx
             .with_eager_session(&mut gpu, |s| s.exp(&constant))
             .unwrap();
-        let (single_launches, single_syncs) = (
+        let (single_launches, single_waits) = (
             launches(&gpu) - before,
-            gpu.launch_completion_syncs() - syncs,
+            gpu.runtime().stream_waits() - waits,
         );
-        let (before, syncs) = (launches(&gpu), gpu.launch_completion_syncs());
+        assert_eq!(
+            single_waits, 0,
+            "{dtype:?}: an eager op must not drain the stream (#2666)"
+        );
+        let (before, waits) = (launches(&gpu), gpu.runtime().stream_waits());
         let eager = ctx
             .with_eager_session(&mut gpu, |s| s.softplus(&constant))
             .unwrap();
@@ -765,8 +770,8 @@ fn test_gpu_softplus_is_one_fused_launch_matching_the_composite() {
             "{dtype:?}: untracked eager softplus must launch like one eager unary op"
         );
         assert_eq!(
-            gpu.launch_completion_syncs() - syncs,
-            single_syncs,
+            gpu.runtime().stream_waits() - waits,
+            single_waits,
             "{dtype:?}: untracked eager softplus must wait like one eager unary op"
         );
         let eager = {

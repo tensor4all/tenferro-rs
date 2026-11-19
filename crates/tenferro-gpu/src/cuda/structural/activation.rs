@@ -150,7 +150,7 @@ impl CudaEngine {
                 )
             })?;
         }
-        self.prove_launch(name)?;
+        self.release_completed_staging();
         Ok(Some(output))
     }
 }

@@ -51,6 +51,8 @@ mod engine_eval;
 mod fallible_api;
 #[path = "integration/gpu_ad_tests.rs"]
 mod gpu_ad_tests;
+#[path = "integration/gpu_eager_chain_no_stream_drain.rs"]
+mod gpu_eager_chain_no_stream_drain;
 #[path = "integration/gpu_f32_fusion.rs"]
 mod gpu_f32_fusion;
 #[path = "integration/gpu_nn_composites.rs"]

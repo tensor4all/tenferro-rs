@@ -57,7 +57,9 @@ the last report on the issue it is **−1**: `CudaEngine::runtime_mut` lost its 
 (`e4dfa2f4`, "retire the seven unused U02 internal pub items") deleted it. `cuda/engine.rs` is now 11
 marks (reported as 12 at `55e6a8c06`). The table covers **292** exported items, of which **130** carry
 `#[doc(hidden)]`: the 126 at `90348dc0` plus the four `KernelModules` launch methods the decision keeps
-`workspace-internal` (section 4).
+`workspace-internal` (section 4). Every count on this page is that `90348dc0` snapshot, which is what
+#2579 decided; the generated table is the current one, and #2666 moved it to 291 exported items, 128
+marks, 101 `public`, 149 `private` and 41 `workspace-internal`.
 
 ## 2. The verdicts
 
@@ -142,9 +144,9 @@ about the rustdoc mark, not about new documentation.
 
 ## 4. What stays `#[doc(hidden)]`, and why
 
-**The 42 `workspace-internal` items.** Thirty-five of them are a contract *of the workspace*, not of
+**The `workspace-internal` items.** Thirty-four of them are a contract *of the workspace*, not of
 the crate: another crate in the workspace calls them today. They are `CudaEngine::{runtime_engine_id,
-runtime_identity, launch_completion_syncs, vendor_resource_inits, alloc_output, ensure_gpu_resident,
+runtime_identity, vendor_resource_inits, alloc_output, ensure_gpu_resident,
 scale_tensor_write, to_contiguous_view}`, the 21 `linalg_*` auxiliaries and the `DeviceOperand` bound
 they take (called from `tenferro-linalg`), `CudaRuntime::{allocation_domain_id, device_id,
 with_current_context, stream_waits}` and `CudaRuntimeIdentity` (called from `tenferro-fft` and
@@ -178,17 +180,18 @@ records them so the next reader does not re-derive that they are unreachable.
 ## 5. What lost `pub` in this change
 
 Five items, each with no reader of any kind outside `src/cuda/`, and each still read by non-test code
-inside the crate, so `pub(crate)` alone keeps the crate warning-free:
+inside the crate, so `pub(crate)` alone keeps the crate warning-free. The list below is what #2579
+narrowed, minus `CudaRuntime::completion_deferred`, which #2666 deleted along with the completion
+deferral it guarded:
 
 | item | now | why it is private |
 |---|---|---|
 | `cuda::CudaBackend` | `pub(crate)` | the seam marker: nothing names it. Its only use is the crate-private `gpu::Buffer<CudaBackend>` inside `cuda/storage.rs`, and `docs/design/cuda-extension-hook-2208.md` records that "the generic seam stays internal" (R-api-design-90). The design notes that still name it predate the cutover and do not make it surface. |
 | `CudaRuntime::alloc_pinned` | `pub(crate)` | read only by `cuda/pinned.rs` |
 | `CudaRuntime::identity` | `pub(crate)` | read only by `cuda/engine.rs` and `cuda/runtime.rs`; `tenferro-fft` uses `CudaEngine::runtime_identity` instead |
-| `CudaRuntime::completion_deferred` | `pub(crate)` | read only by `cuda/structural.rs` |
 | `CudaEngine::to_contiguous` | `pub(crate)` | read only by `cuda/structural.rs`; it is a one-line forward to `TensorStructural::to_contiguous_read` |
 
-The sixth reduction, `KernelModules::function`, was withdrawn: the issue decision keeps the whole
+The further reduction this change considered, `KernelModules::function`, was withdrawn: the issue decision keeps the whole
 kernel-launch family `workspace-internal`, so it is `pub` with `#[doc(hidden)]` again (section 4).
 
 `CudaBackend` stays narrowed because it is not the public extension point: there is no second
@@ -230,7 +233,7 @@ accessor.
 
 ## 7. Not to be removed while a sibling crate uses it
 
-Explicitly, so a later pass does not remove them: the 42 `workspace-internal` items in section 4,
+Explicitly, so a later pass does not remove them: the `workspace-internal` items in section 4,
 including the kernel-launch family, and the `DeviceOperand` bound the linalg auxiliaries take. The `linalg_*` auxiliaries in particular are called from
 `tenferro-linalg/src/gpu/linalg.rs` and its `householder_qr.rs` / `rank_revealing_qr.rs` siblings, and
 `to_contiguous_view` from `tenferro-linalg`, and `alloc_output`, `ensure_gpu_resident`,
