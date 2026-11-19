@@ -644,3 +644,16 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         assert!((f64_values(&value)[0] - 2.0).abs() < 1.0e-12);
     }
 }
+
+#[test]
+fn eager_pinv_rtol_drops_singular_values_below_the_threshold() {
+    let a = eager(vec![2.0, 0.0, 0.0, 0.5], vec![2, 2]);
+    // The threshold is `rtol * max(s)` = 1, so 0.5 is dropped and 2 is inverted.
+    let inverse = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.pinv_with(&a, &PinvOptions::default().rtol(Some(0.5)))
+        })
+        .unwrap();
+    assert_eq!(f64_values(&inverse), vec![0.5, 0.0, 0.0, 0.0]);
+}

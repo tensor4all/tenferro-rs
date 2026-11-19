@@ -501,3 +501,27 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
         }
     }
 }
+
+#[cfg(feature = "autodiff")]
+#[test]
+fn eager_empty_square_slogdet_keeps_the_batch_shape_and_a_real_logabsdet() {
+    use num_complex::Complex64;
+
+    let eager = eager(&Tensor::from_vec_col_major(vec![0, 0, 3], Vec::<Complex64>::new()).unwrap());
+    let (sign, logabsdet) = eager_runtime()
+        .with_eager_session(&mut CpuEngine::serial(), |session| {
+            let Slogdet { sign, log_abs_det } = session.slogdet(&eager)?;
+            Ok::<_, tenferro_ad::Error>((
+                session.duplicate_value(&sign)?,
+                session.duplicate_value(&log_abs_det)?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(sign.shape(), &[3]);
+    assert_eq!(
+        sign.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(1.0, 0.0); 3]
+    );
+    assert_eq!(logabsdet.shape(), &[3]);
+    assert_eq!(logabsdet.as_slice::<f64>().unwrap(), &[0.0; 3]);
+}

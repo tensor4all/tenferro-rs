@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use num_complex::{Complex32, Complex64};
 use tenferro_runtime::extension::apply;
 use tenferro_runtime::{
     CompareDir, DType, DotGeneralConfig, Error, ErrorPhase, Result, TraceContext, TraceValue,
@@ -797,10 +796,7 @@ pub(crate) fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor
     let abs_s = s.abs()?;
     let s_max = abs_s.reduce_max(Some(&[0]))?;
     let s_max_shape = s_max.concrete_shape()?;
-    let threshold_scalar = broadcast_scalar(
-        scalar_real(s.context(), s.dtype(), rtol.max(0.0))?,
-        &s_max_shape,
-    )?;
+    let threshold_scalar = s.context().full(s.dtype(), s_max_shape, rtol.max(0.0))?;
     let threshold = (&s_max * &threshold_scalar)?;
     let s_shape = s.concrete_shape()?;
     let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, &s_shape)?;
@@ -953,26 +949,6 @@ fn five_outputs(
     }
 }
 
-fn scalar_real(ctx: &TraceContext, dtype: DType, value: f64) -> Result<TracedTensor> {
-    match dtype {
-        DType::F64 => ctx.from_vec_col_major(vec![], vec![value]),
-        DType::F32 => ctx.from_vec_col_major(vec![], vec![value as f32]),
-        DType::I32 => ctx.from_vec_col_major(vec![], vec![value.round() as i32]),
-        DType::I64 => ctx.from_vec_col_major(vec![], vec![value.round() as i64]),
-        DType::Bool => ctx.from_vec_col_major(vec![], vec![value != 0.0]),
-        DType::C64 => ctx.from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)]),
-        DType::C32 => ctx.from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)]),
-        // An externally defined scalar has no traced scalar literal.
-        DType::External(_) => Err(Error::TensorRuntime(
-            tenferro_tensor::Error::invalid_argument(
-                "scalar_real",
-                "dtype",
-                "an externally defined scalar has no traced scalar literal",
-            ),
-        )),
-    }
-}
-
 pub(crate) fn real_values_dtype(dtype: DType) -> DType {
     match dtype {
         DType::C64 => DType::F64,
@@ -1010,24 +986,12 @@ fn require_concrete_shape(op: &'static str, input: &TracedTensor) -> Result<Vec<
     })
 }
 
-fn zero_scalar(ctx: &TraceContext, dtype: DType) -> Result<TracedTensor> {
-    scalar_real(ctx, dtype, 0.0)
-}
-
 fn eye_like(anchor: &TracedTensor, size: usize) -> Result<TracedTensor> {
     let mut vector_shape = vec![size];
     let anchor_shape = anchor.concrete_shape()?;
     vector_shape.extend_from_slice(&anchor_shape[2..]);
     let diagonal = anchor.context().ones(anchor.dtype(), vector_shape)?;
     diagonal.embed_diag(0, 1)
-}
-
-fn broadcast_scalar(input: TracedTensor, shape: &[usize]) -> Result<TracedTensor> {
-    let input_shape = input.concrete_shape()?;
-    if input_shape == shape {
-        return Ok(input);
-    }
-    input.broadcast_in_dim(shape, &[])
 }
 
 fn broadcast_batch_scalar_to_leading_axis(
@@ -1078,8 +1042,8 @@ fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
     if p == 2.0 {
         return frobenius_norm(abs, axes);
     }
-    let power = abs.pow(&scalar_real(abs.context(), abs.dtype(), p)?)?;
-    let inv_p = scalar_real(abs.context(), abs.dtype(), 1.0 / p)?;
+    let power = abs.pow(&abs.context().full(abs.dtype(), [0_usize; 0], p)?)?;
+    let inv_p = abs.context().full(abs.dtype(), [0_usize; 0], 1.0 / p)?;
     power.reduce_sum(Some(&signed(axes)[..]))?.pow(&inv_p)
 }
 
@@ -1099,7 +1063,7 @@ fn zero_norm_for_empty_reduction(
         return Ok(None);
     }
     let output_shape = reduction_shape(input_shape, axes, keepdim);
-    zero_traced_tensor(ctx, real_norm_dtype(dtype)?, output_shape).map(Some)
+    ctx.zeros(real_values_dtype(dtype), output_shape).map(Some)
 }
 
 fn empty_reduction_norm_is_zero(axis_count: usize, ord: Option<f64>) -> bool {
@@ -1129,50 +1093,6 @@ fn reduction_shape(input_shape: &[usize], axes: &[usize], keepdim: bool) -> Vec<
         .enumerate()
         .filter_map(|(axis, &dim)| (!reduced[axis]).then_some(dim))
         .collect()
-}
-
-fn real_norm_dtype(dtype: DType) -> Result<DType> {
-    match dtype {
-        DType::F32 | DType::F64 => Ok(dtype),
-        DType::C32 => Ok(DType::F32),
-        DType::C64 => Ok(DType::F64),
-        _ => Err(Error::TensorRuntime(
-            tenferro_tensor::Error::unsupported_dtype(
-                "norm",
-                dtype,
-                "norm supports only floating-point and complex dtypes",
-            ),
-        )),
-    }
-}
-
-fn zero_traced_tensor(ctx: &TraceContext, dtype: DType, shape: Vec<usize>) -> Result<TracedTensor> {
-    let len = checked_element_count("norm", &shape)?;
-    match dtype {
-        DType::F32 => ctx.from_vec_col_major(shape, vec![0.0_f32; len]),
-        DType::F64 => ctx.from_vec_col_major(shape, vec![0.0_f64; len]),
-        DType::C32 => ctx.from_vec_col_major(shape, vec![Complex32::new(0.0, 0.0); len]),
-        DType::C64 => ctx.from_vec_col_major(shape, vec![Complex64::new(0.0, 0.0); len]),
-        _ => Err(Error::TensorRuntime(
-            tenferro_tensor::Error::unsupported_dtype(
-                "norm",
-                dtype,
-                "norm supports only floating-point and complex dtypes",
-            ),
-        )),
-    }
-}
-
-fn checked_element_count(op: &'static str, shape: &[usize]) -> Result<usize> {
-    shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim).ok_or_else(|| {
-            Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
-                op,
-                "shape",
-                "shape element count overflow",
-            ))
-        })
-    })
 }
 
 fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
@@ -1281,7 +1201,10 @@ fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
     // `ord = 0` counts `x != 0` (#2359); equality with zero, then negated,
     // keeps NaN entries because IEEE 754 makes `NaN > 0` false while
     // `NaN != 0` is true.
-    let is_zero = abs.compare(&zero_scalar(abs.context(), abs.dtype())?, CompareDir::Eq)?;
+    let is_zero = abs.compare(
+        &abs.context().zeros(abs.dtype(), [0_usize; 0])?,
+        CompareDir::Eq,
+    )?;
     let is_zero = is_zero.convert(abs.dtype())?;
     let ones = abs.context().ones(abs.dtype(), abs.concrete_shape()?)?;
     let mask = (&ones - &is_zero)?;
