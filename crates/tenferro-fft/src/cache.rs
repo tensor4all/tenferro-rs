@@ -48,11 +48,26 @@ pub const fn fft_plan_cache_selector() -> ExtensionCacheSelector {
 /// private `Send + Sync + 'static` values under their own
 /// [`ExtensionCacheKey`] namespace. Entry limits, LRU eviction, clearing,
 /// aggregate entry counts, and retained-byte accounting apply uniformly to CPU
-/// and non-CPU entries.
+/// and non-CPU entries. Caller-owned `_into` execution also retains validated
+/// request schedules and intermediate spectra for plain host tensors. These
+/// tensors are independent of any CPU engine; managed/device intermediates
+/// remain scoped to the call and are never retained in this caller-owned cache.
+///
+/// Repeating an `_into` request with owned dtype-erased [`tenferro_tensor::Tensor`]
+/// inputs and destinations in plain host storage allocates no Rust heap memory
+/// once its schedule, plans, scratch and intermediates fit the warmed cache.
+/// Typed inputs and compact views share this guarantee through inline metadata
+/// rank 8; adapters above rank 8 may allocate shape/stride metadata. Changing
+/// options, shape, dtype or placement creates a distinct schedule. Clearing the
+/// cache or evicting part of the working set requires warming it again.
 ///
 /// The CPU backend stores RustFFT plans in the private `rustfft-plans`
 /// namespace. Its retained-byte estimate includes the exact plan key and the
 /// cache-owned `Arc` handle; allocations opaque to RustFFT are excluded.
+/// The private `into-schedules` namespace accounts for owned request/spec
+/// metadata and logical intermediate tensor bytes. Both namespaces share the
+/// default 64-entry and 64-MiB limits, configurable through [`Self::set_limits`],
+/// cleared through [`Self::clear`] and reported by [`Self::stats`].
 ///
 /// # Examples
 ///

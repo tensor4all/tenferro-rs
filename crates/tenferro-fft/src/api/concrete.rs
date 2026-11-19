@@ -119,3 +119,29 @@ entries! {
     rfftn, n_axes, FftnOptions, concrete_rfft_operation, wrap_complex, Cx;
     irfftn, n_axes, FftnOptions, concrete_irfft_operation, wrap_real, Re;
 }
+
+// `_into` destinations follow the result representation, including real/complex changes.
+macro_rules! into_entries {
+    ($($name:ident, $kind:ident, $options:ty, $operation:path, $out:ident;)*) => {$(
+        pub(crate) fn $name<X: AsView + ?Sized>(
+            a: &X, o: &$options, e: &mut dyn Engine,
+            dest: tenferro_tensor::Dest<<<$out<X> as AsView>::Repr as tenferro_tensor::Repr>::Write<'_>>,
+        ) -> Res<()> where X::Repr: FftRepr {
+            let target = crate::executor_into::overwrite(stringify!($name), dest)?;
+            let target = <<$out<X> as AsView>::Repr as tenferro_tensor::Repr>::erase_write(target);
+            let mut plans = FftPlanCache::default();
+            crate::executor_into::$kind(a.as_read(), stringify!($name), $operation, o, &mut plans, e, tenferro_tensor::Dest::Overwrite(target))
+        }
+    )*};
+}
+
+into_entries! {
+    fft_into, one_axis_into, FftOptions, concrete_fft_operation, Cx;
+    ifft_into, one_axis_into, FftOptions, concrete_ifft_operation, Cx;
+    rfft_into, one_axis_into, FftOptions, concrete_rfft_operation, Cx;
+    irfft_into, one_axis_into, FftOptions, concrete_irfft_operation, Re;
+    fftn_into, n_axes_into, FftnOptions, concrete_fft_operation, Cx;
+    ifftn_into, n_axes_into, FftnOptions, concrete_ifft_operation, Cx;
+    rfftn_into, n_axes_into, FftnOptions, concrete_rfft_operation, Cx;
+    irfftn_into, n_axes_into, FftnOptions, concrete_irfft_operation, Re;
+}

@@ -8,6 +8,18 @@ pool you built; repeatedly constructing it throws away those resources. For
 traced work, likewise reuse the compiler, runtime and prepared program across
 executions when their shape and registration contracts match.
 
+## Repeated FFTs
+
+Use `FftExecutor` with caller-owned overwrite destinations for repeated concrete
+FFTs. Reuse the executor and CPU engine, and warm the same request before the
+inner loop. Owned dtype-erased `Tensor` inputs and destinations in plain host storage require no
+Rust heap allocations while their plans and working buffers remain retained.
+A higher axis gathers lanes, not the whole tensor; noncompact input views keep
+a full same-placement gather and are outside this guarantee. See the
+[FFT destination contract](../../../../docs/design/cpu-fft-output-reuse.md#caller-owned-fft-destinations-2653)
+for cache limits, layout and CUDA behavior. Eager and traced calls retain their
+existing allocation behavior.
+
 ## Ordinary versus prepared einsum
 
 Use ordinary `EinsumOps::einsum` (`[&a, &b].einsum(spec, exec)`) by default. Reuse a `ConcreteEinsumPlan`

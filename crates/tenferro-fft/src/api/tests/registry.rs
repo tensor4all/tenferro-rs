@@ -51,8 +51,8 @@ fn op_and_op_with_default_options_agree_bit_for_bit() {
 }
 
 #[test]
-fn no_operation_declares_into() {
-    assert!(API_OPS.iter().all(|op| op.into.is_empty()));
+fn every_operation_declares_only_overwrite_into() {
+    assert!(API_OPS.iter().all(|op| op.into == ["overwrite"]));
 }
 
 // ---------------------------------------------------------- 2. input shapes

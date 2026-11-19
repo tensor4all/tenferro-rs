@@ -250,13 +250,13 @@ fn fft_cpu_output_buffers_avoid_zero_fill_but_keep_lane_padding() {
     let lanes = include_str!("../src/cpu/lanes.rs");
     assert!(source.contains("PooledUninitOutput::<O>::new"));
     assert!(
-        lanes.contains("lane.resize(fft_len, Complex::zero())")
+        lanes.contains("lane_storage[copy_len..].fill(MaybeUninit::new(Complex::zero()))")
             && lanes.contains("// INVARIANT: only missing input positions are padding"),
         "FFT padding must explicitly initialize only missing input positions"
     );
     assert!(
-        lanes.contains("buffers.acquire_with_capacity::<Complex<T>>(fft_len)")
-            && lanes.contains("Complex::<T>::pool_release(buffers, lane)"),
+        lanes.contains("buffers.acquire_with_capacity::<Complex<T>>(total_len)")
+            && lanes.contains("Complex::<T>::pool_release(buffers, storage)"),
         "the FFT lane must come from the session buffer pool instead of a zero-filled allocation"
     );
 }
@@ -280,9 +280,9 @@ fn fft_cpu_execution_reuses_cached_rustfft_plans() {
 fn fft_cpu_execution_uses_explicit_plan_provider() {
     let source = include_str!("../src/cpu/lanes.rs");
     assert!(source.contains("cached_fft_plan::<T, _>(plans"));
-    assert!(source.contains("plan.process_with_scratch(lane.as_mut_slice(), &mut scratch)"));
+    assert!(source.contains("plan.process_with_scratch(lane, scratch)"));
     assert!(
-        source.find("let mut scratch =").unwrap() < source.find("for _ in start..end").unwrap(),
+        source.find("scratch_storage.fill").unwrap() < source.find("for _ in start..end").unwrap(),
         "scratch must be reused across each job's lanes"
     );
 }

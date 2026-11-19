@@ -96,7 +96,11 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     assert_eq!(eager_cache_stats.evictions, 0);
     assert_eq!(eager_cache_stats.clears, 0);
 
-    let spectrum_tensor = eager_spectrum.to_tensor(&mut engine).unwrap();
+    let spectrum_tensor = ctx
+        .with_eager_session(&mut engine, |session| {
+            session.duplicate_value(&eager_spectrum)
+        })
+        .unwrap();
     support::assert_cuda_resident(&spectrum_tensor, real_domain);
     let expected_spectrum = Operation::Rfft
         .execute_cpu(&mut cpu, &real_host, None, -1, FftNorm::Backward)
@@ -116,7 +120,11 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     assert_eq!(signal_stats.misses, 2);
     assert_eq!(signal_stats.evictions, 0);
     assert_eq!(signal_stats.clears, 0);
-    let signal_tensor = eager_signal.to_tensor(&mut engine).unwrap();
+    let signal_tensor = ctx
+        .with_eager_session(&mut engine, |session| {
+            session.duplicate_value(&eager_signal)
+        })
+        .unwrap();
     support::assert_cuda_resident(&signal_tensor, real_domain);
     let expected_signal = Operation::Irfft
         .execute_cpu(&mut cpu, &expected_spectrum, None, -1, FftNorm::Backward)
@@ -144,7 +152,9 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     assert_eq!(fft_stats.misses, 3);
     assert_eq!(fft_stats.evictions, 0);
     assert_eq!(fft_stats.clears, 0);
-    let fft_tensor = eager_fft.to_tensor(&mut engine).unwrap();
+    let fft_tensor = ctx
+        .with_eager_session(&mut engine, |session| session.duplicate_value(&eager_fft))
+        .unwrap();
     support::assert_cuda_resident(&fft_tensor, real_domain);
     let expected_fft = Operation::Fft
         .execute_cpu(&mut cpu, &complex_host, None, -1, FftNorm::Backward)
@@ -158,9 +168,10 @@ fn cuda_eager_fft_rfft_irfft_select_cuda_and_keep_cpu_control_on_host() {
     // the CPU engine, not in this CUDA engine.
     let cpu_input = ctx.constant_from(real_f64(&[8], 0.25)).unwrap();
     let cpu_output = ctx
-        .with_eager_session(&mut cpu, |session| session.rfft(&cpu_input))
-        .unwrap()
-        .to_tensor(&mut cpu)
+        .with_eager_session(&mut cpu, |session| {
+            let output = session.rfft(&cpu_input)?;
+            session.duplicate_value(&output)
+        })
         .unwrap();
     assert_eq!(
         cpu_output.placement().memory_kind,
@@ -191,16 +202,16 @@ fn cuda_eager_engine_cache_limit_reduction_evicts_and_preserves_results() {
         None => return,
     };
     let first = ctx
-        .with_eager_session(&mut engine, |session| session.rfft(&input))
-        .unwrap()
-        .to_tensor(&mut engine)
+        .with_eager_session(&mut engine, |session| {
+            let output = session.rfft(&input)?;
+            session.duplicate_value(&output)
+        })
         .unwrap();
     let second = ctx
         .with_eager_session(&mut engine, |session| {
-            session.rfft_with(&input, &FftOptions::default().n(Some(6)))
+            let output = session.rfft_with(&input, &FftOptions::default().n(Some(6)))?;
+            session.duplicate_value(&output)
         })
-        .unwrap()
-        .to_tensor(&mut engine)
         .unwrap();
     support::assert_cuda_resident(&first, domain);
     support::assert_cuda_resident(&second, domain);
@@ -278,7 +289,9 @@ fn cuda_eager_zero_batch_returns_empty_outputs_without_engine_cache() {
             session.fft_with(&input, &FftOptions::default().axis(1))
         })
         .unwrap();
-    let tensor = output.to_tensor(&mut engine).unwrap();
+    let tensor = ctx
+        .with_eager_session(&mut engine, |session| session.duplicate_value(&output))
+        .unwrap();
     support::assert_cuda_resident(&tensor, domain);
     assert_eq!(tensor.shape(), &[0, 8]);
     assert_eq!(tensor.dtype(), tenferro_runtime::DType::C64);
@@ -309,7 +322,9 @@ fn cuda_eager_zero_batch_returns_empty_outputs_without_engine_cache() {
             session.rfft_with(&real_input, &FftOptions::default().axis(2))
         })
         .unwrap();
-    let real_tensor = real_output.to_tensor(&mut engine).unwrap();
+    let real_tensor = ctx
+        .with_eager_session(&mut engine, |session| session.duplicate_value(&real_output))
+        .unwrap();
     support::assert_cuda_resident(&real_tensor, domain);
     assert_eq!(real_tensor.shape(), &[2, 0, 5]);
     assert_eq!(real_tensor.dtype(), tenferro_runtime::DType::C32);

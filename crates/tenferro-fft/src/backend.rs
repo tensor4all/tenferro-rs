@@ -1,7 +1,7 @@
 use std::fmt;
 
 use tenferro_runtime::ExtensionCacheStore;
-use tenferro_tensor::{Engine, Tensor, TensorRead};
+use tenferro_tensor::{Engine, Tensor, TensorRead, TensorWrite};
 
 use crate::{FftPlanCache, FftPlanSpec};
 
@@ -18,8 +18,8 @@ pub(crate) enum FftCacheOwner {
 /// (lent by the runtime for the run). The two differ in what they may hold:
 ///
 /// * a caller-owned cache may outlive the engine and be used with several
-///   engines, so it holds only engine-independent plans (the CPU's rustfft
-///   plans);
+///   engines, so it holds only engine-independent plans and portable host
+///   workspaces (RustFFT plans and `_into` schedules/intermediate spectra);
 /// * an engine-owned store dies with its engine, so a device backend keeps
 ///   device-bound plans and workspaces (cuFFT plans) only there. Given a
 ///   caller-owned cache, a device backend keeps its device-bound plans in its
@@ -222,6 +222,45 @@ pub trait FftBackend: Engine {
                 self.execute_fft(&owned, spec, cache)
             }
         }
+    }
+
+    /// Execute one validated FFT directly into caller-provided storage.
+    ///
+    /// The default returns `Unsupported`; a backend must explicitly support
+    /// destination writes instead of allocating and copying a result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use num_complex::Complex64;
+    /// use tenferro_cpu::CpuEngine;
+    /// use tenferro_fft::{FftOps, FftOptions};
+    /// use tenferro_tensor::{Dest, Tensor, TensorWrite};
+    /// let input = Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2])?;
+    /// let mut output = Tensor::from_vec_col_major([2], vec![Complex64::new(0., 0.); 2])?;
+    /// let mut engine = CpuEngine::serial();
+    /// input.fft_into(&FftOptions::default(), &mut engine,
+    ///     Dest::Overwrite(TensorWrite::from_tensor(&mut output)))?;
+    /// assert_eq!(output.as_slice::<Complex64>()?[0], Complex64::new(2., 0.));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when direct writes or
+    /// the destination layout are unsupported, [`tenferro_tensor::Error::Validation`]
+    /// for inconsistent metadata, and the backend's typed execution errors.
+    /// No implicit transfer is permitted.
+    fn execute_fft_read_into(
+        &mut self,
+        _input: TensorRead<'_>,
+        spec: &FftPlanSpec,
+        _cache: FftExecutionCache<'_>,
+        _dest: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        Err(tenferro_tensor::Error::unsupported(
+            crate::fft_op_name(spec.operation()),
+            "this FFT backend does not support caller-provided destinations",
+        ))
     }
 
     /// Execute one validated FFT request on `input`'s existing placement.

@@ -312,3 +312,168 @@ fn trait_default_read_hooks_accept_input_pass_tensors_through_and_canonicalize_v
     assert_eq!(compact.values, [data[0], data[2], data[1], data[3]]);
     assert_eq!(transposed_output.as_slice::<Complex64>().unwrap().len(), 4);
 }
+
+#[test]
+fn cpu_into_writes_compact_offset_views_for_complex_and_real_transforms() {
+    use crate::{FftNorm, FftOperation};
+    use num_complex::{Complex32, Complex64};
+    use tenferro_tensor::{TensorWrite, TypedTensorViewMut};
+    let mut cpu = tenferro_cpu::CpuEngine::serial();
+    let mut cache = FftPlanCache::default();
+    macro_rules! check {
+        ($input:expr, $operation:expr, $scalar:ty, $zero:expr) => {{
+            let input = $input;
+            let spec = crate::concrete_fft_spec(
+                "fft",
+                $operation,
+                input.dtype(),
+                input.shape(),
+                None,
+                1,
+                FftNorm::Ortho,
+            )
+            .unwrap();
+            let expected = cpu
+                .execute_fft(&input, &spec, FftExecutionCache::caller_owned(&mut cache))
+                .unwrap();
+            let len = expected.as_slice::<$scalar>().unwrap().len();
+            let mut data = vec![$zero; len + 2];
+            let view =
+                TypedTensorViewMut::from_slice(expected.shape(), [1, 2], 1, &mut data).unwrap();
+            let write = TensorWrite::from_view(
+                <$scalar as tenferro_tensor::TensorScalar>::tensor_view_mut(view),
+            );
+            cpu.execute_fft_read_into(
+                TensorRead::from_tensor(&input),
+                &spec,
+                FftExecutionCache::caller_owned(&mut cache),
+                write,
+            )
+            .unwrap();
+            assert_eq!(&data[1..len + 1], expected.as_slice::<$scalar>().unwrap());
+            assert_eq!(data[0], $zero);
+            assert_eq!(data[len + 1], $zero);
+        }};
+    }
+    check!(
+        Tensor::from_vec_col_major(
+            [2, 4],
+            (0..8).map(|x| Complex64::new(x as f64, 0.25)).collect()
+        )
+        .unwrap(),
+        FftOperation::C2cForward,
+        Complex64,
+        Complex64::new(-9., 0.)
+    );
+    check!(
+        Tensor::from_vec_col_major(
+            [2, 4],
+            (0..8).map(|x| Complex32::new(x as f32, 0.25)).collect()
+        )
+        .unwrap(),
+        FftOperation::C2cInverse,
+        Complex32,
+        Complex32::new(-9., 0.)
+    );
+    check!(
+        Tensor::from_vec_col_major([2, 4], (0..8).map(|x| x as f64).collect()).unwrap(),
+        FftOperation::R2cOnesided,
+        Complex64,
+        Complex64::new(-9., 0.)
+    );
+    check!(
+        Tensor::from_vec_col_major([2, 4], (0..8).map(|x| x as f32).collect()).unwrap(),
+        FftOperation::R2cFull,
+        Complex32,
+        Complex32::new(-9., 0.)
+    );
+    check!(
+        Tensor::from_vec_col_major(
+            [2, 3],
+            (0..6).map(|x| Complex64::new(x as f64, 0.25)).collect()
+        )
+        .unwrap(),
+        FftOperation::C2r,
+        f64,
+        -9.
+    );
+    check!(
+        Tensor::from_vec_col_major(
+            [2, 3],
+            (0..6).map(|x| Complex32::new(x as f32, 0.25)).collect()
+        )
+        .unwrap(),
+        FftOperation::C2r,
+        f32,
+        -9.
+    );
+}
+
+#[test]
+fn cpu_into_rejects_noncompact_destination_before_writes() {
+    use crate::{FftNorm, FftOperation};
+    use num_complex::Complex64;
+    use tenferro_tensor::{TensorViewMut, TensorWrite, TypedTensorViewMut};
+    let input = Tensor::from_vec_col_major([2, 2], vec![Complex64::new(1., 0.); 4]).unwrap();
+    let spec = crate::concrete_fft_spec(
+        "fft",
+        FftOperation::C2cForward,
+        input.dtype(),
+        input.shape(),
+        None,
+        1,
+        FftNorm::Backward,
+    )
+    .unwrap();
+    let sentinel = Complex64::new(17., -4.);
+    let mut data = [sentinel; 8];
+    let view = TypedTensorViewMut::from_slice([2, 2], [2, 4], 0, &mut data).unwrap();
+    let mut cpu = tenferro_cpu::CpuEngine::serial();
+    let mut cache = FftPlanCache::default();
+    let error = cpu
+        .execute_fft_read_into(
+            TensorRead::from_tensor(&input),
+            &spec,
+            FftExecutionCache::caller_owned(&mut cache),
+            TensorWrite::from_view(TensorViewMut::C64(view)),
+        )
+        .unwrap_err();
+    assert!(matches!(error, tenferro_tensor::Error::Unsupported { .. }));
+    assert_eq!(data, [sentinel; 8]);
+    assert_eq!(cache.stats().entries, 0);
+}
+
+#[test]
+fn default_into_is_unsupported_without_allocating_execution() {
+    use crate::{FftNorm, FftOperation};
+    use num_complex::Complex64;
+    use tenferro_tensor::TensorWrite;
+    let input = Tensor::from_vec_col_major([2], vec![Complex64::new(1., 0.); 2]).unwrap();
+    let spec = crate::concrete_fft_spec(
+        "fft",
+        FftOperation::C2cForward,
+        input.dtype(),
+        input.shape(),
+        None,
+        0,
+        FftNorm::Backward,
+    )
+    .unwrap();
+    let mut output = Tensor::from_vec_col_major([2], vec![Complex64::new(7., 0.); 2]).unwrap();
+    let mut backend = DefaultFftSession::default();
+    let mut cache = FftPlanCache::default();
+    let error = backend
+        .execute_fft_read_into(
+            TensorRead::from_tensor(&input),
+            &spec,
+            FftExecutionCache::caller_owned(&mut cache),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+    assert!(matches!(error, tenferro_tensor::Error::Unsupported { .. }));
+    assert!(backend.recorded.is_empty());
+    assert_eq!(
+        output.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(7., 0.); 2]
+    );
+}

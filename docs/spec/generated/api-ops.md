@@ -1291,14 +1291,14 @@ Contract `a` with `b` over the given axis pairs (or the last/first `n` axes); fr
 
 | Op | concrete | traced | eager | Suffixes |
 |---|---|---|---|---|
-| `fft` | FftOps | TracedFftOps | EagerFftOps | `fft`, `fft_with` |
-| `ifft` | FftOps | TracedFftOps | EagerFftOps | `ifft`, `ifft_with` |
-| `rfft` | FftOps | TracedFftOps | EagerFftOps | `rfft`, `rfft_with` |
-| `irfft` | FftOps | TracedFftOps | EagerFftOps | `irfft`, `irfft_with` |
-| `fftn` | FftOps | TracedFftOps | EagerFftOps | `fftn`, `fftn_with` |
-| `ifftn` | FftOps | TracedFftOps | EagerFftOps | `ifftn`, `ifftn_with` |
-| `rfftn` | FftOps | TracedFftOps | EagerFftOps | `rfftn`, `rfftn_with` |
-| `irfftn` | FftOps | TracedFftOps | EagerFftOps | `irfftn`, `irfftn_with` |
+| `fft` | FftOps | TracedFftOps | EagerFftOps | `fft`, `fft_with`, `fft_into` (overwrite) |
+| `ifft` | FftOps | TracedFftOps | EagerFftOps | `ifft`, `ifft_with`, `ifft_into` (overwrite) |
+| `rfft` | FftOps | TracedFftOps | EagerFftOps | `rfft`, `rfft_with`, `rfft_into` (overwrite) |
+| `irfft` | FftOps | TracedFftOps | EagerFftOps | `irfft`, `irfft_with`, `irfft_into` (overwrite) |
+| `fftn` | FftOps | TracedFftOps | EagerFftOps | `fftn`, `fftn_with`, `fftn_into` (overwrite) |
+| `ifftn` | FftOps | TracedFftOps | EagerFftOps | `ifftn`, `ifftn_with`, `ifftn_into` (overwrite) |
+| `rfftn` | FftOps | TracedFftOps | EagerFftOps | `rfftn`, `rfftn_with`, `rfftn_into` (overwrite) |
+| `irfftn` | FftOps | TracedFftOps | EagerFftOps | `irfftn`, `irfftn_with`, `irfftn_into` (overwrite) |
 
 ### fft
 
@@ -1307,7 +1307,7 @@ One-axis discrete Fourier transform along `axis` (default the last axis).
 - Options: `FftOptions`
 - Output: `C`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result is complex (Complex32 for f32/Complex32 inputs, Complex64 otherwise); a real input is transformed as a complex one with zero imaginary part.
-- Layout: On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred.
+- Layout: On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`
@@ -1319,7 +1319,7 @@ One-axis inverse discrete Fourier transform along `axis`.
 - Options: `FftOptions`
 - Output: `C`
 - Dtypes: `a`: Complex32 or Complex64. The result has the dtype of `a`.
-- Layout: On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred.
+- Layout: On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`
@@ -1331,7 +1331,7 @@ One-axis transform of a real signal, returning the one-sided spectrum.
 - Options: `FftOptions`
 - Output: `C`
 - Dtypes: `a`: f32 or f64. The result is the one-sided complex spectrum (Complex32 or Complex64) of length `n / 2 + 1` along `axis`.
-- Layout: On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred.
+- Layout: On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`
@@ -1343,7 +1343,7 @@ Inverse of `rfft`: a one-sided spectrum back to a real signal.
 - Options: `FftOptions`
 - Output: `R`
 - Dtypes: `a`: Complex32 or Complex64 (a one-sided spectrum). The result is real (f32 or f64); its length along `axis` is `n`, by default `2 * (m - 1)`.
-- Layout: On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred.
+- Layout: On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`
@@ -1355,7 +1355,7 @@ N-dimensional discrete Fourier transform over `axes` (default every axis).
 - Options: `FftnOptions`
 - Output: `C`
 - Dtypes: `a`: f32, f64, Complex32 or Complex64. The result is complex, as for `fft`.
-- Layout: On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.
+- Layout: On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`
@@ -1367,7 +1367,7 @@ N-dimensional inverse discrete Fourier transform over `axes`.
 - Options: `FftnOptions`
 - Output: `C`
 - Dtypes: `a`: Complex32 or Complex64. The result has the dtype of `a`.
-- Layout: On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.
+- Layout: On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`
@@ -1379,7 +1379,7 @@ N-dimensional transform of a real signal; the last transformed axis is one-sided
 - Options: `FftnOptions`
 - Output: `C`
 - Dtypes: `a`: f32 or f64. The result is complex; the last transformed axis is one-sided (`n / 2 + 1`).
-- Layout: On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.
+- Layout: On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`
@@ -1391,7 +1391,7 @@ Inverse of `rfftn`.
 - Options: `FftnOptions`
 - Output: `R`
 - Dtypes: `a`: Complex32 or Complex64. The result is real (f32 or f64); the last transformed axis has length `2 * (m - 1)` unless `shape` says otherwise.
-- Layout: On the CPU provider a compact column-major operand is read in place; any other strided view (transposed, sliced, negative strides) is gathered once into a compact buffer of the same placement and dtype before the transform. The CUDA provider canonicalizes on the device. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.
+- Layout: On CPU compact column-major inputs are read directly; non-leading axes use reusable per-lane gathers, while noncompact views use one full same-placement gather. CPU destinations must be compact column-major plain host storage; managed/backend destinations return Unsupported. For owned compact tensors in plain host storage and compact borrowed host views through inline metadata rank 8, warmed executor calls avoid Rust heap allocation while plans, scratch and multi-axis intermediates fit their configured cache/pool limits. Higher-rank view adapters may allocate metadata. Cache stats report owned logical bytes. The CUDA provider canonicalizes on the device; `_into` computes a temporary result and copies it into the destination on the same device, with no allocation guarantee. Operands stay on their device; nothing is transferred. The transform runs one one-axis transform per axis; the intermediate spectra stay on the device and the normalization is applied once to the whole transform.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
   - lanes (`CpuEngine::with_lanes`): an FFT on a lane engine returns `Unsupported`
@@ -1401,7 +1401,7 @@ Inverse of `rfftn`.
 | ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |
 |---|---|---|---|---|---|---|---|---|
 | E01 | retained | `tenferro_fft::EagerFftOps::fft_in_place`<br>`tenferro_fft::EagerFftOps::ifft_in_place`<br>`tenferro_fft::EagerFftInPlaceError` | consuming eager FFTs that reuse the input storage | in-place \| consuming | `tenferro_fft::eager_in_place` | an FFT of a large compact complex tensor can reuse its storage; the grammar's `_into` writes to a separate destination and cannot express a consumed input | src/api/tests/registry.rs: a length change and a real input are Rejected with the input returned unchanged; an accepted call equals the out-of-place fft bit for bit | a consuming `Dest` form in the grammar |
-| E02 | retained | `tenferro_fft::FftExecutor::fft_with`<br>`tenferro_fft::FftExecutor::ifft_with`<br>`tenferro_fft::FftExecutor::rfft_with`<br>`tenferro_fft::FftExecutor::irfft_with`<br>`tenferro_fft::FftExecutor::fftn_with`<br>`tenferro_fft::FftExecutor::ifftn_with`<br>`tenferro_fft::FftExecutor::rfftn_with`<br>`tenferro_fft::FftExecutor::irfftn_with`<br>`tenferro_fft::FftExecutor::new`<br>`tenferro_fft::FftExecutor::plan_cache`<br>`tenferro_fft::FftExecutor::plan_cache_mut`<br>`tenferro_fft::FftExecutor::cache_stats`<br>`tenferro_fft::FftExecutor::clear_cache` | the caller-owned FFT plan cache and its transforms | cache owner | `tenferro_fft` | the receiver is the plan cache, not the input; the transforms take the input, the options and the engine in grammar order | src/api/tests/registry.rs: every `_with` equals the `FftOps` result bit for bit and fills the caller's plan cache | plan caches owned by the engine for every caller |
+| E02 | retained | `tenferro_fft::FftExecutor::fft_with`<br>`tenferro_fft::FftExecutor::fft_into`<br>`tenferro_fft::FftExecutor::ifft_with`<br>`tenferro_fft::FftExecutor::ifft_into`<br>`tenferro_fft::FftExecutor::rfft_with`<br>`tenferro_fft::FftExecutor::rfft_into`<br>`tenferro_fft::FftExecutor::irfft_with`<br>`tenferro_fft::FftExecutor::irfft_into`<br>`tenferro_fft::FftExecutor::fftn_with`<br>`tenferro_fft::FftExecutor::fftn_into`<br>`tenferro_fft::FftExecutor::ifftn_with`<br>`tenferro_fft::FftExecutor::ifftn_into`<br>`tenferro_fft::FftExecutor::rfftn_with`<br>`tenferro_fft::FftExecutor::rfftn_into`<br>`tenferro_fft::FftExecutor::irfftn_with`<br>`tenferro_fft::FftExecutor::irfftn_into`<br>`tenferro_fft::FftExecutor::new`<br>`tenferro_fft::FftExecutor::plan_cache`<br>`tenferro_fft::FftExecutor::plan_cache_mut`<br>`tenferro_fft::FftExecutor::cache_stats`<br>`tenferro_fft::FftExecutor::clear_cache` | the caller-owned FFT plan cache and its transforms | cache owner | `tenferro_fft` | the receiver is the plan cache, not the input; the transforms take the input, the options and the engine in grammar order | src/api/tests/registry.rs: every `_with` equals the `FftOps` result bit for bit and fills the caller's plan cache | plan caches owned by the engine for every caller |
 
 <!-- api-ops:fft:end -->
 

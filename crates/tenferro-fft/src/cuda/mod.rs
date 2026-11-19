@@ -10,7 +10,8 @@ mod tests;
 
 use tenferro_gpu::cuda::CudaEngine;
 use tenferro_tensor::{
-    DType, SliceConfig, Tensor, TensorIndexing, TensorRead, TensorStructural, TensorWrite,
+    AllocationDomainId, DType, SliceConfig, Tensor, TensorIndexing, TensorRead, TensorStructural,
+    TensorWrite,
 };
 
 use crate::backend::FftExecutionCache;
@@ -175,6 +176,49 @@ impl FftBackend for CudaEngine {
             None => allocate_cuda_output(self, output_dtype, &canonical.output_shape),
         }
     }
+
+    fn execute_fft_read_into(
+        &mut self,
+        input: TensorRead<'_>,
+        spec: &FftPlanSpec,
+        cache: FftExecutionCache<'_>,
+        dest: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        // Validate both runtime domains before canonicalization, allocation,
+        // zero-batch shortcuts, or vendor/cache work.
+        let domain = self.runtime().allocation_domain_id();
+        validate_cuda_read_domain(&input, domain)?;
+        validate_cuda_read_domain(&dest.as_read(), domain)?;
+        validate_cuda_spec_metadata(input.dtype(), input.shape(), spec)?;
+        let (_, _, dtype) = transform_mapping(spec.operation(), input.dtype())?;
+        if dest.dtype() != dtype {
+            return Err(tenferro_tensor::Error::dtype_mismatch(
+                OP,
+                dtype,
+                dest.dtype(),
+            ));
+        }
+        let shape = output_shape_for_metadata(input.shape(), spec)?;
+        checked_shape_product(OP, "output shape", &shape)?;
+        if dest.shape() != shape {
+            return Err(tenferro_tensor::Error::invalid_argument(
+                OP,
+                "destination shape",
+                "does not match the FFT output shape",
+            ));
+        }
+        if !dest.is_col_major_contiguous()? {
+            return Err(tenferro_tensor::Error::unsupported(
+                OP,
+                "CUDA FFT destination must be compact column-major",
+            ));
+        }
+        // shortcut: cuFFT's canonical-axis and Hermitian paths use a device
+        // staging result; write it back on-device until direct strided vendor
+        // destinations cover every FFT variant. No host payload is accessed.
+        let output = self.execute_fft_read(input, spec, cache)?;
+        self.copy_read_into(TensorRead::from_tensor(&output), dest)
+    }
 }
 
 fn validate_cuda_input(
@@ -182,22 +226,43 @@ fn validate_cuda_input(
     input: &Tensor,
     spec: &FftPlanSpec,
 ) -> tenferro_tensor::Result<()> {
+    validate_cuda_spec_metadata(input.dtype(), input.shape(), spec)?;
+
+    // Placement is checked before layout, dtype dispatch, zero-batch returns,
+    // allocation, or any vendor-library/cache work. This rejects host,
+    // foreign-backend, and foreign-runtime/device tensors without an implicit
+    // transfer, using the exact session runtime as the residency witness.
+    ensure_cuda_tensor_resident(session, input)?;
+    if !input.is_col_major_contiguous()? {
+        return Err(tenferro_tensor::Error::unsupported(
+            fft_op_name(spec.operation()),
+            "CUDA FFT requires compact column-major input",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_cuda_spec_metadata(
+    dtype: DType,
+    shape: &[usize],
+    spec: &FftPlanSpec,
+) -> tenferro_tensor::Result<()> {
     let op = fft_op_name(spec.operation());
-    if input.dtype() != spec.input_dtype() {
+    if dtype != spec.input_dtype() {
         return Err(tenferro_tensor::Error::dtype_mismatch(
             op,
             spec.input_dtype(),
-            input.dtype(),
+            dtype,
         ));
     }
-    if input.shape() != spec.input_shape() {
+    if shape != spec.input_shape() {
         return Err(tenferro_tensor::Error::invalid_argument(
             op,
             "input shape",
             format!(
                 "validated FFT spec shape {:?} does not match execution input shape {:?}",
                 spec.input_shape(),
-                input.shape()
+                shape
             ),
         ));
     }
@@ -208,18 +273,28 @@ fn validate_cuda_input(
         ));
     }
 
-    // Placement is checked before layout, dtype dispatch, zero-batch returns,
-    // allocation, or any vendor-library/cache work. This rejects host,
-    // foreign-backend, and foreign-runtime/device tensors without an implicit
-    // transfer, using the exact session runtime as the residency witness.
-    ensure_cuda_tensor_resident(session, input)?;
-    if !input.is_col_major_contiguous()? {
-        return Err(tenferro_tensor::Error::unsupported(
-            op,
-            "CUDA FFT requires compact column-major input",
-        ));
-    }
     Ok(())
+}
+
+fn validate_cuda_read_domain(
+    input: &TensorRead<'_>,
+    domain: AllocationDomainId,
+) -> tenferro_tensor::Result<()> {
+    if input.backend_family() == Some("cuda")
+        && input.allocation_domain() == Some(domain)
+        && !input.is_host_memory()
+    {
+        return Ok(());
+    }
+    Err(tenferro_tensor::Error::runtime_state_source(
+        OP,
+        CudaFftPlacementError {
+            source: tenferro_tensor::Error::runtime_state(
+                OP,
+                "expected a CUDA allocation belonging to the executing runtime",
+            ),
+        },
+    ))
 }
 
 fn ensure_cuda_tensor_resident(
@@ -288,23 +363,30 @@ fn transform_mapping(
 }
 
 fn output_shape_for(input: &Tensor, spec: &FftPlanSpec) -> tenferro_tensor::Result<Vec<usize>> {
+    output_shape_for_metadata(input.shape(), spec)
+}
+
+fn output_shape_for_metadata(
+    input_shape: &[usize],
+    spec: &FftPlanSpec,
+) -> tenferro_tensor::Result<Vec<usize>> {
     let axis = spec.normalized_axis();
-    if axis >= input.shape().len() {
+    if axis >= input_shape.len() {
         return Err(tenferro_tensor::Error::axis_out_of_bounds(
             fft_op_name(spec.operation()),
             axis,
-            input.shape().len(),
+            input_shape.len(),
         ));
     }
     match spec.operation() {
         FftOperation::C2cForward | FftOperation::C2cInverse => {
-            output_shape_c2c(input.shape(), axis, spec.requested_len())
+            output_shape_c2c(input_shape, axis, spec.requested_len())
         }
-        FftOperation::R2cFull => output_shape_r2c(input.shape(), axis, spec.requested_len(), false),
+        FftOperation::R2cFull => output_shape_r2c(input_shape, axis, spec.requested_len(), false),
         FftOperation::R2cOnesided => {
-            output_shape_r2c(input.shape(), axis, spec.requested_len(), true)
+            output_shape_r2c(input_shape, axis, spec.requested_len(), true)
         }
-        FftOperation::C2r => output_shape_c2r(input.shape(), axis, spec.requested_len()),
+        FftOperation::C2r => output_shape_c2r(input_shape, axis, spec.requested_len()),
     }
 }
 
