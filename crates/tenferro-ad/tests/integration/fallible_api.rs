@@ -228,3 +228,43 @@ fn eager_binary_methods_return_shape_errors() {
         })
     ));
 }
+
+#[test]
+fn traced_filled_constants_differentiate_as_constants_and_reject_seed_roles() {
+    use crate::support::{cpu_runtime, RunTraced};
+
+    let eval = |t: &tenferro_runtime::TracedTensor| {
+        t.run_with(&cpu_runtime()).unwrap().duplicate().unwrap()
+    };
+    let trace = TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])
+        .unwrap();
+    let dx = trace
+        .from_vec_col_major(vec![3], vec![0.5_f64, -1.0, 2.0])
+        .unwrap();
+    // A rank-0 `Constant` broadcast to `[3]`: a graph value with no attached data.
+    let ones = trace.ones(DType::F64, [3]).unwrap();
+    let y = (&x * &ones).unwrap();
+    let loss = y.reduce_sum(None).unwrap();
+
+    let grad = eval(&loss.grad(&x).unwrap());
+    assert_eq!(grad.as_slice::<f64>().unwrap(), &[1.0; 3]);
+    let tangent = eval(&y.jvp(&x, &dx).unwrap());
+    assert_eq!(tangent.as_slice::<f64>().unwrap(), &[0.5, -1.0, 2.0]);
+
+    // The constant is neither a trace input (so not a `wrt`) nor concrete data (so not a seed).
+    let argument = |err: tenferro_runtime::Error| match err {
+        tenferro_runtime::Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: tenferro_tensor::ValidationError::InvalidArgument { argument, .. },
+            ..
+        } => argument,
+        other => panic!("expected a typed InvalidArgument, got {other:?}"),
+    };
+    assert_eq!(argument(loss.grad(&ones).unwrap_err()), "wrt");
+    assert_eq!(argument(y.jvp(&ones, &dx).unwrap_err()), "wrt");
+    assert_eq!(argument(y.jvp(&x, &ones).unwrap_err()), "tangent");
+    assert_eq!(argument(y.vjp(&x, &ones).unwrap_err()), "cotangent");
+    assert!(loss.grad_optional(&ones).unwrap().is_none());
+}

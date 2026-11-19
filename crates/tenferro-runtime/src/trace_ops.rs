@@ -425,6 +425,8 @@ impl TraceContext {
 
     /// A zero-filled traced constant of `dtype` and concrete `shape`.
     ///
+    /// Non-differentiable, as described in [`full`](Self::full).
+    ///
     /// # Examples
     ///
     /// ```
@@ -447,6 +449,8 @@ impl TraceContext {
     }
 
     /// A one-filled traced constant of `dtype` and concrete `shape`.
+    ///
+    /// Non-differentiable, as described in [`full`](Self::full).
     ///
     /// # Examples
     ///
@@ -473,6 +477,11 @@ impl TraceContext {
     ///
     /// The graph holds one rank-0 constant broadcast to `shape`, not a
     /// full-size buffer. `value` converts as in [`Tensor::full`].
+    ///
+    /// The result is a non-differentiable constant: gradients flow through it to
+    /// the trace inputs it combines with, but it is not a trace input, so AD
+    /// rejects it as `wrt`, and it carries no data, so AD rejects it as a
+    /// tangent or cotangent seed. Both are typed `InvalidArgument` errors.
     ///
     /// # Examples
     ///
