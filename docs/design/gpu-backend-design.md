@@ -51,7 +51,7 @@ crates/tenferro-gpu/src/cuda/
                            (structural/activation.rs: fused activations)
     fusion.rs              fused elementwise catalogue integration
     cutensor.rs            cuTENSOR contraction and permutation integration
-    vendor.rs              cuBLAS integration
+    vendor.rs              cuBLAS integration (GEMM, strided-batched GEMM, BLAS-1 dot)
     raw.rs                 engine-scoped vendor stream, spans and scratch
     runtime_adapter.rs     prepared-runtime engine registration
     event_domain.rs        prepared-runtime event integration
@@ -127,7 +127,13 @@ also write the squeezed result shape directly, since a compact column-major
 buffer holds the same bytes with or without unit axes.
 
 cuTENSOR and cuBLAS integration lives in `tenferro-gpu`; cuSOLVER integration
-lives in `tenferro-linalg`. cuFFT loading and opaque plan entries remain owned
+lives in `tenferro-linalg`. `cuda/vendor.rs` issues the cuBLAS calls the engine itself
+needs (GEMM, strided-batched GEMM, and the BLAS-1 conjugate dot behind
+`Engine::vdot_read`). It loads the library through the `cudarc` bindings, so it
+finds it on the loader path (`LD_LIBRARY_PATH`) and does not read
+`TENFERRO_CUBLAS_PATH`; `tenferro-linalg` keeps its own `libloading` loader
+for the factorization calls it owns, and that one honors the override. cuFFT
+loading and opaque plan entries remain owned
 by `tenferro-fft`. Its `cufft-plans` entries live in the executing engine's
 extension-cache store, not a caller-owned `FftExecutionCache`. The plan entry
 retains the required work-area byte size, while execution obtains fresh scratch
@@ -139,7 +145,7 @@ The CUDA library path overrides are:
 | Variable | Library owner |
 | --- | --- |
 | `TENFERRO_CUTENSOR_PATH` | cuTENSOR in `tenferro-gpu` |
-| `TENFERRO_CUBLAS_PATH` | cuBLAS loader in `tenferro-linalg` |
+| `TENFERRO_CUBLAS_PATH` | cuBLAS loader in `tenferro-linalg` (`tenferro-gpu`'s vendor seam loads through cudarc's soname search) |
 | `TENFERRO_CUSOLVER_PATH` | cuSOLVER in `tenferro-linalg` |
 | `TENFERRO_CUFFT_PATH` | cuFFT in `tenferro-fft` |
 

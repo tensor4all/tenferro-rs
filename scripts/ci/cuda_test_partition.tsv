@@ -1115,6 +1115,7 @@ host	tenferro-gpu	cuda::runtime::tests::a_warning_to_a_closed_stderr_is_dropped_
 host	tenferro-gpu	event_retirement::tests::explicit_retirement_then_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_drop_invokes_retirement_once
 host	tenferro-gpu	event_retirement::tests::implicit_retirement_contains_provider_panic
+host	tenferro-gpu	cuda::tests::vendor_narrowing::a_dot_length_past_the_bound_is_refused_by_name_and_value
 host	tenferro-gpu	cuda::tests::vendor_narrowing::a_negative_value_still_narrows
 host	tenferro-gpu	cuda::tests::vendor_narrowing::one_past_the_bound_is_refused_by_name_and_value
 host	tenferro-gpu	cuda::tests::vendor_narrowing::the_descriptor_rank_bound_fits_both_narrowing_types
@@ -1130,7 +1131,10 @@ gpu	tenferro-gpu::blas1_cuda	cuda_norm_squared_matches_cpu
 gpu	tenferro-gpu::blas1_cuda	cuda_reductions_accept_a_non_contiguous_read
 gpu	tenferro-gpu::blas1_cuda	cuda_reductions_accept_compact_views_with_offsets
 gpu	tenferro-gpu::blas1_cuda	cuda_vdot_accepts_two_strided_operands
+gpu	tenferro-gpu::blas1_cuda	cuda_vdot_handles_rank_zero_operands
 gpu	tenferro-gpu::blas1_cuda	cuda_vdot_matches_cpu_and_conjugates_the_left_operand
+gpu	tenferro-gpu::blas1_cuda	cuda_vdot_over_compact_operands_admits_no_catalogue_launch
+gpu	tenferro-gpu::blas1_cuda	cuda_vdot_real_operands_match_cpu_on_strided_and_offset_layouts
 gpu	tenferro-gpu::chunked_staging	a_payload_exactly_one_chunk_long_round_trips
 gpu	tenferro-gpu::chunked_staging	a_payload_one_element_over_the_chunk_round_trips
 gpu	tenferro-gpu::chunked_staging	a_payload_one_element_under_the_chunk_round_trips

@@ -44,3 +44,20 @@ fn the_descriptor_rank_bound_fits_both_narrowing_types() {
     assert_eq!(u32::try_from(modes), Ok(i32::MAX as u32));
     assert_eq!(i32::try_from(modes), Ok(i32::MAX));
 }
+
+/// The conjugate-dot entry takes its element count as `i32` too, so the same bound refuses a
+/// length the composed path used to fold (#2624). This pins the names `Cublas::dot` reports.
+#[test]
+fn a_dot_length_past_the_bound_is_refused_by_name_and_value() {
+    let too_large = i64::from(i32::MAX) + 1;
+    let error = narrow_i32("dot", "element count", too_large)
+        .expect_err("a length above i32::MAX must be refused");
+    let GpuError::Unsupported { op, detail } = error else {
+        panic!("expected a typed Unsupported error");
+    };
+    assert_eq!(op, "dot");
+    assert!(
+        detail.contains(&format!("element count = {too_large}")),
+        "the error must name the field and its value, got {detail}"
+    );
+}

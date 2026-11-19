@@ -68,6 +68,8 @@ pub struct CudaEngine {
     /// The cuTENSOR handle, created on the first contraction: a plan cache lives beside
     /// it, so a contraction reuses its plan instead of planning on every call.
     cutensor: Option<super::Cutensor>,
+    /// The cuBLAS handle, created on the first BLAS-1 vendor call.
+    cublas: Option<super::Cublas>,
     /// The runtime engine id this engine runs prepared programs as.
     runtime_engine_id: tenferro_runtime::EngineId,
     /// Extension caches the runtime lends to extension executors during a run.
@@ -159,6 +161,7 @@ impl CudaEngine {
         Ok(CudaEngine {
             runtime: CudaRuntime::new(device_id)?,
             cutensor: None,
+            cublas: None,
             runtime_engine_id: default_runtime_engine_id(),
             extension_caches: std::cell::RefCell::new(Some(
                 tenferro_runtime::ExtensionCacheStore::default(),
@@ -353,6 +356,51 @@ impl CudaEngine {
                 Some(super::Cutensor::new(&self.runtime).map_err(CudaEngineError::from)?);
         }
         Ok(self.cutensor.as_mut().expect("set above"))
+    }
+
+    /// The engine's cuBLAS handle, created on first use.
+    ///
+    /// # Errors
+    ///
+    /// [`CudaEngineError::Seam`] when the library cannot be loaded or the handle cannot
+    /// be created on this runtime's context.
+    pub(crate) fn cublas(&mut self) -> Result<&mut super::Cublas, CudaEngineError> {
+        if self
+            .cublas
+            .as_ref()
+            .is_some_and(|handle| handle.mode_unproven())
+        {
+            // A handle whose pointer mode could not be re-established is not reused: every entry
+            // reads its coefficients in the mode it sets, so an unproven mode would turn a host
+            // coefficient into a device address.
+            self.cublas = None;
+        }
+        if self.cublas.is_none() {
+            self.cublas = Some(super::Cublas::new(&self.runtime).map_err(CudaEngineError::from)?);
+        }
+        Ok(self.cublas.as_mut().expect("set above"))
+    }
+
+    /// Fold one conjugate dot of two compact spans into `result`.
+    ///
+    /// The vendor state stays here: the engine owns the handle, its lifetime and the pointer
+    /// mode every entry of it shares.
+    ///
+    /// # Errors
+    ///
+    /// [`CudaEngineError::Seam`] when the library cannot be loaded, its handle cannot be created
+    /// on this runtime's context, or the vendor call rejects the shape it was given.
+    pub(crate) fn vendor_dot(
+        &mut self,
+        dtype: t4a_cuda_kernels::DType,
+        len: i64,
+        x: &t4a_cuda_runtime::Buffer,
+        y: &t4a_cuda_runtime::Buffer,
+        result: &t4a_cuda_runtime::Buffer,
+    ) -> Result<(), CudaEngineError> {
+        self.cublas()?
+            .dot(dtype, len, x, y, result)
+            .map_err(CudaEngineError::Seam)
     }
 
     /// The runtime this engine owns.

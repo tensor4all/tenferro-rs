@@ -162,6 +162,18 @@ layer, generated from a per-family registry. The operation list, options,
   on `CpuEngine` and `CudaEngine` now moves the store out instead of building an
   empty placeholder store, so a take/restore round trip no longer allocates.
 
+- **CUDA `vdot_read` is one cuBLAS conjugate dot** (#2624). The operation no
+  longer composes `conj_read` -> `mul_read` -> `reduce_axes`, which copied the
+  left operand for a conjugation that is the identity on a real dtype, wrote a
+  full product tensor and launched a separate reduction: it is one
+  `cublasDdot`/`cublasSdot` on the real widths and one
+  `cublasZdotc`/`cublasCdotc` on the complex ones, over the operands' compact
+  spans, writing the rank-0 result on the engine's stream. Semantics, layouts,
+  empty and rank-0 operands and aliasing are unchanged; a strided or offset view
+  keeps the staging copy it already took. The length travels as cuBLAS's 32-bit
+  argument, so a dot of more than `i32::MAX` elements is now refused with a typed
+  `Unsupported` error instead of being folded in two passes.
+
 - **CUDA softplus is one fused launch** (#2530). `CudaEngine` now implements
   `Engine::fused_activation_read` for `softplus` on `F32`/`F64`, so concrete
   `Tensor::softplus` / `TypedTensor::softplus` and untracked eager softplus no

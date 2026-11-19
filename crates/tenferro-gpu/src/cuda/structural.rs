@@ -6187,6 +6187,14 @@ fn seam_error(op: &'static str, error: crate::gpu::GpuError) -> crate::Error {
     }
 }
 
+/// Map a vendor-handle failure: a seam failure keeps its own kind, anything else is the engine's.
+fn engine_vendor_error(op: &'static str, error: super::engine::CudaEngineError) -> crate::Error {
+    match error {
+        super::engine::CudaEngineError::Seam(error) => seam_error(op, error),
+        error => crate::Error::runtime_state(op, error.to_string()),
+    }
+}
+
 /// One contraction scalar as the `(re, im)` pair the library reads.
 fn scalar_pair(value: tenferro_tensor::ContractionScalar) -> (f64, f64) {
     match value {
@@ -6331,10 +6339,9 @@ impl CudaEngine {
             conj_a,
             conj_b,
         };
-        let cutensor = self.cutensor().map_err(|error| match error {
-            super::engine::CudaEngineError::Seam(error) => seam_error(op, error),
-            error => crate::Error::runtime_state(op, error.to_string()),
-        })?;
+        let cutensor = self
+            .cutensor()
+            .map_err(|error| engine_vendor_error(op, error))?;
         cutensor
             .contract(&request)
             .map_err(|error| seam_error(op, error))?;
@@ -7082,32 +7089,36 @@ impl tenferro_tensor::Engine for CudaEngine {
     fn vdot_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         const OP: &str = "vdot_read";
         tenferro_tensor::backend::validate_vdot_read(&lhs, &rhs)?;
+        // Both operands are read as compact spans: an owned tensor is one, and a borrowed view
+        // keeps the single staging copy the composed path took for it too. One cuBLAS conjugate
+        // dot then folds `sum(conj(lhs) * rhs)` over the span, so the conjugation copy, the
+        // product tensor and the separate reduction launch are gone (#2624).
         let left = self.device_read(lhs, OP)?;
         let right = self.device_read(rhs, OP)?;
+        let dtype = left.dtype();
         if element_count(left.shape())? == 0 {
             // Nothing to fold: the conjugate dot of an empty vector is its additive identity,
             // which is what the CPU surface returns for the same operand.
-            let output = alloc_tensor(self.runtime(), left.dtype(), &[])?;
+            let output = alloc_tensor(self.runtime(), dtype, &[])?;
             self.zero_into(&output, OP)?;
             return Ok(output);
         }
-        // The dot conjugates its left operand: `conj(lhs) * rhs`, reduced over every axis.
-        let conjugated = {
-            use tenferro_tensor::TensorElementwise as _;
-            self.conj_read(TensorRead::from_tensor(&left))?
-        };
-        let product = {
-            use tenferro_tensor::TensorElementwise as _;
-            self.mul_read(
-                TensorRead::from_tensor(&conjugated),
-                TensorRead::from_tensor(&right),
-            )?
-        };
-        let axes: Vec<usize> = (0..product.shape().len()).collect();
-        if axes.is_empty() {
-            return self.to_contiguous(&product);
-        }
-        self.reduce_axes(TensorRead::from_tensor(&product), &axes, ReduceOp::Sum, OP)
+        let kernel = kernel_dtype(dtype, OP)?;
+        let len = count_i64(left.shape(), OP)?;
+        let output = alloc_tensor(self.runtime(), dtype, &[])?;
+        let (x, y, result) = with_scalar!(dtype, |T| {
+            Ok((
+                self.allocation_of::<T>(left.tensor(), OP)?,
+                self.allocation_of::<T>(right.tensor(), OP)?,
+                self.allocation_of::<T>(&output, OP)?,
+            ))
+        })?;
+        self.vendor_dot(kernel, len, x, y, result)
+            .map_err(|error| engine_vendor_error(OP, error))?;
+        // The result is device-resident, like every other eager CUDA result on this engine: the
+        // submit is ordered on the stream and the caller observes it at its own barrier (#2666).
+        self.release_completed_staging();
+        Ok(output)
     }
 
     fn fused_activation_read(
