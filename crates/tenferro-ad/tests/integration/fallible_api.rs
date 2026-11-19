@@ -228,3 +228,49 @@ fn eager_binary_methods_return_shape_errors() {
         })
     ));
 }
+
+#[test]
+fn traced_filled_constants_differentiate_as_constants_and_reject_seed_roles() {
+    use crate::support::{cpu_runtime, RunTraced};
+
+    let eval = |t: &tenferro_runtime::TracedTensor| {
+        t.run_with(&cpu_runtime()).unwrap().duplicate().unwrap()
+    };
+    let trace = TraceContext::new();
+    let x = trace
+        .from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])
+        .unwrap();
+    let dx = trace
+        .from_vec_col_major(vec![3], vec![0.5_f64, -1.0, 2.0])
+        .unwrap();
+    // A rank-0 `Constant` broadcast to `[3]`: a graph value with no attached data.
+    // `ones` is `full(.., 1.0)`; 0.25 keeps a dropped factor from passing as `y = x`.
+    let c = trace.full(DType::F64, [3], 0.25).unwrap();
+    let y = (&x * &c).unwrap();
+    let loss = y.reduce_sum(None).unwrap();
+
+    let grad = eval(&loss.grad(&x).unwrap());
+    assert_eq!(grad.as_slice::<f64>().unwrap(), &[0.25; 3]);
+    let tangent = eval(&y.jvp(&x, &dx).unwrap());
+    assert_eq!(tangent.as_slice::<f64>().unwrap(), &[0.125, -0.25, 0.5]);
+
+    // The constant is neither a trace input (so not a `wrt`) nor concrete data (so not a seed).
+    let argument = |err: tenferro_runtime::Error| match err {
+        tenferro_runtime::Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: tenferro_tensor::ValidationError::InvalidArgument { argument, .. },
+            ..
+        } => argument,
+        other => panic!("expected a typed InvalidArgument, got {other:?}"),
+    };
+    let ones = trace.ones(DType::F64, [3]).unwrap();
+    let one = trace.full(DType::F64, [0_usize; 0], 1.0).unwrap();
+    assert_eq!(argument(loss.grad(&c).unwrap_err()), "wrt");
+    assert_eq!(argument(y.jvp(&c, &dx).unwrap_err()), "wrt");
+    assert_eq!(argument(y.vjp(&c, &dx).unwrap_err()), "wrt");
+    assert_eq!(argument(y.jvp(&x, &ones).unwrap_err()), "tangent");
+    assert_eq!(argument(y.vjp(&x, &ones).unwrap_err()), "cotangent");
+    // The rank-0 form is a bare `Constant`, without the broadcast.
+    assert_eq!(argument(loss.vjp(&x, &one).unwrap_err()), "cotangent");
+    assert!(loss.grad_optional(&c).unwrap().is_none());
+}

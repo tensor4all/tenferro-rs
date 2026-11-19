@@ -129,7 +129,7 @@ fn eager_ad_seed_and_missing_tangent_zeroes_are_uploaded() {
         "pub(crate) fn one_like_tensor(input: &Tensor, session: &mut dyn Engine)",
         "#[cfg(test)]",
     );
-    assert!(eager_one_like.contains("ones_tensor(input.dtype(), input.shape().to_vec())"));
+    assert!(eager_one_like.contains("Tensor::ones(input.dtype(), input.shape())"));
     assert!(eager_one_like.contains(".upload_host_tensor(TensorRead::from_tensor(&host))"));
     assert!(!eager_one_like.contains(".exp("));
 

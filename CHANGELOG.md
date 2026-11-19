@@ -111,6 +111,14 @@ layer, generated from a per-family registry. The operation list, options,
 
 ### Added
 
+- **Filled constants on every layer (#2642).** `zeros(dtype, shape)`,
+  `ones(dtype, shape)` and `full(dtype, shape, value)` on `Tensor`,
+  `TraceContext` and `EagerSession`. The traced form is a rank-0 graph constant
+  broadcast to `shape`; the eager form uploads one element and returns an
+  untracked broadcast view. `value` is an `f64`, accepted by an integer dtype only
+  when exact and in range and by `Bool` only when `0` or `1`. tenferro-linalg's
+  private `ones_like` helpers on the traced and eager layers now use them.
+
 - **`TensorStructural::cast_read` and `convert_read` (#2223).** The read form of the
   explicit dtype projection consumes a `TensorRead` where it lies, so a borrowed view
   is not staged before a cast. `convert_read` is the checked form (promotion-lattice
@@ -167,6 +175,12 @@ layer, generated from a per-family registry. The operation list, options,
   payload.
 
 ### Removed
+
+- **`tenferro_runtime::ad_support::ones_tensor` and
+  `tenferro_runtime::composite::scalar_tensor`** (#2642). Use
+  `Tensor::ones(dtype, shape)` and `Tensor::full(dtype, [0_usize; 0], value)`.
+  `composite::scalar_bytes` now also accepts `Bool`, and rejects an unrepresentable
+  value with `InvalidArgument` from `Tensor::full`.
 
 - **The vendor BLAS/LAPACK CPU providers are gone, and with them the CPU backend
   feature** (#2608). Every build now links one faer-backed

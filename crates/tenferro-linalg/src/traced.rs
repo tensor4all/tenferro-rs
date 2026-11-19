@@ -758,8 +758,8 @@ fn slogdet_empty_square(a: &TracedTensor) -> Result<Option<(TracedTensor, Traced
     }
     let batch_shape = shape[2..].to_vec();
     Ok(Some((
-        filled_real(ctx, a.dtype(), batch_shape.clone(), 1.0)?,
-        filled_real(ctx, real_values_dtype(a.dtype()), batch_shape, 0.0)?,
+        ctx.ones(a.dtype(), &batch_shape)?,
+        ctx.zeros(real_values_dtype(a.dtype()), batch_shape)?,
     )))
 }
 
@@ -806,7 +806,7 @@ pub(crate) fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor
     let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, &s_shape)?;
     let mask = abs_s.compare(&threshold, CompareDir::Gt)?;
     let mask = mask.convert(s.dtype())?;
-    let ones = ones_like(&s)?;
+    let ones = s.context().ones(s.dtype(), s_shape)?;
     let neg_mask = (-&mask)?;
     let denom = (&s + &(&ones + &neg_mask)?)?;
     let s_inv = (&mask / &denom)?;
@@ -973,32 +973,6 @@ fn scalar_real(ctx: &TraceContext, dtype: DType, value: f64) -> Result<TracedTen
     }
 }
 
-fn filled_real(
-    ctx: &TraceContext,
-    dtype: DType,
-    shape: Vec<usize>,
-    value: f64,
-) -> Result<TracedTensor> {
-    let len = tenferro_tensor::validate::checked_shape_product("slogdet", "output shape", &shape)?;
-    match dtype {
-        DType::F64 => ctx.from_vec_col_major(shape, vec![value; len]),
-        DType::F32 => ctx.from_vec_col_major(shape, vec![value as f32; len]),
-        DType::I32 => ctx.from_vec_col_major(shape, vec![value.round() as i32; len]),
-        DType::I64 => ctx.from_vec_col_major(shape, vec![value.round() as i64; len]),
-        DType::Bool => ctx.from_vec_col_major(shape, vec![value != 0.0; len]),
-        DType::C64 => ctx.from_vec_col_major(shape, vec![Complex64::new(value, 0.0); len]),
-        DType::C32 => ctx.from_vec_col_major(shape, vec![Complex32::new(value as f32, 0.0); len]),
-        // An externally defined scalar has no traced filled literal.
-        DType::External(_) => Err(Error::TensorRuntime(
-            tenferro_tensor::Error::invalid_argument(
-                "filled_real",
-                "dtype",
-                "an externally defined scalar has no traced filled literal",
-            ),
-        )),
-    }
-}
-
 pub(crate) fn real_values_dtype(dtype: DType) -> DType {
     match dtype {
         DType::C64 => DType::F64,
@@ -1040,20 +1014,11 @@ fn zero_scalar(ctx: &TraceContext, dtype: DType) -> Result<TracedTensor> {
     scalar_real(ctx, dtype, 0.0)
 }
 
-fn one_scalar(ctx: &TraceContext, dtype: DType) -> Result<TracedTensor> {
-    scalar_real(ctx, dtype, 1.0)
-}
-
-fn ones_like(input: &TracedTensor) -> Result<TracedTensor> {
-    let shape = input.concrete_shape()?;
-    broadcast_scalar(one_scalar(input.context(), input.dtype())?, &shape)
-}
-
 fn eye_like(anchor: &TracedTensor, size: usize) -> Result<TracedTensor> {
     let mut vector_shape = vec![size];
     let anchor_shape = anchor.concrete_shape()?;
     vector_shape.extend_from_slice(&anchor_shape[2..]);
-    let diagonal = broadcast_scalar(one_scalar(anchor.context(), anchor.dtype())?, &vector_shape)?;
+    let diagonal = anchor.context().ones(anchor.dtype(), vector_shape)?;
     diagonal.embed_diag(0, 1)
 }
 
@@ -1318,7 +1283,7 @@ fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
     // `NaN != 0` is true.
     let is_zero = abs.compare(&zero_scalar(abs.context(), abs.dtype())?, CompareDir::Eq)?;
     let is_zero = is_zero.convert(abs.dtype())?;
-    let ones = ones_like(abs)?;
+    let ones = abs.context().ones(abs.dtype(), abs.concrete_shape()?)?;
     let mask = (&ones - &is_zero)?;
     mask.reduce_sum(Some(&signed(axes)[..]))
 }

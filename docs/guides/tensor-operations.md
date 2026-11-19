@@ -227,6 +227,13 @@ assert_eq!(product.as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ```
 <!-- end-snippet-source -->
 
+Filled tensors of a runtime dtype have one spelling on every layer:
+`zeros(dtype, shape)`, `ones(dtype, shape)` and `full(dtype, shape, value)`
+on `Tensor`, `TraceContext` and `EagerSession`.
+A ones-like of a traced value is `trace.ones(x.dtype(), x.concrete_shape()?)`.
+The traced and eager forms hold one element broadcast to `shape`,
+so they allocate no full-size host buffer.
+
 ## Eager Forward And Autodiff Example
 
 Use `EagerTensor` when the same immediate computation should stay in an

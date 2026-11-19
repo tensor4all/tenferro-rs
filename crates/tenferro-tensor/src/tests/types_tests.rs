@@ -14,6 +14,7 @@ use crate::{
     Error, ErrorKind, ShapeMismatch, ShapeVec, SliceConfig, ValidationError, ValidationKind,
 };
 
+mod filled;
 mod host_write_narrowing;
 mod strided_dynamic;
 

@@ -6,7 +6,6 @@
 
 use tenferro_cpu::CpuEngine;
 use tenferro_df64_proof::Df64;
-use tenferro_runtime::ad_support::ones_tensor;
 use tenferro_tensor::{DType, Tensor, TensorElementwise, TensorRead, TensorReduction};
 use tenferro_tensor::{DynRank, ErasedHostTensor, Host, TypedTensor};
 
@@ -23,7 +22,7 @@ fn external_dtype() -> DType {
 
 #[test]
 fn the_runtime_builds_no_core_identity_tensor_for_a_caller_owned_scalar() {
-    let error = ones_tensor(external_dtype(), vec![2])
+    let error = Tensor::ones(external_dtype(), [2])
         .expect_err("a caller-owned scalar has no core runtime tensor");
     assert!(
         error.to_string().contains("externally defined"),

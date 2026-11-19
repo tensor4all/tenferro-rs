@@ -6,10 +6,9 @@
 //! from the recorded primitives.
 
 use tenferro_runtime::composite::{
-    self, scalar_tensor, zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce,
-    CompositeUnary,
+    self, zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce, CompositeUnary,
 };
-use tenferro_tensor::{ActivationOp, CompareDir, DType, GatherConfig};
+use tenferro_tensor::{ActivationOp, CompareDir, DType, GatherConfig, Tensor};
 
 use super::{EagerSession, EagerTensor};
 use crate::{Error, Result};
@@ -33,7 +32,7 @@ impl CompositeOps for EagerComposite<'_, '_> {
 
     fn scalar(&mut self, dtype: DType, value: f64) -> Result<EagerTensor> {
         self.session
-            .constant_from_host(scalar_tensor(dtype, value)?)
+            .constant_from_host(Tensor::full(dtype, [0_usize; 0], value)?)
     }
 
     fn unary(&mut self, op: CompositeUnary, value: &EagerTensor) -> Result<EagerTensor> {

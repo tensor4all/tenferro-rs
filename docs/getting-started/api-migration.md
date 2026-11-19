@@ -160,6 +160,22 @@ dtype-erased `Tensor`. Engine, backend, and provider hooks (`Engine`,
 `add_into` overwrite only; `einsum_into` and `plan.execute_into` support all
 three), and an unsupported mode is refused with `Unsupported` before any write.
 
+### Filled constants (#2642)
+
+`zeros(dtype, shape)`, `ones(dtype, shape)` and `full(dtype, shape, value)`
+build a filled tensor of a runtime dtype on every layer:
+`Tensor` (a host tensor), `TraceContext` (a rank-0 graph constant broadcast to
+`shape`) and `EagerSession` (an untracked broadcast view on the session's backend).
+`value` is an `f64`; an integer dtype takes it only when it is an exact integer
+in range, and `Bool` only when it is `0` or `1`.
+
+| Older spelling | Current spelling |
+| --- | --- |
+| `tenferro_runtime::ad_support::ones_tensor(dtype, shape)` | `Tensor::ones(dtype, shape)` |
+| `tenferro_runtime::composite::scalar_tensor(dtype, value)` | `Tensor::full(dtype, [0_usize; 0], value)` |
+| A rank-0 traced literal broadcast with `broadcast_in_dim` | `trace.full(dtype, shape, value)`, or `trace.ones(x.dtype(), x.concrete_shape()?)` for a ones-like |
+| `s.constant_from_host(scalar)` then `s.broadcast_in_dim(..)` | `s.full(dtype, shape, value)` |
+
 The sections below describe earlier migrations. They are kept as history: where
 their right-hand column names a trait or `_read` method that 0.12 removed, use
 the tables above.
