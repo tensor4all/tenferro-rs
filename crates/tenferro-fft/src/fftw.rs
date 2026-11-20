@@ -128,8 +128,13 @@ impl Fftw {
     /// Load both FFTW precisions using the platform's shared library search path.
     ///
     /// # Errors
-    /// Returns a typed error if either library, its required symbols, or
-    /// requested threading support is unavailable.
+    /// Returns [`FftwError::Load`] if a required library cannot be opened or
+    /// [`FftwError::Symbol`] if a required symbol is missing.
+    /// Returns [`FftwError::ThreadCount`] if the count exceeds the C API limit,
+    /// [`FftwError::ThreadLibraryMismatch`] if the companion library uses a
+    /// different FFTW installation, or [`FftwError::ThreadInitialization`]
+    /// if FFTW fails to initialize threads.
+    ///
     /// A thread count above one requires FFTW 3.3.9 or later, the first release
     /// that exports `fftw_planner_nthreads`.
     ///
@@ -148,8 +153,13 @@ impl Fftw {
     /// a shared library can execute native code.
     ///
     /// # Errors
-    /// Returns a typed error if the named libraries, symbols, or requested
-    /// threading support are unavailable.
+    /// Returns [`FftwError::Load`] if a required library cannot be opened or
+    /// [`FftwError::Symbol`] if a required symbol is missing.
+    /// Returns [`FftwError::ThreadCount`] if the count exceeds the C API limit,
+    /// [`FftwError::ThreadLibraryMismatch`] if the companion library uses a
+    /// different FFTW installation, or [`FftwError::ThreadInitialization`]
+    /// if FFTW fails to initialize threads.
+    ///
     /// A thread count above one requires FFTW 3.3.9 or later, the first release
     /// that exports `fftw_planner_nthreads`.
     ///
