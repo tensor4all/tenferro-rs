@@ -19,9 +19,10 @@ fftw.install(&mut engine);
 
 A new CPU engine uses RustFFT until a provider is explicitly installed. Use
 `Fftw::load_from` to choose a library directory. Choose `Measure` to let FFTW
-time candidate plans. A thread count above one requires a matching FFTW
-threading runtime, either in the base library or in the FFTW threads companion
-library. Plans use FFTW's unaligned mode so cached plans can execute on Rust
+time candidate plans. A thread count above one requires FFTW 3.3.9 or later
+with threading support, either in the base library or in the FFTW threads
+companion library. Threaded providers make FFTW's planner thread safe and
+restore FFTW's process-wide planner thread count after each plan. Plans use FFTW's unaligned mode so cached plans can execute on Rust
 lane buffers of different alignments, which can limit FFTW's use of SIMD.
 FFTW threads and tenferro lane parallelism are used separately. Use
 `CpuEngine::serial()` for FFTW-owned threading on Linux, where FFTW pthread

@@ -1,4 +1,5 @@
-//! Runtime FFTW loading and lane plans. FFTW planning and destruction are serialized.
+//! Runtime FFTW loading and lane plans. FFTW planning and destruction are serialized,
+//! and threaded runtimes restore FFTW's process-wide planner thread count after planning.
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::{c_int, c_uint, c_void};
@@ -28,6 +29,17 @@ type Execute = unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void);
 type Destroy = unsafe extern "C" fn(*mut c_void);
 type InitThreads = unsafe extern "C" fn() -> c_int;
 type SetThreads = unsafe extern "C" fn(c_int);
+type GetThreads = unsafe extern "C" fn() -> c_int;
+type MakePlannerThreadSafe = unsafe extern "C" fn();
+
+/// FFTW 3.3.9+ threading entry points, from the core or the companion library.
+#[derive(Clone, Copy, Debug)]
+struct ThreadApi {
+    init: InitThreads,
+    set: SetThreads,
+    get: GetThreads,
+    make_planner_thread_safe: MakePlannerThreadSafe,
+}
 
 /// Describes an FFTW runtime or planning failure.
 ///
@@ -118,6 +130,8 @@ impl Fftw {
     /// # Errors
     /// Returns a typed error if either library, its required symbols, or
     /// requested threading support is unavailable.
+    /// A thread count above one requires FFTW 3.3.9 or later, the first release
+    /// that exports `fftw_planner_nthreads`.
     ///
     /// # Examples
     /// ```
@@ -136,6 +150,8 @@ impl Fftw {
     /// # Errors
     /// Returns a typed error if the named libraries, symbols, or requested
     /// threading support are unavailable.
+    /// A thread count above one requires FFTW 3.3.9 or later, the first release
+    /// that exports `fftw_planner_nthreads`.
     ///
     /// # Examples
     /// ```
@@ -260,7 +276,7 @@ struct Api {
     execute_r2c: Execute,
     execute_c2r: Execute,
     destroy: Destroy,
-    threads: Option<(InitThreads, SetThreads)>,
+    threads: Option<ThreadApi>,
     _library: Library,
     _thread_library: Option<Library>,
 }
@@ -294,7 +310,7 @@ fn load_library(path: &Path) -> Result<Library, FftwError> {
 
 impl Api {
     fn initialize_threads(self: &Arc<Self>) -> Result<(), FftwError> {
-        let Some((init, _)) = self.threads else {
+        let Some(threads) = self.threads else {
             return Err(FftwError::ThreadInitialization);
         };
         let mut initialized = PLANNER
@@ -303,13 +319,16 @@ impl Api {
         if !initialized.iter().any(|loaded| {
             loaded
                 .threads
-                .is_some_and(|(other, _)| std::ptr::fn_addr_eq(other, init))
+                .is_some_and(|other| std::ptr::fn_addr_eq(other.init, threads.init))
         }) {
-            // SAFETY: the runtime exports this signature and PLANNER serializes
+            // SAFETY: the runtime exports these signatures and PLANNER serializes
             // initialization with every tenferro FFTW plan and destruction.
-            if unsafe { init() } == 0 {
+            if unsafe { (threads.init)() } == 0 {
                 return Err(FftwError::ThreadInitialization);
             }
+            // FFTW's planner lock also serializes planning by other FFTW users
+            // in the process, which PLANNER cannot reach.
+            unsafe { (threads.make_planner_thread_safe)() };
             initialized.push(self.clone());
         }
         Ok(())
@@ -335,25 +354,45 @@ impl Api {
         }
         let complex_name = format!("{prefix}_plan_dft_1d");
         let complex: PlanComplex = symbol(&library, &path, complex_name.clone())?;
-        let thread_symbols = |library: &Library, path: &Path| {
-            Ok::<_, FftwError>((
-                symbol(library, path, format!("{prefix}_init_threads"))?,
-                symbol(library, path, format!("{prefix}_plan_with_nthreads"))?,
-            ))
-        };
         let (threads, thread_library) = if threaded {
-            match thread_symbols(&library, &path) {
-                Ok(symbols) => (Some(symbols), None),
-                Err(_) => {
-                    let path = library_path(directory, &format!("{stem}_threads"));
-                    let library = load_library(&path)?;
-                    let companion: PlanComplex = symbol(&library, &path, complex_name)?;
-                    if !std::ptr::fn_addr_eq(companion, complex) {
-                        return Err(FftwError::ThreadLibraryMismatch(path));
-                    }
-                    (Some(thread_symbols(&library, &path)?), Some(library))
+            // Threading lives in the core library when it exports
+            // `init_threads`, and otherwise in the companion library.
+            let init_name = format!("{prefix}_init_threads");
+            let companion = if symbol::<InitThreads>(&library, &path, init_name.clone()).is_ok() {
+                None
+            } else {
+                let path = library_path(directory, &format!("{stem}_threads"));
+                let library = load_library(&path)?;
+                let companion: PlanComplex = symbol(&library, &path, complex_name)?;
+                if !std::ptr::fn_addr_eq(companion, complex) {
+                    return Err(FftwError::ThreadLibraryMismatch(path));
                 }
-            }
+                Some((library, path))
+            };
+            let (thread_library, thread_path) = companion
+                .as_ref()
+                .map_or((&library, path.as_path()), |(library, path)| {
+                    (library, path.as_path())
+                });
+            let threads = ThreadApi {
+                init: symbol(thread_library, thread_path, init_name)?,
+                set: symbol(
+                    thread_library,
+                    thread_path,
+                    format!("{prefix}_plan_with_nthreads"),
+                )?,
+                get: symbol(
+                    thread_library,
+                    thread_path,
+                    format!("{prefix}_planner_nthreads"),
+                )?,
+                make_planner_thread_safe: symbol(
+                    thread_library,
+                    thread_path,
+                    format!("{prefix}_make_planner_thread_safe"),
+                )?,
+            };
+            (Some(threads), companion.map(|(library, _)| library))
         } else {
             (None, None)
         };
@@ -410,8 +449,13 @@ impl<T: crate::cache::CachedFftPlanScalar> LanePlan<T> {
         // The complex plan is in place. Real plans receive disjoint input and output.
         // Planning may overwrite these private allocations. PLANNER serializes the C calls.
         let raw = unsafe {
-            if let Some((_, set)) = api.threads {
-                set(runtime.threads);
+            // The planner thread count is process-wide FFTW state. Restore the
+            // previous value so other FFTW users keep their setting. FFTW does not
+            // lock this setter, so a concurrent change outside tenferro can still
+            // reach this plan.
+            let previous = api.threads.map(|threads| (threads, (threads.get)()));
+            if let Some((threads, _)) = previous {
+                (threads.set)(runtime.threads);
             }
             let raw = match operation {
                 FftOperation::C2cForward => (api.complex)(n, s, s, -1, runtime.flags),
@@ -421,8 +465,8 @@ impl<T: crate::cache::CachedFftPlanScalar> LanePlan<T> {
                 }
                 FftOperation::C2r => (api.c2r)(n, s, r, runtime.flags),
             };
-            if let Some((_, set)) = api.threads {
-                set(1);
+            if let Some((threads, count)) = previous {
+                (threads.set)(count);
             }
             raw
         };

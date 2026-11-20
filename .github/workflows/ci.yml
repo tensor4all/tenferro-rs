@@ -170,7 +170,7 @@ jobs:
       - name: Run FFTW integration tests
         env:
           TENFERRO_TEST_REQUIRE_FFTW: '1'
-        run: cargo test --locked -p tenferro-fft --features fftw,autodiff --test fftw
+        run: cargo test --locked -p tenferro-fft --features fftw,autodiff --test fftw --test fftw_thread_state
 
   mpi-adapter:
     name: MPI transport adapter

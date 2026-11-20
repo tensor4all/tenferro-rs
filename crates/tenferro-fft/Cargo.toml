@@ -50,6 +50,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+libloading.workspace = true
 syn = { workspace = true, features = ["full", "visit"] }
 
 [[bench]]
