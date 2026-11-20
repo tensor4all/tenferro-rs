@@ -218,29 +218,39 @@ impl Fftw {
         self.0.threads > 1
     }
 
+    /// Cached plan for `operation` of length `len`. `threaded` plans with the
+    /// runtime's FFTW thread count; otherwise the plan is single-threaded.
     pub(crate) fn plan<T: crate::cache::CachedFftPlanScalar>(
         &self,
         store: &mut ExtensionCacheStore,
         len: usize,
         operation: FftOperation,
+        threaded: bool,
     ) -> tenferro_tensor::Result<Arc<LanePlan<T>>> {
         let operation = if operation == FftOperation::R2cFull {
             FftOperation::R2cOnesided
         } else {
             operation
         };
-        let identity = (Arc::as_ptr(&self.0), len, operation);
+        let threads = if threaded { self.0.threads } else { 1 };
+        let identity = (Arc::as_ptr(&self.0), len, operation, threads);
         let mut hasher = DefaultHasher::new();
         identity.hash(&mut hasher);
         std::any::TypeId::of::<T>().hash(&mut hasher);
         let key = ExtensionCacheKey::new(FFT_EXTENSION_FAMILY_ID, "fftw-plans", hasher.finish());
         if let Some(plan) = store.get::<Arc<LanePlan<T>>>(&key) {
-            if (Arc::as_ptr(&plan.runtime), plan.len, plan.operation) == identity {
+            if (
+                Arc::as_ptr(&plan.runtime),
+                plan.len,
+                plan.operation,
+                plan.threads,
+            ) == identity
+            {
                 return Ok(plan.clone());
             }
         }
         let plan = Arc::new(
-            LanePlan::new(self.0.clone(), len, operation)
+            LanePlan::new(self.0.clone(), len, operation, threads)
                 .map_err(|source| tenferro_tensor::Error::backend_source("fft", source))?,
         );
         store.put(key, plan.clone(), std::mem::size_of::<LanePlan<T>>());
@@ -416,6 +426,8 @@ pub(crate) struct LanePlan<T> {
     runtime: Arc<Runtime>,
     len: usize,
     operation: FftOperation,
+    /// FFTW planner thread count the plan was created with.
+    threads: c_int,
     scalar: PhantomData<T>,
 }
 
@@ -426,7 +438,12 @@ unsafe impl<T: Send> Send for LanePlan<T> {}
 unsafe impl<T: Sync> Sync for LanePlan<T> {}
 
 impl<T: crate::cache::CachedFftPlanScalar> LanePlan<T> {
-    fn new(runtime: Arc<Runtime>, len: usize, operation: FftOperation) -> Result<Self, FftwError> {
+    fn new(
+        runtime: Arc<Runtime>,
+        len: usize,
+        operation: FftOperation,
+        plan_threads: c_int,
+    ) -> Result<Self, FftwError> {
         let n = c_int::try_from(len).map_err(|_| FftwError::Length(len))?;
         let api = runtime.api::<T>();
         let complex = matches!(
@@ -455,7 +472,7 @@ impl<T: crate::cache::CachedFftPlanScalar> LanePlan<T> {
             // reach this plan.
             let previous = api.threads.map(|threads| (threads, (threads.get)()));
             if let Some((threads, _)) = previous {
-                (threads.set)(runtime.threads);
+                (threads.set)(plan_threads);
             }
             let raw = match operation {
                 FftOperation::C2cForward => (api.complex)(n, s, s, -1, runtime.flags),
@@ -475,6 +492,7 @@ impl<T: crate::cache::CachedFftPlanScalar> LanePlan<T> {
             runtime,
             len,
             operation,
+            threads: plan_threads,
             scalar: PhantomData,
         })
     }

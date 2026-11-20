@@ -67,15 +67,34 @@ impl<T> Output<'_, T> {
 // Below this grain spawning jobs costs more than the representative small FFTs.
 const MIN_PARALLEL_ELEMENTS: usize = 32 * 1024;
 
-fn planner_is_threaded(_plans: &mut (impl FftPlanProvider + ?Sized)) -> bool {
+/// Lane jobs for one transform, and whether each lane runs a threaded FFTW plan.
+///
+/// A threaded FFTW provider parallelizes within one lane. Lane jobs take
+/// precedence when they can occupy the whole engine budget; otherwise a single
+/// job runs threaded plans. The two kinds of threads never nest.
+fn lane_parallelism(
+    _plans: &mut (impl FftPlanProvider + ?Sized),
+    lanes: usize,
+    output_len: usize,
+    exec: &Exec<'_>,
+) -> (usize, bool) {
     #[cfg(feature = "fftw")]
-    {
-        _plans
-            .fftw()
-            .is_some_and(|(provider, _)| provider.threaded())
-    }
+    let threaded = _plans
+        .fftw()
+        .is_some_and(|(provider, _)| provider.threaded());
     #[cfg(not(feature = "fftw"))]
-    false
+    let threaded = false;
+    let budget = exec.budget().get();
+    let lane_jobs = if output_len < MIN_PARALLEL_ELEMENTS {
+        1
+    } else {
+        budget.min(lanes)
+    };
+    if threaded && (lane_jobs == 1 || lanes < budget) {
+        (1, true)
+    } else {
+        (lane_jobs, false)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -140,7 +159,8 @@ where
     if lanes == 0 {
         return Ok(());
     }
-    let threaded = planner_is_threaded(plans);
+    #[cfg_attr(not(feature = "fftw"), allow(unused_variables))]
+    let (jobs, fftw_threads) = lane_parallelism(plans, lanes, output_len, &exec);
     // Every lane here is a full complex transform, including the mirrored
     // spectrum of `C2r`, so FFTW needs a c2c plan in the operation's direction.
     #[cfg(feature = "fftw")]
@@ -152,7 +172,7 @@ where
     #[cfg(feature = "fftw")]
     let fftw = plans
         .fftw()
-        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, fftw_operation))
+        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, fftw_operation, fftw_threads))
         .transpose()?;
     #[cfg(feature = "fftw")]
     let plan = fftw
@@ -165,11 +185,6 @@ where
         operation.is_forward(),
     ));
     let scale = scale_for::<T>(norm, operation.is_forward(), fft_len)?;
-    let jobs = if threaded || output_len < MIN_PARALLEL_ELEMENTS {
-        1
-    } else {
-        exec.budget().get().min(lanes)
-    };
     let per_job = lanes.div_ceil(jobs);
     let out = Output {
         pointer: output.as_mut_ptr(),
@@ -376,11 +391,12 @@ where
     if lanes == 0 {
         return Ok(());
     }
-    let threaded = planner_is_threaded(plans);
+    #[cfg_attr(not(feature = "fftw"), allow(unused_variables))]
+    let (jobs, fftw_threads) = lane_parallelism(plans, lanes, output_len, &exec);
     #[cfg(feature = "fftw")]
     let fftw = plans
         .fftw()
-        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, operation))
+        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, operation, fftw_threads))
         .transpose()?;
     #[cfg(feature = "fftw")]
     let plan = fftw
@@ -393,11 +409,6 @@ where
         operation.is_forward(),
     ));
     let scale = scale_for::<T>(norm, operation.is_forward(), fft_len)?;
-    let jobs = if threaded || output_len < MIN_PARALLEL_ELEMENTS {
-        1
-    } else {
-        exec.budget().get().min(lanes)
-    };
     let per_job = lanes.div_ceil(jobs);
     let out = Output {
         pointer: output.as_mut_ptr(),

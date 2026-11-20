@@ -141,20 +141,18 @@ fn measure_and_threaded_plans_are_reused_and_do_not_modify_input() {
     }
 }
 
-fn assert_engine_used_fftw(engine: &mut CpuEngine) {
+fn fftw_plan_count(engine: &mut CpuEngine) -> usize {
     use tenferro_runtime::{ExecutionEngine, ExtensionCacheSelector};
 
     let cache = engine.take_extension_caches();
-    assert_eq!(
-        cache
-            .stats(ExtensionCacheSelector::Cache {
-                family_id: tenferro_fft::FFT_EXTENSION_FAMILY_ID,
-                cache_name: "fftw-plans",
-            })
-            .entries,
-        1
-    );
+    let entries = cache
+        .stats(ExtensionCacheSelector::Cache {
+            family_id: tenferro_fft::FFT_EXTENSION_FAMILY_ID,
+            cache_name: "fftw-plans",
+        })
+        .entries;
     engine.restore_extension_caches(cache);
+    entries
 }
 
 #[test]
@@ -195,7 +193,7 @@ fn traced_fft_selects_the_installed_provider() {
         y.as_slice::<Complex64>().unwrap(),
         &[Complex64::new(2.0, 0.0), Complex64::new(0.0, 0.0)]
     );
-    assert_engine_used_fftw(&mut engine);
+    assert_eq!(fftw_plan_count(&mut engine), 1);
 }
 
 #[cfg(feature = "autodiff")]
@@ -223,5 +221,51 @@ fn eager_in_place_fft_selects_the_installed_provider() {
         y.value().unwrap().as_slice::<Complex64>().unwrap(),
         &[Complex64::new(2.0, 0.0), Complex64::new(0.0, 0.0)]
     );
-    assert_engine_used_fftw(&mut engine);
+    assert_eq!(fftw_plan_count(&mut engine), 1);
+}
+
+#[test]
+fn threaded_provider_runs_many_lanes_in_parallel_jobs() {
+    let Some(provider) = load(FftwPlanning::Estimate, NonZeroUsize::new(2).unwrap()) else {
+        return;
+    };
+    let parallel = || CpuEngine::new(tenferro_cpu::Pool::builder().threads(4).build().unwrap());
+    let mut fftw = parallel();
+    assert!(
+        fftw.num_threads() >= 2,
+        "lane-parallel dispatch needs at least two engine threads"
+    );
+    provider.install(&mut fftw);
+    let mut rustfft = parallel();
+    // With FFTW installed, `fftw_plans` holds only FFTW plans.
+    let mut fftw_plans = FftExecutor::default();
+    let mut rustfft_plans = FftExecutor::default();
+    // 4096 lanes of length 16 fill every engine thread, so they run as lane jobs
+    // with a single-threaded plan; one short lane runs FFTW's threaded plan.
+    for shape in [vec![16, 4096], vec![16]] {
+        let len = shape.iter().product::<usize>();
+        let x = Tensor::from_vec_col_major(
+            shape,
+            (0..len)
+                .map(|i| Complex64::new((i % 7) as f64, (i % 3) as f64))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let options = FftOptions::default().axis(0);
+        let a = fftw_plans.fft_with(&x, &options, &mut fftw).unwrap();
+        let b = rustfft_plans.fft_with(&x, &options, &mut rustfft).unwrap();
+        for (a, b) in a
+            .as_slice::<Complex64>()
+            .unwrap()
+            .iter()
+            .zip(b.as_slice::<Complex64>().unwrap())
+        {
+            assert!((*a - *b).norm() < 1e-12, "{a} != {b}");
+        }
+    }
+    assert_eq!(
+        fftw_plans.cache_stats().entries,
+        2,
+        "expected single-threaded and threaded length-16 plans"
+    );
 }

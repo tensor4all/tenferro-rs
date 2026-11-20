@@ -24,7 +24,9 @@ with threading support, either in the base library or in the FFTW threads
 companion library. Threaded providers make FFTW's planner thread safe and
 restore FFTW's process-wide planner thread count after each plan. Plans use FFTW's unaligned mode so cached plans can execute on Rust
 lane buffers of different alignments, which can limit FFTW's use of SIMD.
-FFTW threads and tenferro lane parallelism are used separately. Use
+FFTW threads and tenferro lane parallelism never nest. A transform whose lanes
+can occupy every engine thread runs them in parallel with single-threaded FFTW
+plans; otherwise it runs as one job with FFTW's threads. Use
 `CpuEngine::serial()` for FFTW-owned threading on Linux, where FFTW pthread
 workers can inherit the affinity of a pinned tenferro worker.
 

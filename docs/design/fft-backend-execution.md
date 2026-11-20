@@ -99,8 +99,10 @@ the caller-held `CpuEngine` and applies to concrete, eager, and traced
 execution. FFTW shares CPU lane layout, real spectrum handling, and
 normalization with the default provider. Its native plans use a separate
 namespace in the existing extension cache and are keyed by provider
-instance, precision, transform length, and operation. FFTW-owned threading
-uses one tenferro lane job to avoid nested parallelism.
+instance, precision, transform length, operation, and planner thread count.
+FFTW threads and lane jobs never nest: lanes that can occupy the engine's
+whole thread budget run as parallel jobs with single-threaded plans, and other
+transforms run as one job with the provider's threaded plans.
 
 ### CUDA/cuFFT execution
 
