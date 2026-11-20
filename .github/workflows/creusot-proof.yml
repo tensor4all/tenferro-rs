@@ -1,0 +1,89 @@
+name: Creusot proofs
+
+# Formal verification of the contiguous-buffer split that feeds the mutable
+# view kernels (#2682). The contracts live in
+# `crates/tenferro-tensor/src/types/split_ranges.rs`; the proof harness
+# `ext/proofs/split-ranges` compiles that same file by path, so nothing is
+# duplicated. The proof runs against Creusot's own `split_at_mut_checked` spec,
+# not against anything this repository maintains.
+#
+# Non-blocking on purpose: the prover toolchain is a pinned nightly plus an opam
+# switch, so a red proof job informs a PR rather than gating it.
+
+on:
+  pull_request:
+    paths:
+      - "crates/tenferro-tensor/src/types/split_ranges.rs"
+      - "ext/proofs/split-ranges/**"
+      - ".github/workflows/creusot-proof.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: creusot-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Creusot's own `rust-toolchain` pins the nightly it builds with; bump both
+  # together. The cache key below carries the version, not the channel.
+  CREUSOT_VERSION: v0.15.0
+  CREUSOT_TOOLCHAIN: nightly-2026-08-03
+
+jobs:
+  prove:
+    name: creusot (contiguous split)
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache the Creusot toolchain
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.local/share/creusot
+            ~/.opam
+          key: creusot-${{ runner.os }}-${{ env.CREUSOT_VERSION }}
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.CREUSOT_TOOLCHAIN }}
+          components: rustfmt, rustc-dev, llvm-tools
+
+      - name: Install Creusot
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          CARGO_BUILD_JOBS: 4
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends opam unzip
+          opam init --bare --disable-sandboxing --no-setup -y
+          # `creusot-deps.opam` pulls the GTK-based Why3 IDE unless this switch
+          # variable is set; the proof only needs `why3` and `why3find`.
+          opam var --global in-creusot-ci=true
+          git clone --depth 1 --branch "${CREUSOT_VERSION}" \
+            https://github.com/creusot-rs/creusot.git "${RUNNER_TEMP}/creusot"
+          cd "${RUNNER_TEMP}/creusot"
+          ./INSTALL
+
+      - name: Prove the contracts
+        working-directory: ext/proofs/split-ranges
+        run: cargo creusot
+
+      # `cargo creusot` also succeeds when a specification has been deleted, so
+      # the two claims the job exists for are checked here.
+      - name: The contracts still state the ranges and the separation
+        working-directory: ext/proofs/split-ranges
+        run: |
+          set -euo pipefail
+          coma=verif/tenferro_split_proofs_rlib/split_ranges
+          grep -qF "Slice64.view left.final" "${coma}/split_ordered_ranges_mut.coma"
+          grep -qF "UInt64.t'int second.f1 < UInt64.t'int first.f0" \
+            "${coma}/split_two_mut_ranges.coma"
