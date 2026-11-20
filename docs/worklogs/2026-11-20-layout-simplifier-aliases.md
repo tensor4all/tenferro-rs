@@ -36,9 +36,9 @@
   program-output aliases, transpose composition across aliases, and the complete
   standard-operation compilation entry point. A debug assertion rejects programs
   that read a slot before its producer, which the forward alias table requires.
-- No test inspects the compiler source text: such checks pin the spelling of the
-  implementation rather than its behavior. The ignored release probes measure
-  the scaling property instead.
+- Removed this change's two source-text tests, which pinned implementation
+  spelling rather than behavior. The ignored release probes measure the
+  scaling property instead.
 - The ignored release probe measures only the private compiler pass, with setup
   and program cloning outside the timed interval, over 64/256/1024/4096 operations.
   No numerical backend or new public benchmark API is involved.
