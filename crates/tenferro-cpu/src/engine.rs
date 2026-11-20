@@ -135,6 +135,7 @@ pub struct CpuEngine {
     pub(crate) plans: CpuPlanCache,
     pub(crate) batch_policy: crate::CpuBatchPolicy,
     pub(crate) allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
+    fft_provider: Option<Arc<dyn std::any::Any + Send + Sync>>,
     runtime_clears: u64,
     pub(crate) broken: bool,
     /// Runtime engine id this engine runs prepared programs as.
@@ -159,6 +160,33 @@ impl std::fmt::Debug for CpuEngine {
 }
 
 impl CpuEngine {
+    /// Store the FFT extension's selected implementation on this engine.
+    ///
+    /// # Examples
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use tenferro_cpu::CpuEngine;
+    /// let mut engine = CpuEngine::serial();
+    /// engine.set_fft_provider(Arc::new(7_u32));
+    /// assert_eq!(engine.fft_provider::<u32>().as_deref(), Some(&7));
+    /// ```
+    #[doc(hidden)]
+    pub fn set_fft_provider(&mut self, provider: Arc<dyn std::any::Any + Send + Sync>) {
+        self.fft_provider = Some(provider);
+    }
+
+    /// Retrieve the FFT extension's selected implementation by its type.
+    ///
+    /// # Examples
+    /// ```
+    /// # use tenferro_cpu::CpuEngine;
+    /// assert!(CpuEngine::serial().fft_provider::<u32>().is_none());
+    /// ```
+    #[doc(hidden)]
+    pub fn fft_provider<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.fft_provider.as_ref()?.clone().downcast().ok()
+    }
+
     fn with_resources(resources: ExecutionResources) -> Self {
         Self {
             resources,
@@ -166,6 +194,7 @@ impl CpuEngine {
             plans: CpuPlanCache::new(),
             batch_policy: crate::CpuBatchPolicy::default(),
             allocation_domain: None,
+            fft_provider: None,
             runtime_clears: 0,
             broken: false,
             runtime_engine_id: crate::runtime_adapter::default_runtime_engine_id(),

@@ -67,6 +67,17 @@ impl<T> Output<'_, T> {
 // Below this grain spawning jobs costs more than the representative small FFTs.
 const MIN_PARALLEL_ELEMENTS: usize = 32 * 1024;
 
+fn planner_is_threaded(_plans: &mut (impl FftPlanProvider + ?Sized)) -> bool {
+    #[cfg(feature = "fftw")]
+    {
+        _plans
+            .fftw()
+            .is_some_and(|(provider, _)| provider.threaded())
+    }
+    #[cfg(not(feature = "fftw"))]
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 // INVARIANT: these arguments are validated FFT metadata and the two borrowed
 // buffers; no public configurable operation descriptor is duplicated here.
@@ -129,9 +140,24 @@ where
     if lanes == 0 {
         return Ok(());
     }
-    let plan = cached_fft_plan::<T, _>(plans, fft_len, operation.is_forward());
+    let threaded = planner_is_threaded(plans);
+    #[cfg(feature = "fftw")]
+    let fftw = plans
+        .fftw()
+        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, operation))
+        .transpose()?;
+    #[cfg(feature = "fftw")]
+    let plan = fftw
+        .is_none()
+        .then(|| cached_fft_plan::<T, _>(plans, fft_len, operation.is_forward()));
+    #[cfg(not(feature = "fftw"))]
+    let plan = Some(cached_fft_plan::<T, _>(
+        plans,
+        fft_len,
+        operation.is_forward(),
+    ));
     let scale = scale_for::<T>(norm, operation.is_forward(), fft_len)?;
-    let jobs = if output_len < MIN_PARALLEL_ELEMENTS {
+    let jobs = if threaded || output_len < MIN_PARALLEL_ELEMENTS {
         1
     } else {
         exec.budget().get().min(lanes)
@@ -141,7 +167,9 @@ where
         pointer: output.as_mut_ptr(),
         _borrow: PhantomData,
     };
-    let scratch_len = plan.get_inplace_scratch_len();
+    let scratch_len = plan
+        .as_ref()
+        .map_or(0, |plan| plan.get_inplace_scratch_len());
     let job_len = fft_len.checked_add(scratch_len).ok_or_else(|| {
         tenferro_tensor::Error::invalid_argument("fft", "scratch length", "overflows usize")
     })?;
@@ -232,7 +260,13 @@ where
                     fft_len,
                 )
             };
-            plan.process_with_scratch(lane, scratch);
+            if let Some(plan) = &plan {
+                plan.process_with_scratch(lane, scratch);
+            }
+            #[cfg(feature = "fftw")]
+            if let Some(plan) = &fftw {
+                plan.complex(lane);
+            }
             // Fold the normalization into the scatter. This is the same single
             // multiply per emitted value as the removed separate full-lane pass,
             // so the numerical result is unchanged; `scale == 1` keeps the
@@ -334,9 +368,24 @@ where
     if lanes == 0 {
         return Ok(());
     }
-    let plan = cached_real_plan::<T, _>(plans, fft_len, operation.is_forward());
+    let threaded = planner_is_threaded(plans);
+    #[cfg(feature = "fftw")]
+    let fftw = plans
+        .fftw()
+        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, operation))
+        .transpose()?;
+    #[cfg(feature = "fftw")]
+    let plan = fftw
+        .is_none()
+        .then(|| cached_real_plan::<T, _>(plans, fft_len, operation.is_forward()));
+    #[cfg(not(feature = "fftw"))]
+    let plan = Some(cached_real_plan::<T, _>(
+        plans,
+        fft_len,
+        operation.is_forward(),
+    ));
     let scale = scale_for::<T>(norm, operation.is_forward(), fft_len)?;
-    let jobs = if output_len < MIN_PARALLEL_ELEMENTS {
+    let jobs = if threaded || output_len < MIN_PARALLEL_ELEMENTS {
         1
     } else {
         exec.budget().get().min(lanes)
@@ -363,8 +412,9 @@ where
         lane_len
     };
     let scratch_len = match &plan {
-        RealPlan::Forward(plan) => plan.get_scratch_len(),
-        RealPlan::Inverse(plan) => plan.get_scratch_len(),
+        Some(RealPlan::Forward(plan)) => plan.get_scratch_len(),
+        Some(RealPlan::Inverse(plan)) => plan.get_scratch_len(),
+        None => 0,
     };
     let complex_job_len = complex_len.checked_add(scratch_len).ok_or_else(|| {
         tenferro_tensor::Error::invalid_argument("fft", "scratch length", "overflows usize")
@@ -404,7 +454,7 @@ where
                     {
                         *slot = values[offset];
                     }
-                    if let RealPlan::Forward(plan) = &plan {
+                    if let Some(RealPlan::Forward(plan)) = &plan {
                         plan.process_with_scratch(
                             real_lane,
                             complex_lane[..spectrum_len].as_mut(),
@@ -416,6 +466,10 @@ where
                                 format!("real-to-complex plan rejected the lane buffers: {error}"),
                             )
                         })?;
+                    }
+                    #[cfg(feature = "fftw")]
+                    if let Some(plan) = &fftw {
+                        plan.real(real_lane, &mut complex_lane[..spectrum_len]);
                     }
                     // Fill the negative-frequency half only when the caller
                     // asked for the full spectrum; the one-sided output already
@@ -463,7 +517,7 @@ where
                             complex_lane[last] = Complex::new(complex_lane[last].re, T::zero());
                         }
                     }
-                    if let RealPlan::Inverse(plan) = &plan {
+                    if let Some(RealPlan::Inverse(plan)) = &plan {
                         plan.process_with_scratch(complex_lane, real_lane, scratch)
                             .map_err(|error| {
                                 tenferro_tensor::Error::runtime_state(
@@ -473,6 +527,10 @@ where
                                     ),
                                 )
                             })?;
+                    }
+                    #[cfg(feature = "fftw")]
+                    if let Some(plan) = &fftw {
+                        plan.real(real_lane, complex_lane);
                     }
                     for (value, offset) in real_lane
                         .iter()

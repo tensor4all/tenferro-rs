@@ -33,7 +33,7 @@ temporary directory.
 | `tenferro-einsum+autodiff-cuda.txt` | `tenferro-einsum` | `autodiff,cuda` |
 | `tenferro-ad+cuda.txt` | `tenferro-ad` | `cuda` |
 | `tenferro-linalg+autodiff-cuda.txt` | `tenferro-linalg` | `autodiff,cuda` |
-| `tenferro-fft+autodiff-cuda.txt` | `tenferro-fft` | `autodiff,cuda` |
+| `tenferro-fft+autodiff-cuda-fftw.txt` | `tenferro-fft` | `autodiff,cuda,fftw` |
 
 The second combination of a crate is its docs.rs feature set. `tenferro-runtime`
 declares no features at all, and `tenferro-cpu` only `ledger` and `route-report` —

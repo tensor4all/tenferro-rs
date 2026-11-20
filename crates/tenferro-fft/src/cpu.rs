@@ -69,7 +69,7 @@ impl FftBackend for CpuEngine {
             let owned = self.to_contiguous_read(TensorRead::View(view))?;
             return self.execute_fft(&owned, spec, cache);
         }
-        let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
+        let mut plans = ExtensionFftPlanCache::for_engine(cache.store_mut(), self);
         self.with_linalg_pool(|exec, buffers| {
             macro_rules! transform {
                 ($input:expr, $kind:ident, $variant:ident, $project:expr) => {
@@ -131,7 +131,7 @@ impl FftBackend for CpuEngine {
             let owned = self.to_contiguous_read(input)?;
             return self.execute_fft_read_into(TensorRead::from_tensor(&owned), spec, cache, dest);
         }
-        let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
+        let mut plans = ExtensionFftPlanCache::for_engine(cache.store_mut(), self);
         self.with_linalg_pool(|exec, buffers| {
             macro_rules! write {
                 ($input_type:ty, $kind:ident, $output_type:ty, $variant:ident, $project:expr) => {{
@@ -219,7 +219,7 @@ impl FftBackend for CpuEngine {
         mut cache: FftExecutionCache<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
         validate_spec_input(input, spec)?;
-        let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
+        let mut plans = ExtensionFftPlanCache::for_engine(cache.store_mut(), self);
         let domain = self.shared_allocation_domain().cloned();
         let managed = if input.is_backend_buffer() {
             domain.as_deref()
@@ -271,7 +271,7 @@ pub(crate) fn execute_in_place(
             "in-place FFT requires shape-preserving complex input",
         ));
     }
-    let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
+    let mut plans = ExtensionFftPlanCache::for_engine(cache.store_mut(), session);
     session.with_linalg_pool(|exec, buffers| match input.dtype() {
         tenferro_tensor::DType::C64 => in_place_typed(
             in_place_operand::<f64>(&mut *input)?,

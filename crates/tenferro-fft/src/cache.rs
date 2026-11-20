@@ -64,8 +64,9 @@ pub const fn fft_plan_cache_selector() -> ExtensionCacheSelector {
 /// The CPU backend stores RustFFT plans in the private `rustfft-plans`
 /// namespace. Its retained-byte estimate includes the exact plan key and the
 /// cache-owned `Arc` handle; allocations opaque to RustFFT are excluded.
+/// FFTW plans use the same cache under the private `fftw-plans` namespace.
 /// The private `into-schedules` namespace accounts for owned request/spec
-/// metadata and logical intermediate tensor bytes. Both namespaces share the
+/// metadata and logical intermediate tensor bytes. These namespaces share the
 /// default 64-entry and 64-MiB limits, configurable through [`Self::set_limits`],
 /// cleared through [`Self::clear`] and reported by [`Self::stats`].
 ///
@@ -228,6 +229,11 @@ impl ExtensionFftPlanEntry {
 }
 
 pub(crate) trait FftPlanProvider: Send {
+    #[cfg(feature = "fftw")]
+    fn fftw(&mut self) -> Option<(&crate::Fftw, &mut ExtensionCacheStore)> {
+        None
+    }
+
     fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>>;
     fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>>;
     fn real_plan_f32(&mut self, len: usize, forward: bool) -> RealPlan<f32>;
@@ -320,11 +326,32 @@ pub(crate) fn cached_real_plan<T: CachedFftPlanScalar, P: FftPlanProvider + ?Siz
 
 pub(crate) struct ExtensionFftPlanCache<'a> {
     entries: &'a mut ExtensionCacheStore,
+    #[cfg(feature = "fftw")]
+    fftw: Option<crate::Fftw>,
 }
 
 impl<'a> ExtensionFftPlanCache<'a> {
     pub(crate) fn new(entries: &'a mut ExtensionCacheStore) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            #[cfg(feature = "fftw")]
+            fftw: None,
+        }
+    }
+
+    pub(crate) fn for_engine(
+        entries: &'a mut ExtensionCacheStore,
+        _engine: &tenferro_cpu::CpuEngine,
+    ) -> Self {
+        #[cfg(feature = "fftw")]
+        {
+            Self {
+                entries,
+                fftw: crate::Fftw::for_engine(_engine),
+            }
+        }
+        #[cfg(not(feature = "fftw"))]
+        Self::new(entries)
     }
 }
 
@@ -339,6 +366,13 @@ fn extension_plan_key(key: FftPlanKey) -> ExtensionCacheKey {
 }
 
 impl FftPlanProvider for ExtensionFftPlanCache<'_> {
+    #[cfg(feature = "fftw")]
+    fn fftw(&mut self) -> Option<(&crate::Fftw, &mut ExtensionCacheStore)> {
+        self.fftw
+            .as_ref()
+            .map(|provider| (provider, &mut *self.entries))
+    }
+
     fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>> {
         let key = FftPlanKey {
             len,

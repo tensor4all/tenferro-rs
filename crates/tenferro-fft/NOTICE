@@ -1,0 +1,9 @@
+Optional FFTW provider
+
+The off-by-default `fftw` feature uses a separately installed FFTW runtime.
+FFTW is Copyright Matteo Frigo and the Massachusetts Institute of Technology
+and is distributed under the GPL-2.0-or-later. Commercial licenses are available.
+
+Tenferro neither bundles FFTW nor links to it at build time. Runtime loading
+does not by itself exempt a combined work from the GPL. Evaluate FFTW's license
+terms before distributing software that enables the FFTW provider.
