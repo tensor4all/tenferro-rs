@@ -1187,9 +1187,14 @@ fn algebraic_layout_simplifier_one_pass(
     let producer_by_slot = producer_indices_by_slot(program);
     let slot_shapes = collect_slot_shapes(program, input_shapes)?;
     let use_counts = slot_use_counts(program)?;
+    let mut canonical_slots: Vec<usize> = (0..program.n_slots).collect();
     let mut changed = false;
 
     for index in 0..program.instructions.len() {
+        // INVARIANT: lowering emits inputs before outputs, so each alias already names its canonical source.
+        for slot in &mut program.instructions[index].input_slots {
+            *slot = canonical_slots[*slot];
+        }
         if program.instructions[index].input_slots.len() != 1
             || program.instructions[index].output_slots.len() != 1
         {
@@ -1202,9 +1207,7 @@ fn algebraic_layout_simplifier_one_pass(
 
         match program.instructions[index].op.clone() {
             ExecOp::Transpose { perm } if is_identity_perm(&perm) => {
-                let from = output_slot;
-                let to = program.instructions[index].input_slots[0];
-                replace_slot_uses(program, from, to);
+                canonical_slots[output_slot] = program.instructions[index].input_slots[0];
                 changed = true;
             }
             ExecOp::Reshape { shape }
@@ -1215,9 +1218,7 @@ fn algebraic_layout_simplifier_one_pass(
                         .and_then(Option::as_deref),
                 ) =>
             {
-                let from = output_slot;
-                let to = program.instructions[index].input_slots[0];
-                replace_slot_uses(program, from, to);
+                canonical_slots[output_slot] = program.instructions[index].input_slots[0];
                 changed = true;
             }
             ExecOp::Transpose { perm } => {
@@ -1238,7 +1239,7 @@ fn algebraic_layout_simplifier_one_pass(
                 };
                 let source_slot = program.instructions[producer_idx].input_slots[0];
                 if is_identity_perm(&composed) {
-                    replace_slot_uses(program, output_slot, source_slot);
+                    canonical_slots[output_slot] = source_slot;
                 } else {
                     program.instructions[index].input_slots[0] = source_slot;
                     program.instructions[index].op = ExecOp::Transpose {
@@ -1249,6 +1250,10 @@ fn algebraic_layout_simplifier_one_pass(
             }
             _ => {}
         }
+    }
+
+    for slot in &mut program.output_slots {
+        *slot = canonical_slots[*slot];
     }
 
     Ok(changed)
@@ -1331,24 +1336,6 @@ fn compose_transpose_perms(first: &[usize], second: &[usize]) -> Option<AxisVec>
         return None;
     }
     Some(second.iter().map(|&axis| first[axis]).collect())
-}
-
-fn replace_slot_uses(program: &mut ExecProgram, from: usize, to: usize) {
-    if from == to {
-        return;
-    }
-    for instr in &mut program.instructions {
-        for slot in &mut instr.input_slots {
-            if *slot == from {
-                *slot = to;
-            }
-        }
-    }
-    for slot in &mut program.output_slots {
-        if *slot == from {
-            *slot = to;
-        }
-    }
 }
 
 // ============================================================================

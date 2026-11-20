@@ -16,6 +16,8 @@ use tenferro_tensor::{
 
 #[path = "tests/dot_decomposer_tests.rs"]
 mod dot_decomposer_tests;
+#[path = "tests/layout_simplifier.rs"]
+mod layout_simplifier;
 #[path = "tests/metadata_views.rs"]
 mod metadata_views;
 #[path = "tests/shape_constraints.rs"]
