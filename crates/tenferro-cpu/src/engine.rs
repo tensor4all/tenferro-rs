@@ -168,23 +168,26 @@ impl CpuEngine {
     /// # use tenferro_cpu::CpuEngine;
     /// let mut engine = CpuEngine::serial();
     /// engine.set_fft_provider(Arc::new(7_u32));
-    /// assert_eq!(engine.fft_provider::<u32>().as_deref(), Some(&7));
+    /// assert_eq!(engine.fft_provider().unwrap().downcast_ref::<u32>(), Some(&7));
     /// ```
     #[doc(hidden)]
     pub fn set_fft_provider(&mut self, provider: Arc<dyn std::any::Any + Send + Sync>) {
         self.fft_provider = Some(provider);
     }
 
-    /// Retrieve the FFT extension's selected implementation by its type.
+    /// Retrieve the FFT extension's selected implementation, if one is installed.
+    ///
+    /// The value is untyped so that the FFT extension can reject a provider of
+    /// a type it does not recognize instead of ignoring it.
     ///
     /// # Examples
     /// ```
     /// # use tenferro_cpu::CpuEngine;
-    /// assert!(CpuEngine::serial().fft_provider::<u32>().is_none());
+    /// assert!(CpuEngine::serial().fft_provider().is_none());
     /// ```
     #[doc(hidden)]
-    pub fn fft_provider<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
-        self.fft_provider.as_ref()?.clone().downcast().ok()
+    pub fn fft_provider(&self) -> Option<&Arc<dyn std::any::Any + Send + Sync>> {
+        self.fft_provider.as_ref()
     }
 
     fn with_resources(resources: ExecutionResources) -> Self {

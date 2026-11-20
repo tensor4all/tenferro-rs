@@ -1,4 +1,5 @@
 //! Runtime FFTW loading and lane plans. FFTW planning and destruction are serialized.
+use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::{c_int, c_uint, c_void};
 use std::hash::{Hash, Hasher};
@@ -192,8 +193,9 @@ impl Fftw {
         engine.set_fft_provider(self.0.clone());
     }
 
-    pub(crate) fn for_engine(engine: &CpuEngine) -> Option<Self> {
-        engine.fft_provider::<Runtime>().map(Self)
+    /// The FFTW provider stored by [`Self::install`], or `None` for any other value.
+    pub(crate) fn from_provider(provider: &Arc<dyn Any + Send + Sync>) -> Option<Self> {
+        Arc::clone(provider).downcast::<Runtime>().ok().map(Self)
     }
 
     pub(crate) fn threaded(&self) -> bool {

@@ -339,19 +339,32 @@ impl<'a> ExtensionFftPlanCache<'a> {
         }
     }
 
+    /// Plan cache for transforms on `engine`, using the FFT provider installed
+    /// on it, or RustFFT when none is installed.
+    ///
+    /// # Errors
+    /// Returns a runtime-state error when the engine holds a provider value
+    /// that this build cannot execute, so a transform never silently runs on a
+    /// different provider than the one the caller installed.
     pub(crate) fn for_engine(
         entries: &'a mut ExtensionCacheStore,
-        _engine: &tenferro_cpu::CpuEngine,
-    ) -> Self {
-        #[cfg(feature = "fftw")]
-        {
-            Self {
-                entries,
-                fftw: crate::Fftw::for_engine(_engine),
-            }
+        engine: &tenferro_cpu::CpuEngine,
+    ) -> tenferro_tensor::Result<Self> {
+        if engine.fft_provider().is_none() {
+            return Ok(Self::new(entries));
         }
-        #[cfg(not(feature = "fftw"))]
-        Self::new(entries)
+        #[cfg(feature = "fftw")]
+        if let Some(fftw) = engine.fft_provider().and_then(crate::Fftw::from_provider) {
+            return Ok(Self {
+                entries,
+                fftw: Some(fftw),
+            });
+        }
+        Err(tenferro_tensor::Error::runtime_state(
+            "fft",
+            "the CPU engine's FFT provider was not installed by `Fftw::install` \
+             from this tenferro-fft build",
+        ))
     }
 }
 
