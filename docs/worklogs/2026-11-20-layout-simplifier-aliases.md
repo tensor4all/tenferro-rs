@@ -64,7 +64,7 @@
   load/noise checks: both unchanged AD tests take about 14% of baseline time.
   [Full experiment evidence](../performance/compiler-preparation-2026-11-20/README.md)
   summarizes the first inconclusive run, every case, and the diagnostic; the raw
-  samples and intervals are attached to tensor4all-rs#1408.
+  samples and intervals are linked at their immutable pre-removal commit.
   These are unpinned macOS results; pinned-core idle observations and
   affinity-controlled Linux validation required by the full upstream host
   protocol remain unavailable. Do not claim that full gate is satisfied.

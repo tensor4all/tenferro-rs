@@ -15,16 +15,16 @@ than a claim that the full host-validity gate is satisfied.
 | Conjugation metadata diagnostic, 4096 operations | 5.961 ms | 0.166 ms | 0.0276 |
 
 The source, complete case lists, every raw sample, paired ratios, bootstrap
-intervals, and before/after load observations are attached to
-tensor4all/tensor4all-rs#1408 as three JSON files:
+intervals, and before/after load observations remain available at the immutable
+pre-removal commit `8f4f035fd9141b3f432768e0e5407dc727203062`:
 
-- `first-inconclusive.json`, the first layout-only experiment:
+- [`first-inconclusive.json`](https://github.com/tensor4all/tenferro-rs/blob/8f4f035fd9141b3f432768e0e5407dc727203062/docs/performance/compiler-preparation-2026-11-20/first-inconclusive.json), the first layout-only experiment:
   **INCONCLUSIVE**. It failed the noise gate and did not meet the end-to-end
   thresholds. Its isolated layout result did not establish acceptance.
-- `final-local.json`, the combined candidate: all six original cases retained,
+- [`final-local.json`](https://github.com/tensor4all/tenferro-rs/blob/8f4f035fd9141b3f432768e0e5407dc727203062/docs/performance/compiler-preparation-2026-11-20/final-local.json), the combined candidate: all six original cases retained,
   with the original thresholds. The experiment's local checks pass; the stronger
   upstream pinned-core host check remains unverified.
-- `conjugation-local.json`, the conjugation diagnostic: all four sizes
+- [`conjugation-local.json`](https://github.com/tensor4all/tenferro-rs/blob/8f4f035fd9141b3f432768e0e5407dc727203062/docs/performance/compiler-preparation-2026-11-20/conjugation-local.json), the conjugation diagnostic: all four sizes
   retained. This is secondary evidence and does not replace the original
   acceptance cases.
 
