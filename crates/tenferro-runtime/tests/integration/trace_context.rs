@@ -207,3 +207,126 @@ fn filled_constants_are_graph_constants_that_run_to_the_filled_value() {
 
     assert!(trace.full(DType::I64, [2], 0.5).is_err());
 }
+
+#[test]
+fn compile_with_inputs_takes_the_given_inputs_first_in_the_given_order() {
+    let trace = TraceContext::new();
+    // Symbolic placeholders of different lengths: their extents name inputs by
+    // position, so the reordering has to rewrite them, and nothing is specialized.
+    let x = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let w = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let b = trace.input_symbolic_shape(DType::F64, 1).unwrap();
+    let neg_x = x.neg().unwrap();
+    let twice_w = (&w + &w).unwrap();
+    let neg_b = b.neg().unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let mut engine = CpuEngine::serial();
+    let runtime = cpu_runtime(&engine);
+    let mut run = |outputs: &[&TracedTensor], inputs: &[&TracedTensor], values: &[&[f64]]| {
+        let compiled = compiler.compile_with_inputs(outputs, inputs).unwrap();
+        let tensors: Vec<Tensor> = values
+            .iter()
+            .map(|v| Tensor::from_vec_col_major(vec![v.len()], v.to_vec()).unwrap())
+            .collect();
+        let reads: Vec<TensorRead<'_>> = tensors.iter().map(TensorRead::from_tensor).collect();
+        let prepared = runtime
+            .prepare(&compiled, &reads, &[engine.target()])
+            .unwrap();
+        runtime
+            .run(&mut [&mut engine], &prepared, &reads)
+            .unwrap()
+            .into_iter()
+            .map(|output| {
+                output
+                    .into_tensor(&mut engine)
+                    .unwrap()
+                    .as_slice::<f64>()
+                    .unwrap()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // Positional order `w, x, b`, against the context order `x, w, b`.
+    let (w_v, x_v, b_v) = ([1.0, 2.0], [10.0, 20.0, 30.0], [0.5]);
+    assert_eq!(
+        run(
+            &[&neg_x, &twice_w, &neg_b],
+            &[&w, &x, &b],
+            &[&w_v, &x_v, &b_v]
+        ),
+        [vec![-10.0, -20.0, -30.0], vec![2.0, 4.0], vec![-0.5]]
+    );
+    // Undeclared live inputs follow in context order: `b`, then `x`, then `w`.
+    assert_eq!(
+        run(&[&twice_w, &neg_b, &neg_x], &[&b], &[&b_v, &x_v, &w_v]),
+        [vec![2.0, 4.0], vec![-0.5], vec![-10.0, -20.0, -30.0]]
+    );
+    // A symbolic placeholder keeps its traced declaration: other lengths run too.
+    assert_eq!(
+        run(&[&neg_x, &twice_w], &[&w, &x], &[&[1.0], &[4.0, 5.0]]),
+        [vec![-4.0, -5.0], vec![2.0]]
+    );
+}
+
+#[test]
+fn compile_with_inputs_rejects_bad_input_lists_with_typed_errors() {
+    use tenferro_runtime::Error;
+
+    let trace = TraceContext::new();
+    let x = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
+    let unused = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
+    let data = trace
+        .from_vec_col_major(vec![2], vec![1.0_f64, 2.0])
+        .unwrap();
+    let y = (&x + &data).unwrap();
+    let mut compiler = GraphCompiler::new();
+
+    assert!(matches!(
+        compiler.compile_with_inputs(&[&y], &[&x, &data]),
+        Err(Error::UnexpectedBinding { binding_index: 1 })
+    ));
+    assert!(matches!(
+        compiler.compile_with_inputs(&[&y], &[&x, &x]),
+        Err(Error::DuplicateBinding { .. })
+    ));
+    let error = compiler
+        .compile_with_inputs(&[&y], &[&x, &unused])
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            Error::Validation {
+                source: tenferro_tensor::ValidationError::InvalidArgument {
+                    argument: "inputs",
+                    ..
+                },
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("input 1"), "{error}");
+    let foreign = TraceContext::new()
+        .input_concrete_shape(DType::F64, &[2])
+        .unwrap();
+    let error = compiler
+        .compile_with_inputs(&[&y], &[&x, &foreign])
+        .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            Error::Validation {
+                source: tenferro_tensor::ValidationError::InvalidArgument {
+                    argument: "context",
+                    ..
+                },
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    let error = compiler.compile_with_inputs(&[], &[&x]).unwrap_err();
+    assert!(error.to_string().contains("at least one output"), "{error}");
+}

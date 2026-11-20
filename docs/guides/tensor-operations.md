@@ -277,7 +277,7 @@ let sum = (&a + &b).unwrap();
 let product = (&a * &b).unwrap();
 
 let mut compiler = GraphCompiler::new();
-let program = compiler.compile_many(&[&sum, &product]).unwrap();
+let program = compiler.compile_with_inputs(&[&sum, &product], &[]).unwrap();
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();
 builder

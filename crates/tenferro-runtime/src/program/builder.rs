@@ -215,11 +215,12 @@ impl SemanticProgramBuilder {
         self.snapshot_pruned_with_aliases_and_specs(outputs, &[], &[])
     }
 
-    /// Snapshot with explicit declarations for kept inputs.
+    /// Snapshot with an explicit order, and optional declarations, for kept inputs.
     ///
-    /// A declared input spec replaces the traced declaration, which is how
-    /// `compile_with_input_specs` specializes placeholder extents to the concrete
-    /// shapes the caller declares.
+    /// The listed inputs come first, in the listed order. A declared input spec
+    /// replaces the traced declaration, which is how `compile_with_input_specs`
+    /// specializes placeholder extents to the concrete shapes the caller declares;
+    /// `None` keeps the traced declaration, as `compile_with_inputs` does.
     ///
     /// # Errors
     ///
@@ -228,7 +229,7 @@ impl SemanticProgramBuilder {
     pub(crate) fn snapshot_pruned_with_input_specs(
         &self,
         outputs: &[ProgramValue],
-        input_specs: &[(usize, ProgramInputSpec)],
+        input_specs: &[(usize, Option<ProgramInputSpec>)],
     ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
         self.snapshot_pruned_with_aliases_and_specs(outputs, &[], input_specs)
     }
@@ -255,7 +256,7 @@ impl SemanticProgramBuilder {
         &self,
         outputs: &[ProgramValue],
         aliases: &[crate::trace::CheckpointAlias],
-        input_specs: &[(usize, ProgramInputSpec)],
+        input_specs: &[(usize, Option<ProgramInputSpec>)],
     ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
         let value_count = self.values.len();
         let mut live = vec![false; value_count];
@@ -357,7 +358,7 @@ impl SemanticProgramBuilder {
             Vec::with_capacity(self.inputs.len());
         for (source_index, declared) in input_specs {
             if self.input_specs.get(*source_index).is_some() {
-                creation_order.push((*source_index, Some(declared.clone())));
+                creation_order.push((*source_index, declared.clone()));
             }
         }
         for index in 0..self.inputs.len() {

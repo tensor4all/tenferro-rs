@@ -190,24 +190,7 @@ impl GraphCompiler {
     /// to a different trace context, and the typed snapshot error from
     /// [`compile`](Self::compile) when the program cannot be frozen.
     pub fn compile_many(&mut self, outputs: &[&TracedTensor]) -> Result<CompiledGraph> {
-        let Some(first) = outputs.first() else {
-            return Err(Error::invalid_argument(
-                "GraphCompiler::compile_many",
-                ErrorPhase::Compile,
-                "outputs",
-                "at least one output is required",
-            ));
-        };
-        for output in outputs.iter().skip(1) {
-            crate::traced::ensure_same_context(first, output)?;
-        }
-        let values: Vec<_> = outputs.iter().map(|output| output.value).collect();
-        let (frozen, kept) = first
-            .ctx
-            .plain_snapshot_with_inputs(&values)
-            .map_err(graph_error_with_context("GraphCompiler::compile_many"))?;
-        let input_keys = kept.into_iter().map(|(key, _)| key).collect();
-        self.compile_frozen(&frozen, input_keys)
+        self.compile_declared("GraphCompiler::compile_many", "inputs", outputs, &[])
     }
 
     /// Compile one traced output with concrete placeholder specs.
@@ -246,34 +229,129 @@ impl GraphCompiler {
             }
             specs.push((
                 key,
-                crate::program::ProgramInputSpec::new(
+                Some(crate::program::ProgramInputSpec::new(
                     *dtype,
                     shape
                         .iter()
                         .map(|&size| tenferro_ops::dim_expr::DimExpr::Const(size)),
-                ),
+                )),
             ));
         }
-        let (frozen, kept) = output
+        self.compile_declared(
+            "GraphCompiler::compile_with_input_specs",
+            "bindings",
+            &[output],
+            &specs,
+        )
+    }
+
+    /// Compile traced outputs into one program with a fixed input order.
+    ///
+    /// `inputs` are data-less placeholders of the outputs' context; the compiled
+    /// program takes them first, in the order given here, followed by the
+    /// remaining live inputs in context order. Each placeholder keeps the dtype
+    /// and shape it was traced with, so a caller who needs static shapes, for
+    /// example for an XLA lowering, declares them with
+    /// [`TraceContext::input_concrete_shape`](crate::TraceContext::input_concrete_shape).
+    /// With no `inputs` this is [`compile_many`](Self::compile_many).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{DType, GraphCompiler, TraceContext};
+    ///
+    /// let trace = TraceContext::new();
+    /// let x = trace.input_concrete_shape(DType::F64, &[2])?;
+    /// let w = trace.input_concrete_shape(DType::F64, &[2])?;
+    /// let y = (&x * &w)?;
+    /// let z = y.neg()?;
+    /// // Parameters first: the program's inputs are `w`, then `x`.
+    /// let program = GraphCompiler::new().compile_with_inputs(&[&y, &z], &[&w, &x])?;
+    /// assert_eq!(program.input_count(), 2);
+    /// assert_eq!(program.output_count(), 2);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for an entry of `inputs` that carries
+    /// data or is not a context input, [`Error::DuplicateBinding`] for a repeated
+    /// one, `Error::Validation` with `ValidationError::InvalidArgument` when
+    /// `outputs` is empty (`argument: "outputs"`), an entry of `inputs` belongs to
+    /// another context (`argument: "context"`) or is not used by the outputs
+    /// (`argument: "inputs"`), and the errors of
+    /// [`compile_many`](Self::compile_many) for outputs of different contexts or a
+    /// program that cannot be frozen.
+    pub fn compile_with_inputs(
+        &mut self,
+        outputs: &[&TracedTensor],
+        inputs: &[&TracedTensor],
+    ) -> Result<CompiledGraph> {
+        let mut seen = std::collections::HashSet::new();
+        let mut order = Vec::with_capacity(inputs.len());
+        for (index, input) in inputs.iter().enumerate() {
+            if let Some(first) = outputs.first() {
+                crate::traced::ensure_same_context(first, input)?;
+            }
+            let key = input.input_key().filter(|_| input.data.is_none()).ok_or(
+                Error::UnexpectedBinding {
+                    binding_index: index,
+                },
+            )?;
+            if !seen.insert(key.clone()) {
+                return Err(Error::DuplicateBinding {
+                    input_key: format!("{key:?}"),
+                });
+            }
+            order.push((key, None));
+        }
+        self.compile_declared(
+            "GraphCompiler::compile_with_inputs",
+            "inputs",
+            outputs,
+            &order,
+        )
+    }
+
+    /// Compile `outputs` with the `declared` inputs first, and reject a declared
+    /// input that no output uses.
+    fn compile_declared(
+        &mut self,
+        op: &'static str,
+        argument: &'static str,
+        outputs: &[&TracedTensor],
+        declared: &[(TensorInputKey, Option<crate::program::ProgramInputSpec>)],
+    ) -> Result<CompiledGraph> {
+        let Some(first) = outputs.first() else {
+            return Err(Error::invalid_argument(
+                op,
+                ErrorPhase::Compile,
+                "outputs",
+                "at least one output is required",
+            ));
+        };
+        for output in outputs.iter().skip(1) {
+            crate::traced::ensure_same_context(first, output)?;
+        }
+        let values: Vec<_> = outputs.iter().map(|output| output.value).collect();
+        let (frozen, kept) = first
             .ctx
-            .snapshot_with_input_specs(&[output.value], &specs)
-            .map_err(graph_error_with_context(
-                "GraphCompiler::compile_with_input_specs",
-            ))?;
+            .snapshot_with_input_specs(&values, declared)
+            .map_err(graph_error_with_context(op))?;
         let input_keys = kept.into_iter().map(|(key, _)| key).collect();
         let program = self.compile_frozen(&frozen, input_keys)?;
-        if let Some(binding_index) = bindings.iter().position(|(placeholder, _, _)| {
-            placeholder
-                .input_key()
-                .is_none_or(|key| program.input_key_index(&key).is_none())
-        }) {
+        if let Some(index) = declared
+            .iter()
+            .position(|(key, _)| program.input_key_index(key).is_none())
+        {
             return Err(Error::invalid_argument(
-                "GraphCompiler::compile_with_input_specs",
+                op,
                 ErrorPhase::Compile,
-                "bindings",
+                argument,
                 format!(
-                    "binding {binding_index} declares a placeholder the output does not \
-                     depend on; remove it from the bindings"
+                    "{} {index} declares a placeholder no output depends on; remove it from the \
+                     {argument}",
+                    argument.trim_end_matches('s')
                 ),
             ));
         }

@@ -119,6 +119,13 @@ layer, generated from a per-family registry. The operation list, options,
   when exact and in range and by `Bool` only when `0` or `1`. tenferro-linalg's
   private `ones_like` helpers on the traced and eager layers now use them.
 
+- **`GraphCompiler::compile_with_inputs(outputs, inputs)` (#2642).** One entry
+  point for any number of outputs and a fixed input order: the listed
+  placeholders come first, in the given order, then the remaining live inputs in
+  context order. It takes no dtype or shape: a placeholder keeps the declaration
+  it was traced with. `compile`, `compile_many` and `compile_with_input_specs`
+  stay; the guides now use `compile_with_inputs`.
+
 - **`TensorStructural::cast_read` and `convert_read` (#2223).** The read form of the
   explicit dtype projection consumes a `TensorRead` where it lies, so a borrowed view
   is not staged before a cast. `convert_read` is the checked form (promotion-lattice

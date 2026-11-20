@@ -5,7 +5,7 @@ execution starts. This tutorial builds compiled programs that run an SVD, count
 singular values above a threshold, truncate `u`, `s`, and `vt` with
 `dynamic_truncate`, and reconstruct the thresholded matrix.
 
-The same traced graph and explicit placeholder spec are compiled once, then the
+The same traced graph, with its concrete `4 x 4` placeholder, is compiled once, then the
 programs run twice below: once with two singular values above the threshold and
 once with three. No re-trace or recompile is needed between the two executions.
 
@@ -131,9 +131,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rhs_batch_dims: [].as_slice().into(),
         },
     )?;
-    let input_specs = [(&x, DType::F64, &[4, 4][..])];
-    let reconstructed_program = compiler.compile_with_input_specs(&reconstructed, &input_specs)?;
-    let singular_values_program = compiler.compile_with_input_specs(&s_truncated, &input_specs)?;
+    let reconstructed_program = compiler.compile_with_inputs(&[&reconstructed], &[&x])?;
+    let singular_values_program = compiler.compile_with_inputs(&[&s_truncated], &[&x])?;
 
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime_with_linalg_and_einsum(&engine)?;

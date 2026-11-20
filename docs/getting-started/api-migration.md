@@ -176,6 +176,22 @@ in range, and `Bool` only when it is `0` or `1`.
 | A rank-0 traced literal broadcast with `broadcast_in_dim` | `trace.full(dtype, shape, value)`, or `trace.ones(x.dtype(), x.concrete_shape()?)` for a ones-like |
 | `s.constant_from_host(scalar)` then `s.broadcast_in_dim(..)` | `s.full(dtype, shape, value)` |
 
+### Compiling with an input order (#2642)
+
+`GraphCompiler::compile_with_inputs(outputs, inputs)` compiles any number of
+outputs into one program whose inputs start with `inputs`, in the given order,
+followed by the remaining live inputs in context order. A placeholder keeps its
+traced dtype and shape, so a program that needs static shapes declares them with
+`trace.input_concrete_shape(dtype, shape)` instead of passing them at compile
+time. The older methods remain.
+
+| Older spelling | Current spelling |
+| --- | --- |
+| `compiler.compile_many(&[&a, &b])` | `compiler.compile_with_inputs(&[&a, &b], &[])` |
+| `compiler.compile_with_input_specs(&y, &[(&x, dtype, &shape)])` with `x` from `input_concrete_shape(dtype, &shape)` | `compiler.compile_with_inputs(&[&y], &[&x])` |
+| `compiler.compile_with_input_specs(&y, &[(&x, dtype, &shape)])` with `x` from `input_symbolic_shape(dtype, rank)` | Trace `x` with `input_concrete_shape(dtype, &shape)`, then `compiler.compile_with_inputs(&[&y], &[&x])` |
+| Loss and gradients with a fixed parameter order (not possible before) | `compiler.compile_with_inputs(&[&loss, &g1, &g2], &[&p1, &p2, &data])` |
+
 The sections below describe earlier migrations. They are kept as history: where
 their right-hand column names a trait or `_read` method that 0.12 removed, use
 the tables above.
