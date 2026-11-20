@@ -25,14 +25,44 @@ while `EagerTensor` and `TracedTensor` add automatic
 differentiation when a workflow needs it. Both eager and traced modes support
 VJP and JVP. Eager mode also supports PyTorch-style `backward()` for scalar
 losses, while traced mode is the main surface for reusable graph transforms and
-HVP-style higher-order composition. WebGPU, Metal execution, and the Apple
-shared CPU/Metal path are not provided today.
+HVP-style higher-order composition. A first Metal slice (f32 and Complex32
+elementwise operations behind the `metal` feature) shares memory with the CPU
+engine on macOS; see
+[Devices and GPU](https://tensor4all.org/tenferro-rs/guides/devices-and-gpu.html#metal).
 
 tenferro-rs is the tensor engine behind the
 [tensor4all](https://github.com/tensor4all) scientific-computing stack and is
 dogfooded in its core product,
 [tensor4all-rs](https://github.com/tensor4all/tensor4all-rs), and the related
 Julia wrapper [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl).
+
+## Why tenferro-rs
+
+- **A missing layer.** Moving tensor-network engines from Julia to Rust exposed
+  a gap between ndarray, faer and the deep-learning frameworks: a tensor stack
+  that is column-major, dynamic-shape, autodiff-capable and extensible.
+  tenferro-rs fills that layer. The background story is in the introduction
+  post,
+  [From Julia to Rust](https://tensor4all.org/blog/introducing-tenferro-rs/).
+- **The whole stack, down to the kernels.** CPU threads
+  ([threadteam-rs](https://github.com/tensor4all/threadteam-rs)), strided
+  kernels ([strided-rs](https://github.com/tensor4all/strided-rs)), binary
+  contraction ([tcontract-rs](https://github.com/tensor4all/tcontract-rs)) and
+  batched linear algebra ([tlinalg-rs](https://github.com/tensor4all/tlinalg-rs))
+  are developed together, so performance can be tuned across layers instead of
+  stopping at a black box.
+- **For Julia users too.** Julia packages can call these kernels precompiled,
+  which avoids long precompilation, and the same kernels can be shared across
+  languages and research groups
+  ([Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl) does this for
+  tensor4all-rs).
+- **Built for AI-assisted development.** We assume that many developers of
+  tenferro-rs and of downstream projects use AI agents. Human coders are
+  welcome, but we observe that most young people entering computational
+  physics already use AI heavily. Issues and work logs are partly working notes
+  for agents and are not written for humans to read directly; human readers
+  should start from this README, the [documentation](https://tensor4all.org/tenferro-rs/),
+  the [design documents](docs/design/) and the release notes.
 
 Positioning: tenferro-rs sits between low-level array crates and full
 deep-learning frameworks for Rust scientific code that needs column-major
@@ -191,6 +221,18 @@ For PyTorch-style eager autodiff with `backward()` and functional
 Setup notes, including local-checkout builds and the single CPU backend, are
 in [Getting Started](https://tensor4all.org/tenferro-rs/getting-started/index.html).
 
+## Examples
+
+Larger runnable applications live in
+[tensor4all/tenferro-examples](https://github.com/tensor4all/tenferro-examples):
+physics-informed neural networks (Korteweg–de Vries, Burgers, Allen–Cahn, and
+a Poisson problem trained with Levenberg–Marquardt), a neural ODE, a DeepONet,
+neural-network quantum states, and DMFT with the IPT impurity solver. They
+build against the crates released on crates.io and are also checked daily
+against tenferro-rs `main`. New examples are welcome, especially ones compared
+against a PyTorch, JAX or Julia implementation, with what the comparison finds
+reported back as issues.
+
 ## Is tenferro for You?
 
 tenferro-rs is a good fit when:
@@ -214,10 +256,13 @@ tenferro-rs is a good fit when:
   example — and it flows through the same eager and traced autodiff (see
   [custom operations](https://tensor4all.org/tenferro-rs/guides/custom-operations.html)).
 
-tenferro-rs deliberately builds on the Rust numerics ecosystem instead of
-replacing it: [`faer`](https://github.com/sarah-quinones/faer-rs) for dense
-linear algebra, a native CUDA backend for GPU kernels, [`omeco`](https://crates.io/crates/omeco) for contraction ordering,
-and [`num-traits`](https://github.com/rust-num/num-traits) /
+tenferro-rs builds on the tensor4all numerical crates described above, on
+[`faer`](https://github.com/sarah-quinones/faer-rs) for dense linear algebra
+(through tensor4all's fork, `t4a-faer`), on native CUDA and Metal backends for
+GPU kernels, on [`omeco`](https://crates.io/crates/omeco) for contraction
+ordering, on [RustFFT](https://github.com/ejmahler/RustFFT) and
+[RealFFT](https://github.com/HEnquist/realfft) for CPU FFTs, and on
+[`num-traits`](https://github.com/rust-num/num-traits) /
 [`num-complex`](https://github.com/rust-num/num-complex) for generic
 numerics.
 
@@ -238,6 +283,7 @@ tenferro-rs is for projects that want this kind of stack natively in Rust.
 | Immediate execution in one runtime, optionally with `backward()`, VJP, or JVP | `EagerTensor` and `EagerRuntime` |
 | Reusable graph transforms, including `grad`, VJP/JVP, and HVP-style composition | `TracedTensor`, `GraphCompiler`, and `Runtime::prepare` / `Runtime::run` |
 | CUDA execution | The same tensor API plus explicit GPU upload/download and supported provider backend features |
+| Apple GPU (Metal, first slice) | `tenferro_gpu::metal` behind the `metal` feature; f64 and Complex64 work stays on the paired CPU engine |
 | Static-shaped StableHLO and PJRT plugin experiments | `GraphCompiler` plus `tenferro-xla` |
 
 ## Crates
@@ -254,7 +300,7 @@ solves your problem.
 | --- | --- |
 | `tenferro-tensor` | Tensor values, typed tensors, views, dtype/runtime tensor contracts, and backend traits |
 | `tenferro-cpu` | CPU backend execution |
-| `tenferro-gpu` | CUDA backend support and explicit device transfers |
+| `tenferro-gpu` | CUDA and Metal backends and explicit device transfers |
 | `tenferro-runtime` | Eager/traced execution, graph compilation, and extension runtime support |
 | `tenferro-ad` | Automatic differentiation |
 | `tenferro-xla` | Experimental StableHLO lowering and runtime-loaded PJRT plugin support for static-shaped traced graphs |
@@ -273,6 +319,9 @@ The crates `tenferro-tensor-core`, `tenferro-core-ops`,
 `tenferro-cpu-basic`, `tenferro-internal-cpu-kernels`, `tenferro-cpu-fused`,
 `tenferro-internal-ops`, and `tenferro-internal-extension-macros` are published
 building blocks for the crates above; most users never depend on them directly.
+The workspace also holds two adapters that are not on crates.io yet:
+`tenferro-mpi` (point-to-point MPI transport for host tensors) and
+`tenferro-hdf5` (HDF5 payloads).
 The CPU ownership split is documented in
 [`docs/design/cpu-kernel-boundaries.md`](docs/design/cpu-kernel-boundaries.md).
 For current backend operation coverage, start with the hand-written
@@ -324,21 +373,7 @@ Selected deep dives:
 - [Custom operations](https://tensor4all.org/tenferro-rs/guides/custom-operations.html)
   — extension operations and AD rules from external crates.
 
-Larger example applications, such as a physics-informed neural network for the
-Korteweg–de Vries equation, live in
-[tensor4all/tenferro-examples](https://github.com/tensor4all/tenferro-examples).
-They build against the crates released on crates.io and are also checked daily
-against tenferro-rs `main`.
-
 ## Project
-
-**Why tenferro-rs exists.** Moving tensor-network engines from Julia to Rust
-exposed a missing layer: a scientific-computing tensor stack between ndarray,
-faer, and the deep-learning frameworks — column-major, dynamic-shape,
-autodiff-capable, and extensible. tenferro-rs fills that layer and bridges to
-the Fortran/LAPACK, Julia, and JAX/PyTorch worlds. The background story is in
-the introduction post:
-[From Julia to Rust: a differentiable tensor stack for scientific computing in the agentic AI era](https://tensor4all.org/blog/introducing-tenferro-rs/).
 
 **Stability.** tenferro-rs is a pre-1.0 experimental research platform;
 public APIs may change substantially, including across 0.x releases. Pin
@@ -392,10 +427,13 @@ tenferro-rs stands on excellent work across several ecosystems, and aims to
 integrate with and contribute back to them.
 
 - **GPU.** The CUDA backend builds on the NVIDIA CUDA toolkit,
-  cuTENSOR, cuSOLVER, cuBLAS, and cuFFT. The temporary `t4a-*` crates
-  stage tensor4all patches until they land upstream.
+  cuTENSOR, cuSOLVER, cuBLAS, and cuFFT, all loaded at run time; the driver
+  and runtime bindings come from [`cudarc`](https://github.com/coreylowman/cudarc).
+  The Metal backend loads
+  Apple's Metal framework at run time.
 - **CPU / numerics.** Dense CPU linear algebra builds on
-  [`faer`](https://github.com/sarah-quinones/faer-rs), with numeric
+  [`faer`](https://github.com/sarah-quinones/faer-rs) through tensor4all's
+  fork `t4a-faer`, CPU FFTs on RustFFT and RealFFT, with numeric
   foundations from [`num-traits`](https://github.com/rust-num/num-traits) and
   [`num-complex`](https://github.com/rust-num/num-complex).
 - **Contraction ordering.** Einsum contraction-order optimization uses
