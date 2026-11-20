@@ -152,16 +152,33 @@ fn compile_eliminates_identity_layout_chain() {
 }
 
 #[test]
-fn layout_rewrites_do_not_rescan_program_uses() {
-    let source = include_str!("../mod.rs");
-    let (_, pass) = source
-        .split_once("fn algebraic_layout_simplifier_one_pass(")
-        .unwrap();
-    let (pass, _) = pass.split_once("fn collect_slot_shapes(").unwrap();
-    assert!(
-        !pass.contains("replace_slot_uses(") && !pass.contains("resolve_slot_redirect("),
-        "each layout rewrite must use a canonical alias, without a whole-program scan or per-use slot-table allocation"
+#[cfg(debug_assertions)]
+#[should_panic(expected = "requires SSA order")]
+fn rejects_use_before_definition_in_debug_builds() {
+    let shape = dim_shape(&[2, 3]);
+    let mut program = make_exec_program(
+        vec![
+            make_exec_instr_with_meta(
+                ExecOp::Negate,
+                vec![2],
+                vec![1],
+                DType::F64,
+                vec![shape.clone()],
+            ),
+            make_exec_instr_with_meta(
+                ExecOp::Transpose { perm: vec![0, 1] },
+                vec![0],
+                vec![2],
+                DType::F64,
+                vec![shape.clone()],
+            ),
+        ],
+        vec![0],
+        vec![1],
+        3,
     );
+
+    let _ = algebraic_layout_simplifier(&mut program, &[shape]);
 }
 
 #[test]
