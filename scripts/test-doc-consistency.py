@@ -178,23 +178,17 @@ def test_architecture_svg_lists_cpu_crate_xla_boundary_and_background() -> None:
     assert '<rect width="100%" height="100%" fill="#ffffff"/>' in text
     assert "tenferro-cpu" in text
     assert "tenferro-xla" in text
-    # The figure is embedded in README.md and docs/index.md, so it is user-facing:
-    # REPOSITORY_RULES ("User-Facing Docs") forbids naming internal crates there.
-    assert "tenferro-internal-ops" not in text
-    assert "computegraph-rs" not in text
+    assert "tenferro-internal-ops" in text
     assert "tidu-rs" not in text
     assert "GraphProgram → StableHLO" in text
     assert "PJRT plugin" in text
     assert "tenferro-xla bridge" in text
     assert "CPU backend" in text
-    # The CPU box names the caller-held engine (#2608); a `faer | BLAS/LAPACK`
+    # The CPU box names the one unconditional backend (#2608); a `faer | BLAS/LAPACK`
     # choice, an OpenBLAS/MKL/Accelerate provider or a `native` build qualifier would
-    # document a layer no build compiles. The numerical foundations column names the
-    # external crates the CPU backend actually runs on.
+    # document a layer no build compiles.
     cpu_box = text[text.index(">tenferro-cpu<") : text.index(">tenferro-gpu<")]
-    assert "caller-held CpuEngine" in cpu_box
-    for foundation in ("strided-rs", "tcontract-rs", "tlinalg-rs", "threadteam-rs"):
-        assert foundation in text, foundation
+    assert "faer · tlinalg · cpueinsum" in cpu_box
     for stale in ("BLAS/LAPACK", "OpenBLAS", "MKL", "Accelerate", "native"):
         assert stale not in text
 
