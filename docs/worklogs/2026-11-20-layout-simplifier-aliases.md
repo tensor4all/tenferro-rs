@@ -55,6 +55,14 @@
   including strict workspace and extension Clippy. Restoring the old redirect
   allocation makes the new source-contract regression fail; restoring the
   candidate passes. Independent review found no actionable correctness defects.
-- Downstream-pin verification and a complete paired rerun remain pending. The
-  first experiment's evidence is retained; its isolated layout improvement does
-  not satisfy the unchanged end-to-end gate.
+- The downstream backport passes 93 compiler checks in release mode, and all
+  five compiler/test files match the reviewed upstream implementation. The
+  downstream five-crate ordinary suite passes 2,072 checks; all eight retained
+  heavy witnesses also pass.
+- The complete paired rerun meets the unchanged local primary thresholds and
+  load/noise checks: both unchanged AD tests take about 14% of baseline time.
+  [Full experiment evidence](../performance/compiler-preparation-2026-11-20/README.md)
+  retains the first inconclusive run, every case and interval, and the diagnostic.
+  These are unpinned macOS results; pinned-core idle observations and
+  affinity-controlled Linux validation required by the full upstream host
+  protocol remain unavailable. Do not claim that full gate is satisfied.
