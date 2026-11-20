@@ -64,7 +64,8 @@ three pair ratios (27 resamples), not a large-sample confidence claim.
 
 The two ignored probes are
 `compiler::tests::layout_simplifier::benchmark_algebraic_layout_simplifier_scaling`
-and `compiler::tests::scaling::benchmark_conj_sinking_scaling`. Run each with
+and `compiler::tests::scaling::benchmark_conj_sinking_scaling`. From the tested
+tenferro 0.10 baseline/backport checkout, run each with
 `cargo test --release -p tenferro-runtime --no-default-features --features
 blas-accelerate --lib <probe> -- --exact --ignored --nocapture`. For the original
 baseline, copy only the two probe modules and their module declarations from
