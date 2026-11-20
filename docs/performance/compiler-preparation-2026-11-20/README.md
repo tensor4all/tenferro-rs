@@ -15,16 +15,18 @@ than a claim that the full host-validity gate is satisfied.
 | Conjugation metadata diagnostic, 4096 operations | 5.961 ms | 0.166 ms | 0.0276 |
 
 The source, complete case lists, every raw sample, paired ratios, bootstrap
-intervals, and before/after load observations are retained in these files:
+intervals, and before/after load observations are attached to
+tensor4all/tensor4all-rs#1408 as three JSON files:
 
-- [First layout-only experiment](first-inconclusive.json): **INCONCLUSIVE**.
-  It failed the noise gate and did not meet the end-to-end thresholds. Its
-  isolated layout result did not establish acceptance.
-- [Combined candidate](final-local.json): all six original cases retained,
+- `first-inconclusive.json`, the first layout-only experiment:
+  **INCONCLUSIVE**. It failed the noise gate and did not meet the end-to-end
+  thresholds. Its isolated layout result did not establish acceptance.
+- `final-local.json`, the combined candidate: all six original cases retained,
   with the original thresholds. The experiment's local checks pass; the stronger
   upstream pinned-core host check remains unverified.
-- [Conjugation diagnostic](conjugation-local.json): all four sizes retained.
-  This is secondary evidence and does not replace the original acceptance cases.
+- `conjugation-local.json`, the conjugation diagnostic: all four sizes
+  retained. This is secondary evidence and does not replace the original
+  acceptance cases.
 
 ## Method and reproduction
 
@@ -74,7 +76,9 @@ the candidate; they use pass APIs already present at the original pin.
 For end-to-end reproduction, build the five affected tensor4all-rs crates
 (`treetn`, `partitionedtreetn`, `treeaci`, `interpolativeqtt`, and `tutorial-code`)
 with `--release --lib --test integration`, then invoke the treetn integration
-binary once per exact AD test name in `final-local.json`. Time the complete
+binary once per exact AD test name
+(`gse::global_subspace_expand_preserves_ad_tracking_through_local_density_path`
+and `linsolve::test_linsolve_coefficient_gradient_reaches_solution`). Time the complete
 process, retain the full paired suite, and do not substitute individual cases.
 
 The conjugation diagnostic avoids a sinking fixpoint to isolate metadata and

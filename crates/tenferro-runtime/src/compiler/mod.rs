@@ -1232,6 +1232,14 @@ fn algebraic_layout_simplifier_one_pass(
     for index in 0..program.instructions.len() {
         // INVARIANT: lowering emits inputs before outputs, so each alias already names its canonical source.
         for slot in &mut program.instructions[index].input_slots {
+            if let Some(producer) = producer_by_slot.get(*slot).copied().flatten() {
+                debug_assert!(
+                    producer < index,
+                    "algebraic_layout_simplifier requires SSA order: instruction {index} reads \
+                     slot {} produced by instruction {producer}",
+                    *slot
+                );
+            }
             *slot = canonical_slots[*slot];
         }
         if program.instructions[index].input_slots.len() != 1
