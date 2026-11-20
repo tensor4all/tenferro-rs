@@ -48,7 +48,8 @@ Julia wrapper [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl).
   ([threadteam-rs](https://github.com/tensor4all/threadteam-rs)), strided
   kernels ([strided-rs](https://github.com/tensor4all/strided-rs)), binary
   contraction ([tcontract-rs](https://github.com/tensor4all/tcontract-rs)) and
-  batched linear algebra ([tlinalg-rs](https://github.com/tensor4all/tlinalg-rs))
+  batched linear algebra ([tlinalg-rs](https://github.com/tensor4all/tlinalg-rs)
+  on [colmat](https://github.com/tensor4all/colmat-rs), tensor4all's fork of faer)
   are developed together, so performance can be tuned across layers instead of
   stopping at a black box.
 - **For Julia users too.** Julia packages can call these kernels precompiled,
@@ -258,7 +259,8 @@ tenferro-rs is a good fit when:
 
 tenferro-rs builds on the tensor4all numerical crates described above, on
 [`faer`](https://github.com/sarah-quinones/faer-rs) for dense linear algebra
-(through tensor4all's fork, `t4a-faer`), on native CUDA and Metal backends for
+(through tensor4all's fork, colmat; the workspace still pins it under its
+earlier crate name, `t4a-faer`), on native CUDA and Metal backends for
 GPU kernels, on [`omeco`](https://crates.io/crates/omeco) for contraction
 ordering, on [RustFFT](https://github.com/ejmahler/RustFFT) and
 [RealFFT](https://github.com/HEnquist/realfft) for CPU FFTs, and on
@@ -433,7 +435,7 @@ integrate with and contribute back to them.
   Apple's Metal framework at run time.
 - **CPU / numerics.** Dense CPU linear algebra builds on
   [`faer`](https://github.com/sarah-quinones/faer-rs) through tensor4all's
-  fork `t4a-faer`, CPU FFTs on RustFFT and RealFFT, with numeric
+  fork [colmat](https://github.com/tensor4all/colmat-rs), CPU FFTs on RustFFT and RealFFT, with numeric
   foundations from [`num-traits`](https://github.com/rust-num/num-traits) and
   [`num-complex`](https://github.com/rust-num/num-complex).
 - **Contraction ordering.** Einsum contraction-order optimization uses
@@ -483,6 +485,19 @@ requests, design discussions, documentation improvements, benchmark reports,
 prototype branches, and pull requests are welcome. Pull requests are accepted
 from any account, forks included; a prior issue is recommended for substantial
 work, not required.
+
+### Contributions we are looking for
+
+- **Examples in [tenferro-examples](https://github.com/tensor4all/tenferro-examples).**
+  An application from your field, compared against a PyTorch, JAX or Julia
+  implementation, with what the comparison finds reported back to tenferro-rs
+  as issues or PRs.
+- **colmat on more hardware.** Tuning [colmat](https://github.com/tensor4all/colmat-rs)
+  kernels and benchmarking them on CPUs we do not have.
+- **More GPU backends.** ROCm (see the
+  [design](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/rocm-backend.md)),
+  Intel GPUs, and extending the first Metal slice
+  ([design](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/metal-backend.md)).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution policy and the
 supported AI-assisted workflows, and [GOVERNANCE.md](GOVERNANCE.md) for
