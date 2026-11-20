@@ -141,10 +141,18 @@ where
         return Ok(());
     }
     let threaded = planner_is_threaded(plans);
+    // Every lane here is a full complex transform, including the mirrored
+    // spectrum of `C2r`, so FFTW needs a c2c plan in the operation's direction.
+    #[cfg(feature = "fftw")]
+    let fftw_operation = if operation.is_forward() {
+        FftOperation::C2cForward
+    } else {
+        FftOperation::C2cInverse
+    };
     #[cfg(feature = "fftw")]
     let fftw = plans
         .fftw()
-        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, operation))
+        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, fftw_operation))
         .transpose()?;
     #[cfg(feature = "fftw")]
     let plan = fftw
