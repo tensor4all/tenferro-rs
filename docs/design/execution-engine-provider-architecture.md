@@ -230,9 +230,8 @@ legacy graph caller is migrated:
   equality. Bindings and diagnostic provenance are excluded, while semantic
   operations, metadata, constants, guards, effects, aliases, placement, and
   output order are included;
-- object-safe validation-preserving semantic transforms. Transform import
-  preserves all bindings, returned roots are destination-builder-local, and
-  collision buckets verify exact input structure after compact-key lookup.
+- an experimental custom compiler-pass interface with transactional import,
+  destination-local roots, and exact cache collision checks.
 
 The program module has no dependency on provider, resource-domain,
 scheduling, execution, graph, or AD modules. Its public objects expose no raw
@@ -242,9 +241,9 @@ operation index.
 This checkpoint does not claim Phase 3 complete. P3-A1 still owns the sole
 private forward staging adapter and XLA/einsum caller migration. P3-A2/A3
 still own `TraceContext`, pure `GraphCompiler`, `CompiledGraph`, semantic AD
-for core/FFT/einsum/linalg/sparse/tropical, production wiring of the transform
-cache, and deletion of public `GraphProgram`/`ExecProgram` and old semantic
-rule surfaces.
+for core/FFT/einsum/linalg/sparse/tropical, and deletion of public
+`GraphProgram`/`ExecProgram` and old semantic rule surfaces. The experimental
+custom compiler-pass interface stayed test-only until its removal.
 
 ### Phase 3 closure (2026-07-24)
 
@@ -494,11 +493,9 @@ explicit operation governed by a size policy. A tensor from another runtime is
 never imported implicitly as a default. Cross-`TraceContext` tensor use also
 requires an explicit import; tracing does not merge graphs implicitly.
 
-Extension tracing APIs target `TraceContext`. Existing APIs such as
-`TraceContextEinsumExt` are replaced atomically when the new compiler
-extension point lands; they are not permanent compiler extension points.
+Extension tracing APIs target `TraceContext`.
 
-### Verified semantic transforms and AD
+### Compiler pipeline and semantic AD
 
 The fixed compiler pipeline is deterministic and target-independent:
 
@@ -509,12 +506,9 @@ The fixed compiler pipeline is deterministic and target-independent:
 5. extension output pruning;
 6. validation, freeze, and fingerprinting.
 
-Custom compiler work uses an explicit `SemanticTransform`: a read-only input
-and a validated builder output. Transforms cannot mutate a program, inspect
-runtime providers or input values, or use a process-global pass registry.
-Ordered custom transforms participate in a compiler cache key and preserve
-node provenance. Extension callbacks admitted inside the fixed pipeline are
-limited to pure semantic operations such as output pruning.
+Extension operations can provide pure semantic callbacks such as output
+pruning. `GraphCompiler` takes a traced graph or frozen program and compiler
+options.
 
 Automatic differentiation is a separate
 `SemanticProgram -> SemanticProgram` transform in `tenferro-ad`, before
