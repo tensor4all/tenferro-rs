@@ -6,6 +6,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the unused custom compiler-pass API from `tenferro_runtime::program`
+  (`SemanticTransform`, `SemanticTransformContext`, `TransformIdentity`, and
+  `SemanticTransformError`) and its private cache.
+
 ### Breaking changes — one call grammar (#2552, ships in 0.12.0)
 
 Every operation family (core, linalg, einsum, FFT) now has one spelling per
