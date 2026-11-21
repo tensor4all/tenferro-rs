@@ -5,7 +5,7 @@ The release workflow must not ship a tree that mixes t4a-faer with colmat, or tw
 strided release trains. This is a publish preflight, not a code-style check.
 """
 from __future__ import annotations
-import re, sys
+import argparse, re, sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,13 +26,16 @@ FORBIDDEN = {"t4a-faer"}
 
 
 def main() -> int:
-    lock = (ROOT / "Cargo.lock").read_text()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lock", default=str(ROOT / "Cargo.lock"))
+    args = parser.parse_args()
+    lock = Path(args.lock).read_text()
     versions = {}
     for block in lock.split("[[package]]")[1:]:
         name = re.search(r'^name = "([^"]+)"', block, re.M)
         ver = re.search(r'^version = "([^"]+)"', block, re.M)
         if name and ver:
-            versions[name.group(1)] = ver.group(1)
+            versions.setdefault(name.group(1), []).append(ver.group(1))
     problems = []
     for name in FORBIDDEN & set(versions):
         problems.append(f"forbidden dependency {name} {versions[name]}")
@@ -41,14 +44,27 @@ def main() -> int:
         if name not in versions:
             problems.append(f"missing {name}")
             continue
-        v = versions[name]
-        try:
-            major, minor = (int(x) for x in v.split(".")[:2])
-        except ValueError:
-            problems.append(f"{name} has unparsable version {v}")
-            continue
-        if (major, minor) != want:
-            problems.append(f"{name} {v} != {want[0]}.{want[1]}.x")
+        for v in versions[name]:
+            try:
+                major, minor = (int(x) for x in v.split(".")[:2])
+            except ValueError:
+                problems.append(f"{name} has unparsable version {v}")
+                continue
+            if (major, minor) != want:
+                problems.append(f"{name} {v} != {want[0]}.{want[1]}.x")
+        if len(set(versions[name])) > 1:
+            problems.append(f"{name} has multiple versions {sorted(set(versions[name]))}")
+    # Any other strided-* crate must be on the 0.15 train.
+    for name in versions:
+        if name.startswith("strided-") and name not in wanted:
+            for v in versions[name]:
+                try:
+                    major, minor = (int(x) for x in v.split(".")[:2])
+                except ValueError:
+                    problems.append(f"{name} has unparsable version {v}")
+                    continue
+                if (major, minor) != (0, 15):
+                    problems.append(f"unlisted {name} {v} != 0.15.x")
     for p in problems:
         print(f"FAIL stack-version: {p}")
     print(f"check-stack-versions: {len(problems)} problem(s)")
