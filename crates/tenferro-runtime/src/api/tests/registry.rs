@@ -152,28 +152,81 @@ fn every_input_kind_returns_the_owned_result() -> TR<()> {
 // ------------------------------------------------------------------ 3. _into
 
 #[test]
-fn only_add_declares_into_and_only_overwrite() {
+fn elementwise_into_is_declared_for_overwrite_only() {
     let into: Vec<(&str, &[&str])> = API_OPS
         .iter()
         .filter(|op| !op.into.is_empty())
         .map(|op| (op.name, op.into))
         .collect();
-    assert_eq!(into, [("add", &["overwrite"][..])]);
+    let mut names: Vec<&str> = into.iter().map(|(name, _)| *name).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["add", "conj", "div", "mul", "neg", "sub"]);
+    for (name, modes) in into {
+        assert_eq!(modes, ["overwrite"], "{name}");
+    }
+}
+
+type IntoCase = (
+    &'static str,
+    fn(&TypedTensor<f64>, &mut CpuEngine) -> TR<Tensor>,
+    fn(
+        &TypedTensor<f64>,
+        &mut CpuEngine,
+        Dest<tenferro_tensor::TypedTensorWrite<'_, f64>>,
+    ) -> tenferro_tensor::Result<()>,
+);
+
+/// Every declared `_into` with the allocating form it must match bit for bit.
+fn into_cases() -> [IntoCase; 6] {
+    [
+        (
+            "add",
+            |a, e| Ok(Tensor::from_typed(a.add(a, e)?)),
+            |a, e, d| a.add_into(a, e, d),
+        ),
+        (
+            "sub",
+            |a, e| Ok(Tensor::from_typed(a.sub(a, e)?)),
+            |a, e, d| a.sub_into(a, e, d),
+        ),
+        (
+            "mul",
+            |a, e| Ok(Tensor::from_typed(a.mul(a, e)?)),
+            |a, e, d| a.mul_into(a, e, d),
+        ),
+        (
+            "div",
+            |a, e| Ok(Tensor::from_typed(a.div(a, e)?)),
+            |a, e, d| a.div_into(a, e, d),
+        ),
+        (
+            "neg",
+            |a, e| Ok(Tensor::from_typed(a.neg(e)?)),
+            |a, e, d| a.neg_into(e, d),
+        ),
+        (
+            "conj",
+            |a, e| Ok(Tensor::from_typed(a.conj(e)?)),
+            |a, e, d| a.conj_into(e, d),
+        ),
+    ]
 }
 
 #[test]
-fn add_into_overwrite_never_reads_the_destination() -> TR<()> {
+fn into_overwrite_never_reads_the_destination() -> TR<()> {
     let mut e = CpuEngine::serial();
     let a = base()?;
-    let want = Tensor::from_typed(a.add(&a, &mut e)?);
-    for poison in [f64::NAN, -0.0, f64::INFINITY] {
-        let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![poison; 6])?;
-        a.add_into(&a, &mut e, Dest::overwrite(&mut out))?;
-        assert_eq!(
-            bits(&Tensor::from_typed(out))?,
-            bits(&want)?,
-            "poison {poison}"
-        );
+    for (name, owned, into) in into_cases() {
+        let want = owned(&a, &mut e)?;
+        for poison in [f64::NAN, -0.0, f64::INFINITY] {
+            let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![poison; 6])?;
+            into(&a, &mut e, Dest::overwrite(&mut out))?;
+            assert_eq!(
+                bits(&Tensor::from_typed(out))?,
+                bits(&want)?,
+                "{name}: poison {poison}"
+            );
+        }
     }
     Ok(())
 }
@@ -190,15 +243,17 @@ fn undeclared_into_modes_are_unsupported_before_any_write() -> TR<()> {
         ("accumulate", |out| Dest::accumulate(out)),
         ("scaled", |out| Dest::scaled(out, 2.0, 0.0)),
     ];
-    for (label, mk) in modes {
-        let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], sentinel.clone())?;
-        let err = a.add_into(&a, &mut e, mk(&mut out)).expect_err(label);
-        assert_eq!(err.kind(), ErrorKind::Unsupported, "{label}: {err}");
-        assert_eq!(
-            out.host_data()?,
-            &sentinel[..],
-            "{label} touched the destination"
-        );
+    for (name, _, into) in into_cases() {
+        for (label, mk) in modes {
+            let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], sentinel.clone())?;
+            let err = into(&a, &mut e, mk(&mut out)).expect_err(label);
+            assert_eq!(err.kind(), ErrorKind::Unsupported, "{name} {label}: {err}");
+            assert_eq!(
+                out.host_data()?,
+                &sentinel[..],
+                "{name} {label} touched the destination"
+            );
+        }
     }
     Ok(())
 }

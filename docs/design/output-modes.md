@@ -57,6 +57,14 @@ Backend and provider traits (`Engine`, `TensorDot`, `LinalgBackend`,
 | `op_read_into(..., out: TensorWrite)` | Borrowed inputs plus overwritten caller output. This is the main backend hook shape. |
 | `op_read_into_accum(..., accum, out: TensorWrite)` | Dot/GEMM-only update, `out = alpha * op(lhs, rhs) + beta * out`, with `DotGeneralAccumulation` carrying conjugation flags and `alpha`/`beta`. |
 
+The elementwise `add`, `sub`, `mul`, `div`, `neg` and `conj` declare `_into`
+with `Dest::Overwrite` only, on the concrete and the eager layer
+(`EagerSession::add_into` and siblings, #2701); the traced layer has none. An
+eager destination is a caller-owned `Tensor`,
+not an eager value, so a tracked operand or an active trace capture is
+`Unsupported` before anything is written instead of silently dropping the
+gradient; an eager `_into` never records a graph node.
+
 A public `Dest::accumulate` or `Dest::scaled` on a dot/GEMM-shaped operation is
 lowered onto the `_read_into_accum` hook (`Dest::into_accumulation`, exception
 E06); there is no separate `_linear_into` vocabulary.

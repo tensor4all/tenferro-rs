@@ -102,9 +102,34 @@ binary! {
     minimum => minimum_read;
 }
 
-pub(crate) fn add_into(a: R<'_>, b: R<'_>, e: &mut dyn Engine, out: TensorWrite<'_>) -> Result<()> {
-    let (lhs, rhs) = binary_in(a, b, e)?;
-    e.add_read_into(lhs.tensor_read(), rhs.tensor_read(), out)
+macro_rules! binary_into {
+    ($($name:ident => $hook:ident;)*) => {$(
+        pub(crate) fn $name(a: R<'_>, b: R<'_>, e: &mut dyn Engine, out: TensorWrite<'_>) -> Result<()> {
+            let (lhs, rhs) = binary_in(a, b, e)?;
+            e.$hook(lhs.tensor_read(), rhs.tensor_read(), out)
+        }
+    )*};
+}
+
+binary_into! {
+    add_into => add_read_into;
+    sub_into => sub_read_into;
+    mul_into => mul_read_into;
+    div_into => div_read_into;
+}
+
+pub(crate) fn neg_into(a: R<'_>, e: &mut dyn Engine, out: TensorWrite<'_>) -> Result<()> {
+    e.neg_read_into(a, out)
+}
+
+pub(crate) fn conj_into(a: R<'_>, e: &mut dyn Engine, out: TensorWrite<'_>) -> Result<()> {
+    // Conjugation is the identity on a real dtype; the allocating `conj` returns the
+    // value unchanged there, and a backend need not declare a real conjugation kernel.
+    if matches!(a.dtype(), DType::C32 | DType::C64) {
+        e.conj_read_into(a, out)
+    } else {
+        e.copy_read_into(a, out)
+    }
 }
 
 pub(crate) fn compare(a: R<'_>, b: R<'_>, dir: CompareDir, e: &mut dyn Engine) -> Result<Tensor> {

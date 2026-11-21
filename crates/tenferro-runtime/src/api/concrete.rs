@@ -41,27 +41,64 @@ where
     <X::Repr as CoreRepr>::wrap_bool(op, t)
 }
 
-pub(crate) fn add_into<X: AsView + ?Sized>(
-    a: &X,
-    b: &impl AsView<Repr = X::Repr>,
-    e: &mut dyn Engine,
-    dest: Dest<<X::Repr as Repr>::Write<'_>>,
-) -> Res<()>
-where
-    X::Repr: CoreRepr,
-{
-    // Rejected before `dest` is touched.
+/// The `Dest` modes the elementwise `_into` forms declare: overwrite only.
+/// Rejected before `dest` is touched, so an undeclared mode writes nothing.
+fn overwrite_target<W>(op: &'static str, dest: Dest<W>) -> Res<W> {
     if dest.mode() != DestMode::Overwrite {
         return Err(Error::unsupported(
-            "add_into",
+            op,
             format!(
-                "destination mode {:?} is not supported; add_into overwrites its destination",
+                "destination mode {:?} is not supported; {op} overwrites its destination",
                 dest.mode()
             ),
         ));
     }
-    let out = <X::Repr as Repr>::erase_write(dest.into_target());
-    body::add_into(a.as_read(), b.as_read(), e, out)
+    Ok(dest.into_target())
+}
+
+macro_rules! binary_into {
+    ($($name:ident => $body:ident;)*) => {$(
+        pub(crate) fn $name<X: AsView + ?Sized>(
+            a: &X,
+            b: &impl AsView<Repr = X::Repr>,
+            e: &mut dyn Engine,
+            dest: Dest<<X::Repr as Repr>::Write<'_>>,
+        ) -> Res<()>
+        where
+            X::Repr: CoreRepr,
+        {
+            let out = <X::Repr as Repr>::erase_write(overwrite_target(stringify!($name), dest)?);
+            body::$body(a.as_read(), b.as_read(), e, out)
+        }
+    )*};
+}
+
+binary_into! {
+    add_into => add_into;
+    sub_into => sub_into;
+    mul_into => mul_into;
+    div_into => div_into;
+}
+
+macro_rules! unary_into {
+    ($($name:ident => $body:ident;)*) => {$(
+        pub(crate) fn $name<X: AsView + ?Sized>(
+            a: &X,
+            e: &mut dyn Engine,
+            dest: Dest<<X::Repr as Repr>::Write<'_>>,
+        ) -> Res<()>
+        where
+            X::Repr: CoreRepr,
+        {
+            let out = <X::Repr as Repr>::erase_write(overwrite_target(stringify!($name), dest)?);
+            body::$body(a.as_read(), e, out)
+        }
+    )*};
+}
+
+unary_into! {
+    neg_into => neg_into;
+    conj_into => conj_into;
 }
 
 pub(crate) fn where_select<X: AsView + ?Sized, Y: SelectOperand<X::Repr> + ?Sized>(
