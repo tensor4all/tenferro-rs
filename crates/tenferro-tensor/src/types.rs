@@ -12363,8 +12363,13 @@ impl Tensor {
                 format!("{value} is not representable in {dtype:?}"),
             )
         };
-        // Below 2^53 (~9.007e15) every integer is exact in f64, so `as i64` loses nothing.
-        let integer = (value.fract() == 0.0 && value.abs() < 9.0e15)
+        // Both bounds are exact in binary64, so they decide representability
+        // without the saturating `as i64` cast: 2^53 and every integral binary64
+        // value up to the largest one below 2^63 are exactly representable (and
+        // NaN/infinity fail the `fract` test).
+        const I64_MIN: f64 = -9_223_372_036_854_775_808.0; // -(2^63)
+        const I64_MAX_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0; // 2^63
+        let integer = (value.fract() == 0.0 && (I64_MIN..I64_MAX_EXCLUSIVE).contains(&value))
             .then_some(value as i64)
             .ok_or_else(not_representable);
         match dtype {

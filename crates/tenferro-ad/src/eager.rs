@@ -1940,8 +1940,9 @@ impl EagerSession<'_> {
     /// ```
     /// # Errors
     /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
-    /// externally defined scalar, or a backend error from the upload or broadcast.
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the shape
+    /// product overflows or `dtype` is an externally defined scalar, or a backend
+    /// error from the upload or broadcast.
     pub fn zeros(&mut self, dtype: DType, shape: impl IntoShapeVec) -> Result<EagerTensor> {
         self.full(dtype, shape, 0.0)
     }
@@ -1961,8 +1962,9 @@ impl EagerSession<'_> {
     /// ```
     /// # Errors
     /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
-    /// externally defined scalar, or a backend error from the upload or broadcast.
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the shape
+    /// product overflows or `dtype` is an externally defined scalar, or a backend
+    /// error from the upload or broadcast.
     pub fn ones(&mut self, dtype: DType, shape: impl IntoShapeVec) -> Result<EagerTensor> {
         self.full(dtype, shape, 1.0)
     }
@@ -1988,9 +1990,10 @@ impl EagerSession<'_> {
     /// ```
     /// # Errors
     /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `value` is not
-    /// representable in `dtype` or `dtype` is an externally defined scalar, or a
-    /// backend error from the upload or broadcast.
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the shape
+    /// product overflows, `value` is not representable in `dtype`, or `dtype` is
+    /// an externally defined scalar, or a backend error from the upload or
+    /// broadcast.
     pub fn full(
         &mut self,
         dtype: DType,
@@ -1998,6 +2001,9 @@ impl EagerSession<'_> {
         value: f64,
     ) -> Result<EagerTensor> {
         let shape = shape.into_shape_vec();
+        // The target shape is known here, so an element count that overflows
+        // `usize` must fail before the scalar is uploaded or broadcast.
+        tenferro_tensor::validate::checked_shape_product("EagerSession::full", "shape", &shape)?;
         let scalar = self.constant_from_host(Tensor::full(dtype, [0_usize; 0], value)?)?;
         if shape.is_empty() {
             return Ok(scalar);
