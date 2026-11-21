@@ -160,6 +160,15 @@ layer, generated from a per-family registry. The operation list, options,
 
 ### Changed
 
+- **`FftExecutor`'s allocating transforms take any `AsView` input (#2687).**
+  `fft_with`, `ifft_with`, `rfft_with`, `irfft_with`, `fftn_with`, `ifftn_with`,
+  `rfftn_with` and `irfftn_with` now take `&X` for `X: AsView + ?Sized`, the same
+  input as their `_into` twins, so a typed tensor, a compact borrowed read or a
+  supported strided view uses the executor's plan cache without being copied into
+  an owned `Tensor` first. An owned-`Tensor` call is unchanged. A borrowed view
+  that is not compact column-major is staged once into compact storage, as the
+  `_into` forms do.
+
 - **`CpuEngine`'s engine-wide cache controls cover its extension cache store**
   (#2587). `runtime_cache_stats` adds the store's entries and retained bytes to
   `entries` and `retained_bytes`; `hits`, `misses` and `evictions` stay the plan
