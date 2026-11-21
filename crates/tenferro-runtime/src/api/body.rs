@@ -194,17 +194,11 @@ pub(crate) fn reduce_mean(a: R<'_>, axes: Option<&[usize]>, e: &mut dyn Engine) 
 }
 
 pub(crate) fn convert(a: R<'_>, to: DType, e: &mut dyn Engine) -> Result<Tensor> {
-    match a.as_tensor() {
-        Some(t) => e.convert(t, to),
-        None => e.convert_read(a, to),
-    }
+    e.convert_read(a, to)
 }
 
 pub(crate) fn cast(a: R<'_>, to: DType, e: &mut dyn Engine) -> Result<Tensor> {
-    match a.as_tensor() {
-        Some(t) => e.cast(t, to),
-        None => e.cast_read(a, to),
-    }
+    e.cast_read(a, to)
 }
 
 pub(crate) fn scale_real(a: R<'_>, factor: f64, e: &mut dyn Engine) -> Result<Tensor> {

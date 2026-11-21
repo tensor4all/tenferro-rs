@@ -997,7 +997,7 @@ Checked dtype conversion along tenferro's promotion lattice. The result is a dty
 - Options: none
 - Output: `tenferro_tensor::Tensor`
 - Dtypes: Any source dtype the conversion supports; the result has dtype `to`.
-- Layout: An owned `Tensor` receiver is converted directly. Any other receiver (a borrowed view or a typed tensor) is first gathered once into a compact tensor of the same placement and dtype, because the engine conversion reads an owned tensor.
+- Layout: Every receiver is read through `TensorRead` by the engine's `*_read` entry: an owned tensor, a typed tensor and a borrowed view reach the same body. CPU reads a supported strided or offset view in place and does not gather it first. A backend whose conversion kernel takes one flat span (CUDA's `Convert`) gathers a borrowed view once into compact storage of the same placement and dtype; a backend without such a conversion route reports an error rather than falling back to the host.
 - Errors: `Validation`, `Unsupported`
 - Omissions: none
 
@@ -1008,7 +1008,7 @@ Explicit, possibly lossy dtype projection. The result is a dtype-erased `Tensor`
 - Options: none
 - Output: `tenferro_tensor::Tensor`
 - Dtypes: Any source dtype the conversion supports; the result has dtype `to`.
-- Layout: An owned `Tensor` receiver is converted directly. Any other receiver (a borrowed view or a typed tensor) is first gathered once into a compact tensor of the same placement and dtype, because the engine conversion reads an owned tensor.
+- Layout: Every receiver is read through `TensorRead` by the engine's `*_read` entry: an owned tensor, a typed tensor and a borrowed view reach the same body. CPU reads a supported strided or offset view in place and does not gather it first. A backend whose conversion kernel takes one flat span (CUDA's `Convert`) gathers a borrowed view once into compact storage of the same placement and dtype; a backend without such a conversion route reports an error rather than falling back to the host.
 - Errors: `Validation`, `Unsupported`
 - Omissions: none
 

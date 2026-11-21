@@ -335,26 +335,46 @@ fn test_slice_concatenate_and_reverse_edge_cases() {
 }
 
 #[test]
-fn test_structural_convert_helper_returns_result() {
+fn test_convert_entry_widens_owned_and_offset_operands() {
     let input = Tensor::from_typed::<f32>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.25_f32, -2.5_f32]).unwrap(),
     );
+    let mut backend = crate::CpuEngine::serial();
 
-    let output = crate::structural::convert(&input, DType::F64).unwrap();
+    let output =
+        crate::test_support::on_engine(&mut backend, |__s| __s.convert(&input, DType::F64))
+            .unwrap()
+            .unwrap();
 
     assert_eq!(output.shape(), &[2]);
     assert_eq!(output.dtype(), DType::F64);
     assert_eq!(get_f64(&output, &[0]), 1.25);
     assert_eq!(get_f64(&output, &[1]), -2.5);
+
+    // The same values one element into a larger buffer: the checked entry reads the offset
+    // operand's own layout instead of gathering it first.
+    let buffer = [9.0_f32, 1.25, -2.5, 9.0];
+    let read = TensorRead::from_view(TensorView::F32(
+        TypedTensorView::from_slice(vec![2], vec![1], 1, &buffer).unwrap(),
+    ));
+    let output = crate::test_support::on_engine(&mut backend, |__s| {
+        __s.convert_read(read.clone(), DType::F64)
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[1.25, -2.5]);
 }
 
 #[test]
-fn test_structural_convert_rejects_lossy_dtype_projection() {
+fn test_convert_entry_rejects_lossy_dtype_projection() {
     let input = Tensor::from_typed::<f64>(
         TypedTensor::from_vec_col_major(vec![2], vec![1.25_f64, -2.5_f64]).unwrap(),
     );
+    let mut backend = crate::CpuEngine::serial();
 
-    let err = crate::structural::convert(&input, DType::I32).unwrap_err();
+    let err = crate::test_support::on_engine(&mut backend, |__s| __s.convert(&input, DType::I32))
+        .unwrap()
+        .unwrap_err();
 
     assert!(matches!(
         err,
