@@ -16,7 +16,7 @@
   elementwise path staged every view. A flat view (one compact span at its allocation's base)
   is now passed to the flat kernel where it lies. The CUDA test pins the contract with the
   runtime's allocation and launch counters: one launch and no allocation per eager `_into` on
-  compact operands.
+  compact operands, measured for the f64 arithmetic forms and f64/c64 `conj`.
 - No new name for the eager "borrowed strided read". An eager `transpose` already yields a view,
   but over a compact copy it makes, and the flat CUDA kernels gather permuted views once.
   Reading permuted views in place needs stride-aware kernel entries in `t4a-cuda-kernels`
@@ -31,10 +31,12 @@
 
 ## Verification conclusions and constraints
 
-- On an A100, every eager `_into` on compact eager operands performs 0 device allocations and
-  1 launch and is bit-identical to the owned-tensor hook. Complex and integer division also
-  zero a 4-byte status word. An integer division by zero is a NumericalFailure reported after
-  the launch, so the destination contents are then unspecified.
+- On an A100, the eager `_into` forms on compact eager operands (f64 arithmetic, f64/c64
+  `conj`) perform 0 device allocations and 1 launch and are bit-identical to the owned-tensor
+  hook. Complex and integer division are checked for values only: they allocate and zero a
+  4-byte kernel status word per call (no result allocation, no operand copy). An integer
+  division by zero is a NumericalFailure reported after the launch, so the destination contents
+  are then unspecified.
 - Allocating eager CUDA ops still stage compact eager operands (`exp` on an eager value: 2
   allocations and 2 launches against 1 and 1 on the owned hook). Fixing that needs a
   borrowed-allocation `Resolved` in the CUDA `device_read`.
