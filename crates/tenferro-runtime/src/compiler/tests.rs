@@ -14,10 +14,16 @@ use tenferro_tensor::{
     DType, DotGeneralConfig, ErrorKind, ShapeMismatch, ValidationError, ValidationKind,
 };
 
+#[path = "tests/conj_sinking.rs"]
+mod conj_sinking_tests;
 #[path = "tests/dot_decomposer_tests.rs"]
 mod dot_decomposer_tests;
+#[path = "tests/layout_simplifier.rs"]
+mod layout_simplifier;
 #[path = "tests/metadata_views.rs"]
 mod metadata_views;
+#[path = "tests/scaling.rs"]
+mod scaling;
 #[path = "tests/shape_constraints.rs"]
 mod shape_constraints;
 
@@ -197,7 +203,7 @@ fn record_producer_rejects_out_of_range_output_slot() {
     let instr = make_exec_instr(ExecOp::Negate, vec![0], vec![3]);
     let mut producers = vec![None];
 
-    let err = record_producer(&mut producers, &instr).unwrap_err();
+    let err = record_producer(&mut producers, &instr, 0, &[], &[]).unwrap_err();
 
     assert!(matches!(
         err,

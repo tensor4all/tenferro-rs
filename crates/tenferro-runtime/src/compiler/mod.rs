@@ -721,21 +721,18 @@ fn combine_monotonic_kinds(lhs: ExtentKind, rhs: ExtentKind) -> ExtentKind {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct SlotMeta {
     dtype: DType,
-    shape: Vec<DimExpr>,
-    extents: Vec<ShapeExtent<DimExpr>>,
+    source: SlotMetaSource,
 }
 
-#[derive(Clone)]
-struct ProducerInfo {
-    op: ExecOp,
-    input_slots: Vec<usize>,
-    dtype: DType,
+#[derive(Clone, Copy)]
+enum SlotMetaSource {
+    Input(usize),
+    InstructionOutput { instruction: usize, output: usize },
 }
 
-type ProducerMap = Vec<Option<ProducerInfo>>;
 type AxisVec = TinyVec<[usize; 4]>;
 
 // ============================================================================
@@ -784,9 +781,8 @@ fn conj_sinking_one_pass(
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
 ) -> Result<bool> {
-    let mut slot_meta = collect_slot_meta(program, input_dtypes, input_shapes)?;
+    let mut slot_meta = collect_input_slot_meta(program, input_dtypes)?;
     let mut redirect: Vec<usize> = (0..program.n_slots).collect();
-    let mut producer_by_slot: ProducerMap = vec![None; program.n_slots];
     let mut conj_cache: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     let mut new_instructions = Vec::with_capacity(program.instructions.len());
     let mut changed = false;
@@ -799,7 +795,7 @@ fn conj_sinking_one_pass(
 
         if matches!(instr.op, ExecOp::Conj) && instr.input_slots.len() == 1 {
             let input_slot = instr.input_slots[0];
-            if let Some(producer) = producer_for_slot(&producer_by_slot, input_slot).cloned() {
+            if let Some(producer) = producer_for_slot(&slot_meta, &new_instructions, input_slot) {
                 if matches!(producer.op, ExecOp::Conj) && producer.input_slots.len() == 1 {
                     let replacement = resolve_slot_redirect(producer.input_slots[0], &redirect)?;
                     for &slot in &instr.output_slots {
@@ -810,14 +806,15 @@ fn conj_sinking_one_pass(
                 }
 
                 if let Some(commuting_inputs) =
-                    conj_commuting_input_indices(&producer, producer.input_slots.len(), &slot_meta)
+                    conj_commuting_input_indices(producer, producer.input_slots.len(), &slot_meta)
                 {
-                    let mut input_slots = producer.input_slots;
+                    let mut input_slots = producer.input_slots.clone();
+                    let op = producer.op.clone();
                     for input_idx in commuting_inputs {
                         let input_slot = input_slots[input_idx];
                         input_slots[input_idx] = ConjSinkingState {
                             slot_meta: &mut slot_meta,
-                            producer_by_slot: &mut producer_by_slot,
+                            input_shapes,
                             conj_cache: &mut conj_cache,
                             new_instructions: &mut new_instructions,
                             n_slots: &mut program.n_slots,
@@ -825,14 +822,20 @@ fn conj_sinking_one_pass(
                         }
                         .ensure_conj_slot(input_slot)?;
                     }
-                    instr.op = producer.op;
+                    instr.op = op;
                     instr.input_slots = input_slots;
                     changed = true;
                 }
             }
         }
 
-        record_producer(&mut producer_by_slot, &instr)?;
+        record_producer(
+            &mut slot_meta,
+            &instr,
+            new_instructions.len(),
+            &new_instructions,
+            input_shapes,
+        )?;
         new_instructions.push(instr);
     }
 
@@ -843,10 +846,9 @@ fn conj_sinking_one_pass(
     Ok(changed)
 }
 
-fn collect_slot_meta(
+fn collect_input_slot_meta(
     program: &ExecProgram,
     input_dtypes: &[DType],
-    input_shapes: &[Vec<DimExpr>],
 ) -> Result<Vec<Option<SlotMeta>>> {
     let mut slot_meta = vec![None; program.n_slots];
     for (index, &slot) in program.input_slots.iter().enumerate() {
@@ -858,38 +860,42 @@ fn collect_slot_meta(
         };
         *meta_slot = Some(SlotMeta {
             dtype: input_dtypes[index],
-            shape: input_shapes[index].clone(),
-            extents: exact_extents_from_shape(&input_shapes[index]),
+            source: SlotMetaSource::Input(index),
         });
     }
-    for instr in &program.instructions {
-        let output_dtypes = instruction_output_dtypes(instr, &slot_meta)?;
-        for (((&slot, dtype), shape), extents) in instr
-            .output_slots
-            .iter()
-            .zip(output_dtypes.iter())
-            .zip(instr.output_shapes.iter())
-            .zip(instr.output_extents.iter())
-        {
-            let Some(meta_slot) = slot_meta.get_mut(slot) else {
-                return Err(invalid_compiled_graph(format!(
-                    "output slot {} is outside slot table of length {}",
-                    slot, program.n_slots
-                )));
-            };
-            *meta_slot = Some(SlotMeta {
-                dtype: *dtype,
-                shape: shape.clone(),
-                extents: extents.clone(),
-            });
-        }
-    }
     Ok(slot_meta)
+}
+
+fn slot_shape<'a>(
+    slot: usize,
+    slot_meta: &[Option<SlotMeta>],
+    instructions: &'a [ExecInstruction],
+    input_shapes: &'a [Vec<DimExpr>],
+) -> Result<&'a [DimExpr]> {
+    let shape = match slot_meta
+        .get(slot)
+        .and_then(Option::as_ref)
+        .map(|meta| meta.source)
+    {
+        Some(SlotMetaSource::Input(input)) => input_shapes.get(input),
+        Some(SlotMetaSource::InstructionOutput {
+            instruction,
+            output,
+        }) => instructions
+            .get(instruction)
+            .and_then(|instr| instr.output_shapes.get(output)),
+        None => None,
+    };
+    shape
+        .map(Vec::as_slice)
+        .ok_or_else(|| missing_slot_meta("shape", slot))
 }
 
 fn instruction_output_dtypes(
     instr: &ExecInstruction,
     slot_meta: &[Option<SlotMeta>],
+    instructions: &[ExecInstruction],
+    input_shapes: &[Vec<DimExpr>],
 ) -> Result<Vec<DType>> {
     let ExecOp::Extension(ext) = &instr.op else {
         return Ok(vec![instr.dtype; instr.output_slots.len()]);
@@ -905,18 +911,11 @@ fn instruction_output_dtypes(
                 .map(|meta| meta.dtype)
         })
         .collect::<Result<_>>()?;
-    let input_shapes: Vec<Vec<DimExpr>> = instr
+    let input_shape_refs: Vec<&[DimExpr]> = instr
         .input_slots
         .iter()
-        .map(|&slot| {
-            slot_meta
-                .get(slot)
-                .and_then(Option::as_ref)
-                .ok_or_else(|| missing_slot_meta("shape", slot))
-                .map(|meta| meta.shape.clone())
-        })
+        .map(|&slot| slot_shape(slot, slot_meta, instructions, input_shapes))
         .collect::<Result<_>>()?;
-    let input_shape_refs: Vec<&[DimExpr]> = input_shapes.iter().map(Vec::as_slice).collect();
     let metas = infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shape_refs)?;
     if metas.len() != instr.output_slots.len() {
         return Err(invalid_compiled_graph(format!(
@@ -931,7 +930,7 @@ fn instruction_output_dtypes(
 
 struct ConjSinkingState<'a> {
     slot_meta: &'a mut Vec<Option<SlotMeta>>,
-    producer_by_slot: &'a mut ProducerMap,
+    input_shapes: &'a [Vec<DimExpr>],
     conj_cache: &'a mut std::collections::HashMap<usize, usize>,
     new_instructions: &'a mut Vec<ExecInstruction>,
     n_slots: &'a mut usize,
@@ -941,7 +940,7 @@ struct ConjSinkingState<'a> {
 impl ConjSinkingState<'_> {
     fn ensure_conj_slot(&mut self, slot: usize) -> Result<usize> {
         let slot = resolve_slot_redirect(slot, self.redirect)?;
-        if let Some(producer) = producer_for_slot(self.producer_by_slot, slot)
+        if let Some(producer) = producer_for_slot(self.slot_meta, self.new_instructions, slot)
             && matches!(producer.op, ExecOp::Conj)
             && producer.input_slots.len() == 1
         {
@@ -955,13 +954,31 @@ impl ConjSinkingState<'_> {
             .slot_meta
             .get(slot)
             .and_then(Option::as_ref)
-            .cloned()
+            .copied()
             .ok_or_else(|| missing_slot_meta("metadata", slot))?;
+        let shape = slot_shape(
+            slot,
+            self.slot_meta,
+            self.new_instructions,
+            self.input_shapes,
+        )?
+        .to_vec();
+        let extents = match meta.source {
+            SlotMetaSource::Input(_) => exact_extents_from_shape(&shape),
+            SlotMetaSource::InstructionOutput {
+                instruction,
+                output,
+            } => self
+                .new_instructions
+                .get(instruction)
+                .and_then(|instr| instr.output_extents.get(output))
+                .cloned()
+                .ok_or_else(|| missing_slot_meta("extents", slot))?,
+        };
         let output_slot = *self.n_slots;
         *self.n_slots += 1;
         self.redirect.push(output_slot);
-        self.slot_meta.push(Some(meta.clone()));
-        self.producer_by_slot.push(None);
+        self.slot_meta.push(None);
 
         let instr = ExecInstruction {
             op: ExecOp::Conj,
@@ -969,58 +986,80 @@ impl ConjSinkingState<'_> {
             input_slots: vec![slot],
             output_slots: vec![output_slot],
             dtype: meta.dtype,
-            output_shapes: vec![meta.shape].into_iter().collect(),
-            output_extents: vec![meta.extents].into_iter().collect(),
+            output_shapes: vec![shape].into_iter().collect(),
+            output_extents: vec![extents].into_iter().collect(),
             last_use: Vec::new(),
             input_views: Vec::new(),
             effectful: false,
         };
-        record_producer(self.producer_by_slot, &instr)?;
+        record_producer(
+            self.slot_meta,
+            &instr,
+            self.new_instructions.len(),
+            self.new_instructions,
+            self.input_shapes,
+        )?;
         self.new_instructions.push(instr);
         self.conj_cache.insert(slot, output_slot);
         Ok(output_slot)
     }
 }
 
-fn record_producer(producer_by_slot: &mut ProducerMap, instr: &ExecInstruction) -> Result<()> {
-    let producer = ProducerInfo {
-        op: instr.op.clone(),
-        input_slots: instr.input_slots.clone(),
-        dtype: instr.dtype,
-    };
-    for &slot in &instr.output_slots {
-        if slot >= producer_by_slot.len() {
+fn record_producer(
+    slot_meta: &mut [Option<SlotMeta>],
+    instr: &ExecInstruction,
+    instruction: usize,
+    instructions: &[ExecInstruction],
+    input_shapes: &[Vec<DimExpr>],
+) -> Result<()> {
+    let output_dtypes = instruction_output_dtypes(instr, slot_meta, instructions, input_shapes)?;
+    for (output, (&slot, dtype)) in instr.output_slots.iter().zip(output_dtypes).enumerate() {
+        if slot >= slot_meta.len() {
             return Err(invalid_compiled_graph(format!(
                 "producer output slot {slot} is outside producer map of length {}",
-                producer_by_slot.len()
+                slot_meta.len()
             )));
         }
-        producer_by_slot[slot] = Some(producer.clone());
+        slot_meta[slot] = Some(SlotMeta {
+            dtype,
+            source: SlotMetaSource::InstructionOutput {
+                instruction,
+                output,
+            },
+        });
     }
     Ok(())
 }
 
-fn producer_for_slot(producer_by_slot: &ProducerMap, slot: usize) -> Option<&ProducerInfo> {
-    producer_by_slot.get(slot).and_then(Option::as_ref)
+fn producer_for_slot<'a>(
+    slot_meta: &[Option<SlotMeta>],
+    instructions: &'a [ExecInstruction],
+    slot: usize,
+) -> Option<&'a ExecInstruction> {
+    match slot_meta.get(slot).and_then(Option::as_ref)?.source {
+        SlotMetaSource::Input(_) => None,
+        SlotMetaSource::InstructionOutput { instruction, .. } => instructions.get(instruction),
+    }
 }
 
 fn resolve_slot_redirect(mut slot: usize, redirect: &[usize]) -> Result<usize> {
     let origin = slot;
-    let mut seen = vec![false; redirect.len()];
+    // INVARIANT: ConjSinking writes resolved targets and appends identity entries, so production needs at most one hop.
+    let mut remaining = redirect.len();
     while slot < redirect.len() && redirect[slot] != slot {
-        if seen[slot] {
+        if remaining == 0 {
             return Err(invalid_compiled_graph(format!(
                 "redirect cycle while resolving slot {origin}: revisited slot {slot}"
             )));
         }
-        seen[slot] = true;
+        remaining -= 1;
         slot = redirect[slot];
     }
     Ok(slot)
 }
 
 fn conj_commuting_input_indices(
-    producer: &ProducerInfo,
+    producer: &ExecInstruction,
     input_len: usize,
     slot_meta: &[Option<SlotMeta>],
 ) -> Option<Vec<usize>> {
@@ -1187,9 +1226,22 @@ fn algebraic_layout_simplifier_one_pass(
     let producer_by_slot = producer_indices_by_slot(program);
     let slot_shapes = collect_slot_shapes(program, input_shapes)?;
     let use_counts = slot_use_counts(program)?;
+    let mut canonical_slots: Vec<usize> = (0..program.n_slots).collect();
     let mut changed = false;
 
     for index in 0..program.instructions.len() {
+        // INVARIANT: lowering emits inputs before outputs, so each alias already names its canonical source.
+        for slot in &mut program.instructions[index].input_slots {
+            if let Some(producer) = producer_by_slot.get(*slot).copied().flatten() {
+                debug_assert!(
+                    producer < index,
+                    "algebraic_layout_simplifier requires SSA order: instruction {index} reads \
+                     slot {} produced by instruction {producer}",
+                    *slot
+                );
+            }
+            *slot = canonical_slots[*slot];
+        }
         if program.instructions[index].input_slots.len() != 1
             || program.instructions[index].output_slots.len() != 1
         {
@@ -1202,9 +1254,7 @@ fn algebraic_layout_simplifier_one_pass(
 
         match program.instructions[index].op.clone() {
             ExecOp::Transpose { perm } if is_identity_perm(&perm) => {
-                let from = output_slot;
-                let to = program.instructions[index].input_slots[0];
-                replace_slot_uses(program, from, to);
+                canonical_slots[output_slot] = program.instructions[index].input_slots[0];
                 changed = true;
             }
             ExecOp::Reshape { shape }
@@ -1215,9 +1265,7 @@ fn algebraic_layout_simplifier_one_pass(
                         .and_then(Option::as_deref),
                 ) =>
             {
-                let from = output_slot;
-                let to = program.instructions[index].input_slots[0];
-                replace_slot_uses(program, from, to);
+                canonical_slots[output_slot] = program.instructions[index].input_slots[0];
                 changed = true;
             }
             ExecOp::Transpose { perm } => {
@@ -1238,7 +1286,7 @@ fn algebraic_layout_simplifier_one_pass(
                 };
                 let source_slot = program.instructions[producer_idx].input_slots[0];
                 if is_identity_perm(&composed) {
-                    replace_slot_uses(program, output_slot, source_slot);
+                    canonical_slots[output_slot] = source_slot;
                 } else {
                     program.instructions[index].input_slots[0] = source_slot;
                     program.instructions[index].op = ExecOp::Transpose {
@@ -1249,6 +1297,10 @@ fn algebraic_layout_simplifier_one_pass(
             }
             _ => {}
         }
+    }
+
+    for slot in &mut program.output_slots {
+        *slot = canonical_slots[*slot];
     }
 
     Ok(changed)
@@ -1331,24 +1383,6 @@ fn compose_transpose_perms(first: &[usize], second: &[usize]) -> Option<AxisVec>
         return None;
     }
     Some(second.iter().map(|&axis| first[axis]).collect())
-}
-
-fn replace_slot_uses(program: &mut ExecProgram, from: usize, to: usize) {
-    if from == to {
-        return;
-    }
-    for instr in &mut program.instructions {
-        for slot in &mut instr.input_slots {
-            if *slot == from {
-                *slot = to;
-            }
-        }
-    }
-    for slot in &mut program.output_slots {
-        if *slot == from {
-            *slot = to;
-        }
-    }
 }
 
 // ============================================================================
