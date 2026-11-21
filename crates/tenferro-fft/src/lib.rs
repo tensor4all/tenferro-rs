@@ -14,7 +14,7 @@
 //!
 //! | Layer | Trait | Receiver | Spellings |
 //! |---|---|---|---|
-//! | concrete | [`FftOps`] | anything that implements [`AsView`](tenferro_tensor::AsView) | `x.fft(exec)`, `x.fft_with(&opts, exec)`, `x.fft_into(&opts, exec, dest)` |
+//! | concrete | [`FftOps`] | anything that implements [`AsView`] | `x.fft(exec)`, `x.fft_with(&opts, exec)`, `x.fft_into(&opts, exec, dest)` |
 //! | traced | [`TracedFftOps`] | [`TracedTensor`] | `t.fft()`, `t.fft_with(&opts)` |
 //! | eager (`autodiff`) | `EagerFftOps` | `EagerSession` | `sess.fft(&x)`, `sess.fft_with(&x, &opts)` |
 //!
@@ -147,7 +147,7 @@ use tenferro_runtime::extension::{
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
-use tenferro_tensor::{CacheStats, DType, Engine, ErrorKind, Tensor, TensorRead};
+use tenferro_tensor::{AsView, CacheStats, DType, Engine, ErrorKind, Tensor, TensorRead};
 #[cfg(feature = "autodiff")]
 use tenferro_tensor::{PadConfig, SliceConfig};
 
@@ -196,6 +196,14 @@ pub const FFT_EXTENSION_FAMILY_ID: &str = "tenferro-fft.fft.v1";
 /// plans (exception E02). The [`FftOps`] methods stay
 /// one-shot and do not retain hidden process-global, thread-local, or
 /// backend-owned plan state between calls.
+///
+/// Every allocating transform takes the same input as its `_into` twin: any
+/// [`AsView`], so an owned [`Tensor`], a borrowed [`TensorRead`], a
+/// `TypedTensor<T>`/`TypedTensorView<T>` or a reference to any of them. A
+/// borrowed view that is not compact column-major is staged once into compact
+/// storage before the backend call, as the `_into` forms do. No plan key holds
+/// an input stride, so a staged view reuses the plan of the compact tensor it
+/// stages to.
 #[derive(Default)]
 pub struct FftExecutor {
     plans: FftPlanCache,
@@ -227,33 +235,37 @@ impl FftExecutor {
         self.plans.clear();
     }
 
-    fn one_axis_with(
+    fn one_axis_with<X: AsView + ?Sized>(
         &mut self,
         op: &'static str,
         operation_of: fn(&'static str, DType) -> tenferro_tensor::Result<FftOperation>,
-        input: &Tensor,
+        input: &X,
         opts: &FftOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
-        self.execute(
-            input,
-            operation_of(op, input.dtype())?,
+        let input = input.as_read();
+        let lengths = opts.n.map(|n| [n]);
+        self.execute_nd(
             op,
-            opts.n,
-            opts.axis,
+            operation_of(op, input.dtype())?,
+            input,
+            lengths.as_ref().map(<[usize; 1]>::as_slice),
+            &[opts.axis],
+            "n",
             opts.norm,
             exec,
         )
     }
 
-    fn n_axes_with(
+    fn n_axes_with<X: AsView + ?Sized>(
         &mut self,
         op: &'static str,
         operation_of: fn(&'static str, DType) -> tenferro_tensor::Result<FftOperation>,
-        input: &Tensor,
+        input: &X,
         opts: &FftnOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
+        let input = input.as_read();
         let axes = opts.resolved_axes(input.shape().len());
         self.execute_nd(
             op,
@@ -261,6 +273,7 @@ impl FftExecutor {
             input,
             opts.shape.as_deref(),
             &axes,
+            "shape",
             opts.norm,
             exec,
         )
@@ -281,18 +294,24 @@ impl FftExecutor {
     /// use num_complex::Complex64;
     /// use tenferro_cpu::CpuEngine;
     /// use tenferro_fft::{FftExecutor, FftOptions};
-    /// use tenferro_tensor::Tensor;
+    /// use tenferro_tensor::{Tensor, TypedTensor};
     ///
     /// let mut executor = FftExecutor::default();
     /// let x = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     /// let y = executor.fft_with(&x, &FftOptions::default(), &mut CpuEngine::serial())?;
     /// assert_eq!(y.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
     /// assert!(executor.cache_stats().entries > 0);
+    /// // A typed input takes the same call and reuses the same plan.
+    /// let typed = TypedTensor::<f64>::from_vec_col_major(vec![4], vec![1.0, 2.0, 3.0, 4.0])?;
+    /// let entries = executor.cache_stats().entries;
+    /// let z = executor.fft_with(&typed, &FftOptions::default(), &mut CpuEngine::serial())?;
+    /// assert_eq!(z.as_slice::<Complex64>()?, y.as_slice::<Complex64>()?);
+    /// assert_eq!(executor.cache_stats().entries, entries);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn fft_with(
+    pub fn fft_with<X: AsView + ?Sized>(
         &mut self,
-        input: &Tensor,
+        input: &X,
         opts: &FftOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
@@ -330,9 +349,9 @@ impl FftExecutor {
     /// assert_eq!(y.as_slice::<Complex64>()?[1], Complex64::new(2.0, 0.0));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn ifft_with(
+    pub fn ifft_with<X: AsView + ?Sized>(
         &mut self,
-        input: &Tensor,
+        input: &X,
         opts: &FftOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
@@ -366,9 +385,9 @@ impl FftExecutor {
     /// assert_eq!(y.shape(), &[3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn rfft_with(
+    pub fn rfft_with<X: AsView + ?Sized>(
         &mut self,
-        input: &Tensor,
+        input: &X,
         opts: &FftOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
@@ -406,9 +425,9 @@ impl FftExecutor {
     /// assert_eq!(y.shape(), &[4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn irfft_with(
+    pub fn irfft_with<X: AsView + ?Sized>(
         &mut self,
-        input: &Tensor,
+        input: &X,
         opts: &FftOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
@@ -443,9 +462,9 @@ impl FftExecutor {
     /// assert_eq!(y.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn fftn_with(
+    pub fn fftn_with<X: AsView + ?Sized>(
         &mut self,
-        input: &Tensor,
+        input: &X,
         opts: &FftnOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
@@ -480,9 +499,9 @@ impl FftExecutor {
     /// assert_eq!(y.as_slice::<Complex64>()?[1], Complex64::new(2.0, 0.0));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn ifftn_with(
+    pub fn ifftn_with<X: AsView + ?Sized>(
         &mut self,
-        input: &Tensor,
+        input: &X,
         opts: &FftnOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
@@ -516,9 +535,9 @@ impl FftExecutor {
     /// assert_eq!(y.shape(), &[2, 3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn rfftn_with(
+    pub fn rfftn_with<X: AsView + ?Sized>(
         &mut self,
-        input: &Tensor,
+        input: &X,
         opts: &FftnOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
@@ -555,9 +574,9 @@ impl FftExecutor {
     /// assert_eq!(y.as_slice::<f64>()?, &[1.0; 8]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn irfftn_with(
+    pub fn irfftn_with<X: AsView + ?Sized>(
         &mut self,
-        input: &Tensor,
+        input: &X,
         opts: &FftnOptions,
         exec: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
@@ -570,16 +589,17 @@ impl FftExecutor {
         )
     }
 
-    /// Validate an n-dimensional request and run it through the shared
-    /// extension execution path, which owns the axis loop and the plan cache.
+    /// Validate one transform request and run it through the shared extension
+    /// execution path, which owns the axis loop and the plan cache.
     #[allow(clippy::too_many_arguments)]
     fn execute_nd(
         &mut self,
         op_name: &'static str,
         operation: FftOperation,
-        input: &Tensor,
+        input: TensorRead<'_>,
         shape: Option<&[usize]>,
         axes: &[isize],
+        length_argument: &'static str,
         norm: FftNorm,
         session: &mut dyn Engine,
     ) -> tenferro_tensor::Result<Tensor> {
@@ -590,47 +610,15 @@ impl FftExecutor {
             input.shape().len(),
             Some(input.shape()),
             shape,
-            "shape",
+            length_argument,
             axes,
             norm,
         )?;
         with_fft_exec_session(session, op_name, |backend| {
             execute_fft_op(
                 &fft_op,
-                &TensorRead::Tensor(input),
+                &input,
                 backend,
-                FftExecutionCache::caller_owned(&mut self.plans),
-            )
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn execute(
-        &mut self,
-        input: &Tensor,
-        operation: FftOperation,
-        op_name: &'static str,
-        n: Option<usize>,
-        axis: isize,
-        norm: FftNorm,
-        session: &mut dyn Engine,
-    ) -> tenferro_tensor::Result<Tensor> {
-        let spec = concrete_fft_spec(
-            op_name,
-            operation,
-            input.dtype(),
-            input.shape(),
-            n,
-            axis,
-            norm,
-        )?;
-        // The executor calls the concrete backend directly (no internal
-        // session entry); the built-in dispatch only bridges the borrowed
-        // session to its FFT execution capability.
-        with_fft_exec_session(session, op_name, |backend| {
-            backend.execute_fft(
-                input,
-                &spec,
                 FftExecutionCache::caller_owned(&mut self.plans),
             )
         })
@@ -1656,9 +1644,10 @@ fn execute_fft_extension_reads_for_capability<B: FftBackend + ?Sized>(
 
 /// Execute one validated FFT request as successive one-axis backend calls.
 ///
-/// This is the only axis loop for n-dimensional FFTs: the eager executor
-/// ([`FftExecutor::fftn`]) and the traced/extension execution path both enter
-/// here. Each iteration hands the backend a single-axis [`FftPlanSpec`], so the
+/// This is the allocating axis loop: the [`FftExecutor`] transforms, the one-shot
+/// n-dimensional [`FftOps`] form and the traced/extension execution path enter
+/// here; the `_into` forms run their own schedule (`executor_into::Schedule`).
+/// Each iteration hands the backend a single-axis [`FftPlanSpec`], so the
 /// backend runs its own plan for that length and dtype (`rustfft`/`realfft` on
 /// CPU, a one-dimensional `cufftPlanMany` on CUDA) and reuses it from the shared
 /// plan cache. Nothing here computes a transform: this function owns only the

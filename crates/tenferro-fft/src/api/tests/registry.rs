@@ -4,7 +4,7 @@
 use num_complex::Complex64;
 use tenferro_cpu::{BufferPool, CpuEngine};
 use tenferro_tensor::{
-    AsView, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorScalar, TypedTensor,
+    AsView, Dest, ErrorKind, StridedSliceSpec, Tensor, TensorRead, TensorScalar, TypedTensor,
     TypedTensorView,
 };
 
@@ -224,6 +224,137 @@ fn executor_with_forms_equal_fft_ops_and_fill_the_plan_cache() -> TestResult<()>
     }
     assert!(ex.cache_stats().entries > 0);
     assert!(API_EXCEPTIONS.iter().any(|x| x.id == "E02"));
+    Ok(())
+}
+
+/// The allocating executor transforms take the same `AsView` input as their
+/// `_into` twins (#2687): for every transform on one axis and over several axes,
+/// an owned tensor, a compact borrowed read, a typed tensor, a compact typed view
+/// and a supported strided view return the owned input's shape, dtype and bits and
+/// look their plans up instead of building new ones.
+#[test]
+fn executor_allocating_forms_accept_every_as_view_input() -> TestResult<()> {
+    let real_t = real()?;
+    let complex_t = complex()?;
+    let one = FftOptions::default();
+    let nd = FftnOptions::default();
+    let mut e = CpuEngine::serial();
+    let mut ex = FftExecutor::default();
+
+    // Reference: the owned input fills the plan cache, one entry per transform.
+    let reference = [
+        ex.fft_with(&real_t, &one, &mut e)?,
+        ex.ifft_with(&complex_t, &one, &mut e)?,
+        ex.rfft_with(&real_t, &one, &mut e)?,
+        ex.irfft_with(&complex_t, &one, &mut e)?,
+        ex.fftn_with(&real_t, &nd, &mut e)?,
+        ex.ifftn_with(&complex_t, &nd, &mut e)?,
+        ex.rfftn_with(&real_t, &nd, &mut e)?,
+        ex.irfftn_with(&complex_t, &nd, &mut e)?,
+    ];
+    let warmed = ex.cache_stats().entries;
+    assert!(warmed > 0, "the owned input must fill the plan cache");
+
+    macro_rules! check_form {
+        ($label:expr, $real:expr, $complex:expr) => {{
+            let (hits, misses) = (ex.cache_stats().hits, ex.cache_stats().misses);
+            let got = [
+                ex.fft_with(&$real, &one, &mut e)?,
+                ex.ifft_with(&$complex, &one, &mut e)?,
+                ex.rfft_with(&$real, &one, &mut e)?,
+                ex.irfft_with(&$complex, &one, &mut e)?,
+                ex.fftn_with(&$real, &nd, &mut e)?,
+                ex.ifftn_with(&$complex, &nd, &mut e)?,
+                ex.rfftn_with(&$real, &nd, &mut e)?,
+                ex.irfftn_with(&$complex, &nd, &mut e)?,
+            ];
+            for (index, (actual, expected)) in got.iter().zip(&reference).enumerate() {
+                assert_eq!(
+                    actual.dtype(),
+                    expected.dtype(),
+                    "{} input, executor case {index}: dtype",
+                    $label
+                );
+                assert_eq!(
+                    actual.shape(),
+                    expected.shape(),
+                    "{} input, executor case {index}: shape",
+                    $label
+                );
+                assert_eq!(
+                    tensor_bits(actual)?,
+                    tensor_bits(expected)?,
+                    "{} input, executor case {index}: bits",
+                    $label
+                );
+            }
+            assert_eq!(
+                ex.cache_stats().entries,
+                warmed,
+                "{} input must reuse the warmed plans",
+                $label
+            );
+            // A lookup that found its plan records a hit; rebuilding one is a miss.
+            assert_eq!(
+                ex.cache_stats().misses,
+                misses,
+                "{} input must not rebuild a plan",
+                $label
+            );
+            assert!(
+                ex.cache_stats().hits > hits,
+                "{} input must look a plan up",
+                $label
+            );
+        }};
+    }
+
+    check_form!("owned", real_t, complex_t);
+    let (real_read, complex_read) = (real_t.as_read(), complex_t.as_read());
+    check_form!("compact borrowed", real_read, complex_read);
+
+    let typed_real =
+        TypedTensor::<f64>::from_vec_col_major(vec![3, 4], real_t.as_slice::<f64>()?.to_vec())?;
+    let typed_complex = TypedTensor::<Complex64>::from_vec_col_major(
+        vec![3, 4],
+        complex_t.as_slice::<Complex64>()?.to_vec(),
+    )?;
+    check_form!("typed", typed_real, typed_complex);
+
+    let (real_view, complex_view) = (typed_real.as_view(), typed_complex.as_view());
+    check_form!("typed view", real_view, complex_view);
+
+    // Column-major shape `[3, 4]` with padded column strides `[1, 4]`: the same
+    // logical elements as the compact tensors, laid out non-contiguously.
+    let padded_real: Vec<f64> = {
+        let mut slots = vec![0.0_f64; 15];
+        for (column, chunk) in real_t.as_slice::<f64>()?.chunks(3).enumerate() {
+            slots[4 * column..4 * column + 3].copy_from_slice(chunk);
+        }
+        slots
+    };
+    let padded_complex: Vec<Complex64> = {
+        let mut slots = vec![Complex64::new(0.0, 0.0); 15];
+        for (column, chunk) in complex_t.as_slice::<Complex64>()?.chunks(3).enumerate() {
+            slots[4 * column..4 * column + 3].copy_from_slice(chunk);
+        }
+        slots
+    };
+    let strided_real = TypedTensorView::from_slice([3, 4], [1, 4], 0, &padded_real)?;
+    let strided_complex = TypedTensorView::from_slice([3, 4], [1, 4], 0, &padded_complex)?;
+    assert!(
+        !TensorRead::from_view(f64::tensor_view(strided_real.clone())).is_col_major_contiguous()?,
+        "the strided case must not be compact column-major"
+    );
+    check_form!("strided", strided_real, strided_complex);
+
+    // The `_into` twin takes the same strided input and writes the same bits.
+    let mut dest = Tensor::from_vec_col_major(
+        reference[0].shape().to_vec(),
+        vec![Complex64::new(f64::NAN, f64::NAN); 12],
+    )?;
+    ex.fft_into(&strided_real, &one, &mut e, Dest::overwrite(&mut dest))?;
+    assert_eq!(tensor_bits(&dest)?, tensor_bits(&reference[0])?);
     Ok(())
 }
 
