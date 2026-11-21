@@ -49,6 +49,9 @@ def main():
     forbidden = CLEAN + '[[package]]\nname = "t4a-faer-traits"\nversion = "0.24.3"\n'
     rc, out = run(forbidden)
     assert rc == 1 and "forbidden dependency t4a-faer-traits" in out
+    upstream = CLEAN + '[[package]]\nname = "faer"\nversion = "0.22.0"\n'
+    rc, out = run(upstream)
+    assert rc == 1 and "forbidden dependency faer" in out
     unlisted = CLEAN + '[[package]]\nname = "strided-einsum"\nversion = "0.12.0"\n'
     rc, out = run(unlisted)
     assert rc == 1 and "unlisted strided-einsum" in out

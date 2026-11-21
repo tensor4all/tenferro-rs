@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Reject a tenferro release unless the CPU stack is one version set.
 
-The release workflow must not ship a tree that mixes t4a-faer with colmat, or two
-strided release trains. This is a publish preflight, not a code-style check.
+The release workflow must not ship a tree that carries two dense-linalg identities
+(t4a-faer/faer alongside colmat), or two strided release trains. This is a publish
+preflight, not a code-style check.
 """
 from __future__ import annotations
 import argparse, re, sys
@@ -22,7 +23,7 @@ STRIDED = {
     "strided-traits": (0, 7),
     "strided-view": (0, 8),
 }
-FORBIDDEN_PREFIX = "t4a-faer"
+FORBIDDEN_PREFIXES = ("t4a-faer", "faer")
 STACK_PREFIXES = ("colmat", "threadteam", "tcontract", "tlinalg", "strided", "t4a-faer")
 
 
@@ -40,7 +41,7 @@ def main() -> int:
             versions.setdefault(name.group(1), []).append((ver.group(1), src.group(1) if src else ""))
     problems = []
     for name in versions:
-        if name == FORBIDDEN_PREFIX or name.startswith(FORBIDDEN_PREFIX + "-"):
+        if any(name == p or name.startswith(p + "-") for p in FORBIDDEN_PREFIXES):
             problems.append(f"forbidden dependency {name} {[v for v, _ in versions[name]]}")
     wanted = {**EXPECTED, **STRIDED}
     for name, want in wanted.items():
