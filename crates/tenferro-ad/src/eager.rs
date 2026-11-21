@@ -2607,7 +2607,9 @@ impl EagerSession<'_> {
     /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
     /// / `Dest::Scaled` destination, and a validation error for an operand
     /// dtype or shape mismatch with the destination. These are raised before
-    /// the destination is written.
+    /// the destination is written. An integer division by zero is a numerical
+    /// failure that a device backend reports after the launch, which leaves the
+    /// destination contents unspecified.
     pub fn div_into(
         &mut self,
         lhs: &EagerTensor,

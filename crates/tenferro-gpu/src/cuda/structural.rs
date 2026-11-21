@@ -4120,6 +4120,40 @@ impl CudaEngine {
         len: i64,
         name: &'static str,
     ) -> crate::Result<Tensor> {
+        with_scalar!(dtype, |T| {
+            self.dispatch_division(
+                self.allocation_of::<T>(left, name)?,
+                self.allocation_of::<T>(right, name)?,
+                super::dispatch::Dest::Uninit(&output),
+                kernel,
+                dtype,
+                len,
+                name,
+            )
+        })?;
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), dtype, shape, output)
+    }
+
+    /// The division launch for a dtype without a plain `/` entry, into `destination`.
+    ///
+    /// Integers use the checked division and observe its status word, a zeroed 4-byte scratch
+    /// (a device memset, not an upload); complex values use the robust complex division. A
+    /// division by zero is a numerical failure reported after the launch, so a caller-provided
+    /// destination's contents are then unspecified.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_division(
+        &mut self,
+        left: &t4a_cuda_runtime::Buffer,
+        right: &t4a_cuda_runtime::Buffer,
+        destination: super::dispatch::Dest<'_>,
+        kernel: t4a_cuda_kernels::DType,
+        dtype: DType,
+        len: i64,
+        name: &'static str,
+    ) -> crate::Result<()> {
+        let checked = matches!(dtype, DType::I32 | DType::I64);
         let op = match dtype {
             DType::I32 | DType::I64 => t4a_cuda_kernels::BinaryOp::DivChecked,
             DType::C32 | DType::C64 => t4a_cuda_kernels::BinaryOp::DivComplex,
@@ -4130,39 +4164,35 @@ impl CudaEngine {
                 ))
             }
         };
-        let runtime = self.runtime().clone();
-        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
-        let status = runtime
+        let status = self
+            .runtime()
             .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
-        with_scalar!(dtype, |T| {
-            dispatcher.binary(
-                op,
-                kernel,
-                t4a_cuda_kernels::ScalarSide::Both,
-                len,
-                super::dispatch::Dest::Uninit(&output),
-                self.allocation_of::<T>(left, name)?,
-                self.allocation_of::<T>(right, name)?,
-                &status,
-            )
-        })?;
+        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
+        dispatcher.binary(
+            op,
+            kernel,
+            t4a_cuda_kernels::ScalarSide::Both,
+            len,
+            destination,
+            left,
+            right,
+            &status,
+        )?;
         self.release_completed_staging();
-        if matches!(dtype, DType::I32 | DType::I64) {
+        if checked {
             let flag = self
                 .runtime()
                 .download_bytes(&status)
                 .map_err(|error| crate::Error::runtime_state_source(name, error))?;
             if flag.iter().any(|byte| *byte != 0) {
-                return Err(crate::Error::unsupported(
+                return Err(numerical_failure(
                     name,
                     "the checked division reported a division by zero",
                 ));
             }
         }
-        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
-        let output = unsafe { output.assume_init() };
-        tensor_from_buffer(self.runtime(), dtype, shape, output)
+        Ok(())
     }
 
     /// One unary elementwise operation over a device tensor.
@@ -4693,45 +4723,16 @@ impl CudaEngine {
             tenferro_tensor::ElementwiseReadOp::Divide
                 if !matches!(dtype, DType::F32 | DType::F64) =>
             {
-                // As in the allocating division: an integer division is the checked one (its
-                // status word reports a division by zero) and a complex one is the robust complex
-                // entry. The status word is a zeroed 4-byte scratch, not an upload.
-                let checked = matches!(dtype, DType::I32 | DType::I64);
-                let binary = if checked {
-                    t4a_cuda_kernels::BinaryOp::DivChecked
-                } else {
-                    t4a_cuda_kernels::BinaryOp::DivComplex
-                };
-                let status = self
-                    .runtime()
-                    .zeroed_status_word()
-                    .map_err(|error| crate::Error::runtime_state_source(name, error))?;
-                let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
-                with_scalar!(dtype, |T| {
-                    dispatcher.binary(
-                        binary,
-                        kernel,
-                        t4a_cuda_kernels::ScalarSide::Both,
-                        len,
-                        super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
-                        source_buffers[0],
-                        source_buffers[1],
-                        &status,
-                    )
-                })?;
-                if checked {
-                    let flag = self
-                        .runtime()
-                        .download_bytes(&status)
-                        .map_err(|error| crate::Error::runtime_state_source(name, error))?;
-                    if flag.iter().any(|byte| *byte != 0) {
-                        return Err(crate::Error::unsupported(
-                            name,
-                            "the checked division reported a division by zero; the destination \
-                             contents are unspecified",
-                        ));
-                    }
-                }
+                let out = with_scalar!(dtype, |T| self.allocation_of::<T>(destination, name))?;
+                self.dispatch_division(
+                    source_buffers[0],
+                    source_buffers[1],
+                    super::dispatch::Dest::Init(out),
+                    kernel,
+                    dtype,
+                    len,
+                    name,
+                )?;
             }
             binary => {
                 let entry = match binary {

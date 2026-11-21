@@ -277,3 +277,36 @@ fn every_eager_into_matches_its_allocating_form_and_rejects_before_writing() {
         assert_untouched(&out);
     }
 }
+
+#[test]
+fn eager_into_rejects_a_real_operand_against_a_complex_destination_before_writing() {
+    use num_complex::Complex64;
+    let ctx = EagerRuntime::new().expect("runtime");
+    // Rank-zero operands: an allocating CPU kernel would promote the real scalar.
+    let real = constant(
+        &ctx,
+        Tensor::from_vec_col_major(vec![], vec![1.0_f64]).expect("real scalar"),
+    );
+    let complex = constant(
+        &ctx,
+        Tensor::from_vec_col_major(vec![], vec![Complex64::new(2.0, 1.0)]).expect("complex scalar"),
+    );
+    let sentinel = Complex64::new(7.5, -3.25);
+    for (name, into, _) in eager_into_cases() {
+        let mut out = Tensor::from_vec_col_major(vec![], vec![sentinel]).expect("destination");
+        let err = ctx
+            .with_eager_session(&mut CpuEngine::serial(), |s| {
+                into(s, &real, &complex, Dest::overwrite(&mut out))
+            })
+            .expect_err("a real operand cannot overwrite a complex destination");
+        assert!(
+            matches!(err.kind(), ErrorKind::Validation(_)),
+            "{name}: {err}"
+        );
+        assert_eq!(
+            out.as_slice::<Complex64>().expect("host"),
+            &[sentinel],
+            "{name}_into wrote a rejected result"
+        );
+    }
+}

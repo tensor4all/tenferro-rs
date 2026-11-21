@@ -56,6 +56,22 @@ fn overwrite_target<W>(op: &'static str, dest: Dest<W>) -> Res<W> {
     Ok(dest.into_target())
 }
 
+/// The elementwise `_into` forms do not promote: every operand has the
+/// destination's dtype. Checked before dispatch, so a backend whose allocating
+/// kernel would promote (a real scalar against a complex one) never writes.
+fn same_dtype_as_destination(
+    op: &'static str,
+    operands: &[&tenferro_tensor::TensorRead<'_>],
+    out: &tenferro_tensor::TensorWrite<'_>,
+) -> Res<()> {
+    for operand in operands {
+        if operand.dtype() != out.dtype() {
+            return Err(Error::dtype_mismatch(op, out.dtype(), operand.dtype()));
+        }
+    }
+    Ok(())
+}
+
 macro_rules! binary_into {
     ($($name:ident => $body:ident;)*) => {$(
         pub(crate) fn $name<X: AsView + ?Sized>(
@@ -68,7 +84,9 @@ macro_rules! binary_into {
             X::Repr: CoreRepr,
         {
             let out = <X::Repr as Repr>::erase_write(overwrite_target(stringify!($name), dest)?);
-            body::$body(a.as_read(), b.as_read(), e, out)
+            let (a, b) = (a.as_read(), b.as_read());
+            same_dtype_as_destination(stringify!($name), &[&a, &b], &out)?;
+            body::$body(a, b, e, out)
         }
     )*};
 }
@@ -91,7 +109,9 @@ macro_rules! unary_into {
             X::Repr: CoreRepr,
         {
             let out = <X::Repr as Repr>::erase_write(overwrite_target(stringify!($name), dest)?);
-            body::$body(a.as_read(), e, out)
+            let a = a.as_read();
+            same_dtype_as_destination(stringify!($name), &[&a], &out)?;
+            body::$body(a, e, out)
         }
     )*};
 }

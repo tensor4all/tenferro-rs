@@ -257,17 +257,29 @@ fn eager_div_into_serves_complex_and_integer_dtypes() {
         let lhs_value = upload_tensor(gpu.runtime(), &lhs_host).expect("upload");
         let rhs_value = upload_tensor(gpu.runtime(), &rhs_host).expect("upload");
         let mut out = upload_tensor(gpu.runtime(), &lhs_host).expect("upload destination");
-        let result = ctx.with_eager_session(&mut gpu, |s| {
-            let lhs = s.constant_from(lhs_value)?;
-            let rhs = s.constant_from(rhs_value)?;
-            s.div_into(&lhs, &rhs, Dest::overwrite(&mut out))?;
-            s.div(&lhs, &rhs)
+        let (lhs, rhs) = ctx
+            .with_eager_session(&mut gpu, |s| {
+                Ok::<_, tenferro_ad::Error>((
+                    s.constant_from(lhs_value)?,
+                    s.constant_from(rhs_value)?,
+                ))
+            })
+            .expect("eager constants");
+        let into = ctx.with_eager_session(&mut gpu, |s| {
+            s.div_into(&lhs, &rhs, Dest::overwrite(&mut out))
         });
         if divides_by_zero {
-            let error = result.expect_err("an integer division by zero is reported");
-            assert!(error.to_string().contains("division by zero"), "{error}");
+            // The `_into` call itself must report it, from its own status word.
+            let error = into.expect_err("an integer division by zero is reported by div_into");
+            assert_eq!(
+                error.kind(),
+                tenferro_tensor::ErrorKind::NumericalFailure,
+                "{error}"
+            );
             continue;
         }
+        into.unwrap_or_else(|error| panic!("{:?} div_into: {error}", lhs_host.dtype()));
+        let result = ctx.with_eager_session(&mut gpu, |s| s.div(&lhs, &rhs));
         let fresh = result
             .unwrap_or_else(|error| panic!("{:?} div_into: {error}", lhs_host.dtype()))
             .into_value()
