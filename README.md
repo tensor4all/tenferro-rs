@@ -259,9 +259,8 @@ tenferro-rs is a good fit when:
 
 tenferro-rs builds on the tensor4all numerical crates described above, on
 [`faer`](https://github.com/sarah-quinones/faer-rs) for dense linear algebra
-(through tensor4all's fork, colmat; the workspace still pins it under its
-earlier crate name, `t4a-faer`), on native CUDA and Metal backends for
-GPU kernels, on [`omeco`](https://crates.io/crates/omeco) for contraction
+(through tensor4all's fork, colmat, formerly published as `t4a-faer`), on
+native CUDA and Metal backends for GPU kernels, on [`omeco`](https://crates.io/crates/omeco) for contraction
 ordering, on [RustFFT](https://github.com/ejmahler/RustFFT) and
 [RealFFT](https://github.com/HEnquist/realfft) for CPU FFTs, and on
 [`num-traits`](https://github.com/rust-num/num-traits) /
