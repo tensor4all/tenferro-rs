@@ -109,7 +109,6 @@ pub enum CublasOperation {
 #[derive(Clone, Copy, Debug)]
 pub enum CublasPointerMode {
     Host = 0,
-    Device = 1,
 }
 
 #[repr(i32)]

@@ -4133,7 +4133,7 @@ impl CudaEngine {
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         let status = runtime
-            .upload_bytes(&[0u8; 4])
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
         with_scalar!(dtype, |T| {
             dispatcher.binary(
@@ -4235,7 +4235,7 @@ impl CudaEngine {
         // The entry always takes a status word for its checked-integer route; a
         // comparison of two full buffers never sets it.
         let status = runtime
-            .upload_bytes(&[0u8; 4])
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
         with_scalar!(dtype, |T| {
             dispatcher.binary(
@@ -4295,7 +4295,7 @@ impl CudaEngine {
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         let status = runtime
-            .upload_bytes(&[0u8; 4])
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
         with_scalar!(dtype, |T| {
             dispatcher.binary(
@@ -4640,10 +4640,29 @@ impl CudaEngine {
         let dtype = destination.dtype();
         let kernel = kernel_dtype(dtype, name)?;
         let len = count_i64(destination.shape(), name)?;
-        let sources: Vec<Resolved<'_>> = inputs
+        // A flat operand (one compact span at its allocation's base, which is what an owned
+        // tensor and a compact eager value are) is read where it lies; only a permuted, offset,
+        // broadcast or reversed region is staged into a compact copy, since the flat kernels
+        // address no layout (#2701).
+        let staged: Vec<Option<Resolved<'_>>> = inputs
             .iter()
-            .map(|input| self.device_read(input.clone(), name))
+            .map(|input| {
+                let region = self.read_region(input, name)?;
+                if region_is_flat(&region) {
+                    Ok(None)
+                } else {
+                    self.device_read(input.clone(), name).map(Some)
+                }
+            })
             .collect::<crate::Result<_>>()?;
+        let mut source_buffers: Vec<&t4a_cuda_runtime::Buffer> = Vec::with_capacity(inputs.len());
+        for (input, staged) in inputs.iter().zip(&staged) {
+            let buffer = match staged {
+                Some(resolved) => with_scalar!(dtype, |T| self.allocation_of::<T>(resolved, name))?,
+                None => self.read_region(input, name)?.storage.allocation(),
+            };
+            source_buffers.push(buffer);
+        }
         match op {
             tenferro_tensor::ElementwiseReadOp::Negate => {
                 let mut dispatcher = self.dispatcher(&[Entry::Unary])?;
@@ -4654,7 +4673,7 @@ impl CudaEngine {
                         kernel,
                         len,
                         super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
-                        self.allocation_of::<T>(&sources[0], name)?,
+                        source_buffers[0],
                     )
                 })?;
             }
@@ -4667,7 +4686,7 @@ impl CudaEngine {
                         kernel,
                         len,
                         super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
-                        self.allocation_of::<T>(&sources[0], name)?,
+                        source_buffers[0],
                     )
                 })?;
             }
@@ -4685,8 +4704,8 @@ impl CudaEngine {
                         kernel,
                         len,
                         super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
-                        self.allocation_of::<T>(&sources[0], name)?,
-                        self.allocation_of::<T>(&sources[1], name)?,
+                        source_buffers[0],
+                        source_buffers[1],
                     )
                 })?;
             }
@@ -4740,7 +4759,7 @@ impl CudaEngine {
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         let status = runtime
-            .upload_bytes(&[0u8; 4])
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         with_scalar!(dtype, |T| {
             dispatcher.binary(
@@ -6824,7 +6843,7 @@ impl CudaEngine {
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         let status = runtime
-            .upload_bytes(&[0u8; 4])
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
         with_scalar!(dtype, |T| {
             dispatcher.binary(

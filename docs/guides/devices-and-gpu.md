@@ -118,6 +118,23 @@ lower-level `engine.runtime().synchronize()` barrier. See
 
 For a time-axis diagram, see [Execution Models](execution-models.md).
 
+### Eager strided reads and output reuse
+
+An eager structural view of a device value is a device view: `s.transpose(&x, &[1, 0])` on a
+CUDA-resident eager tensor returns an `EagerTensor` whose `tensor_read()` is a `TensorRead::View`
+of the same allocation, with no copy. The CUDA elementwise kernels address a flat domain, so an
+operation on a permuted, offset, broadcast or reversed view gathers that operand once into a
+compact device buffer, on the eager and the direct `*_read` route alike. A compact eager value
+(one span at its allocation's base) is read in place by the elementwise `_into` forms below.
+
+`EagerSession::{add,sub,mul,div}_into(&x, &y, dest)` and `{neg,conj}_into(&x, dest)` are the
+eager output-reuse forms of those operations: they write into a caller-owned, preallocated
+`Tensor` (device-resident for a CUDA session) without allocating a result. They follow the
+concrete `_into` contract (shared dtype, `Dest::Overwrite` only) and reject tracked operands or
+an active trace capture, because a caller-owned destination has no place in the reverse graph.
+Other eager operations return fresh values; see the
+[operation registry](../spec/generated/api-ops.md).
+
 ## CUDA Quickstart
 
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->

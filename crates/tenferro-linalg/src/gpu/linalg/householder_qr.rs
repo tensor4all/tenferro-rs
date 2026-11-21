@@ -41,18 +41,6 @@ where
         .map_err(|_| Error::Internal("explicit Householder vector changed dtype".into()))
 }
 
-fn linalg_scalar_bytes<T: LinalgScalar>(value: &T) -> &[u8] {
-    // SAFETY: LinalgScalar is sealed in this module to f32/f64/Complex32/
-    // Complex64, all of which have initialized byte representations without
-    // padding; the returned slice cannot outlive `value`.
-    unsafe {
-        std::slice::from_raw_parts(
-            std::ptr::from_ref(value).cast::<u8>(),
-            std::mem::size_of::<T>(),
-        )
-    }
-}
-
 fn apply_householder_reflectors_typed<T>(
     backend: &mut CudaEngine,
     packed: &TypedTensor<T>,
@@ -98,15 +86,12 @@ where
         handles.cusolver().set_stream(stream, op)?;
         handles.cublas().set_stream(stream, op)?;
 
-        let one_device = raw.upload_bytes(linalg_scalar_bytes(&one), op)?;
-        let zero_device = raw.upload_bytes(linalg_scalar_bytes(&zero), op)?;
-        let minus_one_device = raw.upload_bytes(linalg_scalar_bytes(&minus_one), op)?;
-        let mut one_ptr = std::ptr::null_mut::<c_void>();
-        let mut zero_ptr = std::ptr::null_mut::<c_void>();
-        let mut minus_one_ptr = std::ptr::null_mut::<c_void>();
-        one_device.with_ptr(|ptr| one_ptr = ptr);
-        zero_device.with_ptr(|ptr| zero_ptr = ptr);
-        minus_one_device.with_ptr(|ptr| minus_one_ptr = ptr);
+        // The gemm scalars stay on the host: in `CublasPointerMode::Host` cuBLAS
+        // reads alpha/beta when the call is enqueued, so no per-call scalar
+        // allocation or host-to-device upload is needed (#2701).
+        let one_ptr: *const c_void = std::ptr::from_ref(&one).cast();
+        let zero_ptr: *const c_void = std::ptr::from_ref(&zero).cast();
+        let minus_one_ptr: *const c_void = std::ptr::from_ref(&minus_one).cast();
 
         let t = raw.alloc_output::<T>(&[k, k])?;
         let w = raw.alloc_output::<T>(&[k, columns])?;
@@ -176,7 +161,7 @@ where
 
             handles
                 .cublas()
-                .set_pointer_mode(CublasPointerMode::Device, op)?;
+                .set_pointer_mode(CublasPointerMode::Host, op)?;
             let computation = (|| -> Result<()> {
                 let adjoint_v = match T::DATA_TYPE {
                     CudaDataType::F32 | CudaDataType::F64 => CublasOperation::T,
@@ -196,12 +181,12 @@ where
                     k_i32,
                     columns_i32,
                     m_i32,
-                    one_ptr.cast_const(),
+                    one_ptr,
                     v_ptr,
                     m_i32,
                     target_ptr.cast_const(),
                     m_i32,
-                    zero_ptr.cast_const(),
+                    zero_ptr,
                     w_ptr,
                     k_i32,
                     op,
@@ -213,12 +198,12 @@ where
                     k_i32,
                     columns_i32,
                     k_i32,
-                    one_ptr.cast_const(),
+                    one_ptr,
                     t_ptr.cast_const(),
                     k_i32,
                     w_ptr.cast_const(),
                     k_i32,
-                    zero_ptr.cast_const(),
+                    zero_ptr,
                     w2_ptr,
                     k_i32,
                     op,
@@ -230,12 +215,12 @@ where
                     m_i32,
                     columns_i32,
                     k_i32,
-                    minus_one_ptr.cast_const(),
+                    minus_one_ptr,
                     v_ptr,
                     m_i32,
                     w2_ptr.cast_const(),
                     k_i32,
-                    one_ptr.cast_const(),
+                    one_ptr,
                     target_ptr,
                     m_i32,
                     op,
