@@ -61,6 +61,9 @@ def main():
     dup = CLEAN + '[[package]]\nname = "tcontract-exec"\nversion = "0.12.0"\n[[package]]\nname = "tcontract-exec"\nversion = "0.13.0"\n'
     rc, out = run(dup)
     assert rc == 1 and "multiple stack versions" in out
+    # Optional strided crates may be absent.
+    short = CLEAN.replace('[[package]]\nname = "strided-view"\nversion = "0.8.1"\n', '')
+    assert run(short)[0] == 0
     print("test-check-stack-versions: ok")
     return 0
 
