@@ -1,0 +1,22 @@
+[package]
+name = "tenferro-split-proofs"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Creusot proofs for the contiguous mutable-split helper (not published)."
+
+[lib]
+name = "tenferro_split_proofs"
+
+# The verified module gates its specifications on `cfg(creusot)`, which only
+# `cargo creusot` sets.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(creusot)'] }
+
+[dependencies]
+creusot-std = "0.15.0"
+
+# Standalone workspace so `cargo creusot` treats this directory as the root and
+# picks up `why3find.json` and `verif/`. The tenferro-rs workspace excludes it.
+[workspace]
