@@ -44,7 +44,9 @@ def main() -> int:
     wanted = {**EXPECTED, **STRIDED}
     for name, want in wanted.items():
         if name not in versions:
-            problems.append(f"missing {name}")
+            # colmat/threadteam must be present; optional strided crates may be absent.
+            if name in EXPECTED:
+                problems.append(f"missing {name}")
             continue
         for v, _src in versions[name]:
             try:
