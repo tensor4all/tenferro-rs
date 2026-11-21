@@ -118,9 +118,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rhs_batch_dims: [].as_slice().into(),
         },
     )?;
-    let input_specs = [(&x, DType::F64, &[4, 4][..])];
-    let reconstructed_program = compiler.compile_with_input_specs(&reconstructed, &input_specs)?;
-    let singular_values_program = compiler.compile_with_input_specs(&s_truncated, &input_specs)?;
+    let reconstructed_program = compiler.compile_with_inputs(&[&reconstructed], &[&x])?;
+    let singular_values_program = compiler.compile_with_inputs(&[&s_truncated], &[&x])?;
 
     let mut engine = CpuEngine::serial();
     let runtime = cpu_runtime_with_linalg_and_einsum(&engine)?;
