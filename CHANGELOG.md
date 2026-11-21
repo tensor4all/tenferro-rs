@@ -113,7 +113,7 @@ layer, generated from a per-family registry. The operation list, options,
   - core: concrete reductions, `transpose` and `reverse` reject a repeated
     axis as `DuplicateAxis { role: "axes" }` before the engine; a typed
     `where_select` whose branch has another dtype reports `Error::Internal`;
-    `convert` / `cast` accept any receiver and gather a non-owned one once.
+    `convert` / `cast` accept any receiver and read it through the engine's read entry.
 
 ### Added
 

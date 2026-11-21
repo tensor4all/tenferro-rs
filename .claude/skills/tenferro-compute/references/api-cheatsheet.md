@@ -70,8 +70,8 @@ receiver methods mirror the eager session methods with the engine last
 (`x.gather(&idx, config, &mut engine)`, `x.reduce_max(Some(&[-1]), &mut engine)`,
 `x.dot_general(&y, config, &mut engine)`), including indexing, padding,
 concatenation and the triangular/diagonal ops. The dtype-changing `convert` /
-`cast` return a dtype-erased `Tensor`; a receiver other than an owned `Tensor`
-is gathered once first.
+`cast` return a dtype-erased `Tensor` and read every receiver through the engine's
+read entry, so a strided or offset view is not gathered first on CPU.
 
 ## Eager tensors
 
