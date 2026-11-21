@@ -965,7 +965,9 @@ class OrchestrationTests(unittest.TestCase):
             client = FakeClient({}, events)
 
             def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-                if command[:2] == ["cargo", "package"]:
+                if command[-1] == "scripts/check-stack-versions.py":
+                    events.append("stack-check")
+                elif command[:2] == ["cargo", "package"]:
                     events.append("package")
                     archive.parent.mkdir(parents=True, exist_ok=True)
                     archive.write_bytes(b"package")
@@ -1010,6 +1012,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(
             events,
             [
+                "stack-check",
                 "exists:crate-a",
                 "package",
                 "inspect:package",
