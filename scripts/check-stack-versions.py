@@ -34,18 +34,19 @@ def main() -> int:
     for block in lock.split("[[package]]")[1:]:
         name = re.search(r'^name = "([^"]+)"', block, re.M)
         ver = re.search(r'^version = "([^"]+)"', block, re.M)
+        src = re.search(r'^source = "([^"]+)"', block, re.M)
         if name and ver:
-            versions.setdefault(name.group(1), []).append(ver.group(1))
+            versions.setdefault(name.group(1), []).append((ver.group(1), src.group(1) if src else ""))
     problems = []
     for name in versions:
         if name == FORBIDDEN_PREFIX or name.startswith(FORBIDDEN_PREFIX + "-"):
-            problems.append(f"forbidden dependency {name} {versions[name]}")
+            problems.append(f"forbidden dependency {name} {[v for v, _ in versions[name]]}")
     wanted = {**EXPECTED, **STRIDED}
     for name, want in wanted.items():
         if name not in versions:
             problems.append(f"missing {name}")
             continue
-        for v in versions[name]:
+        for v, _src in versions[name]:
             try:
                 major, minor = (int(x) for x in v.split(".")[:2])
             except ValueError:
@@ -53,12 +54,12 @@ def main() -> int:
                 continue
             if (major, minor) != want:
                 problems.append(f"{name} {v} != {want[0]}.{want[1]}.x")
-        if len(set(versions[name])) > 1:
-            problems.append(f"{name} has multiple versions {sorted(set(versions[name]))}")
+        if len(versions[name]) > 1:
+            problems.append(f"{name} has multiple lock entries {[(v, s) for v, s in versions[name]]}")
     # Any other strided-* crate must be on the 0.15 train.
     for name in versions:
         if name.startswith("strided-") and name not in wanted:
-            for v in versions[name]:
+            for v, _src in versions[name]:
                 try:
                     major, minor = (int(x) for x in v.split(".")[:2])
                 except ValueError:

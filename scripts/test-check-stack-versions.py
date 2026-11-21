@@ -52,6 +52,12 @@ def main():
     unlisted = CLEAN + '[[package]]\nname = "strided-einsum"\nversion = "0.12.0"\n'
     rc, out = run(unlisted)
     assert rc == 1 and "unlisted strided-einsum" in out
+    missing = '[[package]]\nname = "threadteam"\nversion = "0.6.0"\n'
+    rc, out = run(missing)
+    assert rc == 1 and "missing colmat" in out
+    wrong = CLEAN.replace('version = "0.34.1"', 'version = "0.33.0"')
+    rc, out = run(wrong)
+    assert rc == 1 and "colmat 0.33.0" in out
     print("test-check-stack-versions: ok")
     return 0
 
