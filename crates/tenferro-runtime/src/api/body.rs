@@ -123,12 +123,17 @@ pub(crate) fn neg_into(a: R<'_>, e: &mut dyn Engine, out: TensorWrite<'_>) -> Re
 }
 
 pub(crate) fn conj_into(a: R<'_>, e: &mut dyn Engine, out: TensorWrite<'_>) -> Result<()> {
-    // Conjugation is the identity on a real dtype; the allocating `conj` returns the
-    // value unchanged there, and a backend need not declare a real conjugation kernel.
-    if matches!(a.dtype(), DType::C32 | DType::C64) {
-        e.conj_read_into(a, out)
-    } else {
-        e.copy_read_into(a, out)
+    // Conjugation is declared for f32, f64, Complex32 and Complex64. It is the
+    // identity on the two real dtypes (the allocating `conj` returns the value
+    // unchanged there, and a backend need not declare a real conjugation kernel);
+    // any other dtype is refused before the destination is touched.
+    match a.dtype() {
+        DType::C32 | DType::C64 => e.conj_read_into(a, out),
+        DType::F32 | DType::F64 => e.copy_read_into(a, out),
+        other => Err(Error::unsupported(
+            "conj_into",
+            format!("conjugation is not defined for {other:?}"),
+        )),
     }
 }
 

@@ -180,6 +180,7 @@ fn execute_one_shot_map<T: 'static>(
 
 fn execute_one_shot_zip<T: 'static>(
     dtype: KernelDType,
+    tensor_dtype: DType,
     op: ErasedZipOp,
     lhs: TypedTensorView<'_, T>,
     rhs: TypedTensorView<'_, T>,
@@ -242,7 +243,10 @@ fn execute_one_shot_zip<T: 'static>(
         &rhs_descriptor,
         exec,
     )
-    .map_err(|error| Error::backend_source("elementwise_read_into", error))
+    // An integer division by zero is a numerical failure, as on the allocating path.
+    .map_err(|error| {
+        crate::elementwise::strided_error("elementwise_read_into", tensor_dtype, error)
+    })
 }
 
 fn execute_one_shot_elementwise(
@@ -297,22 +301,22 @@ fn execute_one_shot_elementwise(
             let rhs = inputs[1].clone().tensor_view().ok_or_else(no_view)?;
             match (lhs, rhs, out) {
                 (TensorView::F32(lhs), TensorView::F32(rhs), TensorViewMut::F32(out)) => {
-                    execute_one_shot_zip(KernelDType::F32, $zip_op, lhs, rhs, out, exec)
+                    execute_one_shot_zip(KernelDType::F32, DType::F32, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::F64(lhs), TensorView::F64(rhs), TensorViewMut::F64(out)) => {
-                    execute_one_shot_zip(KernelDType::F64, $zip_op, lhs, rhs, out, exec)
+                    execute_one_shot_zip(KernelDType::F64, DType::F64, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::I32(lhs), TensorView::I32(rhs), TensorViewMut::I32(out)) => {
-                    execute_one_shot_zip(KernelDType::I32, $zip_op, lhs, rhs, out, exec)
+                    execute_one_shot_zip(KernelDType::I32, DType::I32, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::I64(lhs), TensorView::I64(rhs), TensorViewMut::I64(out)) => {
-                    execute_one_shot_zip(KernelDType::I64, $zip_op, lhs, rhs, out, exec)
+                    execute_one_shot_zip(KernelDType::I64, DType::I64, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::C32(lhs), TensorView::C32(rhs), TensorViewMut::C32(out)) => {
-                    execute_one_shot_zip(KernelDType::C32, $zip_op, lhs, rhs, out, exec)
+                    execute_one_shot_zip(KernelDType::C32, DType::C32, $zip_op, lhs, rhs, out, exec)
                 }
                 (TensorView::C64(lhs), TensorView::C64(rhs), TensorViewMut::C64(out)) => {
-                    execute_one_shot_zip(KernelDType::C64, $zip_op, lhs, rhs, out, exec)
+                    execute_one_shot_zip(KernelDType::C64, DType::C64, $zip_op, lhs, rhs, out, exec)
                 }
                 _ => unreachable!("one-shot eligibility validates matching dtypes"),
             }

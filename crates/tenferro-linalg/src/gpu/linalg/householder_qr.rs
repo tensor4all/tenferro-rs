@@ -1,5 +1,17 @@
 use super::*;
 
+/// A host scalar handed to cuBLAS in host pointer mode, aligned for CUDA's
+/// widest scalar type (`cuDoubleComplex`, 16 bytes).
+#[repr(C, align(16))]
+struct AlignedHostScalar<T>(T);
+
+impl<T> AlignedHostScalar<T> {
+    /// The scalar's address; `repr(C)` puts the value at the aligned start.
+    fn as_ptr(&self) -> *const c_void {
+        std::ptr::from_ref(self).cast()
+    }
+}
+
 fn initialize_q_columns_typed<T>(
     backend: &mut CudaEngine,
     rows: usize,
@@ -75,9 +87,12 @@ where
         i64::try_from(m).map_err(|_| Error::invalid_argument(op, "m", "dimension exceeds i64"))?;
     let k_i64 =
         i64::try_from(k).map_err(|_| Error::invalid_argument(op, "k", "dimension exceeds i64"))?;
-    let one = T::one();
-    let zero = T::zero();
-    let minus_one = -one;
+    // CUDA's complex scalars are 16-byte aligned (`double2`) while `num_complex`
+    // values are 8-aligned, and cuBLAS >= 12.9 faults on a misaligned host scalar
+    // (#1870), so each one lives in 16-byte-aligned storage.
+    let one = AlignedHostScalar(T::one());
+    let zero = AlignedHostScalar(T::zero());
+    let minus_one = AlignedHostScalar(-T::one());
 
     backend.with_raw(op, |raw| {
         let handles = raw.resource(CudaLinalgHandles::load)?;
@@ -89,9 +104,9 @@ where
         // The gemm scalars stay on the host: in `CublasPointerMode::Host` cuBLAS
         // reads alpha/beta when the call is enqueued, so no per-call scalar
         // allocation or host-to-device upload is needed (#2701).
-        let one_ptr: *const c_void = std::ptr::from_ref(&one).cast();
-        let zero_ptr: *const c_void = std::ptr::from_ref(&zero).cast();
-        let minus_one_ptr: *const c_void = std::ptr::from_ref(&minus_one).cast();
+        let one_ptr = one.as_ptr();
+        let zero_ptr = zero.as_ptr();
+        let minus_one_ptr = minus_one.as_ptr();
 
         let t = raw.alloc_output::<T>(&[k, k])?;
         let w = raw.alloc_output::<T>(&[k, columns])?;
@@ -415,8 +430,8 @@ where
     let m_i32 = as_i32(m, op, "gemm m")?;
     let n_i32 = as_i32(n, op, "gemm n")?;
     let k_i32 = as_i32(k, op, "gemm k")?;
-    let alpha = T::one();
-    let beta = T::zero();
+    let alpha = AlignedHostScalar(T::one());
+    let beta = AlignedHostScalar(T::zero());
     backend.with_raw(op, |raw| {
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: stream handle is valid for this raw-session scope.
@@ -439,12 +454,12 @@ where
                 m_i32,
                 n_i32,
                 k_i32,
-                std::ptr::from_ref(&alpha).cast(),
+                alpha.as_ptr(),
                 lhs_ref.raw_ptr() as *const _,
                 m_i32,
                 rhs_ref.raw_ptr() as *const _,
                 k_i32,
-                std::ptr::from_ref(&beta).cast(),
+                beta.as_ptr(),
                 output_ref.raw_ptr(),
                 m_i32,
                 op,

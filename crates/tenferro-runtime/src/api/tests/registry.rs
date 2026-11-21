@@ -436,3 +436,45 @@ fn options_exist_exactly_for_the_operations_that_declare_them() {
         assert_eq!(cell, want.join(", "), "{}", op.name);
     }
 }
+
+#[test]
+fn conj_into_refuses_dtypes_outside_conjugation_before_writing() -> TR<()> {
+    let mut e = CpuEngine::serial();
+    let ints = Tensor::from_vec_col_major(vec![2], vec![1_i32, -2])?;
+    assert!(
+        ints.conj(&mut e).is_err(),
+        "the allocating conj refuses i32"
+    );
+    let mut out = Tensor::from_vec_col_major(vec![2], vec![99_i32, 98])?;
+    let err = ints
+        .conj_into(&mut e, Dest::overwrite(&mut out))
+        .expect_err("conj_into refuses i32 like conj");
+    assert_eq!(err.kind(), ErrorKind::Unsupported, "{err}");
+    assert_eq!(out.as_slice::<i32>()?, &[99, 98]);
+
+    let flags = Tensor::from_vec_col_major(vec![2], vec![true, false])?;
+    let mut out = Tensor::from_vec_col_major(vec![2], vec![false, true])?;
+    let err = flags
+        .conj_into(&mut e, Dest::overwrite(&mut out))
+        .expect_err("conj_into refuses bool");
+    assert_eq!(err.kind(), ErrorKind::Unsupported, "{err}");
+    assert_eq!(out.as_slice::<bool>()?, &[false, true]);
+    Ok(())
+}
+
+#[test]
+fn integer_div_into_by_zero_is_a_numerical_failure() -> TR<()> {
+    let mut e = CpuEngine::serial();
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![7_i32, 9])?;
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![1_i32, 0])?;
+    assert_eq!(
+        lhs.div(&rhs, &mut e).expect_err("allocating").kind(),
+        ErrorKind::NumericalFailure
+    );
+    let mut out = Tensor::from_vec_col_major(vec![2], vec![0_i32, 0])?;
+    let err = lhs
+        .div_into(&rhs, &mut e, Dest::overwrite(&mut out))
+        .expect_err("div_into by zero");
+    assert_eq!(err.kind(), ErrorKind::NumericalFailure, "{err}");
+    Ok(())
+}

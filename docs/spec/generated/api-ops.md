@@ -646,8 +646,8 @@ Elementwise quotient with broadcasting.
 - Options: none
 - Output: `V`
 - Dtypes: Both operands share a numeric dtype; the result has that dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `div_into` writes the result into the destination's storage.
-- Errors: `Validation`, `Unsupported`
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `div_into` writes the result into the destination's storage. An integer division by zero is a numerical failure; `div_into` may report it after writing, which leaves the destination contents unspecified.
+- Errors: `Validation`, `Unsupported`, `NumericalFailure`
 - Omissions:
   - traced: only `div`; `div_into` exists on the concrete and eager layers (eager: `EagerSession::div_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
