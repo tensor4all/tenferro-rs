@@ -64,8 +64,9 @@ pub const fn fft_plan_cache_selector() -> ExtensionCacheSelector {
 /// The CPU backend stores RustFFT plans in the private `rustfft-plans`
 /// namespace. Its retained-byte estimate includes the exact plan key and the
 /// cache-owned `Arc` handle; allocations opaque to RustFFT are excluded.
+/// FFTW plans use the same cache under the private `fftw-plans` namespace.
 /// The private `into-schedules` namespace accounts for owned request/spec
-/// metadata and logical intermediate tensor bytes. Both namespaces share the
+/// metadata and logical intermediate tensor bytes. These namespaces share the
 /// default 64-entry and 64-MiB limits, configurable through [`Self::set_limits`],
 /// cleared through [`Self::clear`] and reported by [`Self::stats`].
 ///
@@ -228,6 +229,11 @@ impl ExtensionFftPlanEntry {
 }
 
 pub(crate) trait FftPlanProvider: Send {
+    #[cfg(feature = "fftw")]
+    fn fftw(&mut self) -> Option<(&crate::Fftw, &mut ExtensionCacheStore)> {
+        None
+    }
+
     fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>>;
     fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>>;
     fn real_plan_f32(&mut self, len: usize, forward: bool) -> RealPlan<f32>;
@@ -320,11 +326,45 @@ pub(crate) fn cached_real_plan<T: CachedFftPlanScalar, P: FftPlanProvider + ?Siz
 
 pub(crate) struct ExtensionFftPlanCache<'a> {
     entries: &'a mut ExtensionCacheStore,
+    #[cfg(feature = "fftw")]
+    fftw: Option<crate::Fftw>,
 }
 
 impl<'a> ExtensionFftPlanCache<'a> {
     pub(crate) fn new(entries: &'a mut ExtensionCacheStore) -> Self {
-        Self { entries }
+        Self {
+            entries,
+            #[cfg(feature = "fftw")]
+            fftw: None,
+        }
+    }
+
+    /// Plan cache for transforms on `engine`, using the FFT provider installed
+    /// on it, or RustFFT when none is installed.
+    ///
+    /// # Errors
+    /// Returns a runtime-state error when the engine holds a provider value
+    /// that this build cannot execute, so a transform never silently runs on a
+    /// different provider than the one the caller installed.
+    pub(crate) fn for_engine(
+        entries: &'a mut ExtensionCacheStore,
+        engine: &tenferro_cpu::CpuEngine,
+    ) -> tenferro_tensor::Result<Self> {
+        if engine.fft_provider().is_none() {
+            return Ok(Self::new(entries));
+        }
+        #[cfg(feature = "fftw")]
+        if let Some(fftw) = engine.fft_provider().and_then(crate::Fftw::from_provider) {
+            return Ok(Self {
+                entries,
+                fftw: Some(fftw),
+            });
+        }
+        Err(tenferro_tensor::Error::runtime_state(
+            "fft",
+            "the CPU engine's FFT provider was not installed by `Fftw::install` \
+             from this tenferro-fft build",
+        ))
     }
 }
 
@@ -339,6 +379,13 @@ fn extension_plan_key(key: FftPlanKey) -> ExtensionCacheKey {
 }
 
 impl FftPlanProvider for ExtensionFftPlanCache<'_> {
+    #[cfg(feature = "fftw")]
+    fn fftw(&mut self) -> Option<(&crate::Fftw, &mut ExtensionCacheStore)> {
+        self.fftw
+            .as_ref()
+            .map(|provider| (provider, &mut *self.entries))
+    }
+
     fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>> {
         let key = FftPlanKey {
             len,

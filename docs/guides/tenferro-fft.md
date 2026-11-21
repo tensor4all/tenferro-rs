@@ -12,8 +12,8 @@ graphs use `TracedFftOps` on `TracedTensor` (`t.fft()`). The generated
 [operation registry](../spec/generated/api-ops.md#fft) states the dtypes,
 layout handling, errors, and omissions of each transform.
 
-The current implementation provides CPU transforms backed by RustFFT and an
-explicitly selected CUDA path backed by cuFFT. WebGPU, Metal, and
+CPU transforms use RustFFT by default and can select FFTW at runtime. The
+CUDA path uses cuFFT. WebGPU, Metal, and
 the Apple shared CPU/Metal path are not provided today; see
 [Devices and GPU](devices-and-gpu.md). The public API is ordinary Rust trait methods, so most users do not need to
 work with the lower-level extension machinery directly.
@@ -44,6 +44,11 @@ Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-fft`'s `autodiff` feature when registering FFT AD
 rules. `rustfft` is pulled in automatically by `tenferro-fft`, and the first
 local build can take a few minutes on a fresh machine.
+
+For FFTW on CPU, enable the `fftw` feature and install both FFTW 3 precisions.
+Load the provider with `Fftw::load` and select it on your CPU engine with
+`Fftw::install`. The [crate README](https://github.com/tensor4all/tenferro-rs/blob/main/crates/tenferro-fft/README.md)
+shows a complete setup, threading options, and licensing terms.
 
 For CUDA cuFFT execution from released packages, enable the CUDA feature on
 both the FFT extension and its provider:

@@ -147,6 +147,31 @@ jobs:
           if [ "${POLICY_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
           if [ "${REQUIRED}" != true ]; then echo "clippy not required: ${REASON}"; fi
 
+  fftw:
+    name: FFTW runtime provider
+    needs: policy
+    if: needs.policy.outputs.run_rust == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v1-rust-ubuntu24-fftw
+      - name: Check FFTW dependencies are opt-in
+        run: |
+          set -o pipefail
+          cargo tree --locked -p tenferro-fft --no-default-features --edges normal > fft-dependencies.txt
+          if grep -E '(^|[[:space:]])(fftw[^[:space:]]*|libloading) v' fft-dependencies.txt; then exit 1; fi
+      - name: Install FFTW runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfftw3-double3 libfftw3-single3
+      - name: Run FFTW integration tests
+        env:
+          TENFERRO_TEST_REQUIRE_FFTW: '1'
+        run: cargo test --locked -p tenferro-fft --features fftw,autodiff --test fftw --test fftw_thread_state
+
   mpi-adapter:
     name: MPI transport adapter
     needs: policy
