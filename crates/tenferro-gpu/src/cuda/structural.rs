@@ -4646,10 +4646,15 @@ impl CudaEngine {
         for input in inputs {
             // The read boundary's residency refusals, from metadata only.
             self.read_region(input, name)?;
-            if input.dtype() != dtype || input.shape() != shape {
-                return Err(crate::Error::unsupported(
+            // A mismatch is a caller error, typed like the CPU path's, not an unserved case.
+            if input.dtype() != dtype {
+                return Err(crate::Error::dtype_mismatch(name, dtype, input.dtype()));
+            }
+            if input.shape() != shape {
+                return Err(crate::Error::shape_mismatch(
                     name,
-                    "every operand must share the destination's shape and dtype on this path",
+                    input.shape().to_vec(),
+                    shape.to_vec(),
                 ));
             }
         }
