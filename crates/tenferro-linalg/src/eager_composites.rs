@@ -1,7 +1,4 @@
-use num_complex::{Complex32, Complex64};
-use tenferro_ad::{
-    CompareDir, DType, DotGeneralConfig, EagerSession, EagerTensor, Error, Result, Tensor,
-};
+use tenferro_ad::{CompareDir, DType, DotGeneralConfig, EagerSession, EagerTensor, Error, Result};
 use tenferro_runtime::ErrorPhase;
 
 use crate::eager_ext::EagerLinalg;
@@ -16,11 +13,8 @@ pub(crate) fn slogdet(
     if a.shape()[0] == 0 && a.shape()[1] == 0 {
         ensure_float_or_complex("slogdet", a.dtype())?;
         let batch_shape = &a.shape()[2..];
-        let sign_scalar = scalar_real(session, a, 1.0)?;
-        let sign = broadcast_scalar(session, &sign_scalar, batch_shape)?;
-        let log_scalar =
-            session.constant_from_host(scalar_real_tensor(real_values_dtype(a.dtype()), 0.0)?)?;
-        let logabsdet = broadcast_scalar(session, &log_scalar, batch_shape)?;
+        let sign = session.ones(a.dtype(), batch_shape)?;
+        let logabsdet = session.zeros(real_values_dtype(a.dtype()), batch_shape)?;
         return Ok((sign, logabsdet));
     }
     let (_p, _l, u, parity) = session.lu(a)?;
@@ -153,8 +147,7 @@ pub(crate) fn pinv_with_rtol(
     let (u, s, vt) = session.svd(a)?;
     let abs_s = session.abs(&s)?;
     let s_max = session.reduce_max(&abs_s, Some(&[0]))?;
-    let threshold_scalar =
-        session.constant_from_host(scalar_real_tensor(s.dtype(), rtol.max(0.0))?)?;
+    let threshold_scalar = session.full(s.dtype(), [0_usize; 0], rtol.max(0.0))?;
     let threshold = session.mul(&s_max, &threshold_scalar)?;
     let threshold = broadcast_batch_scalar_to_leading_axis(session, &threshold, s.shape())?;
     let compare = session.compare(&abs_s, &threshold, CompareDir::Gt)?;
@@ -221,37 +214,6 @@ pub(crate) fn norm(
     restore_keepdim(session, out, a.shape(), &axes, keepdim)
 }
 
-fn scalar_real(
-    session: &mut EagerSession<'_>,
-    anchor: &EagerTensor,
-    value: f64,
-) -> Result<EagerTensor> {
-    session.constant_from_host(scalar_real_tensor(anchor.dtype(), value)?)
-}
-
-fn scalar_real_tensor(dtype: DType, value: f64) -> Result<Tensor> {
-    let tensor = match dtype {
-        DType::F64 => Tensor::from_vec_col_major(vec![], vec![value])?,
-        DType::F32 => Tensor::from_vec_col_major(vec![], vec![value as f32])?,
-        DType::I32 => Tensor::from_vec_col_major(vec![], vec![value.round() as i32])?,
-        DType::I64 => Tensor::from_vec_col_major(vec![], vec![value.round() as i64])?,
-        DType::Bool => Tensor::from_vec_col_major(vec![], vec![value != 0.0])?,
-        DType::C64 => Tensor::from_vec_col_major(vec![], vec![Complex64::new(value, 0.0)])?,
-        DType::C32 => Tensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)])?,
-        // An externally defined scalar has no eager scalar literal.
-        DType::External(_) => {
-            return Err(tenferro_ad::Error::TensorRuntime(
-                tenferro_tensor::Error::invalid_argument(
-                    "scalar_real",
-                    "dtype",
-                    "an externally defined scalar has no eager literal",
-                ),
-            ));
-        }
-    };
-    Ok(tensor)
-}
-
 fn can_square_without_abs(dtype: DType, axes_len: usize, ord: Option<f64>) -> bool {
     matches!(dtype, DType::F32 | DType::F64)
         && (ord.is_none() || (ord == Some(2.0) && axes_len != 2))
@@ -280,17 +242,6 @@ fn eye_like(
     vector_shape.extend_from_slice(&anchor.shape()[2..]);
     let ones = session.ones(anchor.dtype(), vector_shape)?;
     session.embed_diag(&ones, 0, 1)
-}
-
-fn broadcast_scalar(
-    session: &mut EagerSession<'_>,
-    input: &EagerTensor,
-    shape: &[usize],
-) -> Result<EagerTensor> {
-    if input.shape() == shape {
-        return Ok(input.clone());
-    }
-    session.broadcast_in_dim(input, shape, &[])
 }
 
 fn broadcast_batch_scalar_to_leading_axis(
@@ -355,10 +306,10 @@ fn p_norm(
     if p == 2.0 {
         return frobenius_norm(session, abs, axes);
     }
-    let order = scalar_real(session, abs, p)?;
+    let order = session.full(abs.dtype(), [0_usize; 0], p)?;
     let powered = session.pow(abs, &order)?;
     let summed = session.reduce_sum(&powered, Some(&signed(axes)[..]))?;
-    let inverse_order = scalar_real(session, abs, 1.0 / p)?;
+    let inverse_order = session.full(abs.dtype(), [0_usize; 0], 1.0 / p)?;
     session.pow(&summed, &inverse_order)
 }
 
@@ -440,7 +391,7 @@ fn count_nonzero(
     // `ord = 0` counts `x != 0` (#2359); equality with zero, then negated,
     // keeps NaN entries because IEEE 754 makes `NaN > 0` false while
     // `NaN != 0` is true.
-    let zero = scalar_real(session, abs, 0.0)?;
+    let zero = session.full(abs.dtype(), [0_usize; 0], 0.0)?;
     let is_zero = session.compare(abs, &zero, CompareDir::Eq)?;
     let is_zero = session.convert(&is_zero, abs.dtype())?;
     let ones = session.ones(abs.dtype(), abs.shape())?;

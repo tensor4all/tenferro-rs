@@ -123,7 +123,11 @@ fn norm_fro_and_p2_norm_use_fused_backend_hook_without_generic_pow() {
 #[test]
 fn real_sum_of_squares_norm_skips_abs_materialization_before_square() {
     let eager_source = crate_source("src/eager_composites.rs");
-    let eager_norm = source_section(&eager_source, "pub(crate) fn norm", "fn scalar_real(");
+    let eager_norm = source_section(
+        &eager_source,
+        "pub(crate) fn norm",
+        "fn can_square_without_abs(",
+    );
     assert!(
         eager_norm.contains("can_square_without_abs(a.dtype(), axes.len(), ord)")
             && eager_norm.contains("frobenius_norm(session, a, &axes)"),
