@@ -22,7 +22,7 @@ STRIDED = {
     "strided-traits": (0, 7),
     "strided-view": (0, 8),
 }
-FORBIDDEN = {"t4a-faer"}
+FORBIDDEN_PREFIX = "t4a-faer"
 
 
 def main() -> int:
@@ -37,8 +37,9 @@ def main() -> int:
         if name and ver:
             versions.setdefault(name.group(1), []).append(ver.group(1))
     problems = []
-    for name in FORBIDDEN & set(versions):
-        problems.append(f"forbidden dependency {name} {versions[name]}")
+    for name in versions:
+        if name == FORBIDDEN_PREFIX or name.startswith(FORBIDDEN_PREFIX + "-"):
+            problems.append(f"forbidden dependency {name} {versions[name]}")
     wanted = {**EXPECTED, **STRIDED}
     for name, want in wanted.items():
         if name not in versions:
