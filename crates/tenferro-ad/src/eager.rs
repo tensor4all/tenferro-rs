@@ -2443,8 +2443,9 @@ impl EagerSession<'_> {
     /// declared, so the previous destination contents are never read.
     ///
     /// The destination is a caller-owned tensor, not an eager value, so it has no
-    /// place in the reverse graph: tracked operands (or an active trace capture)
-    /// are rejected instead of silently dropping the gradient. Use
+    /// place in the reverse graph: while gradient recording is enabled, tracked
+    /// operands (or an active trace capture) are rejected instead of silently
+    /// dropping the gradient; under `no_grad` they are plain values. Use
     /// [`add`](Self::add) when the result must be differentiable.
     ///
     /// # Examples
@@ -2467,10 +2468,11 @@ impl EagerSession<'_> {
     /// # Errors
     ///
     /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
-    /// an unsupported-operation error for a tracked operand, an active trace
-    /// capture, or a `Dest::Accumulate` / `Dest::Scaled` destination, and a typed
-    /// validation or backend error for mismatched dtypes, shapes or placement.
-    /// Every rejection happens before the destination is written.
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate` /
+    /// `Dest::Scaled` destination, and a typed validation or backend error for
+    /// mismatched dtypes, shapes or placement. Every rejection happens before the
+    /// destination is written.
     pub fn add_into(
         &mut self,
         lhs: &EagerTensor,
@@ -2510,8 +2512,12 @@ impl EagerSession<'_> {
     ///
     /// # Errors
     ///
-    /// The errors of [`add_into`](Self::add_into), raised before the
-    /// destination is written.
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written.
     pub fn sub_into(
         &mut self,
         lhs: &EagerTensor,
@@ -2551,8 +2557,12 @@ impl EagerSession<'_> {
     ///
     /// # Errors
     ///
-    /// The errors of [`add_into`](Self::add_into), raised before the
-    /// destination is written.
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written.
     pub fn mul_into(
         &mut self,
         lhs: &EagerTensor,
@@ -2592,8 +2602,12 @@ impl EagerSession<'_> {
     ///
     /// # Errors
     ///
-    /// The errors of [`add_into`](Self::add_into), raised before the
-    /// destination is written.
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written.
     pub fn div_into(
         &mut self,
         lhs: &EagerTensor,
@@ -2633,8 +2647,12 @@ impl EagerSession<'_> {
     ///
     /// # Errors
     ///
-    /// The errors of [`add_into`](Self::add_into), raised before the
-    /// destination is written.
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written.
     pub fn neg_into(
         &mut self,
         input: &EagerTensor,
@@ -2674,8 +2692,12 @@ impl EagerSession<'_> {
     ///
     /// # Errors
     ///
-    /// The errors of [`add_into`](Self::add_into), raised before the
-    /// destination is written.
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written.
     pub fn conj_into(
         &mut self,
         input: &EagerTensor,
@@ -2702,9 +2724,7 @@ impl EagerSession<'_> {
         for operand in operands {
             self.ensure_runtime(operand)?;
         }
-        if eager_grad_recording_enabled()
-            && (eager_capture_active() || operands.iter().any(|operand| operand.requires_grad))
-        {
+        if !crate::eager_ops::untracked_fast_path_allowed(operands) {
             return Err(Error::unsupported(
                 op,
                 ErrorPhase::Execution,

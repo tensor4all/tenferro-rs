@@ -61,9 +61,10 @@ The elementwise `add`, `sub`, `mul`, `div`, `neg` and `conj` declare `_into`
 with `Dest::Overwrite` only, on the concrete and the eager layer
 (`EagerSession::add_into` and siblings, #2701); the traced layer has none. An
 eager destination is a caller-owned `Tensor`,
-not an eager value, so a tracked operand or an active trace capture is
-`Unsupported` before anything is written instead of silently dropping the
-gradient; an eager `_into` never records a graph node.
+not an eager value, so while gradient recording is enabled a tracked operand or
+an active trace capture is `Unsupported` before anything is written instead of
+silently dropping the gradient (under `no_grad` they are plain values); an
+eager `_into` never records a graph node.
 
 A public `Dest::accumulate` or `Dest::scaled` on a dot/GEMM-shaped operation is
 lowered onto the `_read_into_accum` hook (`Dest::into_accumulation`, exception

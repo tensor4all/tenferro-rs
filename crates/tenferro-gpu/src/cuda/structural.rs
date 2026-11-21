@@ -4690,6 +4690,49 @@ impl CudaEngine {
                     )
                 })?;
             }
+            tenferro_tensor::ElementwiseReadOp::Divide
+                if !matches!(dtype, DType::F32 | DType::F64) =>
+            {
+                // As in the allocating division: an integer division is the checked one (its
+                // status word reports a division by zero) and a complex one is the robust complex
+                // entry. The status word is a zeroed 4-byte scratch, not an upload.
+                let checked = matches!(dtype, DType::I32 | DType::I64);
+                let binary = if checked {
+                    t4a_cuda_kernels::BinaryOp::DivChecked
+                } else {
+                    t4a_cuda_kernels::BinaryOp::DivComplex
+                };
+                let status = self
+                    .runtime()
+                    .zeroed_status_word()
+                    .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+                let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
+                with_scalar!(dtype, |T| {
+                    dispatcher.binary(
+                        binary,
+                        kernel,
+                        t4a_cuda_kernels::ScalarSide::Both,
+                        len,
+                        super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
+                        source_buffers[0],
+                        source_buffers[1],
+                        &status,
+                    )
+                })?;
+                if checked {
+                    let flag = self
+                        .runtime()
+                        .download_bytes(&status)
+                        .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+                    if flag.iter().any(|byte| *byte != 0) {
+                        return Err(crate::Error::unsupported(
+                            name,
+                            "the checked division reported a division by zero; the destination \
+                             contents are unspecified",
+                        ));
+                    }
+                }
+            }
             binary => {
                 let entry = match binary {
                     tenferro_tensor::ElementwiseReadOp::Add => Entry::Add,

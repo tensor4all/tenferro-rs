@@ -162,77 +162,69 @@ where
             handles
                 .cublas()
                 .set_pointer_mode(CublasPointerMode::Host, op)?;
-            let computation = (|| -> Result<()> {
-                let adjoint_v = match T::DATA_TYPE {
-                    CudaDataType::F32 | CudaDataType::F64 => CublasOperation::T,
-                    CudaDataType::Complex32 | CudaDataType::Complex64 => CublasOperation::C,
-                };
-                let apply_t = if adjoint {
-                    adjoint_v
-                } else {
-                    CublasOperation::N
-                };
-                // SAFETY: dimensions and leading dimensions describe live
-                // column-major V, T, W, W2, and target device allocations.
-                handles.cublas().gemm(
-                    T::DATA_TYPE,
-                    adjoint_v,
-                    CublasOperation::N,
-                    k_i32,
-                    columns_i32,
-                    m_i32,
-                    one_ptr,
-                    v_ptr,
-                    m_i32,
-                    target_ptr.cast_const(),
-                    m_i32,
-                    zero_ptr,
-                    w_ptr,
-                    k_i32,
-                    op,
-                )?;
-                handles.cublas().gemm(
-                    T::DATA_TYPE,
-                    apply_t,
-                    CublasOperation::N,
-                    k_i32,
-                    columns_i32,
-                    k_i32,
-                    one_ptr,
-                    t_ptr.cast_const(),
-                    k_i32,
-                    w_ptr.cast_const(),
-                    k_i32,
-                    zero_ptr,
-                    w2_ptr,
-                    k_i32,
-                    op,
-                )?;
-                handles.cublas().gemm(
-                    T::DATA_TYPE,
-                    CublasOperation::N,
-                    CublasOperation::N,
-                    m_i32,
-                    columns_i32,
-                    k_i32,
-                    minus_one_ptr,
-                    v_ptr,
-                    m_i32,
-                    w2_ptr.cast_const(),
-                    k_i32,
-                    one_ptr,
-                    target_ptr,
-                    m_i32,
-                    op,
-                )?;
-
-                Ok(())
-            })();
-            let reset = handles
-                .cublas()
-                .set_pointer_mode(CublasPointerMode::Host, op);
-            computation?;
-            reset
+            let adjoint_v = match T::DATA_TYPE {
+                CudaDataType::F32 | CudaDataType::F64 => CublasOperation::T,
+                CudaDataType::Complex32 | CudaDataType::Complex64 => CublasOperation::C,
+            };
+            let apply_t = if adjoint {
+                adjoint_v
+            } else {
+                CublasOperation::N
+            };
+            // SAFETY: dimensions and leading dimensions describe live
+            // column-major V, T, W, W2, and target device allocations.
+            handles.cublas().gemm(
+                T::DATA_TYPE,
+                adjoint_v,
+                CublasOperation::N,
+                k_i32,
+                columns_i32,
+                m_i32,
+                one_ptr,
+                v_ptr,
+                m_i32,
+                target_ptr.cast_const(),
+                m_i32,
+                zero_ptr,
+                w_ptr,
+                k_i32,
+                op,
+            )?;
+            handles.cublas().gemm(
+                T::DATA_TYPE,
+                apply_t,
+                CublasOperation::N,
+                k_i32,
+                columns_i32,
+                k_i32,
+                one_ptr,
+                t_ptr.cast_const(),
+                k_i32,
+                w_ptr.cast_const(),
+                k_i32,
+                zero_ptr,
+                w2_ptr,
+                k_i32,
+                op,
+            )?;
+            handles.cublas().gemm(
+                T::DATA_TYPE,
+                CublasOperation::N,
+                CublasOperation::N,
+                m_i32,
+                columns_i32,
+                k_i32,
+                minus_one_ptr,
+                v_ptr,
+                m_i32,
+                w2_ptr.cast_const(),
+                k_i32,
+                one_ptr,
+                target_ptr,
+                m_i32,
+                op,
+            )?;
+            Ok(())
         }
     })
 }

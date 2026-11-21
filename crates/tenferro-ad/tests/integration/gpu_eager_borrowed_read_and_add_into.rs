@@ -12,7 +12,8 @@
 //! `_into` on compact eager operands performs exactly one launch and no device allocation (no
 //! staging copy, no upload, no result), and writes the same bits as the owned-tensor hook. A
 //! permuted (transposed) eager view is still staged once, because the flat kernels address no
-//! layout; that path is checked for values only.
+//! layout; that path is checked for values only. Complex and integer division are checked for
+//! values too: their kernels need a zeroed 4-byte status word (a device memset, not an upload).
 //!
 //! Run with: `cargo test -p tenferro-ad --features cuda --test integration
 //! gpu_eager_borrowed_read_and_add_into -- --ignored --include-ignored`
@@ -222,6 +223,68 @@ fn eager_into_reads_transposed_eager_views_correctly() {
         for j in 0..N {
             // out is [N, M] column-major: out[j, i] = x[i, j] + y[i, j].
             assert_eq!(got[j + N * i], a[i + M * j] + b[i + M * j]);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a CUDA device"]
+fn eager_div_into_serves_complex_and_integer_dtypes() {
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut gpu = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("open CUDA engine");
+    let ctx = EagerRuntime::new().expect("eager runtime");
+    let complex = c64_matrix(M, N);
+    let complex_rhs = Tensor::from_typed::<Complex64>(
+        TypedTensor::from_vec_col_major(
+            vec![M, N],
+            (0..M * N)
+                .map(|i| Complex64::new(1.0 + (i % 5) as f64, -0.5 * (i % 3) as f64))
+                .collect(),
+        )
+        .expect("host matrix"),
+    );
+    let ints = |values: Vec<i32>| {
+        Tensor::from_typed::<i32>(
+            TypedTensor::from_vec_col_major(vec![values.len()], values).expect("host ints"),
+        )
+    };
+    let cases = [
+        (complex, complex_rhs, false),
+        (ints(vec![7, -9, 10, 3]), ints(vec![2, 4, -3, 1]), false),
+        (ints(vec![7, -9, 10, 3]), ints(vec![2, 0, -3, 1]), true),
+    ];
+    for (lhs_host, rhs_host, divides_by_zero) in cases {
+        let lhs_value = upload_tensor(gpu.runtime(), &lhs_host).expect("upload");
+        let rhs_value = upload_tensor(gpu.runtime(), &rhs_host).expect("upload");
+        let mut out = upload_tensor(gpu.runtime(), &lhs_host).expect("upload destination");
+        let result = ctx.with_eager_session(&mut gpu, |s| {
+            let lhs = s.constant_from(lhs_value)?;
+            let rhs = s.constant_from(rhs_value)?;
+            s.div_into(&lhs, &rhs, Dest::overwrite(&mut out))?;
+            s.div(&lhs, &rhs)
+        });
+        if divides_by_zero {
+            let error = result.expect_err("an integer division by zero is reported");
+            assert!(error.to_string().contains("division by zero"), "{error}");
+            continue;
+        }
+        let fresh = result
+            .unwrap_or_else(|error| panic!("{:?} div_into: {error}", lhs_host.dtype()))
+            .into_value()
+            .expect("unique result");
+        let (got, want) = (
+            download_tensor(gpu.runtime(), &out).expect("download"),
+            download_tensor(gpu.runtime(), &fresh).expect("download"),
+        );
+        match lhs_host.dtype() {
+            tenferro_tensor::DType::C64 => assert_eq!(
+                got.as_slice::<Complex64>().expect("host"),
+                want.as_slice::<Complex64>().expect("host")
+            ),
+            _ => assert_eq!(
+                got.as_slice::<i32>().expect("host"),
+                want.as_slice::<i32>().expect("host")
+            ),
         }
     }
 }
