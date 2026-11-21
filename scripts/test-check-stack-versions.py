@@ -26,7 +26,7 @@ name = "strided-perm"
 version = "0.15.0"
 [[package]]
 name = "strided-traits"
-version = "0.8.0"
+version = "0.7.2"
 [[package]]
 name = "strided-view"
 version = "0.8.1"

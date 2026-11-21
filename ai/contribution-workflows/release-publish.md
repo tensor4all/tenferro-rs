@@ -67,7 +67,7 @@ Complete this phase before changing manifests or making any other release edit.
 6. Run `python3 scripts/check-publish-layout.py` and fix findings first.
 7. Run `python3 scripts/check-stack-versions.py`. It must print zero problems:
    the CPU stack must be one release train (`colmat 0.34`, `threadteam 0.6`,
-   `strided-*` 0.15 / view-traits 0.8) and must not contain `t4a-faer`. A failure
+   `strided-*` 0.15 / view 0.8 / traits 0.7) and must not contain `t4a-faer`. A failure
    aborts the release; fix the dependency set on `main` first.
 
 7. Confirm every CUDA-touching change merged since the baseline carries its GPU

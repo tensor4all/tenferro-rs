@@ -19,7 +19,7 @@ STRIDED = {
     "strided-kernel": (0, 15),
     "strided-nn": (0, 15),
     "strided-perm": (0, 15),
-    "strided-traits": (0, 8),
+    "strided-traits": (0, 7),
     "strided-view": (0, 8),
 }
 FORBIDDEN = {"t4a-faer"}
