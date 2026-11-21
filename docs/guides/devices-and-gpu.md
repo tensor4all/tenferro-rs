@@ -120,13 +120,10 @@ For a time-axis diagram, see [Execution Models](execution-models.md).
 
 ### Eager strided reads and output reuse
 
-`s.transpose(&x, &[1, 0])` on a CUDA-resident eager tensor returns an `EagerTensor` whose
-`tensor_read()` is a `TensorRead::View` with permuted strides over a compact device copy of `x`
-that the transpose makes. The flat CUDA elementwise kernels (arithmetic and unary math) address
-no layout, so they gather a permuted, offset, broadcast or reversed operand once into a compact
-device buffer, on the eager and the direct `*_read` route alike; a copy-based route such as real
-`conj_into` reads the strided source directly. A compact eager value (one span at its
-allocation's base) is read in place by the elementwise `_into` forms below.
+`s.transpose(&x, &[1, 0])` on a CUDA-resident eager tensor returns an `EagerTensor` that
+reads as a strided view. CUDA elementwise operations may gather a permuted, offset, broadcast
+or reversed operand once into a compact device buffer of the same placement, on the eager and
+the direct route alike; the operation registry states the layout handling per operation.
 
 `EagerSession::{add,sub,mul,div}_into(&x, &y, dest)` and `{neg,conj}_into(&x, dest)` are the
 eager output-reuse forms of those operations: they write into a caller-owned, preallocated
@@ -134,10 +131,8 @@ eager output-reuse forms of those operations: they write into a caller-owned, pr
 concrete `_into` contract (shared dtype, `Dest::Overwrite` only). While gradient recording is
 enabled they reject tracked operands or an active trace capture, because a caller-owned
 destination has no place in the reverse graph; under `no_grad` such operands are plain values.
-On compact operands each call is one kernel launch with no device allocation. The one exception
-is complex or integer division, which zeroes a 4-byte kernel status word (a device memset, not
-an upload); an integer division by zero is reported after the launch and leaves the destination
-contents unspecified.
+On compact operands a call allocates no result and copies no operand. An integer division by
+zero is reported as a numerical failure and leaves the destination contents unspecified.
 Other eager operations return fresh values; see the
 [operation registry](../spec/generated/api-ops.md).
 

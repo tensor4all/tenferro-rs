@@ -4142,6 +4142,8 @@ impl CudaEngine {
     /// (a device memset, not an upload); complex values use the robust complex division. A
     /// division by zero is a numerical failure reported after the launch, so a caller-provided
     /// destination's contents are then unspecified.
+    // INVARIANT: the arguments are the launch's two operand buffers, its destination, the kernel
+    // and tensor dtypes, the length and the op name; bundling them would add a one-use struct.
     #[allow(clippy::too_many_arguments)]
     fn dispatch_division(
         &mut self,
