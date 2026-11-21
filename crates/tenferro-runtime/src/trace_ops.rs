@@ -441,9 +441,9 @@ impl TraceContext {
     /// # Errors
     ///
     /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
-    /// externally defined scalar, and the [`TracedTensor::broadcast_in_dim`] errors
-    /// for an invalid `shape`.
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the shape
+    /// product overflows or `dtype` is an externally defined scalar, and the
+    /// [`TracedTensor::broadcast_in_dim`] errors for an invalid `shape`.
     pub fn zeros(&self, dtype: DType, shape: impl IntoShapeVec) -> Result<TracedTensor> {
         self.full(dtype, shape, 0.0)
     }
@@ -466,9 +466,9 @@ impl TraceContext {
     /// # Errors
     ///
     /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
-    /// externally defined scalar, and the [`TracedTensor::broadcast_in_dim`] errors
-    /// for an invalid `shape`.
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the shape
+    /// product overflows or `dtype` is an externally defined scalar, and the
+    /// [`TracedTensor::broadcast_in_dim`] errors for an invalid `shape`.
     pub fn ones(&self, dtype: DType, shape: impl IntoShapeVec) -> Result<TracedTensor> {
         self.full(dtype, shape, 1.0)
     }
@@ -499,11 +499,15 @@ impl TraceContext {
     /// # Errors
     ///
     /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `value` is not
-    /// representable in `dtype` or `dtype` is an externally defined scalar, and the
-    /// [`TracedTensor::broadcast_in_dim`] errors for an invalid `shape`.
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the shape
+    /// product overflows, `value` is not representable in `dtype`, or `dtype` is
+    /// an externally defined scalar, and the [`TracedTensor::broadcast_in_dim`]
+    /// errors for an invalid `shape`.
     pub fn full(&self, dtype: DType, shape: impl IntoShapeVec, value: f64) -> Result<TracedTensor> {
         let shape = shape.into_shape_vec();
+        // The recorded broadcast materializes `shape`; reject an overflowing
+        // element count at construction instead of at compilation.
+        tenferro_tensor::validate::checked_shape_product("TraceContext::full", "shape", &shape)?;
         let bytes = crate::composite::scalar_bytes(dtype, value)?;
         let scalar = crate::traced::apply_nullary(
             StdTensorOp::Constant { dtype, bytes },
