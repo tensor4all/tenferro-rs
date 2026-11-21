@@ -23,6 +23,7 @@ STRIDED = {
     "strided-view": (0, 8),
 }
 FORBIDDEN_PREFIX = "t4a-faer"
+STACK_PREFIXES = ("colmat", "threadteam", "tcontract", "tlinalg", "strided", "t4a-faer")
 
 
 def main() -> int:
@@ -58,6 +59,12 @@ def main() -> int:
                 problems.append(f"{name} {v} != {want[0]}.{want[1]}.x")
         if len(versions[name]) > 1:
             problems.append(f"{name} has multiple lock entries {[(v, s) for v, s in versions[name]]}")
+    # No stack family may resolve to two versions; two copies are two incompatible
+    # types even when their semver ranges could overlap.
+    for name, entries in versions.items():
+        if name.startswith(STACK_PREFIXES) and len(entries) > 1:
+            problems.append(f"{name} has multiple stack versions {[v for v, _ in entries]}")
+
     # Any other strided-* crate must be on the 0.15 train.
     for name in versions:
         if name.startswith("strided-") and name not in wanted:
