@@ -54,8 +54,10 @@ pub(crate) fn split_ordered_ranges_mut<T>(
 
 /// Split `data` into the two inclusive ranges `first` and `second`.
 ///
-/// Returns `None` when the ranges overlap, which is the only case the caller
-/// turns into an unsupported slice pair.
+/// Returns `None` exactly when the ranges overlap, which is the only case the
+/// caller turns into an unsupported slice pair. Both directions are proved: a
+/// `Some` result carries separated ranges, and `None` is returned only for
+/// overlapping ones.
 #[cfg_attr(
     creusot,
     creusot_std::macros::requires(first.0@ <= first.1@ && first.1@ < data@.len())
@@ -72,7 +74,7 @@ pub(crate) fn split_ordered_ranges_mut<T>(
             && (^first_slice)@ == (^data)@[first.0@ .. first.1@ + 1]
             && (^second_slice)@ == (^data)@[second.0@ .. second.1@ + 1]
             && (first.1@ < second.0@ || second.1@ < first.0@),
-        None => true,
+        None => !(first.1@ < second.0@ || second.1@ < first.0@),
     })
 )]
 pub(crate) fn split_two_mut_ranges<T>(
@@ -84,8 +86,13 @@ pub(crate) fn split_two_mut_ranges<T>(
         return split_ordered_ranges_mut(data, first.0, first.1, second.0, second.1);
     }
     if second.1 < first.0 {
-        return split_ordered_ranges_mut(data, second.0, second.1, first.0, first.1)
-            .map(|(second_slice, first_slice)| (first_slice, second_slice));
+        // An explicit match rather than `Option::map` with a closure: the
+        // prover then sees the `None` arm of the callee directly, which is
+        // what lets the `None` postcondition above be discharged.
+        return match split_ordered_ranges_mut(data, second.0, second.1, first.0, first.1) {
+            Some((second_slice, first_slice)) => Some((first_slice, second_slice)),
+            None => None,
+        };
     }
     None
 }
