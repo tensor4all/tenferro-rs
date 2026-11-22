@@ -50,7 +50,7 @@ cudarc = { workspace = true, optional = true }
 faer.workspace = true
 # The extracted tensor-free linalg provider (tlinalg-rs). The interface it is adapted to lives in
 # this crate. Its requirement lives in the workspace manifest, next to the rest of the CPU stack:
-# tlinalg 0.11 takes the engine's `tcontract_exec::Exec` bundle by `&mut` (`*_workspace` entries by
+# tlinalg takes the engine's `tcontract_exec::Exec` bundle by `&mut` (`*_workspace` entries by
 # `&`) and forks its batch lanes over that token.
 tlinalg.workspace = true
 tcontract-exec = { workspace = true, features = ["faer"] }

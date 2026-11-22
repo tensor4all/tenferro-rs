@@ -82,7 +82,7 @@ syn = "2"
 # a single version, so the strided crates are ordinary caret requirements at the
 # patch each API needs; the committed `Cargo.lock` fixes the exact versions a
 # build uses, and `cargo update -p <crate>` moves them. Every fan-out entry of
-# strided 0.11 takes a `threadteam::Exec` token as its last parameter and decides
+# strided takes a `threadteam::Exec` token as its last parameter and decides
 # its parallel width from that token's dispatch costs. `threadteam` (formerly
 # `strided-exec`) is the only crate that depends on Rayon (see `deny.toml`);
 # tenferro starts no task itself.
@@ -149,4 +149,3 @@ incremental = true
 inherits = "test"
 incremental = false
 strip = "symbols"
-
