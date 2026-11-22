@@ -24,10 +24,10 @@ all-features = true
 name = "tenferro_runtime"
 
 [dependencies]
-tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.12.0" }
-tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.12.0" }
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.12.0", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.12.0", default-features = false }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.13.0" }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.13.0" }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.13.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.13.0", default-features = false }
 computegraph.workspace = true
 lru.workspace = true
 num-complex.workspace = true
