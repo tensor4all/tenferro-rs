@@ -26,6 +26,9 @@ permissions:
   actions: read
   checks: read
   contents: read
+  # `gh api .../issues/<n>/labels` reads the label set through the issues API;
+  # without this scope it 403s and the gate retries five times and fails.
+  issues: read
 
 concurrency:
   group: ci-gpu-${{ github.workflow }}-${{ github.ref }}
