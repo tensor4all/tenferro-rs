@@ -78,8 +78,8 @@ jobs:
         run: cargo creusot
 
       # `cargo creusot` also succeeds when a specification has been deleted, so
-      # the two claims the job exists for are checked here.
-      - name: The contracts still state the ranges and the separation
+      # the claims the job exists for are checked here.
+      - name: The contracts still state the ranges, the separation and the overlap
         working-directory: ext/proofs/split-ranges
         run: |
           set -euo pipefail
@@ -87,7 +87,6 @@ jobs:
           grep -qF "Slice64.view left.final" "${coma}/split_ordered_ranges_mut.coma"
           grep -qF "UInt64.t'int second.f1 < UInt64.t'int first.f0" \
             "${coma}/split_two_mut_ranges.coma"
-      - name: DEBUG dump coma
-        if: always()
-        working-directory: ext/proofs/split-ranges
-        run: cat verif/tenferro_split_proofs_rlib/split_ranges/split_two_mut_ranges.coma
+          # `None` is returned only for overlapping ranges.
+          grep -qF "| None -> not (UInt64.t'int first.f1 < UInt64.t'int second.f0" \
+            "${coma}/split_two_mut_ranges.coma"
