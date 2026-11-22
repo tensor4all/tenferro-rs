@@ -133,7 +133,9 @@ jobs:
           }
           crates="strided_view strided_traits strided_perm strided_basic strided_fused strided_kernel"
           if [ "${{ matrix.cfg.backend }}" = cpu-faer ]; then
-            crates="${crates} faer"
+            # colmat 0.34 keeps `[lib] name = "colmat"`, so the artifact is
+            # libcolmat-*.rlib. The old `faer` name only matched t4a-faer <= 0.33.
+            crates="${crates} colmat"
           fi
           missing=""
           for crate in ${crates}; do
