@@ -12,12 +12,15 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   traces a closure once over symbolic-extent parameters and returns a
   `RecordedProgram`, which holds a closed, shape-generic
   `tenferro_runtime::program::Subprogram` and the tensors the closure captured.
-  Captures are hoisted to trailing inputs, so two recordings of one closure
+  Tensors bound from data (`from_vec_col_major`, `from_tensor_concrete_shape`)
+  are captures, hoisted to trailing inputs, so two recordings of one closure
   compare equal (`Eq`/`Hash`, and `Subprogram::semantic_fingerprint`, which
-  includes the parameter/capture split) whatever data they captured. The semantic-program
-  fingerprint moves to `v2`, which also encodes the sub-program calls an
-  operation carries. Fingerprints are process-local cache keys, so nothing
-  persisted changes. Operations that carry and run sub-programs follow in the
+  includes the parameter/capture split) whatever data they captured. Values
+  from constant constructors (`full`, `zeros`, `scalar`, ...) stay `Constant`
+  ops and are part of the identity. The semantic-program fingerprint moves to
+  `v2`, which also encodes the sub-program calls an operation carries. Every
+  fingerprint value changes, including where `Debug` prints one; fingerprints
+  are process-local cache keys and nothing persists them. Operations that carry and run sub-programs follow in the
   next step; see `docs/design/subprograms.md`.
 
 ### Removed

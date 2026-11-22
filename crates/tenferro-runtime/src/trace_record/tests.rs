@@ -137,6 +137,22 @@ fn captured_data_is_hoisted_out_of_the_identity() {
 }
 
 #[test]
+fn a_constant_constructor_value_stays_in_the_identity() {
+    let with_full = |value: f64| {
+        TraceContext::record(&[(DType::F64, 1)], move |trace, p| {
+            let w = trace.full(DType::F64, [2], value)?;
+            Ok(vec![p[0].mul(&w)?])
+        })
+        .unwrap()
+    };
+    let one = with_full(1.0);
+    let two = with_full(2.0);
+    assert_eq!(one.subprogram().capture_count(), 0);
+    assert_ne!(one.subprogram(), two.subprogram());
+    assert_eq!(one.subprogram(), with_full(1.0).subprogram());
+}
+
+#[test]
 fn a_capture_with_another_shape_is_another_program() {
     let wide = TraceContext::record(&[(DType::F64, 1)], |trace, p| {
         let w = trace.from_vec_col_major(vec![3], vec![1.0_f64; 3])?;

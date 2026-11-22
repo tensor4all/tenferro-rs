@@ -100,12 +100,18 @@ impl TraceContext {
     /// specialized for each concrete shape it is run at. Every declared
     /// parameter stays an input, in order, even if `f` does not use it.
     ///
-    /// A tensor that `f` creates from data (for example with
-    /// [`from_vec_col_major`](Self::from_vec_col_major)) is a *capture*: it is
-    /// hoisted to a trailing input and returned by
+    /// A tensor that `f` binds from data (with
+    /// [`from_vec_col_major`](Self::from_vec_col_major) or
+    /// [`from_tensor_concrete_shape`](Self::from_tensor_concrete_shape)) is a
+    /// *capture*: it is hoisted to a trailing input and returned by
     /// [`RecordedProgram::captures`], so the sub-program's identity does not
-    /// depend on its values. Values of any other trace context cannot enter the
-    /// recording.
+    /// depend on its values. A value built by a constant constructor such as
+    /// `full`, `zeros`, `ones` or `scalar` is a `Constant` operation instead:
+    /// its value stays in the program and is part of the identity, so two
+    /// recordings that differ only in such a value are different
+    /// sub-programs. Bind a weight from data when recordings should share one
+    /// identity across values. Values of any other trace context cannot enter
+    /// the recording.
     ///
     /// # Examples
     ///

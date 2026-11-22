@@ -26,13 +26,16 @@ once and specialized for each concrete shape it is prepared at.
 - A `Subprogram` is an `Arc<SemanticProgram>` plus a **parameter count**. Its
   inputs are the declared parameters, in declaration order, followed by the
   **captures**. It has no `ProgramBindings`.
-- **Captures are hoisted.** A tensor that the recorded closure creates from data
-  becomes a trailing input, and the tensor itself travels beside the program in
+- **Captures are hoisted.** A tensor that the recorded closure binds from data
+  (`from_vec_col_major`, `from_tensor_concrete_shape`) becomes a trailing input, and the tensor itself travels beside the program in
   `RecordedProgram::captures`. An operation that carries the sub-program
   receives captures as ordinary operands. Because of this, the identity never
   depends on tensor data: re-recording a closure over different weights of the
-  same shape produces an equal `Subprogram`. Small inline `Constant` ops stay in
-  the program and are part of its identity.
+  same shape produces an equal `Subprogram`. Values from constant constructors
+  (`full`, `zeros`, `ones`, `scalar`) are `Constant` ops: they stay in the
+  program and are part of its identity, whatever their broadcast width, so
+  recordings that differ only in such a value are different sub-programs. A
+  test pins this contract.
 - **Frozen at record time:** the operation list, value metadata with symbolic
   extents, shape guards and the cached fingerprint. **Not frozen:** concrete
   extents, engine placement, kernels and fusion, which are decided when the
