@@ -129,6 +129,16 @@ fn compact_householder_cuda_uses_incremental_device_native_paths() {
     assert_eq!(apply.matches(".gemm(").count(), 3);
     assert!(!apply.contains("for reflector"));
     assert!(!apply.contains("copy_bytes"));
+    // The gemm scalars are host pointers: no per-call scalar allocation or
+    // host-to-device upload inside the reflector application (#2701).
+    assert!(!apply.contains("upload_bytes"));
+    assert!(!apply.contains("CublasPointerMode::Device"));
+    // Host-mode scalars sit in 16-byte-aligned storage: `cuDoubleComplex` is
+    // `__align__(16)` and cuBLAS >= 12.9 faults on an 8-aligned Complex64 (#1870).
+    assert!(apply.contains("AlignedHostScalar("));
+    assert!(source.contains("#[repr(C, align(16))]\nstruct AlignedHostScalar<T>(T);"));
+    assert!(!source.contains("std::ptr::from_ref(&alpha)"));
+    assert!(!source.contains("std::ptr::from_ref(&one)"));
     assert!(source.contains("linalg_householder_explicit_v"));
 
     let from_factors = source_section(

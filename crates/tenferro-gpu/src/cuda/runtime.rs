@@ -725,6 +725,19 @@ impl CudaRuntime {
             })
     }
 
+    /// A zero-initialized 4-byte kernel status word, zeroed by a stream-ordered
+    /// device memset instead of a host-to-device upload (#2701).
+    pub(crate) fn zeroed_status_word(&self) -> Result<t4a_cuda_runtime::Buffer, CudaDeviceError> {
+        let mut guard = self.submit();
+        guard
+            .alloc_zeroed(4, 4)
+            .map_err(|error| CudaDeviceError::Initialization {
+                device: self.inner.device_id,
+                operation: "t4a_cuda_runtime::Runtime::alloc_zeroed",
+                source: Box::new(error),
+            })
+    }
+
     /// Allocate a pinned host buffer owned by this runtime.
     ///
     /// # Errors

@@ -330,9 +330,9 @@ Vector or matrix norm over the chosen axes, selected by `NormOrd`; `NormOrd::Zer
 | Op | concrete | traced | eager | Suffixes |
 |---|---|---|---|---|
 | `exp` | CoreOps | described | described | `exp` |
-| `neg` | CoreOps | described | described | `neg` |
+| `neg` | CoreOps | described | described | `neg`, `neg_into` (overwrite) |
 | `sign` | CoreOps | described | described | `sign` |
-| `conj` | CoreOps | described | described | `conj` |
+| `conj` | CoreOps | described | described | `conj`, `conj_into` (overwrite) |
 | `log` | CoreOps | described | described | `log` |
 | `expm1` | CoreOps | described | described | `expm1` |
 | `log1p` | CoreOps | described | described | `log1p` |
@@ -348,9 +348,9 @@ Vector or matrix norm over the chosen axes, selected by `NormOrd`; `NormOrd::Zer
 | `softplus` | CoreOps | described | described | `softplus` |
 | `gelu` | CoreOps | described | described | `gelu` |
 | `gelu_tanh` | CoreOps | described | described | `gelu_tanh` |
-| `mul` | CoreOps | described | described | `mul` |
-| `sub` | CoreOps | described | described | `sub` |
-| `div` | CoreOps | described | described | `div` |
+| `mul` | CoreOps | described | described | `mul`, `mul_into` (overwrite) |
+| `sub` | CoreOps | described | described | `sub`, `sub_into` (overwrite) |
+| `div` | CoreOps | described | described | `div`, `div_into` (overwrite) |
 | `rem` | CoreOps | described | described | `rem` |
 | `pow` | CoreOps | described | described | `pow` |
 | `maximum` | CoreOps | described | described | `maximum` |
@@ -422,9 +422,10 @@ Elementwise negation.
 - Options: none
 - Output: `V`
 - Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `neg_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Omissions:
+  - traced: only `neg`; `neg_into` exists on the concrete and eager layers (eager: `EagerSession::neg_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### sign
 
@@ -444,9 +445,10 @@ Elementwise complex conjugate (identity on real dtypes).
 - Options: none
 - Output: `V`
 - Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `conj_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Omissions:
+  - traced: only `conj`; `conj_into` exists on the concrete and eager layers (eager: `EagerSession::conj_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### log
 
@@ -620,9 +622,10 @@ Elementwise product with broadcasting.
 - Options: none
 - Output: `V`
 - Dtypes: Both operands share a numeric dtype; the result has that dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `mul_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Omissions:
+  - traced: only `mul`; `mul_into` exists on the concrete and eager layers (eager: `EagerSession::mul_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### sub
 
@@ -631,9 +634,10 @@ Elementwise difference with broadcasting.
 - Options: none
 - Output: `V`
 - Dtypes: Both operands share a numeric dtype; the result has that dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `sub_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Omissions:
+  - traced: only `sub`; `sub_into` exists on the concrete and eager layers (eager: `EagerSession::sub_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### div
 
@@ -642,9 +646,10 @@ Elementwise quotient with broadcasting.
 - Options: none
 - Output: `V`
 - Dtypes: Both operands share a numeric dtype; the result has that dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
-- Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `div_into` writes the result into the destination's storage. An integer division by zero is a numerical failure; `div_into` may report it after writing, which leaves the destination contents unspecified.
+- Errors: `Validation`, `Unsupported`, `NumericalFailure`
+- Omissions:
+  - traced: only `div`; `div_into` exists on the concrete and eager layers (eager: `EagerSession::div_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### rem
 
@@ -700,7 +705,7 @@ Elementwise sum with broadcasting.
 - Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `add_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
-  - traced and eager: only `add`; `add_into` exists on the concrete layer
+  - traced: only `add`; `add_into` exists on the concrete and eager layers (eager: `EagerSession::add_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### matmul
 
