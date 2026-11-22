@@ -4,8 +4,6 @@ All notable changes to the `tenferro-*` crates are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ## [0.13.0] - Unreleased
 
 ### Breaking changes
@@ -19,6 +17,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Tensor::ones(dtype, shape)` and `Tensor::full(dtype, [0_usize; 0], value)`.
   `composite::scalar_bytes` now also accepts `Bool`, and rejects an
   unrepresentable value with `InvalidArgument` from `Tensor::full`.
+- **`CudaEngine::launch_completion_syncs` is removed** (#2667). It was a
+  `#[doc(hidden)]` `pub fn` that only counted the per-launch stream waits the
+  engine no longer performs; `CudaRuntime::stream_waits` is the counter the tests
+  pin now.
 - **Every semantic-program fingerprint value changes** (#2707): the identity
   moves to `v2`. Fingerprints are process-local cache keys and nothing persists
   them.
@@ -79,8 +81,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A CUDA launch no longer drains the stream** (#2667). Work is observed at the
   host's own barrier (a download waits for its own copy; `synchronize` is the
   explicit one), as `docs/guides/devices-and-gpu.md` already documented. No
-  numerics or public API change; the `#[doc(hidden)]` `launch_completion_syncs`
-  counter is gone.
+  numerics change; the same kernels run in the same order. The one removed
+  public item is listed under Breaking changes.
 
 ### Fixed
 
