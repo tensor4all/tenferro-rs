@@ -6,6 +6,19 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Recorded sub-programs, the first slice of #2691: `TraceContext::record`
+  traces a closure once over symbolic-extent parameters and returns a
+  `RecordedProgram`, which holds a closed, shape-generic
+  `tenferro_runtime::program::Subprogram` and the tensors the closure captured.
+  Captures are hoisted to trailing inputs, so two recordings of one closure
+  compare equal (`Eq`/`Hash`) whatever data they captured. The semantic-program
+  fingerprint moves to `v2`, which also encodes the sub-program calls an
+  operation carries. Fingerprints are process-local cache keys, so nothing
+  persisted changes. Operations that carry and run sub-programs follow in the
+  next step; see `docs/design/subprograms.md`.
+
 ### Removed
 
 - Removed the unused custom compiler-pass API from `tenferro_runtime::program`

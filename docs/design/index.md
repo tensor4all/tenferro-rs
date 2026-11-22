@@ -30,6 +30,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision |
 | [dot-general-overhead.md](./dot-general-overhead.md) | Fixed-cost analysis for many small `dot_general` contractions |
 | [dynamic-symbolic-shapes.md](./dynamic-symbolic-shapes.md) | Dynamic and symbolic shape architecture. Covers `DynamicTruncate`, `transpose_scatter`, symbolic `slice_sizes`, the `Exact`/`UpperBound`/`Unknown` extent model, and extension equalities from graph-owned scopes through compiled guards. This is the key design doc for understanding how tenferro differs from XLA-style shape-specialized compilation. |
+| [subprograms.md](./subprograms.md) | Sub-programs carried by operations (#2691): closed shape-generic `Subprogram`, `TraceContext::record` with hoisted captures, operation-local call metadata, and the v2 semantic identity. Updated by each PR of the #2691 sequence (execution, AD, `scan`/`cond`/`while_loop`). |
 | [eager-concatenate-shape-recording.md](./eager-concatenate-shape-recording.md) | Exact-shape semantic recording for eager concatenate and mixed-activity stack AD (#1692) |
 | [eager-semantic-promotion-recording.md](./eager-semantic-promotion-recording.md) | Shared eager execution/semantic input-promotion planning for AD-safe mixed dtypes (#1698) |
 | [eager-semantic-metadata-scope-retention.md](./eager-semantic-metadata-scope-retention.md) | Metadata-scope lifetime transfer across eager semantic helper nodes (#1700) |

@@ -100,6 +100,7 @@ mod import;
 mod metadata;
 mod op;
 mod semantic;
+mod subprogram;
 mod value;
 
 pub use bindings::ProgramBindings;
@@ -117,6 +118,7 @@ pub use metadata::{
 };
 pub use op::{CoreSemanticOp, CoreSemanticOpConversionError, SemanticOpRef, SemanticOperationView};
 pub use semantic::{FrozenProgram, SemanticProgram};
+pub use subprogram::Subprogram;
 pub use value::{BindingKey, ProgramValue};
 
 #[cfg(test)]
