@@ -6,7 +6,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.13.0] - 2026-11-22
+## [0.13.0] - Unreleased
 
 ### Breaking changes
 
@@ -47,6 +47,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are process-local cache keys and nothing persists them. Operations that carry and run sub-programs follow in the
   next step; see `docs/design/subprograms.md`.
 
+- **Reusable overwrite destinations for FFTs (#2665).** All eight concrete `_into`
+  methods and `FftExecutor` write a caller-owned destination; shape, dtype,
+  placement, allocation domain and layout are checked before execution. Warmed
+  calls make no Rust heap allocation for C2C, R2C and C2R in `f32` and `f64`.
+  The eager and traced APIs are unchanged.
+
 - **`FftExecutor`'s allocating transforms take any `AsView` input (#2687).**
   `fft_with`, `ifft_with`, `rfft_with`, `irfft_with`, `fftn_with`, `ifftn_with`,
   `rfftn_with` and `irfftn_with` now take `&X` for `X: AsView + ?Sized`, the same
@@ -69,6 +75,41 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keeps the staging copy it already took. The length travels as cuBLAS's 32-bit
   argument, so a dot of more than `i32::MAX` elements is now refused with a typed
   `Unsupported` error instead of being folded in two passes.
+
+- **A CUDA launch no longer drains the stream** (#2667). Work is observed at the
+  host's own barrier (a download waits for its own copy; `synchronize` is the
+  explicit one), as `docs/guides/devices-and-gpu.md` already documented. No
+  numerics or public API change; the `#[doc(hidden)]` `launch_completion_syncs`
+  counter is gone.
+
+### Fixed
+
+- **`full` accepts every exactly representable integer and checks its shape first**
+  (#2698). `Tensor::full(DType::I64, ..)` rejected values of magnitude `9.0e15` and
+  above although they are exact in binary64; it now decides against
+  `-(2^63) <= value < 2^63`. Eager and traced `full` validate the shape product
+  before allocating or recording, so every surface reports the same typed
+  `InvalidArgument { argument: "shape" }` instead of a wrapped overflow.
+- **Concrete `cast` and `convert` read their operand once** (#2699). The bodies no
+  longer choose between the owned and the read engine entry. The registry
+  `layout:` text and the shipped skill cheatsheet claimed that every non-owned
+  receiver is gathered first; that was false (the CPU engine reads a strided or
+  offset view in place, CUDA gathers once into one flat-span `Convert`, and a
+  backend without a view-capable route returns an error). The text is corrected,
+  including the 0.12.0 line above.
+- **Metal checks element counts and byte lengths before allocating or launching**
+  (#2669, #2672). `MetalEngine::len`, `RuntimeCell::wrap` and
+  `MetalContext::element_bytes` used a wrapping product or a saturating byte
+  length; overflow is now `Error::RuntimeState`.
+
+### Internal
+
+- The checked-in `api/*.txt` snapshots are gone; the registry conformance check
+  on the generated surface is the verdict (#2664).
+- Creusot contracts for the contiguous mutable split in `tenferro-tensor`
+  (#2690, #2709); they compile only under `cfg(creusot)`.
+- README leads with the rationale and links `tenferro-examples` (#2681); shipped
+  examples bind and reuse one CPU engine (#2680).
 
 ## [0.12.0] - 2026-11-19
 
@@ -173,7 +214,9 @@ layer, generated from a per-family registry. The operation list, options,
   - core: concrete reductions, `transpose` and `reverse` reject a repeated
     axis as `DuplicateAxis { role: "axes" }` before the engine; a typed
     `where_select` whose branch has another dtype reports `Error::Internal`;
-    `convert` / `cast` accept any receiver and gather a non-owned one once.
+    `convert` / `cast` accept any receiver and read it through the engine's read entry
+    (a strided view is not staged first; see #2699 under 0.13.0, which corrects the
+    wording this release shipped with).
 
 ### Added
 
