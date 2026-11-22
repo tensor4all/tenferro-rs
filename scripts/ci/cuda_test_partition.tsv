@@ -1790,6 +1790,8 @@ host	tenferro-linalg::integration	traced_correctness::norm_supports_vector_zero_
 host	tenferro-linalg::integration	traced_correctness::pseudoinverse_and_norm_eval
 host	tenferro-linalg::integration	traced_correctness::qr_traced_tensor_returns_q_and_r
 host	tenferro-linalg::integration	traced_correctness::svd_traced_tensor_returns_three_outputs
+host	tenferro-linalg::integration	traced_correctness::traced_norm_over_an_empty_axis_is_a_real_zero
+host	tenferro-linalg::integration	traced_correctness::traced_pinv_rtol_and_p_norm_use_their_scalars
 host	tenferro-linalg::integration	traced_correctness::traced_solve_accepts_a_tiny_nonzero_complex_pivot
 host	tenferro-linalg::integration	traced_correctness::traced_spectral_norm_preserves_signed_and_complex_input
 host	tenferro-linalg::integration	traced_correctness::traced_tensor_linalg_ext_exposes_svd

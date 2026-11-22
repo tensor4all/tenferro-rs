@@ -520,7 +520,11 @@ fn traced_pinv_rtol_and_p_norm_use_their_scalars() {
     let inverse = a
         .pinv_with(&tenferro_linalg::PinvOptions::default().rtol(Some(0.5)))
         .unwrap();
-    let p_norm = a
+    // Columns `[1, 1]` and `[2, 0]`: two nonzeros, so swapping `p` and `1/p` gives 8, not 2^(1/3).
+    let b = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 1.0, 2.0, 0.0]))
+        .unwrap();
+    let p_norm = b
         .norm_with(
             &NormOptions::default()
                 .ord(NormOrd::P(3.0))
@@ -530,5 +534,5 @@ fn traced_pinv_rtol_and_p_norm_use_their_scalars() {
     let results = run_many(&[&inverse, &p_norm]);
 
     assert_tensor_f64_eq(get_f64_data(&results[0]), &[0.5, 0.0, 0.0, 0.0]);
-    assert_tensor_f64_eq(get_f64_data(&results[1]), &[2.0, 0.5]);
+    assert_tensor_f64_eq(get_f64_data(&results[1]), &[2.0_f64.cbrt(), 2.0]);
 }
