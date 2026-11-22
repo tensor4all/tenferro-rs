@@ -1237,9 +1237,9 @@ dependencies = [
 
 [[package]]
 name = "threadteam"
-version = "0.6.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1569aa460678c61333c4dd8635cfd587e157f3ed461dd491b4223c8da5821a2d"
+checksum = "fbc7aeede8aadfaf57ce59a69bc0788bc3196f8c17c003d531cc005204fde194"
 dependencies = [
  "libc",
  "loom",

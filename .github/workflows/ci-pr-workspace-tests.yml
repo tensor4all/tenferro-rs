@@ -117,9 +117,8 @@ jobs:
           # 1.100's build-dir layout keeps them in ci/build/<package>/<hash>/out.
           profile_dir="${CARGO_TARGET_DIR}/ci"
           if [ ! -d "${profile_dir}" ]; then
-            echo "::warning::stale cache hit, rebuilding (no ${profile_dir})"
-            rm -rf "${CARGO_TARGET_DIR}"
-            exit 0
+            echo "::error::restored cache has no ${profile_dir}; the cache key is stale"
+            exit 1
           fi
           has_artifact() {
             local dirs=()
@@ -142,11 +141,12 @@ jobs:
             has_artifact "${crate}" || missing="${missing} ${crate}"
           done
           if [ -n "${missing}" ]; then
-            # A cache key can match while the restored tree no longer fits the
-            # current dependency set. Drop it and let the job rebuild.
-            echo "::warning::stale cache hit, rebuilding (missing:${missing} under ${profile_dir}/{deps,build})"
-            rm -rf "${CARGO_TARGET_DIR}"
-            exit 0
+            # A full cache hit cannot be healed from here: rust-cache skips its
+            # post-step save on a full match, so deleting the tree would only make
+            # every later run cold-rebuild silently. Fail instead, so a stale entry
+            # is visible and the key gets fixed.
+            echo "::error::restored cache is missing:${missing} under ${profile_dir}/{deps,build}"
+            exit 1
           fi
           echo "Verified restored Cargo dependency artifacts under ${profile_dir}."
       - uses: taiki-e/install-action@nextest
