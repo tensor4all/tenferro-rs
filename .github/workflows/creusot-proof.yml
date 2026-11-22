@@ -87,3 +87,7 @@ jobs:
           grep -qF "Slice64.view left.final" "${coma}/split_ordered_ranges_mut.coma"
           grep -qF "UInt64.t'int second.f1 < UInt64.t'int first.f0" \
             "${coma}/split_two_mut_ranges.coma"
+      - name: DEBUG dump coma
+        if: always()
+        working-directory: ext/proofs/split-ranges
+        run: cat verif/tenferro_split_proofs_rlib/split_ranges/split_two_mut_ranges.coma
