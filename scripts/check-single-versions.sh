@@ -17,7 +17,9 @@ cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
 identities='strided[-a-z]*|tcontract[-a-z]*|cpueinsum[-a-z]*|tlinalg[-a-z]*|t4a-faer[-a-z]*|colmat[-a-z]*|threadteam[-a-z]*|t4a-cost[-a-z]*|elem-simd-math|tenferro[-a-z]*|hataori[-a-z]*|t4a-cubecl[-a-z]*|t4a-cubek[-a-z]*|cubecl[-a-z]*|cubek[-a-z]*'
 
 # A resolution error must fail this check too, so the tree is built first.
-tree=$(cargo tree --locked -d -e normal)
+# `--workspace`: the only default member is tenferro-tensor, whose graph holds
+# none of the CPU stack.
+tree=$(cargo tree --locked --workspace -d -e normal)
 duplicates=$(grep -E "^(${identities}) v" <<<"$tree" || true)
 if [[ -n "$duplicates" ]]; then
     printf '%s\n' "$duplicates" >&2
