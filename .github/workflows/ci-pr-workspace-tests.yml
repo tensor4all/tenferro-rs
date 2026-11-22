@@ -106,6 +106,9 @@ jobs:
           workspaces: |
             . -> ../target-${{ matrix.cfg.backend }}
           shared-key: ci-workspace-${{ matrix.cfg.backend }}
+          # A lockfile change (for example a git -> crates.io source switch)
+          # must not reuse a cache built for the old dependency set.
+          key: ${{ hashFiles('Cargo.lock', 'ext/*/Cargo.lock') }}
       - name: Verify restored dependency artifacts
         if: matrix.cfg.profile != '' && steps.rust_cache.outputs.cache-hit == 'true'
         run: |
@@ -113,7 +116,11 @@ jobs:
           # Cargo before 1.100 keeps dependency artifacts in ci/deps; Cargo
           # 1.100's build-dir layout keeps them in ci/build/<package>/<hash>/out.
           profile_dir="${CARGO_TARGET_DIR}/ci"
-          test -d "${profile_dir}"
+          if [ ! -d "${profile_dir}" ]; then
+            echo "::warning::stale cache hit, rebuilding (no ${profile_dir})"
+            rm -rf "${CARGO_TARGET_DIR}"
+            exit 0
+          fi
           has_artifact() {
             local dirs=()
             [ -d "${profile_dir}/deps" ] && dirs+=("${profile_dir}/deps")
@@ -128,12 +135,17 @@ jobs:
           if [ "${{ matrix.cfg.backend }}" = cpu-faer ]; then
             crates="${crates} faer"
           fi
+          missing=""
           for crate in ${crates}; do
-            has_artifact "${crate}" || {
-              echo "restored cache is missing ${crate} artifacts under ${profile_dir}/{deps,build}" >&2
-              exit 1
-            }
+            has_artifact "${crate}" || missing="${missing} ${crate}"
           done
+          if [ -n "${missing}" ]; then
+            # A cache key can match while the restored tree no longer fits the
+            # current dependency set. Drop it and let the job rebuild.
+            echo "::warning::stale cache hit, rebuilding (missing:${missing} under ${profile_dir}/{deps,build})"
+            rm -rf "${CARGO_TARGET_DIR}"
+            exit 0
+          fi
           echo "Verified restored Cargo dependency artifacts under ${profile_dir}."
       - uses: taiki-e/install-action@nextest
         if: matrix.cfg.profile != ''
