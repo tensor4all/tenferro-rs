@@ -272,7 +272,8 @@ dependencies = [
 [[package]]
 name = "cpueinsum"
 version = "0.13.0"
-source = "git+https://github.com/tensor4all/cpueinsum-rs?rev=c176e290e371761cea72b0fe02eef0d6b4f116e3#c176e290e371761cea72b0fe02eef0d6b4f116e3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7a49bd4fd32207f2da1a85e0b0eb7a26ddf087ae14d17b302d6a7e603af1627"
 dependencies = [
  "num-complex",
  "strided-view",
@@ -2378,7 +2379,8 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 [[package]]
 name = "tlinalg"
 version = "0.12.0"
-source = "git+https://github.com/tensor4all/tlinalg-rs.git?rev=d3e9a26dacc5207ba501df9c88aee6294230a3a0#d3e9a26dacc5207ba501df9c88aee6294230a3a0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41ef12d305c5efaad90becf244952b3fd0883abfa70991f553bf103c03f1e25e"
 dependencies = [
  "colmat",
  "num-complex",
