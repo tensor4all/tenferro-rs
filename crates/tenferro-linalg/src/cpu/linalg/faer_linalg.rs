@@ -754,7 +754,7 @@ fn full_piv_lu_impl<T: FaerLinalg>(
     let mut parity = pooled_output::<T>(buffers, OP, "parity", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::full_piv_lu::full_piv_lu_workspace::<T>(n, batch, exec)
+        tlinalg::full_piv_lu::full_piv_lu_workspace::<T>(n, n, batch, exec)
             .map_err(provider(Op::FullPivLu)),
     )?;
     tlinalg::full_piv_lu::full_piv_lu_into(

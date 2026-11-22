@@ -73,28 +73,28 @@ Depend directly on the same major versions the tenferro workspace pins
 
 | Crate | Tested version | Purpose |
 |---|---|---|
-| `faer` (`tenferro_cpu::faer`) | `t4a-faer` `0.33.0` | Pure-Rust column-major linear algebra; the fork the pinned `tlinalg` resolves, re-exported by `tenferro-cpu` |
+| `faer` (`tenferro_cpu::faer`) | `colmat` `0.34.0` | Pure-Rust column-major linear algebra; the fork the pinned `tlinalg` resolves, re-exported by `tenferro-cpu` |
 
 `faer` is re-exported for convenience rather than required: tenferro hands out
 no faer value, so a direct dependency at another compatible version only costs a
 second faer build, not a type mismatch (#1939).
 
-The exception is the `threadteam` line, which is `0.5.1` here and appears in
+The exception is the `threadteam` line, which is `0.6.0` here and appears in
 both crates' public types: `tenferro-cpu` re-exports `threadteam::Pool` as
-`tenferro_cpu::Pool` (`crates/tenferro-cpu/src/lib.rs:204`), `CpuEngine::new`
-takes it (`crates/tenferro-cpu/src/engine.rs:119`), and faer's `Par::Team`
-carries a `threadteam::TeamExec` (`t4a-faer 0.33.0/src/lib.rs:1078`). What
-matters is the `threadteam` version the two resolve to, not which `t4a-faer`
-line they come from. `t4a-faer` 0.32.0 and 0.33.0 both require
-`threadteam ^0.5.1`, so Cargo unifies them onto one `threadteam`: the `Pool` and
+`tenferro_cpu::Pool` (`crates/tenferro-cpu/src/lib.rs:144`), `CpuEngine::new`
+takes it (`crates/tenferro-cpu/src/engine.rs:190`), and faer's `Par::Team`
+carries a `threadteam::TeamExec` (`colmat 0.34.0/src/lib.rs:1087`). What
+matters is the `threadteam` version the two resolve to, not which faer release
+they come from. Two faer releases that both require `threadteam ^0.6.0` unify
+onto one `threadteam`: the `Pool` and
 `TeamExec` are one type, and a `Par::Team` built from a team of that pool is
 valid for either faer build. Only the `faer` types stay apart, so a `Par` from
 one line cannot be passed where the other's `Par` is expected (`E0308`, two
 `faer::Par` types). A line that needs another `threadteam` splits it instead —
-`t4a-faer` 0.30 needs `threadteam ^0.4` — and then no team is shared at all:
-the 0.4 and 0.5 `TeamExec` are different types, and neither a team nor a
+`t4a-faer` 0.33 needs `threadteam ^0.5` — and then no team is shared at all:
+the 0.5 and 0.6 `TeamExec` are different types, and neither a team nor a
 `Par::Team` crosses (`E0308`, two `threadteam` versions in one graph). Depend on
-the tested `t4a-faer` version above when a `Par`, a team, or the engine's pool
+the tested `colmat` version above when a `Par`, a team, or the engine's pool
 crosses the boundary.
 
 For faer there is no feature to enable and no system dependency: the CPU stack
