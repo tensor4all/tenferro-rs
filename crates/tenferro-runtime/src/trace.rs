@@ -477,6 +477,21 @@ impl TraceContext {
         Ok((frozen, kept))
     }
 
+    /// Freeze the closure of `outputs`, keeping the first `leading` context
+    /// inputs even when no output uses them.
+    pub(crate) fn snapshot_keeping_leading_inputs(
+        &self,
+        outputs: &[TraceValue],
+        leading: usize,
+    ) -> Result<FrozenProgram, ProgramFinishError> {
+        let inner = self.borrow_mut_for_finish()?;
+        let values = program_values(outputs);
+        inner
+            .builder
+            .snapshot_pruned_keeping_leading_inputs(&values, leading)
+            .map(|(frozen, _)| frozen)
+    }
+
     /// Freeze the AD source and report which context inputs it kept.
     #[doc(hidden)]
     pub fn ad_snapshot_with_inputs(

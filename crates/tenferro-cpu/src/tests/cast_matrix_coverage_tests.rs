@@ -60,7 +60,8 @@ fn view_source() -> tenferro_tensor::TensorValue {
     )
 }
 
-/// The compact view, a transposed view, an offset view and a negative-stride view of one source.
+/// The compact view, a strided (transposed) view, an offset view and a negative-stride view of one
+/// source.
 fn reads<'a>(
     source: &'a tenferro_tensor::TensorValue,
     offset_buffer: &'a [f64],
@@ -71,9 +72,10 @@ fn reads<'a>(
             .tensor_view()
             .expect("an f64 source always has an f64 view"),
     )];
-    // The transpose of the column-major [2, 3] source: dims [3, 2], strides (1, 3).
+    // dims [3, 2] with strides (2, 1) over the offset buffer: the backing elements are one
+    // contiguous span, but the view's column-major traversal is not.
     reads.push(TensorRead::from_view(TensorView::F64(
-        TypedTensorView::from_slice(vec![3, 2], vec![1, 3], 0, &offset_buffer[..6]).unwrap(),
+        TypedTensorView::from_slice(vec![3, 2], vec![2, 1], 0, &offset_buffer[..6]).unwrap(),
     )));
     // The source shifted by one element: every element moves, the layout stays compact.
     reads.push(TensorRead::from_view(TensorView::F64(
@@ -109,7 +111,8 @@ fn assert_same_cast(got: &Tensor, want: &Tensor) {
 }
 
 /// Every destination dtype casts a borrowed view exactly as it casts the staged compact tensor,
-/// and the view is never staged (#2223, T3/T4).
+/// and the view is never staged (#2223, T3/T4). The borrowed sources are `f64`; the source-dtype
+/// matrix over owned tensors is `cast_matrix_covers_every_preset_pair`.
 #[test]
 fn cast_read_matches_cast_on_every_view_layout_without_staging() {
     let source = view_source();

@@ -21,15 +21,21 @@ all-features = true
 [lib]
 name = "tenferro_tensor"
 
+# The Creusot specifications in `types/split_ranges.rs` sit behind `cfg(creusot)`
+# so a normal build never sees them or their proc-macro crate. The proof itself
+# lives in `ext/proofs/split-ranges` (#2682).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(creusot)'] }
+
 [features]
 default = []
 
 [dependencies]
-tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.12.0" }
+tenferro-tensor-core = { path = "../tenferro-tensor-core", version = "0.13.0" }
 num-traits.workspace = true
 num-complex.workspace = true
 tinyvec.workspace = true
-tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.12.0" }
+tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.13.0" }
 thiserror.workspace = true
 
 [dev-dependencies]

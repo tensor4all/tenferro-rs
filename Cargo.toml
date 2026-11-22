@@ -30,6 +30,9 @@ members = [
 exclude = [
     "ext/sparse",
     "ext/tropical",
+    # Standalone workspace: `cargo creusot` needs the proof crate to be its own
+    # workspace root so its `why3find.json` applies (#2682).
+    "ext/proofs/split-ranges",
 ]
 default-members = [
     "crates/tenferro-tensor",
@@ -37,7 +40,7 @@ default-members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.12.0"
+version = "0.13.0"
 rust-version = "1.96"
 edition = "2021"
 license = "MIT OR Apache-2.0"

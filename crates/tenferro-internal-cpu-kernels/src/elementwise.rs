@@ -215,7 +215,7 @@ impl<'a, T: KernelStorageElement> Operand<'a, T> {
     }
 }
 
-fn strided_error(op: &'static str, dtype: DType, err: StridedError) -> crate::Error {
+pub(crate) fn strided_error(op: &'static str, dtype: DType, err: StridedError) -> crate::Error {
     match err {
         StridedError::IntegerDivisionByZero { .. } => crate::cpu_division_by_zero(op, dtype),
         err => crate::Error::backend_source(op, err),

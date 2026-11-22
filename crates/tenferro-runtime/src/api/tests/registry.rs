@@ -152,28 +152,81 @@ fn every_input_kind_returns_the_owned_result() -> TR<()> {
 // ------------------------------------------------------------------ 3. _into
 
 #[test]
-fn only_add_declares_into_and_only_overwrite() {
+fn elementwise_into_is_declared_for_overwrite_only() {
     let into: Vec<(&str, &[&str])> = API_OPS
         .iter()
         .filter(|op| !op.into.is_empty())
         .map(|op| (op.name, op.into))
         .collect();
-    assert_eq!(into, [("add", &["overwrite"][..])]);
+    let mut names: Vec<&str> = into.iter().map(|(name, _)| *name).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["add", "conj", "div", "mul", "neg", "sub"]);
+    for (name, modes) in into {
+        assert_eq!(modes, ["overwrite"], "{name}");
+    }
+}
+
+type IntoCase = (
+    &'static str,
+    fn(&TypedTensor<f64>, &mut CpuEngine) -> TR<Tensor>,
+    fn(
+        &TypedTensor<f64>,
+        &mut CpuEngine,
+        Dest<tenferro_tensor::TypedTensorWrite<'_, f64>>,
+    ) -> tenferro_tensor::Result<()>,
+);
+
+/// Every declared `_into` with the allocating form it must match bit for bit.
+fn into_cases() -> [IntoCase; 6] {
+    [
+        (
+            "add",
+            |a, e| Ok(Tensor::from_typed(a.add(a, e)?)),
+            |a, e, d| a.add_into(a, e, d),
+        ),
+        (
+            "sub",
+            |a, e| Ok(Tensor::from_typed(a.sub(a, e)?)),
+            |a, e, d| a.sub_into(a, e, d),
+        ),
+        (
+            "mul",
+            |a, e| Ok(Tensor::from_typed(a.mul(a, e)?)),
+            |a, e, d| a.mul_into(a, e, d),
+        ),
+        (
+            "div",
+            |a, e| Ok(Tensor::from_typed(a.div(a, e)?)),
+            |a, e, d| a.div_into(a, e, d),
+        ),
+        (
+            "neg",
+            |a, e| Ok(Tensor::from_typed(a.neg(e)?)),
+            |a, e, d| a.neg_into(e, d),
+        ),
+        (
+            "conj",
+            |a, e| Ok(Tensor::from_typed(a.conj(e)?)),
+            |a, e, d| a.conj_into(e, d),
+        ),
+    ]
 }
 
 #[test]
-fn add_into_overwrite_never_reads_the_destination() -> TR<()> {
+fn into_overwrite_never_reads_the_destination() -> TR<()> {
     let mut e = CpuEngine::serial();
     let a = base()?;
-    let want = Tensor::from_typed(a.add(&a, &mut e)?);
-    for poison in [f64::NAN, -0.0, f64::INFINITY] {
-        let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![poison; 6])?;
-        a.add_into(&a, &mut e, Dest::overwrite(&mut out))?;
-        assert_eq!(
-            bits(&Tensor::from_typed(out))?,
-            bits(&want)?,
-            "poison {poison}"
-        );
+    for (name, owned, into) in into_cases() {
+        let want = owned(&a, &mut e)?;
+        for poison in [f64::NAN, -0.0, f64::INFINITY] {
+            let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![poison; 6])?;
+            into(&a, &mut e, Dest::overwrite(&mut out))?;
+            assert_eq!(
+                bits(&Tensor::from_typed(out))?,
+                bits(&want)?,
+                "{name}: poison {poison}"
+            );
+        }
     }
     Ok(())
 }
@@ -190,15 +243,17 @@ fn undeclared_into_modes_are_unsupported_before_any_write() -> TR<()> {
         ("accumulate", |out| Dest::accumulate(out)),
         ("scaled", |out| Dest::scaled(out, 2.0, 0.0)),
     ];
-    for (label, mk) in modes {
-        let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], sentinel.clone())?;
-        let err = a.add_into(&a, &mut e, mk(&mut out)).expect_err(label);
-        assert_eq!(err.kind(), ErrorKind::Unsupported, "{label}: {err}");
-        assert_eq!(
-            out.host_data()?,
-            &sentinel[..],
-            "{label} touched the destination"
-        );
+    for (name, _, into) in into_cases() {
+        for (label, mk) in modes {
+            let mut out = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], sentinel.clone())?;
+            let err = into(&a, &mut e, mk(&mut out)).expect_err(label);
+            assert_eq!(err.kind(), ErrorKind::Unsupported, "{name} {label}: {err}");
+            assert_eq!(
+                out.host_data()?,
+                &sentinel[..],
+                "{name} {label} touched the destination"
+            );
+        }
     }
     Ok(())
 }
@@ -380,4 +435,46 @@ fn options_exist_exactly_for_the_operations_that_declare_them() {
         let cell = row.trim_end_matches(" |").rsplit("| ").next().unwrap_or("");
         assert_eq!(cell, want.join(", "), "{}", op.name);
     }
+}
+
+#[test]
+fn conj_into_refuses_dtypes_outside_conjugation_before_writing() -> TR<()> {
+    let mut e = CpuEngine::serial();
+    let ints = Tensor::from_vec_col_major(vec![2], vec![1_i32, -2])?;
+    assert!(
+        ints.conj(&mut e).is_err(),
+        "the allocating conj refuses i32"
+    );
+    let mut out = Tensor::from_vec_col_major(vec![2], vec![99_i32, 98])?;
+    let err = ints
+        .conj_into(&mut e, Dest::overwrite(&mut out))
+        .expect_err("conj_into refuses i32 like conj");
+    assert_eq!(err.kind(), ErrorKind::Unsupported, "{err}");
+    assert_eq!(out.as_slice::<i32>()?, &[99, 98]);
+
+    let flags = Tensor::from_vec_col_major(vec![2], vec![true, false])?;
+    let mut out = Tensor::from_vec_col_major(vec![2], vec![false, true])?;
+    let err = flags
+        .conj_into(&mut e, Dest::overwrite(&mut out))
+        .expect_err("conj_into refuses bool");
+    assert_eq!(err.kind(), ErrorKind::Unsupported, "{err}");
+    assert_eq!(out.as_slice::<bool>()?, &[false, true]);
+    Ok(())
+}
+
+#[test]
+fn integer_div_into_by_zero_is_a_numerical_failure() -> TR<()> {
+    let mut e = CpuEngine::serial();
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![7_i32, 9])?;
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![1_i32, 0])?;
+    assert_eq!(
+        lhs.div(&rhs, &mut e).expect_err("allocating").kind(),
+        ErrorKind::NumericalFailure
+    );
+    let mut out = Tensor::from_vec_col_major(vec![2], vec![0_i32, 0])?;
+    let err = lhs
+        .div_into(&rhs, &mut e, Dest::overwrite(&mut out))
+        .expect_err("div_into by zero");
+    assert_eq!(err.kind(), ErrorKind::NumericalFailure, "{err}");
+    Ok(())
 }

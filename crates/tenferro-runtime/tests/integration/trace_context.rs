@@ -330,3 +330,51 @@ fn compile_with_inputs_rejects_bad_input_lists_with_typed_errors() {
     let error = compiler.compile_with_inputs(&[], &[&x]).unwrap_err();
     assert!(error.to_string().contains("at least one output"), "{error}");
 }
+
+#[test]
+fn traced_full_shares_the_concrete_scalar_conversion_and_checks_the_shape() {
+    let trace = TraceContext::new();
+
+    // The same exact-integer conversion as `Tensor::full`: 2^53 is inside i64.
+    let exact = trace.full(DType::I64, [1], 2.0_f64.powi(53)).unwrap();
+    assert_eq!(exact.dtype(), DType::I64);
+    assert_eq!(exact.concrete_shape().unwrap(), vec![1]);
+    assert!(trace.full(DType::I64, [1], 2.0_f64.powi(63)).is_err());
+
+    // The overflowing element count fails at construction, so nothing records a
+    // graph that only fails once compiled.
+    let error = trace
+        .full(DType::F64, [usize::MAX, 2], 1.0)
+        .expect_err("an overflowing fill shape must be rejected while tracing");
+    assert!(
+        matches!(
+            error,
+            tenferro_runtime::Error::TensorRuntime(tenferro_tensor::Error::Validation {
+                source: tenferro_tensor::ValidationError::InvalidArgument {
+                    argument: "shape",
+                    ..
+                },
+                ..
+            })
+        ),
+        "{error}"
+    );
+
+    // Scalar and empty shapes stay valid.
+    assert_eq!(
+        trace
+            .full(DType::I32, [0_usize; 0], 7.0)
+            .unwrap()
+            .concrete_shape()
+            .unwrap(),
+        Vec::<usize>::new()
+    );
+    assert_eq!(
+        trace
+            .full(DType::I32, [2, 0], 7.0)
+            .unwrap()
+            .concrete_shape()
+            .unwrap(),
+        vec![2, 0]
+    );
+}

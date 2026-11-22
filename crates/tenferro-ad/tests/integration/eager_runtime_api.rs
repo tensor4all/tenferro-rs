@@ -98,3 +98,63 @@ fn eager_filled_constants_hold_the_value_and_take_no_gradient() {
     let error = runtime.with_eager_session(&mut engine, |s| s.full(DType::Bool, [2], 0.5));
     assert!(error.is_err());
 }
+
+#[test]
+fn eager_full_shares_the_concrete_scalar_conversion_and_checks_the_shape() {
+    use tenferro_ad::DType;
+
+    fn compact(
+        runtime: &Arc<EagerRuntime>,
+        engine: &mut tenferro_cpu::CpuEngine,
+        shape: &[usize],
+        value: f64,
+    ) -> tenferro_ad::Result<Tensor> {
+        runtime.with_eager_session(engine, |s| {
+            let filled = s.full(DType::I64, shape, value)?;
+            s.duplicate_value(&filled)
+        })
+    }
+
+    let runtime = EagerRuntime::new().unwrap();
+    let mut engine = tenferro_cpu::CpuEngine::serial();
+
+    // The same exact-integer conversion as `Tensor::full`: 2^53 is inside i64.
+    assert_eq!(
+        compact(&runtime, &mut engine, &[1], 2.0_f64.powi(53))
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[1_i64 << 53]
+    );
+    assert!(compact(&runtime, &mut engine, &[1], 2.0_f64.powi(63)).is_err());
+
+    // An overflowing element count is a validation fault, not a wrapped backend
+    // integer overflow, and it is rejected before the scalar is uploaded.
+    let error = runtime
+        .with_eager_session(&mut engine, |s| s.full(DType::F64, [usize::MAX, 2], 1.0))
+        .unwrap_err();
+    match error {
+        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::Validation {
+            source:
+                tenferro_tensor::ValidationError::InvalidArgument {
+                    argument: "shape", ..
+                },
+            ..
+        }) => {}
+        other => panic!("expected a typed shape InvalidArgument, got {other:?}"),
+    }
+
+    // Scalar and empty shapes stay valid.
+    assert_eq!(
+        compact(&runtime, &mut engine, &[0_usize; 0], 7.0)
+            .unwrap()
+            .shape(),
+        &[0_usize; 0]
+    );
+    assert_eq!(
+        compact(&runtime, &mut engine, &[2, 0], 7.0)
+            .unwrap()
+            .shape(),
+        &[2, 0]
+    );
+}

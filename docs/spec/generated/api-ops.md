@@ -330,9 +330,9 @@ Vector or matrix norm over the chosen axes, selected by `NormOrd`; `NormOrd::Zer
 | Op | concrete | traced | eager | Suffixes |
 |---|---|---|---|---|
 | `exp` | CoreOps | described | described | `exp` |
-| `neg` | CoreOps | described | described | `neg` |
+| `neg` | CoreOps | described | described | `neg`, `neg_into` (overwrite) |
 | `sign` | CoreOps | described | described | `sign` |
-| `conj` | CoreOps | described | described | `conj` |
+| `conj` | CoreOps | described | described | `conj`, `conj_into` (overwrite) |
 | `log` | CoreOps | described | described | `log` |
 | `expm1` | CoreOps | described | described | `expm1` |
 | `log1p` | CoreOps | described | described | `log1p` |
@@ -348,9 +348,9 @@ Vector or matrix norm over the chosen axes, selected by `NormOrd`; `NormOrd::Zer
 | `softplus` | CoreOps | described | described | `softplus` |
 | `gelu` | CoreOps | described | described | `gelu` |
 | `gelu_tanh` | CoreOps | described | described | `gelu_tanh` |
-| `mul` | CoreOps | described | described | `mul` |
-| `sub` | CoreOps | described | described | `sub` |
-| `div` | CoreOps | described | described | `div` |
+| `mul` | CoreOps | described | described | `mul`, `mul_into` (overwrite) |
+| `sub` | CoreOps | described | described | `sub`, `sub_into` (overwrite) |
+| `div` | CoreOps | described | described | `div`, `div_into` (overwrite) |
 | `rem` | CoreOps | described | described | `rem` |
 | `pow` | CoreOps | described | described | `pow` |
 | `maximum` | CoreOps | described | described | `maximum` |
@@ -422,9 +422,10 @@ Elementwise negation.
 - Options: none
 - Output: `V`
 - Dtypes: Any numeric dtype the engine supports for the operation; the result has the input dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `neg_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Omissions:
+  - traced: only `neg`; `neg_into` exists on the concrete and eager layers (eager: `EagerSession::neg_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### sign
 
@@ -444,9 +445,10 @@ Elementwise complex conjugate (identity on real dtypes).
 - Options: none
 - Output: `V`
 - Dtypes: f32, f64, Complex32 or Complex64; the result has the input dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `conj_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Omissions:
+  - traced: only `conj`; `conj_into` exists on the concrete and eager layers (eager: `EagerSession::conj_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### log
 
@@ -620,9 +622,10 @@ Elementwise product with broadcasting.
 - Options: none
 - Output: `V`
 - Dtypes: Both operands share a numeric dtype; the result has that dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `mul_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Omissions:
+  - traced: only `mul`; `mul_into` exists on the concrete and eager layers (eager: `EagerSession::mul_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### sub
 
@@ -631,9 +634,10 @@ Elementwise difference with broadcasting.
 - Options: none
 - Output: `V`
 - Dtypes: Both operands share a numeric dtype; the result has that dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `sub_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Omissions:
+  - traced: only `sub`; `sub_into` exists on the concrete and eager layers (eager: `EagerSession::sub_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### div
 
@@ -642,9 +646,10 @@ Elementwise quotient with broadcasting.
 - Options: none
 - Output: `V`
 - Dtypes: Both operands share a numeric dtype; the result has that dtype.
-- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel.
-- Errors: `Validation`, `Unsupported`
-- Omissions: none
+- Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `div_into` writes the result into the destination's storage. An integer division by zero is a numerical failure; `div_into` may report it after writing, which leaves the destination contents unspecified.
+- Errors: `Validation`, `Unsupported`, `NumericalFailure`
+- Omissions:
+  - traced: only `div`; `div_into` exists on the concrete and eager layers (eager: `EagerSession::div_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### rem
 
@@ -700,7 +705,7 @@ Elementwise sum with broadcasting.
 - Layout: Every operand is read through `TensorRead` by the engine's `*_read` entry: owned, borrowed, typed and strided inputs reach the same body. Implicit broadcasting is a zero-stride view, never a copy. Whether a strided or negative-stride view is read in place or gathered once (same placement and dtype) is the engine's documented choice for that kernel. `add_into` writes the result into the destination's storage.
 - Errors: `Validation`, `Unsupported`
 - Omissions:
-  - traced and eager: only `add`; `add_into` exists on the concrete layer
+  - traced: only `add`; `add_into` exists on the concrete and eager layers (eager: `EagerSession::add_into` writes a caller-owned `Tensor` destination and rejects tracked operands)
 
 ### matmul
 
@@ -997,7 +1002,7 @@ Checked dtype conversion along tenferro's promotion lattice. The result is a dty
 - Options: none
 - Output: `tenferro_tensor::Tensor`
 - Dtypes: Any source dtype the conversion supports; the result has dtype `to`.
-- Layout: An owned `Tensor` receiver is converted directly. Any other receiver (a borrowed view or a typed tensor) is first gathered once into a compact tensor of the same placement and dtype, because the engine conversion reads an owned tensor.
+- Layout: Every receiver is read through `TensorRead` by the engine's `*_read` entry: an owned tensor, a typed tensor and a borrowed view reach the same body. CPU reads a supported strided or offset view in place and does not gather it first. A backend whose conversion kernel takes one flat span (CUDA's `Convert`) gathers a borrowed view once into compact storage of the same placement and dtype; a backend without such a conversion route reports an error rather than falling back to the host.
 - Errors: `Validation`, `Unsupported`
 - Omissions: none
 
@@ -1008,7 +1013,7 @@ Explicit, possibly lossy dtype projection. The result is a dtype-erased `Tensor`
 - Options: none
 - Output: `tenferro_tensor::Tensor`
 - Dtypes: Any source dtype the conversion supports; the result has dtype `to`.
-- Layout: An owned `Tensor` receiver is converted directly. Any other receiver (a borrowed view or a typed tensor) is first gathered once into a compact tensor of the same placement and dtype, because the engine conversion reads an owned tensor.
+- Layout: Every receiver is read through `TensorRead` by the engine's `*_read` entry: an owned tensor, a typed tensor and a borrowed view reach the same body. CPU reads a supported strided or offset view in place and does not gather it first. A backend whose conversion kernel takes one flat span (CUDA's `Convert`) gathers a borrowed view once into compact storage of the same placement and dtype; a backend without such a conversion route reports an error rather than falling back to the host.
 - Errors: `Validation`, `Unsupported`
 - Omissions: none
 
@@ -1401,7 +1406,7 @@ Inverse of `rfftn`.
 | ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |
 |---|---|---|---|---|---|---|---|---|
 | E01 | retained | `tenferro_fft::EagerFftOps::fft_in_place`<br>`tenferro_fft::EagerFftOps::ifft_in_place`<br>`tenferro_fft::EagerFftInPlaceError` | consuming eager FFTs that reuse the input storage | in-place \| consuming | `tenferro_fft::eager_in_place` | an FFT of a large compact complex tensor can reuse its storage; the grammar's `_into` writes to a separate destination and cannot express a consumed input | src/api/tests/registry.rs: a length change and a real input are Rejected with the input returned unchanged; an accepted call equals the out-of-place fft bit for bit | a consuming `Dest` form in the grammar |
-| E02 | retained | `tenferro_fft::FftExecutor::fft_with`<br>`tenferro_fft::FftExecutor::fft_into`<br>`tenferro_fft::FftExecutor::ifft_with`<br>`tenferro_fft::FftExecutor::ifft_into`<br>`tenferro_fft::FftExecutor::rfft_with`<br>`tenferro_fft::FftExecutor::rfft_into`<br>`tenferro_fft::FftExecutor::irfft_with`<br>`tenferro_fft::FftExecutor::irfft_into`<br>`tenferro_fft::FftExecutor::fftn_with`<br>`tenferro_fft::FftExecutor::fftn_into`<br>`tenferro_fft::FftExecutor::ifftn_with`<br>`tenferro_fft::FftExecutor::ifftn_into`<br>`tenferro_fft::FftExecutor::rfftn_with`<br>`tenferro_fft::FftExecutor::rfftn_into`<br>`tenferro_fft::FftExecutor::irfftn_with`<br>`tenferro_fft::FftExecutor::irfftn_into`<br>`tenferro_fft::FftExecutor::new`<br>`tenferro_fft::FftExecutor::plan_cache`<br>`tenferro_fft::FftExecutor::plan_cache_mut`<br>`tenferro_fft::FftExecutor::cache_stats`<br>`tenferro_fft::FftExecutor::clear_cache` | the caller-owned FFT plan cache and its transforms | cache owner | `tenferro_fft` | the receiver is the plan cache, not the input; the transforms take the input, the options and the engine in grammar order | src/api/tests/registry.rs: every `_with` equals the `FftOps` result bit for bit and fills the caller's plan cache | plan caches owned by the engine for every caller |
+| E02 | retained | `tenferro_fft::FftExecutor::fft_with`<br>`tenferro_fft::FftExecutor::fft_into`<br>`tenferro_fft::FftExecutor::ifft_with`<br>`tenferro_fft::FftExecutor::ifft_into`<br>`tenferro_fft::FftExecutor::rfft_with`<br>`tenferro_fft::FftExecutor::rfft_into`<br>`tenferro_fft::FftExecutor::irfft_with`<br>`tenferro_fft::FftExecutor::irfft_into`<br>`tenferro_fft::FftExecutor::fftn_with`<br>`tenferro_fft::FftExecutor::fftn_into`<br>`tenferro_fft::FftExecutor::ifftn_with`<br>`tenferro_fft::FftExecutor::ifftn_into`<br>`tenferro_fft::FftExecutor::rfftn_with`<br>`tenferro_fft::FftExecutor::rfftn_into`<br>`tenferro_fft::FftExecutor::irfftn_with`<br>`tenferro_fft::FftExecutor::irfftn_into`<br>`tenferro_fft::FftExecutor::new`<br>`tenferro_fft::FftExecutor::plan_cache`<br>`tenferro_fft::FftExecutor::plan_cache_mut`<br>`tenferro_fft::FftExecutor::cache_stats`<br>`tenferro_fft::FftExecutor::clear_cache` | the caller-owned FFT plan cache and its transforms | cache owner | `tenferro_fft` | the receiver is the plan cache, not the input; the transforms take the input, the options and the engine in grammar order | src/api/tests/registry.rs: every `_with` equals the `FftOps` result bit for bit and fills the caller's plan cache, and every `AsView` input form gives the owned input's shape, dtype and bits while reusing its warmed plans | plan caches owned by the engine for every caller |
 
 <!-- api-ops:fft:end -->
 

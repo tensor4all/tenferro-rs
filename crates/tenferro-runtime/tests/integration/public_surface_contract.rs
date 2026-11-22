@@ -299,7 +299,6 @@ fn semantic_program_module_stays_opaque_and_dependency_neutral() {
         "crates/tenferro-runtime/src/program/mod.rs",
         "crates/tenferro-runtime/src/program/op.rs",
         "crates/tenferro-runtime/src/program/semantic.rs",
-        "crates/tenferro-runtime/src/program/transform.rs",
         "crates/tenferro-runtime/src/program/value.rs",
     ] {
         let source = repo_file(path);
