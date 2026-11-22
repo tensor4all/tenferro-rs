@@ -558,6 +558,7 @@ impl SemanticProgramBuilder {
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            let operations_before = rebuild.operations.len();
             let rebuilt_outputs = match &operation.op {
                 SemanticOp::Core(core) => rebuild.add_op(core.clone(), &inputs),
                 SemanticOp::Extension(extension) => rebuild.add_extension(
@@ -569,8 +570,17 @@ impl SemanticProgramBuilder {
             }
             .map_err(snapshot_rebuild)?;
             if !operation.subprograms.is_empty() {
-                // The rebuilt operation is the one just appended. A call names
-                // only the operation's own inputs, so it is copied unchanged.
+                // A call names only the operation's own inputs, so it is copied
+                // unchanged onto the one operation the replay appended. A replay
+                // that appended anything else cannot say which operation owns
+                // the calls, so it is refused rather than guessed.
+                if rebuild.operations.len() != operations_before + 1 {
+                    return Err(ProgramFinishError::SnapshotRebuild {
+                        source: ProgramBuildError::InvalidImport {
+                            source: ProgramStructuralError::InvalidSsaOrder,
+                        },
+                    });
+                }
                 if let Some(rebuilt) = rebuild.operations.last_mut() {
                     rebuilt.subprograms = operation.subprograms.clone();
                 }

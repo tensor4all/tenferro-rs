@@ -131,8 +131,9 @@ impl TraceContext {
     ///
     /// Returns any error `f` returns. Returns [`Error::Validation`] with
     /// `InvalidArgument` when an output belongs to another trace context, or
-    /// when `f` adds a placeholder input (one without data) that is not a
-    /// declared parameter. Returns [`Error::RuntimeStateSource`] when the trace
+    /// when an output depends on a placeholder input (one without data) that
+    /// `f` added itself instead of declaring it in `inputs`. A placeholder no
+    /// output depends on is pruned like any other dead value. Returns [`Error::RuntimeStateSource`] when the trace
     /// cannot accept the inputs or the program cannot be frozen.
     pub fn record<F>(inputs: &[(DType, usize)], f: F) -> Result<RecordedProgram>
     where

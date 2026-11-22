@@ -2,6 +2,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use tenferro_cpu::CpuEngine;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ShapeExtent;
 
 use crate::compiler::semantic_staging::stage_semantic_program;
 use crate::program::{ProgramImport, Subprogram};
@@ -199,6 +201,36 @@ fn every_declared_parameter_is_kept_in_order() {
         declared,
         [(DType::F64, 1), (DType::F32, 2), (DType::I64, 0)]
     );
+    // Each parameter's extents name its own input position, so a later
+    // specialization resolves every axis against the right argument.
+    for (position, input) in program.inputs().iter().enumerate() {
+        let metadata = program.value_metadata(*input).unwrap();
+        for (axis, extent) in metadata.shape().iter().enumerate() {
+            assert_eq!(
+                *extent,
+                ShapeExtent::Exact(DimExpr::InputDim {
+                    input_idx: position,
+                    axis
+                })
+            );
+        }
+    }
+    // The output of `neg(p[1])` keeps p[1]'s symbolic extents (input 1), not
+    // input 0's: the unused leading parameter must not shift the numbering.
+    let output = program.value_metadata(program.outputs()[0]).unwrap();
+    assert_eq!(
+        output.shape(),
+        [
+            ShapeExtent::Exact(DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0
+            }),
+            ShapeExtent::Exact(DimExpr::InputDim {
+                input_idx: 1,
+                axis: 1
+            }),
+        ]
+    );
     assert_eq!(recorded.subprogram().parameter_count(), 3);
     assert_eq!(recorded.subprogram().capture_count(), 0);
 }
@@ -240,6 +272,17 @@ fn an_outer_trace_value_cannot_enter_a_recording() {
     let returned =
         TraceContext::record(&[(DType::F64, 1)], |_, _| Ok(vec![captured.clone()])).unwrap_err();
     assert_record_invalid_argument(returned, "outputs");
+}
+
+#[test]
+fn an_unused_undeclared_placeholder_is_pruned() {
+    let recorded = TraceContext::record(&[(DType::F64, 1)], |trace, p| {
+        trace.input_symbolic_shape(DType::F64, 1)?;
+        Ok(vec![p[0].neg()?])
+    })
+    .unwrap();
+    assert_eq!(recorded.subprogram().program().inputs().len(), 1);
+    assert_eq!(recorded.subprogram().capture_count(), 0);
 }
 
 #[test]

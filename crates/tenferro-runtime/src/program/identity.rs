@@ -26,6 +26,16 @@ impl SemanticFingerprint {
     pub const fn as_bytes(&self) -> &[u8; 16] {
         &self.0
     }
+
+    /// Fingerprint of a sub-program: this program fingerprint combined with
+    /// how many leading inputs are parameters rather than captures.
+    pub(crate) fn with_parameter_split(self, parameters: usize) -> Self {
+        let mut encoder = CanonicalEncoder::new();
+        encoder.bytes(b"tenferro.subprogram.v1");
+        encoder.raw(&self.0);
+        encoder.usize(parameters);
+        Self(encoder.finalize())
+    }
 }
 
 pub(crate) struct SemanticIdentity {
@@ -351,16 +361,16 @@ fn encode_operation(
     encode_subprogram_calls(encoder, &operation.subprograms);
 }
 
-/// Encode each call as the callee's cached fingerprint, its parameter count and
-/// the call-site input metadata.
+/// Encode each call as the callee's cached sub-program fingerprint (program
+/// structure plus parameter split) and the call-site input metadata.
 ///
 /// The callee fingerprint was computed when the callee was frozen, so encoding
 /// costs O(calls) per operation however deeply sub-programs nest.
 fn encode_subprogram_calls(encoder: &mut CanonicalEncoder, calls: &[SubprogramCall]) {
     encoder.usize(calls.len());
     for call in calls {
+        // The sub-program fingerprint already covers the parameter split.
         encoder.raw(call.program.semantic_fingerprint().as_bytes());
-        encoder.usize(call.program.parameter_count());
         encoder.usize(call.input_meta.len());
         for metadata in &call.input_meta {
             encode_metadata(encoder, metadata);

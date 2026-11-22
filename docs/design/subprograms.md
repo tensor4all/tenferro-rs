@@ -42,8 +42,9 @@ once and specialized for each concrete shape it is prepared at.
   declared parameter stays an input even if unused. A value of another trace
   context cannot enter the recording: combining it fails with the existing
   cross-context error, and returning it fails with `InvalidArgument`
-  (`outputs`). A placeholder input that `f` adds itself fails with
-  `InvalidArgument` (`f`), because it would be neither a parameter nor a capture.
+  (`outputs`). An output that depends on a placeholder input `f` added itself
+  fails with `InvalidArgument` (`f`), because that input would be neither a
+  parameter nor a capture. A placeholder no output uses is pruned.
 - `Subprogram::close(FrozenProgram)` from the step-1 design is not public yet.
   `record` is the only producer, and its snapshot already orders parameters
   before captures. Closing an arbitrary frozen program needs input reordering
@@ -64,19 +65,29 @@ once and specialized for each concrete shape it is prepared at.
   hash a program.
 - The fingerprint tag is `tenferro.semantic-program.v2`. After an operation's
   placement, the encoder appends the call count and, for each call, the callee's
-  cached 16-byte fingerprint, its parameter count and the encoded `input_meta`.
+  cached 16-byte **sub-program** fingerprint and the encoded `input_meta`.
+  `Subprogram::semantic_fingerprint` combines the program fingerprint with the
+  parameter split, so it covers exactly what `Subprogram` equality compares.
+  `SemanticProgram::semantic_fingerprint` of the same program ignores the split.
   Hashing therefore costs O(calls) per operation however deeply calls nest.
   Fingerprints are process-local cache keys (`DefaultHasher` is not stable
   across toolchains), and nothing persists them, so no v1 compatibility is
   needed.
 - Exact equality compares calls pairwise. The callee comparison tries
   `Arc::ptr_eq` first and falls back to `semantic_eq`; the parameter counts and
-  `input_meta` are compared as well. Recursion terminates because a callee is
+  `input_meta` are compared as well. A snapshot copies calls only onto the one
+  operation its replay appends, and it refuses a replay that appends anything
+  else rather than guessing the owner. Recursion terminates because a callee is
   frozen before the operation that contains it.
 - `Subprogram: Eq + Hash` uses the same structural definition, so two
   recordings of one closure are equal and caches keyed by a sub-program hit
   across recordings. The parameter split is part of the identity: the same
   program with one input treated as a capture instead of a parameter is a
   different sub-program.
-- Retained-byte accounting charges a call's `input_meta`, not the callee. The
-  callee is a shared `Arc` and is charged where it is created.
+- Retained-byte accounting charges a call's `input_meta` **and its callee**.
+  A shared callee is counted at every call, which over-estimates sharing but
+  never under-counts what a program keeps alive.
+- Import copies calls without checking `input_meta` against the carrying
+  operation, because no call can exist yet. The PR 2 builder entry validates
+  calls, and import must apply the same check to calls arriving from a source
+  program.

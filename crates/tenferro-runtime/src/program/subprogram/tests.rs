@@ -116,6 +116,16 @@ fn the_parameter_split_is_part_of_subprogram_identity() {
     assert_eq!(as_recorded.capture_count(), 1);
     assert_eq!(all_parameters.capture_count(), 0);
     assert_ne!(as_recorded, all_parameters);
+    // Same program allocation, so only the split tells them apart; the
+    // sub-program fingerprint must see it.
+    assert_eq!(
+        as_recorded.program().semantic_fingerprint(),
+        all_parameters.program().semantic_fingerprint()
+    );
+    assert_ne!(
+        as_recorded.semantic_fingerprint(),
+        all_parameters.semantic_fingerprint()
+    );
     assert_distinct(
         &outer_with(vec![call(as_recorded)]),
         &outer_with(vec![call(all_parameters)]),
@@ -150,16 +160,34 @@ fn calls_survive_snapshot_and_import() {
 }
 
 #[test]
-fn retained_bytes_account_for_call_site_metadata() {
+fn retained_bytes_account_for_call_site_metadata_and_the_callee() {
     let none = outer_with(Vec::new())
         .program
         .logical_retained_bytes()
         .unwrap();
-    let one = outer_with(vec![call(square())])
+    let small = outer_with(vec![call(square())])
         .program
         .logical_retained_bytes()
         .unwrap();
-    assert!(one > none);
+    let large_callee = TraceContext::record(&[(DType::F64, 1)], |_, p| {
+        let mut value = p[0].clone();
+        for _ in 0..16 {
+            value = value.mul(&p[0])?.exp()?;
+        }
+        Ok(vec![value])
+    })
+    .unwrap()
+    .subprogram()
+    .clone();
+    let callee_bytes = large_callee.program().logical_retained_bytes().unwrap();
+    let large = outer_with(vec![call(large_callee)])
+        .program
+        .logical_retained_bytes()
+        .unwrap();
+    assert!(small > none);
+    // Same call-site metadata; the difference is the callee.
+    assert!(large > small);
+    assert!(large >= none + callee_bytes);
 }
 
 #[test]

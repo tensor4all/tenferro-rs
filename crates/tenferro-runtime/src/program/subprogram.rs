@@ -49,6 +49,7 @@ use super::{ProgramValueMetadata, SemanticFingerprint, SemanticProgram};
 pub struct Subprogram {
     program: Arc<SemanticProgram>,
     parameters: usize,
+    fingerprint: SemanticFingerprint,
 }
 
 impl Subprogram {
@@ -56,9 +57,13 @@ impl Subprogram {
     /// and whose remaining inputs are captures.
     pub(crate) fn new(program: Arc<SemanticProgram>, parameters: usize) -> Self {
         debug_assert!(parameters <= program.inputs().len());
+        let fingerprint = program
+            .semantic_fingerprint()
+            .with_parameter_split(parameters);
         Self {
             program,
             parameters,
+            fingerprint,
         }
     }
 
@@ -113,10 +118,18 @@ impl Subprogram {
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     pub fn capture_count(&self) -> usize {
-        self.program.inputs().len() - self.parameters
+        // `new` keeps `parameters <= inputs`; saturate rather than wrap if a
+        // future producer breaks that.
+        self.program.inputs().len().saturating_sub(self.parameters)
     }
 
-    /// Return the cached structural fingerprint of the program.
+    /// Return the cached structural fingerprint of this sub-program.
+    ///
+    /// It covers the program structure and the parameter/capture split, the
+    /// same facts equality compares, so unequal sub-programs differ here
+    /// except by hash collision. It differs from
+    /// [`program().semantic_fingerprint()`](SemanticProgram::semantic_fingerprint),
+    /// which ignores the split.
     ///
     /// # Examples
     ///
@@ -130,7 +143,7 @@ impl Subprogram {
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     pub fn semantic_fingerprint(&self) -> SemanticFingerprint {
-        self.program.semantic_fingerprint()
+        self.fingerprint
     }
 }
 
@@ -146,8 +159,7 @@ impl Eq for Subprogram {}
 
 impl Hash for Subprogram {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.program.semantic_fingerprint().hash(state);
-        self.parameters.hash(state);
+        self.fingerprint.hash(state);
     }
 }
 
@@ -197,18 +209,20 @@ impl SubprogramCall {
         self.program == other.program && self.input_meta == other.input_meta
     }
 
-    /// Bytes this call retains beyond its slot, excluding the shared callee.
+    /// Bytes this call retains beyond its slot, including the callee.
     ///
-    /// The callee is an `Arc` that many operations and programs may share, so
-    /// it is charged where it is created, not at every use.
+    /// The callee is an `Arc` that several calls may share; it is counted at
+    /// every call, so the total over-estimates shared callees and never
+    /// under-counts what a program keeps alive.
     pub(crate) fn logical_retained_bytes(&self) -> Option<usize> {
         let metadata = self
             .input_meta
             .len()
             .checked_mul(size_of::<ProgramValueMetadata>())?;
-        self.input_meta.iter().try_fold(metadata, |sum, meta| {
+        let metadata = self.input_meta.iter().try_fold(metadata, |sum, meta| {
             sum.checked_add(meta.logical_retained_bytes()?)
-        })
+        })?;
+        metadata.checked_add(self.program.program.logical_retained_bytes()?)
     }
 }
 
