@@ -1006,6 +1006,13 @@ def publish_release(
         cwd=root,
         capture=False,
     )
+    # The CPU stack must be one release train at the tag; a mixed lock is not
+    # publishable.
+    runner(
+        [sys.executable, "scripts/check-stack-versions.py"],
+        cwd=root,
+        capture=False,
+    )
     # `cargo publish` resolves the registry package, not the pinned revision, so
     # a version-existence check is not sufficient: content and dependency wiring
     # of the pinned revision must match the published archive.
