@@ -106,9 +106,9 @@ jobs:
           workspaces: |
             . -> ../target-${{ matrix.cfg.backend }}
           shared-key: ci-workspace-${{ matrix.cfg.backend }}
-          # A lockfile change (for example a git -> crates.io source switch)
-          # must not reuse a cache built for the old dependency set.
-          key: ${{ hashFiles('Cargo.lock', 'ext/*/Cargo.lock') }}
+          # No `key:` here: rust-cache ignores `key` when `shared-key` is set, and its
+          # default `add-rust-environment-hash-key` already hashes the workspace
+          # Cargo.lock, so a dependency-source switch produces a different key.
       - name: Verify restored dependency artifacts
         if: matrix.cfg.profile != '' && steps.rust_cache.outputs.cache-hit == 'true'
         run: |
