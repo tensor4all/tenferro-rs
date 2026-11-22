@@ -146,57 +146,71 @@ impl TraceContext {
         F: FnOnce(&TraceContext, &[TracedTensor]) -> Result<Vec<TracedTensor>>,
     {
         let trace = TraceContext::new();
-        let parameters = inputs
-            .iter()
-            .map(|&(dtype, rank)| trace.input_symbolic_shape(dtype, rank))
-            .collect::<Result<Vec<_>>>()?;
+        let parameters = declare_parameters(&trace, inputs)?;
         let outputs = f(&trace, &parameters)?;
-
-        let mut values = Vec::with_capacity(outputs.len());
-        for (index, output) in outputs.iter().enumerate() {
-            if !output.context().same_context(&trace) {
-                return Err(Error::invalid_argument(
-                    RECORD_OP,
-                    ErrorPhase::GraphBuild,
-                    "outputs",
-                    format!(
-                        "output {index} belongs to another trace context; a recorded \
-                         program may return only values created inside its closure"
-                    ),
-                ));
-            }
-            values.push(output.trace_value());
-        }
-
-        let frozen = trace
-            .snapshot_keeping_leading_inputs(&values, parameters.len())
-            .map_err(|source| {
-                Error::runtime_state_source(RECORD_OP, ErrorPhase::GraphBuild, source)
-            })?;
-        // INVARIANT: the snapshot keeps the leading parameters first and in
-        // order, so every later input is something the closure itself added.
-        let captures = frozen
-            .program
-            .inputs()
-            .iter()
-            .skip(parameters.len())
-            .map(|input| {
-                frozen.bindings.tensor_for_input(*input).ok_or_else(|| {
-                    Error::invalid_argument(
-                        RECORD_OP,
-                        ErrorPhase::GraphBuild,
-                        "f",
-                        "the closure added a placeholder input that is not a declared \
-                         parameter; declare it in `inputs` instead",
-                    )
-                })
-            })
-            .collect::<Result<Arc<[_]>>>()?;
-        Ok(RecordedProgram {
-            subprogram: Subprogram::new(frozen.program, parameters.len()),
-            captures,
-        })
+        close_recording(&trace, parameters.len(), &outputs)
     }
+}
+
+/// Add one symbolic-extent parameter per `(dtype, rank)`, in order.
+fn declare_parameters(
+    trace: &TraceContext,
+    inputs: &[(DType, usize)],
+) -> Result<Vec<TracedTensor>> {
+    inputs
+        .iter()
+        .map(|&(dtype, rank)| trace.input_symbolic_shape(dtype, rank))
+        .collect()
+}
+
+/// Freeze a finished recording and split its inputs into parameters and
+/// captures.
+///
+/// Kept out of the generic [`TraceContext::record`] so it is compiled once,
+/// not once per closure type.
+fn close_recording(
+    trace: &TraceContext,
+    parameters: usize,
+    outputs: &[TracedTensor],
+) -> Result<RecordedProgram> {
+    let mut values = Vec::with_capacity(outputs.len());
+    for (index, output) in outputs.iter().enumerate() {
+        if !output.context().same_context(trace) {
+            return Err(Error::invalid_argument(
+                RECORD_OP,
+                ErrorPhase::GraphBuild,
+                "outputs",
+                format!(
+                    "output {index} belongs to another trace context; a recorded \
+                     program may return only values created inside its closure"
+                ),
+            ));
+        }
+        values.push(output.trace_value());
+    }
+
+    let frozen = trace
+        .snapshot_keeping_leading_inputs(&values, parameters)
+        .map_err(|source| Error::runtime_state_source(RECORD_OP, ErrorPhase::GraphBuild, source))?;
+    // INVARIANT: the snapshot keeps the leading parameters first and in
+    // order, so every later input is something the closure itself added.
+    let mut captures = Vec::new();
+    for input in frozen.program.inputs().iter().skip(parameters) {
+        let Some(capture) = frozen.bindings.tensor_for_input(*input) else {
+            return Err(Error::invalid_argument(
+                RECORD_OP,
+                ErrorPhase::GraphBuild,
+                "f",
+                "the closure added a placeholder input that is not a declared \
+                 parameter; declare it in `inputs` instead",
+            ));
+        };
+        captures.push(capture);
+    }
+    Ok(RecordedProgram {
+        subprogram: Subprogram::new(frozen.program, parameters),
+        captures: captures.into(),
+    })
 }
 
 #[cfg(test)]
