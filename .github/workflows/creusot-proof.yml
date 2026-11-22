@@ -88,5 +88,6 @@ jobs:
           grep -qF "UInt64.t'int second.f1 < UInt64.t'int first.f0" \
             "${coma}/split_two_mut_ranges.coma"
           # `None` is returned only for overlapping ranges.
-          grep -qF "| None -> not (UInt64.t'int first.f1 < UInt64.t'int second.f0" \
+          # The whole line, so a weakened second comparison is caught too.
+          grep -qF "| None -> not (UInt64.t'int first.f1 < UInt64.t'int second.f0 \/ UInt64.t'int second.f1 < UInt64.t'int first.f0)" \
             "${coma}/split_two_mut_ranges.coma"
