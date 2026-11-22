@@ -37,15 +37,3 @@ inherits = "test"
 debug = 0
 incremental = false
 strip = "symbols"
-
-# Temporary: cpueinsum 0.13.0 (the threadteam 0.6 line) is
-# not on crates.io yet. Drop this block, and re-lock, once it is released.
-[patch.crates-io]
-cpueinsum = { git = "https://github.com/tensor4all/cpueinsum-rs", rev = "c176e290e371761cea72b0fe02eef0d6b4f116e3" }
-# The cpueinsum git source above names tcontract-rs by git rev (its workspace
-# keeps one source with its private tcontract-capi); a published cpueinsum
-# resolves those from crates.io, so point the git source at the same releases.
-[patch."https://github.com/tensor4all/tcontract-rs.git"]
-tcontract = { version = "0.13.0" }
-tcontract-exec = { version = "0.13.0" }
-tcontract-kernel = { version = "0.3.1" }

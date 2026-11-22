@@ -200,7 +200,8 @@ checksum = "450efd17194c59515cc81b1eb553d98c59e407c095a918c84aefbd71bec1eecc"
 [[package]]
 name = "cpueinsum"
 version = "0.13.0"
-source = "git+https://github.com/tensor4all/cpueinsum-rs?rev=c176e290e371761cea72b0fe02eef0d6b4f116e3#c176e290e371761cea72b0fe02eef0d6b4f116e3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7a49bd4fd32207f2da1a85e0b0eb7a26ddf087ae14d17b302d6a7e603af1627"
 dependencies = [
  "num-complex",
  "strided-view",
