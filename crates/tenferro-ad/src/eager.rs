@@ -2077,7 +2077,9 @@ impl EagerSession<'_> {
                     .engine
                     .fill_scalar(shape, scalar)
                     .map_err(Error::from)?;
-                EagerTensor::new_untracked_result(Arc::clone(self.runtime), filled)
+                // A constant leaf, as `full` makes, so a later gradient taken with respect to it
+                // behaves as before; the filled tensor is adopted, not copied.
+                self.constant_from(filled)
             }
             _ => self.full(dtype, shape.to_vec(), value),
         }

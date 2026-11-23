@@ -56,3 +56,23 @@ fn full_values_stay_uniquely_owned() -> TestResult {
         Ok(())
     })
 }
+
+#[test]
+fn composite_fills_are_constant_leaves() -> TestResult {
+    let ctx = EagerRuntime::new()?;
+    let x = ctx.variable_from(Tensor::from_vec_col_major(Vec::new(), vec![3.0_f64])?)?;
+    let filled = {
+        let _no_grad = ctx.no_grad();
+        ctx.with_eager_session(&mut CpuEngine::serial(), |s| {
+            s.composite_filled(DType::F64, &[], 2.0)
+        })?
+    };
+    ctx.with_eager_session(&mut CpuEngine::serial(), |s| {
+        let loss = s.mul(&x, &filled)?;
+        let grad = s
+            .grad_optional(&loss, &filled)?
+            .expect("a fill is a constant leaf");
+        assert_eq!(s.duplicate_value(&grad)?.as_slice::<f64>()?, &[3.0]);
+        Ok(())
+    })
+}

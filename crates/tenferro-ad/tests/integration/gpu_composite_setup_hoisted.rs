@@ -10,8 +10,8 @@
 //! zero-stride view, and the layout-taking catalogue entries read every such view in place.
 //!
 //! This pins the contract with the runtime's own counters. In steady state every composite makes
-//! no host-to-device copy (counted on every upload path), and every device allocation is a kernel's
-//! own result (allocations equal launches: no upload, no staging copy). The eager route costs
+//! no host-to-device copy (counted on every upload path), launches exactly the primitives of its
+//! formulation, and every device allocation is a kernel's own result (allocations equal launches: no upload, no staging copy). The eager route costs
 //! exactly what the direct route costs and returns the same bits.
 //!
 //! Run with: `cargo test -p tenferro-ad --features cuda --test integration
@@ -199,6 +199,28 @@ fn cases() -> Vec<(&'static str, Direct, Eager)> {
     ]
 }
 
+/// The primitive kernels each composite formulation runs on a 64x48 input along axis 1
+/// (`tenferro_runtime::composite`): gelu is scale, erf, add one, multiply by x and halve; softmax is
+/// max, floor maximum, subtract, exp, sum, tiny maximum and divide; and so on. A staging copy, an
+/// upload or a materialized broadcast would add to it.
+fn primitive_kernels(name: &str) -> u64 {
+    match name {
+        "gelu" => 5,
+        "gelu_tanh" => 9,
+        "sigmoid" => 7,
+        "silu" => 8,
+        "softmax" => 7,
+        "log_softmax" => 8,
+        "masked_softmax" => 8,
+        "masked_log_softmax" => 9,
+        "layer_norm" => 12,
+        "rms_norm" => 7,
+        "reduce_mean" => 2,
+        "scale_real" | "scale_complex" => 1,
+        other => panic!("no primitive count for {other}"),
+    }
+}
+
 #[test]
 #[ignore = "requires a CUDA device"]
 fn composites_transfer_nothing_and_allocate_only_results_in_steady_state() {
@@ -216,6 +238,11 @@ fn composites_transfer_nothing_and_allocate_only_results_in_steady_state() {
         let before = counters(&runtime);
         let reference = direct(&inputs, &mut gpu).unwrap_or_else(|error| panic!("{name}: {error}"));
         let [allocations, launches, transfers] = delta(before, counters(&runtime));
+        assert_eq!(
+            launches,
+            primitive_kernels(name),
+            "{name}: one launch per primitive of the formulation (no extra copy kernel)"
+        );
         assert_eq!(
             transfers, 0,
             "{name}: a steady-state call transfers nothing to the device"
