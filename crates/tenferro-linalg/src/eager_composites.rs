@@ -157,7 +157,7 @@ pub(crate) fn pinv_with_rtol(
     let threshold = broadcast_batch_scalar_to_leading_axis(session, &threshold, s.shape())?;
     let compare = session.compare(&abs_s, &threshold, CompareDir::Gt)?;
     let mask = session.convert(&compare, s.dtype())?;
-    let ones = session.ones(s.dtype(), s.shape())?;
+    let ones = session.composite_filled(s.dtype(), s.shape(), 1.0)?;
     let neg_mask = session.neg(&mask)?;
     let denominator_offset = session.add(&ones, &neg_mask)?;
     let denom = session.add(&s, &denominator_offset)?;
@@ -229,13 +229,13 @@ fn scalar_real(
 
 /// The rank-0 constant `value` of `dtype` on this session's engine.
 ///
-/// A float or complex constant goes through [`EagerSession::full`], which uploads it once
-/// per session and reuses it afterwards, so a repeated composite transfers nothing per
-/// call (#2701). Other dtypes keep their own literal conversion and are uploaded.
+/// A float or complex constant is the session's shared composite constant, uploaded once
+/// per session while gradient recording is off, so a repeated composite transfers nothing
+/// per call (#2701). Other dtypes keep their own literal conversion and are uploaded.
 fn session_scalar(session: &mut EagerSession<'_>, dtype: DType, value: f64) -> Result<EagerTensor> {
     match dtype {
         DType::F32 | DType::F64 | DType::C32 | DType::C64 => {
-            session.full(dtype, Vec::<usize>::new(), value)
+            session.composite_constant(dtype, value)
         }
         _ => session.constant_from_host(scalar_real_tensor(dtype, value)?),
     }
@@ -290,7 +290,7 @@ fn eye_like(
 ) -> Result<EagerTensor> {
     let mut vector_shape = vec![size];
     vector_shape.extend_from_slice(&anchor.shape()[2..]);
-    let ones = session.ones(anchor.dtype(), vector_shape)?;
+    let ones = session.composite_filled(anchor.dtype(), &vector_shape, 1.0)?;
     session.embed_diag(&ones, 0, 1)
 }
 
@@ -455,7 +455,7 @@ fn count_nonzero(
     let zero = scalar_real(session, abs, 0.0)?;
     let is_zero = session.compare(abs, &zero, CompareDir::Eq)?;
     let is_zero = session.convert(&is_zero, abs.dtype())?;
-    let ones = session.ones(abs.dtype(), abs.shape())?;
+    let ones = session.composite_filled(abs.dtype(), abs.shape(), 1.0)?;
     let mask = session.sub(&ones, &is_zero)?;
     session.reduce_sum(&mask, Some(&signed(axes)[..]))
 }

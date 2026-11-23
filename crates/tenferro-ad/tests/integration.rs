@@ -33,6 +33,8 @@ mod duplicate_axis_payload_parity;
 mod dynamic_truncate;
 #[path = "integration/eager_backend_capability_contract.rs"]
 mod eager_backend_capability_contract;
+#[path = "integration/eager_composite_constants.rs"]
+mod eager_composite_constants;
 #[path = "integration/eager_device_placement_contract.rs"]
 mod eager_device_placement_contract;
 #[path = "integration/eager_elementwise_into.rs"]

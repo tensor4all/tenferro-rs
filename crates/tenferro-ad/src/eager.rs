@@ -1972,10 +1972,16 @@ impl EagerSession<'_> {
     /// on its first use and reused afterwards.
     ///
     /// Composites and the scale entries ask for their constants through this, so a
-    /// repeated call in one session transfers nothing to the device (#2701). A value
-    /// without an exact bit key, or one past the session's capacity, is uploaded as by
+    /// repeated call in one session transfers nothing to the device (#2701). The reuse
+    /// applies only while gradient recording is off; with it on, and for a value without
+    /// an exact bit key or past the session's capacity, the value is uploaded as by
     /// [`Self::constant_from_host`].
     pub(crate) fn session_constant(&mut self, tensor: Tensor) -> Result<EagerTensor> {
+        // With gradient recording on, every constant keeps its own value identity: a shared one
+        // would let a gradient taken with respect to one constant see the other's uses.
+        if eager_grad_recording_enabled() {
+            return self.constant_from_host(tensor);
+        }
         let Some(key) = constant_key(&tensor) else {
             return self.constant_from_host(tensor);
         };
@@ -1992,6 +1998,89 @@ impl EagerSession<'_> {
             self.constants.entries.push((key.0, key.1, value.clone()));
         }
         Ok(value)
+    }
+
+    /// A rank-0 untracked constant of a composite, shared within this session.
+    ///
+    /// Composite formulations in other crates (the linalg eager composites) ask for
+    /// their constants here. While gradient recording is off, the constant is uploaded
+    /// once per session and value and the same value is returned afterwards, so it is not
+    /// uniquely owned; with recording on, each call uploads a fresh constant. `value`
+    /// converts as in [`Tensor::full`].
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{DType, EagerRuntime};
+    /// let ctx = EagerRuntime::new()?;
+    /// let two = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let c = s.composite_constant(DType::F64, 2.0)?;
+    ///     s.duplicate_value(&c)
+    /// })?;
+    /// assert_eq!(two.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns [`Error::TensorRuntime`] when `value` is not representable in `dtype` or
+    /// `dtype` is an externally defined scalar, or a backend error from the upload.
+    #[doc(hidden)]
+    pub fn composite_constant(&mut self, dtype: DType, value: f64) -> Result<EagerTensor> {
+        self.session_constant(Tensor::full(dtype, [0_usize; 0], value)?)
+    }
+
+    /// An untracked compact tensor of `shape` filled with `value`, for a composite.
+    ///
+    /// While gradient recording is off, a float or complex fill runs through the engine's
+    /// [`tenferro_tensor::Engine::fill_scalar`], which a device engine serves from a scalar it
+    /// keeps resident: no host-to-device copy and no duplicated broadcast base per call (#2701).
+    /// Otherwise it is [`Self::full`] (a broadcast view of an uploaded rank-0 value).
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{DType, EagerRuntime};
+    /// let ctx = EagerRuntime::new()?;
+    /// let ones = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let o = s.composite_filled(DType::F64, &[3], 1.0)?;
+    ///     s.duplicate_value(&o)
+    /// })?;
+    /// assert_eq!(ones.as_slice::<f64>()?, &[1.0, 1.0, 1.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns [`Error::TensorRuntime`] when `value` is not representable in `dtype`, the
+    /// shape's element count overflows, or the backend fill or upload fails.
+    #[doc(hidden)]
+    pub fn composite_filled(
+        &mut self,
+        dtype: DType,
+        shape: &[usize],
+        value: f64,
+    ) -> Result<EagerTensor> {
+        let scalar = match dtype {
+            DType::F32 => Some(tenferro_tensor::ContractionScalar::F32(value as f32)),
+            DType::F64 => Some(tenferro_tensor::ContractionScalar::F64(value)),
+            DType::C32 => Some(tenferro_tensor::ContractionScalar::C32(
+                num_complex::Complex32::new(value as f32, 0.0),
+            )),
+            DType::C64 => Some(tenferro_tensor::ContractionScalar::C64(
+                num_complex::Complex64::new(value, 0.0),
+            )),
+            _ => None,
+        };
+        match scalar {
+            Some(scalar) if !eager_grad_recording_enabled() => {
+                tenferro_tensor::validate::checked_shape_product(
+                    "EagerSession::composite_filled",
+                    "shape",
+                    shape,
+                )?;
+                let filled = self
+                    .engine
+                    .fill_scalar(shape, scalar)
+                    .map_err(Error::from)?;
+                EagerTensor::new_untracked_result(Arc::clone(self.runtime), filled)
+            }
+            _ => self.full(dtype, shape.to_vec(), value),
+        }
     }
 
     /// A zero-filled untracked tensor of `dtype` and `shape` on this session's backend.
@@ -2041,8 +2130,8 @@ impl EagerSession<'_> {
     /// An untracked tensor of `dtype` and `shape` on this session's backend with every
     /// element `value`.
     ///
-    /// Only a rank-0 value crosses the host/device boundary, once per session and
-    /// value, and the result is a broadcast view of it, like [`Self::broadcast_in_dim`];
+    /// Only a rank-0 value crosses the host/device boundary, and the result is a
+    /// broadcast view of it, like [`Self::broadcast_in_dim`];
     /// [`Self::duplicate_value`] returns compact storage.
     /// `value` converts as in [`Tensor::full`].
     ///
@@ -2073,8 +2162,7 @@ impl EagerSession<'_> {
         // The target shape is known here, so an element count that overflows
         // `usize` must fail before the scalar is uploaded or broadcast.
         tenferro_tensor::validate::checked_shape_product("EagerSession::full", "shape", &shape)?;
-        // The rank-0 value is uploaded once per session and reused (#2701).
-        let scalar = self.session_constant(Tensor::full(dtype, [0_usize; 0], value)?)?;
+        let scalar = self.constant_from_host(Tensor::full(dtype, [0_usize; 0], value)?)?;
         if shape.is_empty() {
             return Ok(scalar);
         }

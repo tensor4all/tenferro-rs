@@ -98,8 +98,7 @@ impl CudaEngine {
         }
         self.with_device_scalar(scalar, |engine, device| {
             use tenferro_tensor::TensorElementwise as _;
-            let splat =
-                TensorRead::from_tensor(device).broadcast_in_dim_view(tensor.shape(), &[])?;
+            let splat = tenferro_tensor::scalar_splat(device, tensor.shape())?;
             let (lhs, rhs) = match side {
                 ScalarOperandSide::Left => (splat, tensor),
                 ScalarOperandSide::Right => (tensor, splat),
@@ -131,8 +130,7 @@ impl CudaEngine {
         }
         self.with_device_scalar(scalar, |engine, device| {
             use tenferro_tensor::TensorElementwise as _;
-            let splat =
-                TensorRead::from_tensor(device).broadcast_in_dim_view(tensor.shape(), &[])?;
+            let splat = tenferro_tensor::scalar_splat(device, tensor.shape())?;
             let (on_true, on_false) = match side {
                 ScalarOperandSide::Left => (splat, tensor),
                 ScalarOperandSide::Right => (tensor, splat),

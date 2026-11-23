@@ -42,6 +42,7 @@ fn upload_typed<T: TensorScalar + Send + Sync + 'static>(
         // invariant, and the slice borrows `host` for the call.
         std::slice::from_raw_parts(host.as_ptr().cast::<u8>(), std::mem::size_of_val(host))
     };
+    runtime.note_host_upload();
     let buffer = {
         let mut guard = runtime.submit();
         guard

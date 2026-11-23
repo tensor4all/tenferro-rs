@@ -131,4 +131,4 @@ required-features = ["autodiff"]
 [[test]]
 name = "gpu_linalg_setup_hoisted"
 path = "tests/gpu_linalg_setup_hoisted.rs"
-required-features = ["cuda", "autodiff"]
+required-features = ["cuda"]

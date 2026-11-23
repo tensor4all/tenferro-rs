@@ -10,12 +10,12 @@
 //! zero-stride view, and the layout-taking catalogue entries read every such view in place.
 //!
 //! This pins the contract with the runtime's own counters. In steady state every composite makes
-//! no host-to-device transfer (no pinned staging chunk), and every device allocation is a kernel's
+//! no host-to-device copy (counted on every upload path), and every device allocation is a kernel's
 //! own result (allocations equal launches: no upload, no staging copy). The eager route costs
 //! exactly what the direct route costs and returns the same bits.
 //!
 //! Run with: `cargo test -p tenferro-ad --features cuda --test integration
-//! gpu_composite_setup_hoisted -- --ignored --include-ignored`
+//! gpu_composite_setup_hoisted -- --ignored`
 
 use num_complex::Complex64;
 use tenferro_ad::{EagerRuntime, EagerSession, EagerTensor};
@@ -74,10 +74,10 @@ fn vector(salt: usize) -> Tensor {
     )
 }
 
-/// Cumulative device allocations, launches and pinned staging chunks (one per host transfer).
+/// Cumulative device allocations, launches and host-to-device copies.
 fn counters(runtime: &CudaRuntime) -> [u64; 3] {
     let stats = runtime.stats().retirement;
-    [stats.allocations, stats.launches, stats.chunk_allocs]
+    [stats.allocations, stats.launches, runtime.host_uploads()]
 }
 
 fn delta(before: [u64; 3], after: [u64; 3]) -> [u64; 3] {

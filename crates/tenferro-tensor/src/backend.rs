@@ -1053,6 +1053,30 @@ fn scalar_host_tensor(scalar: ContractionScalar) -> crate::Result<Tensor> {
     }
 }
 
+/// A rank-0 device scalar read over `shape`: the scalar itself where the shapes already agree
+/// (a rank-0 tensor operand), a zero-stride view otherwise. An engine whose entries take only
+/// owned operands keeps serving the rank-0 case.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{scalar_splat, Tensor};
+/// let one = Tensor::from_vec_col_major(Vec::new(), vec![1.0_f64])?;
+/// assert_eq!(scalar_splat(&one, &[2, 3])?.shape(), &[2, 3]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `ShapeMismatch` when `scalar` is not rank 0, or
+/// with `InvalidArgument` when the element count of `shape` overflows.
+pub fn scalar_splat<'a>(scalar: &'a Tensor, shape: &[usize]) -> crate::Result<TensorRead<'a>> {
+    if shape.is_empty() {
+        return Ok(TensorRead::from_tensor(scalar));
+    }
+    TensorRead::from_tensor(scalar).broadcast_in_dim_view(shape, &[])
+}
+
 /// Refuse a scalar whose dtype is not the tensor operand's; nothing is promoted.
 fn check_scalar_dtype(
     op: &'static str,
@@ -1107,7 +1131,7 @@ pub fn default_binary_scalar_read<E: Engine + ?Sized>(
     check_scalar_dtype(op.label(), &tensor, scalar)?;
     let device =
         engine.upload_host_tensor(TensorRead::from_tensor(&scalar_host_tensor(scalar)?))?;
-    let splat = TensorRead::from_tensor(&device).broadcast_in_dim_view(tensor.shape(), &[])?;
+    let splat = scalar_splat(&device, tensor.shape())?;
     let (lhs, rhs) = match side {
         ScalarOperandSide::Left => (splat, tensor),
         ScalarOperandSide::Right => (tensor, splat),
@@ -1152,7 +1176,7 @@ pub fn default_select_scalar_read<E: Engine + ?Sized>(
     check_scalar_dtype("select", &tensor, scalar)?;
     let device =
         engine.upload_host_tensor(TensorRead::from_tensor(&scalar_host_tensor(scalar)?))?;
-    let splat = TensorRead::from_tensor(&device).broadcast_in_dim_view(tensor.shape(), &[])?;
+    let splat = scalar_splat(&device, tensor.shape())?;
     let (on_true, on_false) = match side {
         ScalarOperandSide::Left => (splat, tensor),
         ScalarOperandSide::Right => (tensor, splat),

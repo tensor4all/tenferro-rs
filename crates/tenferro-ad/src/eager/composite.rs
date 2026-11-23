@@ -28,11 +28,14 @@ use crate::{Error, Result};
 enum EagerValue {
     /// An eager tensor.
     Tensor(EagerTensor),
-    /// `base` broadcast into `shape` along `dims`, not yet materialized.
+    /// `base` broadcast into `shape` along `dims`, not yet materialized. A recorded
+    /// consumer materializes it once and every later consumer reuses that tensor, so the
+    /// trace holds one broadcast, as when the composite materialized it eagerly.
     Broadcast {
         base: EagerTensor,
         shape: Vec<usize>,
         dims: Vec<usize>,
+        materialized: std::cell::OnceCell<EagerTensor>,
     },
 }
 
@@ -60,7 +63,9 @@ impl EagerValue {
     fn read(&self) -> Result<TensorRead<'_>> {
         match self {
             Self::Tensor(tensor) => Ok(tensor.tensor_read()),
-            Self::Broadcast { base, shape, dims } => base
+            Self::Broadcast {
+                base, shape, dims, ..
+            } => base
                 .tensor_read()
                 .broadcast_in_dim_view(shape, dims)
                 .map_err(Error::TensorRuntime),
@@ -78,9 +83,22 @@ impl EagerComposite<'_, '_> {
     fn tensor<'v>(&mut self, value: &'v EagerValue) -> Result<Cow<'v, EagerTensor>> {
         match value {
             EagerValue::Tensor(tensor) => Ok(Cow::Borrowed(tensor)),
-            EagerValue::Broadcast { base, shape, dims } => Ok(Cow::Owned(
-                self.session.broadcast_in_dim(base, shape, dims)?,
-            )),
+            EagerValue::Broadcast {
+                base,
+                shape,
+                dims,
+                materialized,
+            } => {
+                if materialized.get().is_none() {
+                    let tensor = self.session.broadcast_in_dim(base, shape, dims)?;
+                    let _ = materialized.set(tensor);
+                }
+                Ok(Cow::Borrowed(
+                    materialized
+                        .get()
+                        .expect("the broadcast was just materialized"),
+                ))
+            }
         }
     }
 
@@ -297,6 +315,7 @@ impl CompositeOps for EagerComposite<'_, '_> {
                     base,
                     shape: shape.to_vec(),
                     dims: dims.to_vec(),
+                    materialized: std::cell::OnceCell::new(),
                 })
             }
             pending => self.broadcast_in_dim(&pending, shape, dims),
