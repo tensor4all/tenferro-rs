@@ -498,6 +498,20 @@ work, not required.
   Intel GPUs, and extending the first Metal slice
   ([design](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/metal-backend.md)).
 
+### Software paper: join as a co-author
+
+We plan to submit a software paper on tenferro at the end of January 2027 (the
+journal is not fixed and acceptance is not guaranteed). People who make a
+substantial contribution to tenferro-rs, its upstream crates (strided,
+tcontract, tlinalg, threadteam, colmat, ...),
+[tenferro-sci-rs](https://github.com/tensor4all/tenferro-sci-rs) or
+[tenferro-examples](https://github.com/tensor4all/tenferro-examples) can join
+the author list. The criteria and how to apply are in
+[tensor4all/tenferro-paper](https://github.com/tensor4all/tenferro-paper)
+([AUTHORS-NOTES.md](https://github.com/tensor4all/tenferro-paper/blob/main/AUTHORS-NOTES.md));
+contributors coordinate in the tenferro Matrix room
+[#tenferro-tensor4all:matrix.org](https://matrix.to/#/#tenferro-tensor4all:matrix.org).
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution policy and the
 supported AI-assisted workflows, and [GOVERNANCE.md](GOVERNANCE.md) for
 maintainer roles, merge authority, and the project-direction decision model.
