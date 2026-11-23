@@ -2734,6 +2734,27 @@ fn a_coalesced_gather_reads_the_elements_the_original_names() {
         ),
         None
     );
+    // Window axes whose output axes are swapped must not merge, even though their strides
+    // compose: the merged run would write the output transposed.
+    let matrix = [3i64, 4];
+    let matrix_strides = compact_strides_of(&matrix);
+    let swapped_outputs = tenferro_tensor::GatherConfig {
+        offset_dims: vec![1, 0],
+        collapsed_slice_dims: vec![],
+        start_index_map: vec![],
+        index_vector_dim: 0,
+        slice_sizes: vec![3, 4],
+    };
+    assert_eq!(
+        merged_gather_rank(
+            "swapped output axes",
+            (&matrix, &matrix_strides, 1),
+            &swapped_outputs,
+            &[0],
+            &[],
+        ),
+        None
+    );
     // The same axes in their compact order do merge.
     let strides = compact_strides_of(&shape);
     assert_eq!(
