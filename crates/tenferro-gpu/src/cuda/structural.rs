@@ -3969,15 +3969,9 @@ impl CudaEngine {
             let out_layout = compact_layout(&out_shape, &compact_strides(&out_shape, name)?, name)?;
             // The first pass over a strided view reads it through its own layout; every other
             // pass (and a flat or owned source) reads a compact run.
-            let (in_layout, in_len) = match (&view_region, pass) {
-                // Unreachable today (an in-place view is flat, hence compact); kept so a strided
-                // region could never be addressed through a compact layout by mistake.
-                (Some(region), 0) if !compact => (region.layout(name)?, region.len(name)?),
-                _ => (
-                    compact_layout(&shape, &compact_strides(&shape, name)?, name)?,
-                    count_i64(&shape, name)?,
-                ),
-            };
+            // An in-place view is flat, so every pass reads a compact run.
+            let in_layout = compact_layout(&shape, &compact_strides(&shape, name)?, name)?;
+            let in_len = count_i64(&shape, name)?;
             let out_len = count_i64(&out_shape, name)?;
             let result_shape: &[usize] = if pass + 1 == pass_count {
                 &squeezed
@@ -5020,9 +5014,8 @@ impl CudaEngine {
         shape: &[usize],
         name: &'static str,
     ) -> crate::Result<()> {
-        if shape.contains(&0) {
-            return Ok(());
-        }
+        // An empty domain still goes through the planners, so a dtype the operation does not
+        // serve is refused at length zero too; the empty launch itself is skipped.
         let dtype = operands[0].dtype();
         let binary = match op {
             tenferro_tensor::ElementwiseReadOp::Negate

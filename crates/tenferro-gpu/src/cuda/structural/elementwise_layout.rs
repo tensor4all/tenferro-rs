@@ -15,8 +15,9 @@
 //! - only a wider view, which the by-value layout cannot carry, is still staged once.
 //!
 //! The layout-taking entries compute the flat entries' per-element formulas with the same device
-//! helpers, so the two routes agree bit for bit; the staging counter
-//! ([`CudaEngine::staged_reads`]) stays put on both.
+//! helpers, so the two routes agree bit for bit on every non-NaN result (the sign and payload of a
+//! NaN result are unspecified, as in the catalogue's ABI); the staging counter
+//! ([`CudaEngine::staged_reads`]) stays put on both. Reductions read only flat views in place.
 
 use t4a_cuda_kernels::{Entry, Layout};
 use tenferro_tensor::{DType, TensorRead};

@@ -451,6 +451,31 @@ fn in_place_routes_keep_the_staged_results_on_edge_cases() {
         .expect("rank-9 power");
     assert_eq!(down_f64(&out), vec![4.0, 9.0]);
 
+    // A dtype the operation does not serve is refused at length zero too: Bool addition into an
+    // empty strided destination is an error, as on the owned-destination route.
+    let empty_bool = || {
+        up(Tensor::from_typed::<bool>(
+            T::from_vec_col_major(vec![0], Vec::new()).expect("empty bool"),
+        ))
+    };
+    let (lhs_bool, rhs_bool) = (empty_bool(), empty_bool());
+    let mut dest_bool = up(Tensor::from_typed::<bool>(
+        T::from_vec_col_major(vec![2], vec![true, false]).expect("bool dest"),
+    ));
+    {
+        let typed = dest_bool.as_typed_mut::<bool>().expect("bool");
+        let mut whole = typed.as_view_mut();
+        let view = whole
+            .slice_axis_view(0, tenferro_tensor::StridedSliceSpec::new(0, Some(0), 1))
+            .expect("empty view");
+        let result = gpu.add_read_into(
+            TensorRead::from_tensor(&lhs_bool),
+            TensorRead::from_tensor(&rhs_bool),
+            TensorWrite::View(TensorViewMut::Bool(view)),
+        );
+        assert!(result.is_err(), "Bool addition is refused at length zero");
+    }
+
     // An empty base with the same offset scalar exponent is an empty result.
     let empty_base = up(tensor([0, 2], Vec::<f64>::new()));
     let exponent = TensorView::F64(
