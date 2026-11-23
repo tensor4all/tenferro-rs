@@ -32,6 +32,86 @@ pub(crate) fn untracked_fast_path_allowed(tensors: &[&EagerTensor]) -> bool {
         || (!eager_capture_active() && !tensors.iter().any(|tensor| tensor.requires_grad))
 }
 
+/// Whether `read` lives on a GPU, where the elementwise entries read a zero-stride view in place.
+fn gpu_resident(read: &tenferro_tensor::TensorRead<'_>) -> bool {
+    matches!(
+        read.placement().device.as_ref().map(|device| &device.kind),
+        Some(tenferro_tensor::DeviceKind::Gpu(_))
+    )
+}
+
+/// `read` broadcast to `shape` as a zero-stride view, its axes aligned with the trailing axes of
+/// `shape` (the eager surface's implicit-broadcast rule).
+pub(crate) fn trailing_broadcast_view<'a>(
+    read: tenferro_tensor::TensorRead<'a>,
+    shape: &[usize],
+) -> Result<tenferro_tensor::TensorRead<'a>> {
+    if read.shape() == shape {
+        return Ok(read);
+    }
+    let offset = shape.len().saturating_sub(read.shape().len());
+    let dims: Vec<usize> = (0..read.shape().len()).map(|axis| axis + offset).collect();
+    read.broadcast_in_dim_view(shape, &dims)
+        .map_err(Error::TensorRuntime)
+}
+
+/// Whether an untracked op over `tensors` may read broadcast operands as zero-stride views.
+///
+/// Only with no gradient or semantic recording to keep (the untracked fast path), and only on a
+/// GPU: the CUDA elementwise entries read such a view in place, so the operation runs without the
+/// explicit eager `broadcast_in_dim`, which duplicates its base (#2701). Other engines keep the
+/// recorded broadcast.
+pub(crate) fn broadcast_views_allowed(tensors: &[&EagerTensor]) -> bool {
+    untracked_fast_path_allowed(tensors)
+        && tensors
+            .iter()
+            .all(|tensor| gpu_resident(&tensor.tensor_read()))
+}
+
+impl EagerTensor {
+    /// Run `op` untracked on `reads` and bind its single output to `ctx`.
+    pub(crate) fn untracked_op_on_reads(
+        ctx: Arc<crate::eager::EagerRuntime>,
+        op: &StdTensorOp,
+        reads: &[tenferro_tensor::TensorRead<'_>],
+        session: &mut dyn tenferro_tensor::Engine,
+    ) -> Result<Self> {
+        let output = single_session_output(
+            op,
+            exec_standard_op_on_tensor_reads_with_session(op, reads, session)?,
+        )?;
+        Self::new_untracked_result(ctx, output)
+    }
+}
+
+/// An untracked elementwise op whose operands differ in shape, read through zero-stride views
+/// instead of explicit eager broadcasts, or `None` when the recorded path must run.
+pub(crate) fn untracked_broadcast_op(
+    name: &'static str,
+    tensors: &[&EagerTensor],
+    op: &StdTensorOp,
+    session: &mut dyn tenferro_tensor::Engine,
+) -> Result<Option<EagerTensor>> {
+    let Some(first) = tensors.first() else {
+        return Ok(None);
+    };
+    if tensors.iter().all(|tensor| tensor.shape() == first.shape())
+        || !broadcast_views_allowed(tensors)
+    {
+        return Ok(None);
+    }
+    for tensor in &tensors[1..] {
+        ensure_same_context(first, tensor)?;
+    }
+    let shape = broadcast_shapes(tensors.iter().map(|tensor| tensor.shape()))
+        .map_err(|err| broadcast_error(name, err))?;
+    let reads = tensors
+        .iter()
+        .map(|tensor| trailing_broadcast_view(tensor.tensor_read(), &shape))
+        .collect::<Result<Vec<_>>>()?;
+    EagerTensor::untracked_op_on_reads(Arc::clone(&first.ctx), op, &reads, session).map(Some)
+}
+
 pub(crate) fn broadcast_binary_in_session<'a>(
     op: &'static str,
     lhs: &'a EagerTensor,

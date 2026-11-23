@@ -127,3 +127,8 @@ path = "tests/small_linalg_allocation.rs"
 name = "eigh_hvp_degenerate_pair"
 path = "examples/eigh_hvp_degenerate_pair.rs"
 required-features = ["autodiff"]
+
+[[test]]
+name = "gpu_linalg_setup_hoisted"
+path = "tests/gpu_linalg_setup_hoisted.rs"
+required-features = ["cuda"]

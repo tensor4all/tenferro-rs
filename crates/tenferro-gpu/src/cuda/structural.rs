@@ -3658,6 +3658,9 @@ fn count_i64(shape: &[usize], op: &'static str) -> crate::Result<i64> {
 #[path = "structural/activation.rs"]
 pub(super) mod activation;
 
+#[path = "structural/device_scalars.rs"]
+pub(super) mod device_scalars;
+
 #[path = "structural/elementwise_layout.rs"]
 mod elementwise_layout;
 use elementwise_layout::{any_strided, compact_destination_layout, ElementwiseOperand};
@@ -7328,6 +7331,34 @@ impl tenferro_tensor::TensorAnalytic for CudaEngine {
 }
 
 impl tenferro_tensor::Engine for CudaEngine {
+    fn binary_scalar_read(
+        &mut self,
+        op: tenferro_tensor::ScalarBinaryOp,
+        tensor: TensorRead<'_>,
+        scalar: tenferro_tensor::ContractionScalar,
+        side: tenferro_tensor::ScalarOperandSide,
+    ) -> crate::Result<Tensor> {
+        self.binary_with_device_scalar(op, tensor, scalar, side)
+    }
+
+    fn select_scalar_read(
+        &mut self,
+        predicate: TensorRead<'_>,
+        tensor: TensorRead<'_>,
+        scalar: tenferro_tensor::ContractionScalar,
+        side: tenferro_tensor::ScalarOperandSide,
+    ) -> crate::Result<Tensor> {
+        self.select_with_device_scalar(predicate, tensor, scalar, side)
+    }
+
+    fn fill_scalar(
+        &mut self,
+        shape: &[usize],
+        scalar: tenferro_tensor::ContractionScalar,
+    ) -> crate::Result<Tensor> {
+        self.fill_with_device_scalar(shape, scalar)
+    }
+
     /// XLA-style gather over the operand's own layout.
     ///
     /// The index operand must be `I32`, `I64`, `F32` or `F64`; a float index is checked for an
