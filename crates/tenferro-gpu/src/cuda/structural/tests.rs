@@ -2491,11 +2491,12 @@ fn host_gather(
             if has_vector {
                 index_coords.insert(config.index_vector_dim, component);
             }
-            let (mut position, mut step) = (0usize, 1usize);
-            for (&coord, &extent) in index_coords.iter().zip(indices_shape) {
-                position += coord * step;
-                step *= extent;
-            }
+            // The column-major flat position of the index coordinate, slowest axis first.
+            let position = index_coords
+                .iter()
+                .zip(indices_shape)
+                .rev()
+                .fold(0usize, |flat, (&coord, &extent)| flat * extent + coord);
             let slice = config.slice_sizes[axis] as i64;
             start[axis] = indices[position].clamp(0, extents[axis] - slice);
         }
