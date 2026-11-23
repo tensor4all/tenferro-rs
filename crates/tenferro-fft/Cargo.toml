@@ -19,16 +19,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 features = ["autodiff", "cuda"]
 
 [features]
-autodiff = [
-    "dep:tenferro-ad",
-    "tenferro-internal-ops/autodiff",
-]
+autodiff = ["dep:tenferro-ad", "tenferro-ad/autodiff"]
 cuda = [
     "dep:libloading",
     "dep:tenferro-gpu",
     "tenferro-gpu/cuda",
     "tenferro-ad?/cuda",
-    "tenferro-internal-ops/cuda",
 ]
 
 [dependencies]

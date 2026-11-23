@@ -157,6 +157,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         _STORAGE_OWNERSHIP_CHECKER,
         "python3 scripts/test-public-boundary-inventory.py",
         "python3 scripts/test-check-boundary-scope.py",
+        "python3 scripts/check-crate-boundaries.py",
         "python3 scripts/audit-engine-entry.py --check",
         "python3 scripts/check-contraction-kernels.py",
         "python3 scripts/ci/check-duplicate-test-messages.py",

@@ -22,13 +22,9 @@ features = ["autodiff", "cuda"]
 [features]
 # Test support, off by default (see `tenferro-cpu`): placement-ledger assertions.
 ledger = ["tenferro-cpu/ledger"]
-autodiff = [
-    "dep:tenferro-ad",
-    "tenferro-internal-ops/autodiff",
-]
+autodiff = ["dep:tenferro-ad", "tenferro-ad/autodiff"]
 cuda = [
     "tenferro-ad?/cuda",
-    "tenferro-internal-ops/cuda",
     "dep:tenferro-gpu",
     "tenferro-gpu/cuda",
 ]
