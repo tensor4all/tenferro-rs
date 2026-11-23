@@ -723,38 +723,42 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
 // Full-pivot LU
 // ---------------------------------------------------------------------------------------------
 
+/// Complete-pivoting LU of a batch of `m x n` matrices, `P A Qᵀ = L U` (`A = Pᵀ L U Q`).
+///
+/// With `k = min(m, n)` the outputs are, per batch item: the `m x m` row permutation `P`, the
+/// unit-lower-triangular `m x k` factor `L`, the upper-triangular `k x n` factor `U`, the `n x n`
+/// column permutation `Q`, and the scalar parity of the two permutations.
 fn full_piv_lu_impl<T: FaerLinalg>(
     exec: &mut Exec<'_>,
     buffers: &mut BufferPool,
     view: &TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     const OP: &str = "full_piv_lu";
-    let (n, batch_shape) = square_core_and_batch(view.shape(), OP)?;
+    let (m, n, batch_shape) = matrix_core_and_batch(view.shape(), OP)?;
+    let k = m.min(n);
     let placement = view.placement();
-    let shape = matrix_with_batch_shape(n, n, batch_shape);
+    let p_shape = matrix_with_batch_shape(m, m, batch_shape);
+    let l_shape = matrix_with_batch_shape(m, k, batch_shape);
+    let u_shape = matrix_with_batch_shape(k, n, batch_shape);
+    let q_shape = matrix_with_batch_shape(n, n, batch_shape);
     let batch = checked_product(OP, "batch shape", batch_shape)?;
-    if has_zero_dim(view.shape()) {
-        let empty = || tensor_from_vec_with_template(shape.clone(), Vec::new(), placement);
+    if batch == 0 {
         return Ok(vec![
-            empty()?,
-            empty()?,
-            empty()?,
-            empty()?,
-            tensor_from_vec_with_template(
-                batch_shape.to_vec(),
-                vec![T::parity_one(); batch],
-                placement,
-            )?,
+            tensor_from_vec_with_template(p_shape, Vec::new(), placement)?,
+            tensor_from_vec_with_template(l_shape, Vec::new(), placement)?,
+            tensor_from_vec_with_template(u_shape, Vec::new(), placement)?,
+            tensor_from_vec_with_template(q_shape, Vec::new(), placement)?,
+            tensor_from_vec_with_template(batch_shape.to_vec(), Vec::new(), placement)?,
         ]);
     }
-    let mut p = pooled_output::<T>(buffers, OP, "permutation matrix", &shape)?;
-    let mut l = pooled_output::<T>(buffers, OP, "L", &shape)?;
-    let mut u = pooled_output::<T>(buffers, OP, "U", &shape)?;
-    let mut q = pooled_output::<T>(buffers, OP, "permutation matrix", &shape)?;
+    let mut p = pooled_output::<T>(buffers, OP, "permutation matrix", &p_shape)?;
+    let mut l = pooled_output::<T>(buffers, OP, "L", &l_shape)?;
+    let mut u = pooled_output::<T>(buffers, OP, "U", &u_shape)?;
+    let mut q = pooled_output::<T>(buffers, OP, "permutation matrix", &q_shape)?;
     let mut parity = pooled_output::<T>(buffers, OP, "parity", batch_shape)?;
     let mut workspace = pooled_workspace::<T>(
         buffers,
-        tlinalg::full_piv_lu::full_piv_lu_workspace::<T>(n, n, batch, exec)
+        tlinalg::full_piv_lu::full_piv_lu_workspace::<T>(m, n, batch, exec)
             .map_err(provider(Op::FullPivLu)),
     )?;
     tlinalg::full_piv_lu::full_piv_lu_into(

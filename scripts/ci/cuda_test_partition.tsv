@@ -1614,6 +1614,12 @@ host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_solve_decides_singula
 host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_solve_rejects_exactly_singular_system
 host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_solve_returns_expected_solution
 host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_uses_column_pivot_when_max_pivot_is_off_column
+host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_accepts_empty_rectangular_shapes
+host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_factors_a_batch_of_rectangular_matrices
+host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_factors_a_tall_matrix
+host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_factors_a_wide_matrix
+host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_factors_rectangular_f32_and_complex_matrices
+host	tenferro-linalg::integration	full_piv_lu::full_piv_lu_reveals_the_rank_of_rank_deficient_rectangular_matrices
 host	tenferro-linalg::integration	full_svd_host_checks::complex_gram_matches_all_ordered_reference_entries
 host	tenferro-linalg::integration	full_svd_host_checks::gram_rejects_nonfinite_and_correlated_columns
 host	tenferro-linalg::integration	full_svd_lstsq::lstsq_rejects_wide_system

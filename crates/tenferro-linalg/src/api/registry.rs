@@ -521,7 +521,7 @@ assert_eq!(rt.as_slice::<f64>()?[0], 1.0);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
     op full_piv_lu {
-        summary: "Complete-pivot LU `a = p l u q`; `p` and `q` are permutation matrices and `parity` is the real sign of the permutations.";
+        summary: "Complete-pivot LU `p a qᵀ = l u` (`a = pᵀ l u q`) of an `m x n` matrix, square or rectangular: with `k = min(m, n)`, `p` is the `m x m` and `q` the `n x n` permutation matrix, `l` the unit-lower `m x k` and `u` the upper `k x n` factor, and `parity` the real sign of the permutations.";
         operands: (a);
         options: none;
         output: FullPivLu<V, R>;
@@ -536,10 +536,15 @@ use tenferro_linalg::{LinalgOps};
 use tenferro_tensor::{Tensor};
 
 let mut engine = CpuEngine::serial();
-let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 2.0, 2.0, 3.0])?;
+// A rectangular 3 x 2 input: k = min(3, 2) = 2.
+let a = Tensor::from_vec_col_major(vec![3, 2], vec![4.0_f64, 2.0, 1.0, 2.0, 3.0, 5.0])?;
 let r = a.full_piv_lu(&mut engine)?;
-let rt = &r.u;
-assert_eq!(rt.shape(), &[2, 2]);
+assert_eq!(r.p.shape(), &[3, 3]);
+assert_eq!(r.l.shape(), &[3, 2]);
+assert_eq!(r.u.shape(), &[2, 2]);
+assert_eq!(r.q.shape(), &[2, 2]);
+// Complete pivoting moves the largest entry, 5, to the first pivot.
+assert_eq!(r.u.as_slice::<f64>()?[0], 5.0);
 # Ok::<(), tenferro_tensor::Error>(())"#;
         example traced: r#"use tenferro_cpu::CpuEngine;
 use tenferro_linalg::{TracedLinalgOps};
