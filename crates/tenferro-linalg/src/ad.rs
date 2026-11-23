@@ -2035,6 +2035,7 @@ mod tests {
 
         let cases = [
             ("lu", LinalgOp::Lu, vec![1, 2]),
+            ("full_piv_lu", LinalgOp::FullPivLu, vec![1, 2]),
             (
                 "qr",
                 LinalgOp::Qr {
@@ -2146,6 +2147,37 @@ mod tests {
                 .unwrap_or_else(|error| {
                     panic!("{name} {rows}x{cols} symbolic JVP execution: {error}")
                 });
+                // The symbolic JVP itself, against central finite differences of the primal.
+                let step = 1.0e-6;
+                let shifted = |sign: f64| {
+                    let data: Vec<f64> = matrix
+                        .as_slice::<f64>()
+                        .unwrap()
+                        .iter()
+                        .zip(tangent.as_slice::<f64>().unwrap())
+                        .map(|(x, t)| x + sign * step * t)
+                        .collect();
+                    let input = Tensor::from_vec_col_major(vec![rows, cols], data).unwrap();
+                    run_compiled_cpu(&runtime, &primal, &[&row_anchor, &col_anchor, &input])
+                        .unwrap()
+                };
+                let (plus, minus) = (shifted(1.0), shifted(-1.0));
+                for (index, output) in tangent_outputs.iter().enumerate() {
+                    let fd = plus[index]
+                        .as_slice::<f64>()
+                        .unwrap()
+                        .iter()
+                        .zip(minus[index].as_slice::<f64>().unwrap())
+                        .map(|(p, m)| (p - m) / (2.0 * step));
+                    for (entry, (actual, expected)) in
+                        output.as_slice::<f64>().unwrap().iter().zip(fd).enumerate()
+                    {
+                        assert!(
+                            (actual - expected).abs() <= 1.0e-6,
+                            "{name} {rows}x{cols} symbolic JVP output {index}[{entry}]: {actual} vs finite difference {expected}"
+                        );
+                    }
+                }
                 let mut vjp_inputs = vec![&row_anchor, &col_anchor, &matrix];
                 vjp_inputs.extend(&cotangents);
                 let input_cotangents = run_compiled_cpu(&runtime, &vjp, &vjp_inputs)
