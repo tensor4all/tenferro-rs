@@ -7664,6 +7664,14 @@ impl tenferro_tensor::Engine for CudaEngine {
                     .map_err(|_| crate::Error::unsupported(OP, "the rank exceeds the ABI's int"))?;
                 let merged_plan = gather_plan(&merged_config, rank);
                 let merged_out = gather_shape(indices_shape, &merged_plan, &merged_config)?;
+                // Drops remove extent-one axes and merges fold an extent into the run's head, so
+                // the output holds as many elements as before; the planner's span check alone
+                // would accept a smaller merged output.
+                debug_assert_eq!(
+                    merged_out.iter().product::<usize>(),
+                    out_shape.iter().product::<usize>(),
+                    "a merged gather must write every output element"
+                );
                 (extents, strides, merged_plan, merged_out)
             }
             None => (

@@ -560,7 +560,7 @@ fn a_rank_nine_dynamic_slice_uses_the_general_path() {
 fn a_rank_nine_gather_with_singleton_axes_and_scatter() {
     let Some(mut engine) = engine() else { return };
     // A rank-9 operand whose window rides axis 8 and whose start selects axis 7. The gather drops
-    // the collapsed extent-one axes and takes the by-value entry at rank three (#2708); the
+    // the collapsed extent-one axes and takes the by-value entry at rank two (#2708); the
     // scatter keeps the general path, whose plan's window, offset, start-map and slice-size
     // arrays are all non-empty and distinct: a swapped pointer order would fail this.
     // `a_rank_nine_gather_that_does_not_merge_uses_the_general_path` covers the general gather.
