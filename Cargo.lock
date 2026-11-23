@@ -1689,9 +1689,8 @@ checksum = "23ab959ae1e239250950f298b1b3634f799f37d64ea9956111b7d78e3d5146f0"
 
 [[package]]
 name = "t4a-cuda-kernels"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e240fd21fb450bd4d2df4ff4453cc51a5439512e2a15df127ed7260bb492a8da"
+version = "0.4.0"
+source = "git+https://github.com/tensor4all/t4a-cuda-kernels?rev=1cf73b463fe446add25a0659005b6c88928cfd8f#1cf73b463fe446add25a0659005b6c88928cfd8f"
 
 [[package]]
 name = "t4a-cuda-runtime"

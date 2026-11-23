@@ -61,6 +61,8 @@ mod gpu_eager_chain_no_stream_drain;
 mod gpu_f32_fusion;
 #[path = "integration/gpu_nn_composites.rs"]
 mod gpu_nn_composites;
+#[path = "integration/gpu_strided_reads_in_place.rs"]
+mod gpu_strided_reads_in_place;
 #[path = "integration/graph_compile.rs"]
 mod graph_compile;
 #[path = "integration/hvp.rs"]
