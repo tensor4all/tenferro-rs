@@ -12,7 +12,15 @@ name: RunPod tenferro-rs GPU Test
 #     branch workflow file, not through a PR-controlled `pull_request` copy of
 #     this workflow. They MUST reject fork PRs before RunPod startup. The pod
 #     executes the checked-out ref as root, in the same container as the runner
-#     process, so fork code must never reach the self-hosted runner.
+#     process, so unreviewed fork code must never reach the self-hosted runner.
+#   * A fork PR reaches the pod only through a manual dispatch by an
+#     `admin`/`maintain` actor that names the reviewed head in
+#     `approved_head_sha` (`recover_runpod_pr.py PR --approve-head SHA`).
+#     That dispatch is the approval: the maintainer has read the fork's code
+#     at that commit and accepts running it here, including on the
+#     main-scoped hosted jobs that build it. `authorize` refuses any other
+#     head, and the paid lane re-checks it before provisioning, so a push after
+#     the review needs a new approval.
 #   * NEVER add `pull_request_target` to this workflow: that would combine base
 #     repository secrets with PR-controlled refs.
 #   * Top-level permissions must stay read-only. In particular, never add
@@ -25,7 +33,7 @@ name: RunPod tenferro-rs GPU Test
 #     (`runpod-contract`, `start-runpod`, `cleanup-runpod`). Neither may ever be passed to, or
 #     become readable from, the pod itself. Automatic PR runs are started only
 #     by `workflow_run`, after `authorize` gates the run to same-repo
-#     maintainer/admin PRs.
+#     maintainer/admin PRs; fork PRs run only on the approved dispatch above.
 #   * Cache and artifact trust (#1403): every job in this workflow is a cache
 #     READER only (`actions/cache/restore`, rust-cache `save-if: false`).
 #     Jobs here either execute PR-controlled build code (cuda-archive) or run
@@ -48,16 +56,17 @@ name: RunPod tenferro-rs GPU Test
 #     docs/design/runpod-gpu-provisioning.md.
 #   * This workflow owns the branch-protection-required `CI GPU gate` check for
 #     eligible same-repo maintainer PRs by publishing that check to the PR head
-#     SHA from a GitHub-hosted final gate job. Fork PRs keep using the legacy
-#     `CI_gpu.yml` pull_request path because base-repo Checks API writes cannot
-#     attach a check run to fork commits.
+#     SHA from a GitHub-hosted final gate job. For a fork PR it publishes no
+#     check: the `CI GPU gate` job that `CI_gpu.yml` attaches to the fork PR
+#     reads the verdict from the `fork-pr-verdict` job of an approved run
+#     (`scripts/ci/fork_gpu_gate.py`), which re-runs that gate if it gave up.
 # ---------------------------------------------------------------------------
 
 on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: Open same-repository PR number to recover through trusted main
+        description: Open PR number to recover (same repository) or approve (fork) through trusted main
         required: false
         default: 0
         type: number
@@ -68,6 +77,13 @@ on:
         type: string
       ci_gpu_gate_head_sha:
         description: Optional PR head SHA to publish the CI GPU gate check to
+        required: false
+        default: ""
+        type: string
+      approved_head_sha:
+        description: >-
+          Fork PRs only: the full head SHA you reviewed. Running it on RunPod is
+          your approval; a later push needs a new one
         required: false
         default: ""
         type: string
@@ -136,6 +152,7 @@ jobs:
       target_base_sha: ${{ steps.resolve_ref.outputs.target_base_sha }}
       pr_number: ${{ steps.resolve_ref.outputs.pr_number }}
       local_gpu_validation: ${{ steps.resolve_ref.outputs.local_gpu_validation }}
+      fork_pr: ${{ steps.resolve_ref.outputs.fork_pr }}
 
     steps:
       # workflow_run resolves this checkout to trusted default-branch content.
@@ -151,6 +168,7 @@ jobs:
           MANUAL_PR_NUMBER: ${{ inputs.pr_number || 0 }}
           MANUAL_TENFERRO_REF: ${{ inputs.tenferro_ref || '' }}
           MANUAL_GATE_HEAD_SHA: ${{ inputs.ci_gpu_gate_head_sha || '' }}
+          MANUAL_APPROVED_HEAD_SHA: ${{ inputs.approved_head_sha || '' }}
           WORKFLOW_RUN_ACTOR: ${{ github.event.workflow_run.actor.login || '' }}
           WORKFLOW_RUN_EVENT: ${{ github.event.workflow_run.event || '' }}
           WORKFLOW_RUN_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
@@ -179,6 +197,7 @@ jobs:
             local pr_number="$1"
             local base_sha="${2:-}"
             local head_sha="${3:-}"
+            local fork_pr="${4:-false}"
             local changed_paths=/tmp/runpod-pr-changed-paths.txt
             gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/files?per_page=100" \
@@ -211,7 +230,12 @@ jobs:
             # one skips and the gate job publishes nothing.
             # Written to GITHUB_OUTPUT: printed to stdout, the decision never
             # reached the jobs it gates.
-            local_labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/labels" --jq '.[].name')"
+            # A fork PR has no local gate (local_gpu_gate.py refuses it), so the
+            # label must not make it skip the paid lane it was approved for.
+            local_labels=""
+            if [ "${fork_pr}" != true ]; then
+              local_labels="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${pr_number}/labels" --jq '.[].name')"
+            fi
             if grep -Fxq "gpu-validated-locally" <<<"${local_labels}"; then
               echo "local_gpu_validation=true" >> "${GITHUB_OUTPUT}"
             else
@@ -298,6 +322,7 @@ jobs:
 
             echo "Pinned PR #${pr_number} merge ref to ${merge_sha}."
             {
+              echo "fork_pr=false"
               echo "tenferro_ref=${merge_sha}"
               echo "target_head_sha=${pr_head_sha}"
               echo "target_base_sha=${pr_base_sha}"
@@ -326,13 +351,30 @@ jobs:
                 exit 1
               fi
               pr_head_repo="$(jq -r '.head.repo.full_name' <<<"${pr_json}")"
-              if [ "${pr_head_repo}" != "${GITHUB_REPOSITORY}" ]; then
-                echo "::error::PR #${MANUAL_PR_NUMBER} is not from this repository; refusing recovery."
-                exit 1
-              fi
-              pr_author="$(jq -r '.user.login' <<<"${pr_json}")"
-              check_permission "${pr_author}" "PR author"
               pr_head_sha="$(jq -r '.head.sha' <<<"${pr_json}")"
+              fork_pr=false
+              if [ "${pr_head_repo}" != "${GITHUB_REPOSITORY}" ]; then
+                # The dispatching maintainer (checked above) approves a fork
+                # PR by naming the head they reviewed. Any other head is
+                # unreviewed code and must not reach the pod.
+                if ! [[ "${MANUAL_APPROVED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "::error::PR #${MANUAL_PR_NUMBER} is a fork PR (${pr_head_repo}): review it and pass its full head SHA as approved_head_sha."
+                  exit 1
+                fi
+                if [ "${pr_head_sha}" != "${MANUAL_APPROVED_HEAD_SHA}" ]; then
+                  echo "::error::Fork PR #${MANUAL_PR_NUMBER} head is ${pr_head_sha}, not the approved ${MANUAL_APPROVED_HEAD_SHA}; review the new head and approve it."
+                  exit 1
+                fi
+                fork_pr=true
+                echo "Fork PR #${MANUAL_PR_NUMBER} (${pr_head_repo}) approved by ${GITHUB_ACTOR} at ${pr_head_sha}."
+              else
+                if [ -n "${MANUAL_APPROVED_HEAD_SHA}" ] && [ "${MANUAL_APPROVED_HEAD_SHA}" != "${pr_head_sha}" ]; then
+                  echo "::error::PR #${MANUAL_PR_NUMBER} head is ${pr_head_sha}, not approved_head_sha ${MANUAL_APPROVED_HEAD_SHA}."
+                  exit 1
+                fi
+                pr_author="$(jq -r '.user.login' <<<"${pr_json}")"
+                check_permission "${pr_author}" "PR author"
+              fi
               refreshed_pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${MANUAL_PR_NUMBER}")"
               refreshed_head_sha="$(jq -r '.head.sha' <<<"${refreshed_pr_json}")"
               refreshed_state="$(jq -r .state <<<"${refreshed_pr_json}")"
@@ -341,20 +383,26 @@ jobs:
                 echo "::error::PR #${MANUAL_PR_NUMBER} head moved during authorization; refusing recovery."
                 exit 1
               fi
-              if [ "${refreshed_state}" != open ] || [ "${refreshed_head_repo}" != "${GITHUB_REPOSITORY}" ]; then
+              if [ "${refreshed_state}" != open ] || [ "${refreshed_head_repo}" != "${pr_head_repo}" ]; then
                 echo "::error::PR #${MANUAL_PR_NUMBER} trust state changed during authorization; refusing recovery."
                 exit 1
               fi
               {
+                echo "fork_pr=${fork_pr}"
                 echo "tenferro_ref=${pr_head_sha}"
                 echo "target_head_sha=${pr_head_sha}"
                 echo "pr_number=${MANUAL_PR_NUMBER}"
               } >> "${GITHUB_OUTPUT}"
-              classify_pr_paths "${MANUAL_PR_NUMBER}"
+              classify_pr_paths "${MANUAL_PR_NUMBER}" "" "" "${fork_pr}"
             else
+              if [ -n "${MANUAL_APPROVED_HEAD_SHA}" ]; then
+                echo "::error::approved_head_sha needs pr_number."
+                exit 1
+              fi
               manual_ref="${MANUAL_TENFERRO_REF:-main}"
               manual_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${manual_ref}" --jq .sha)"
               {
+                echo "fork_pr=false"
                 echo "tenferro_ref=${manual_sha}"
                 echo "pr_number=0"
                 echo "target_head_sha=${MANUAL_GATE_HEAD_SHA}"
@@ -827,6 +875,7 @@ jobs:
       target_head_sha: ${{ needs.authorize.outputs.target_head_sha }}
       target_base_sha: ${{ needs.authorize.outputs.target_base_sha }}
       pr_number: ${{ needs.authorize.outputs.pr_number }}
+      fork_pr: ${{ needs.authorize.outputs.fork_pr == 'true' }}
       archive_cache_key: ${{ needs.cuda-archive.outputs.archive_cache_key }}
       archive_artifact_name: ${{ needs.cuda-archive.outputs.archive_artifact_name }}
       runtime_artifact_prefix: ${{ needs.gpu-runtime.outputs.artifact_prefix }}
@@ -877,6 +926,7 @@ jobs:
           GPU_REQUIRED: ${{ needs.authorize.outputs.gpu_required }}
           LOCAL_GPU_VALIDATION: ${{ needs.authorize.outputs.local_gpu_validation }}
           PR_NUMBER: ${{ needs.authorize.outputs.pr_number }}
+          FORK_PR: ${{ needs.authorize.outputs.fork_pr }}
           POLICY_REASON: ${{ needs.authorize.outputs.policy_reason }}
           CONTRACT_RESULT: ${{ needs.runpod-contract.result }}
           PRE_RUNPOD_RESULT: ${{ needs.pre-runpod-gate.result }}
@@ -916,8 +966,10 @@ jobs:
           # workflow then runs no job and publishes nothing, so it can never
           # override that publication. The label is read again here because it
           # may have been added after authorize ran.
+          # A fork PR has no local gate, so the label never stands in for its
+          # approved paid run (authorize ignored it too).
           labels=""
-          if [ "${LOCAL_GPU_VALIDATION}" != true ] && [ -n "${PR_NUMBER}" ] && [ "${PR_NUMBER}" != 0 ]; then
+          if [ "${FORK_PR}" != true ] && [ "${LOCAL_GPU_VALIDATION}" != true ] && [ -n "${PR_NUMBER}" ] && [ "${PR_NUMBER}" != 0 ]; then
             # A failed lookup must not read as "unlabelled": that would publish
             # over a local gate. Without an answer this job publishes nothing.
             attempt=1
@@ -945,6 +997,11 @@ jobs:
             if [ "${PAID_PATH_DECISION}" = "reuse" ] && [ -z "${REUSED_CHECK_URL}" ]; then
               echo "::error::The paid path reused an earlier gate but named none."
               echo "- reused CI GPU gate: missing" >> "${failures_file}"
+            fi
+            # An approved fork head passes only on tests that ran for it.
+            if [ "${FORK_PR}" = true ] && [ "${PAID_PATH_DECISION}" != "run" ]; then
+              echo "::error::The approved fork PR did not run the paid path (decision: ${PAID_PATH_DECISION:-missing})."
+              echo "- fork PR paid path: ${PAID_PATH_DECISION:-missing}" >> "${failures_file}"
             fi
           elif [ "${GPU_REQUIRED}" = false ]; then
             echo "GPU validation not required: ${POLICY_REASON}"
@@ -984,6 +1041,16 @@ jobs:
             external_id="runpod-gpu-gate:v1:${TESTED_REF}:${kind}"
           fi
 
+          # The fork PR's own `CI GPU gate` job (CI_gpu.yml) reads this run's
+          # fork-pr-verdict job instead of a check published here.
+          if [ "${FORK_PR}" = true ]; then
+            echo "Fork PR #${PR_NUMBER}: ${title}. The verdict job reports it to CI_gpu.yml."
+            if [ -s "${failures_file}" ]; then
+              exit 1
+            fi
+            exit 0
+          fi
+
           echo "Publishing CI GPU gate check to PR head SHA ${TARGET_HEAD_SHA}."
           jq -n \
             --arg name "CI GPU gate" \
@@ -1013,3 +1080,39 @@ jobs:
           if [ "${conclusion}" != "success" ]; then
             exit 1
           fi
+
+  fork-pr-verdict:
+    # CI_gpu.yml's fork gate (scripts/ci/fork_gpu_gate.py) matches this exact
+    # name, which only a passed, approved run for this PR head can carry.
+    name: "Fork PR GPU verdict #${{ needs.authorize.outputs.pr_number }} @ ${{ needs.authorize.outputs.target_head_sha }}"
+    needs: [authorize, ci-gpu-gate]
+    if: >-
+      always() &&
+      !cancelled() &&
+      github.event_name == 'workflow_dispatch' &&
+      needs.authorize.outputs.fork_pr == 'true' &&
+      needs.ci-gpu-gate.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: Checkout trusted gate helper
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/ci/fork_gpu_gate.py
+          sparse-checkout-cone-mode: false
+
+      - name: Re-run the fork PR's CI GPU gate if it gave up
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.authorize.outputs.pr_number }}
+          HEAD_SHA: ${{ needs.authorize.outputs.target_head_sha }}
+        run: |
+          python3 scripts/ci/fork_gpu_gate.py rerun \
+            --repository "${GITHUB_REPOSITORY}" \
+            --pr "${PR_NUMBER}" \
+            --head-sha "${HEAD_SHA}"

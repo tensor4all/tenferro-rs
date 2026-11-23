@@ -114,7 +114,8 @@ group from head revalidation through provisioning, execution and cleanup; it
 uses `queue: max` so a third request cannot evict the second pending request.
 No cancellation of an active paid lifecycle is introduced. The parent publishes
 the required check only after the reusable workflow finishes, including cleanup.
-A stale/closed/forked PR fails before provisioning, and manual refs are resolved
+A stale or closed PR, or a fork PR whose head is not the approved one, fails
+before provisioning, and manual refs are resolved
 to immutable commits before preparation. Existing debug keep-pod behavior remains
 an explicit maintainer-only exception.
 
@@ -161,7 +162,7 @@ checks are reported not run because this workflow does not install that external
 tool. These exclusions have separate inventory categories, not host/device
 success results. No test bodies or numerical assertions are removed.
 
-The legacy `CI_gpu.yml` fork/manual fallback retains its existing full archive
+The legacy `CI_gpu.yml` manual fallback retains its existing full archive
 selection; this partition changes the trusted RunPod preparation/execution path.
 Before trust adoption, a PR run using the old default-branch workflow validates
 the test changes, not the new workflow wiring. Validate that wiring locally and
@@ -178,17 +179,35 @@ recorded as `fork_pr_contributor_approval` in `ai/repo-settings.json`: an
 unapproved `pull_request` run does not execute. The deterministic `repository
 rules review gate` runs on `pull_request_target`, so it is safe by construction
 instead of by approval: it checks out the base revision and treats PR content as
-data, reads no secret, and writes only the review comment. A fork PR takes the
-legacy `CI_gpu.yml` gate; the RunPod path below stays same-repository.
+data, reads no secret, and writes only the review comment.
+
+A fork PR reaches RunPod only through a maintainer's approval of its head. The
+automatic `workflow_run` path rejects every fork PR. An `admin`/`maintain` actor
+who has reviewed the fork's code dispatches the trusted workflow with
+`pr_number` and `approved_head_sha` (`recover_runpod_pr.py --approve-head`);
+`authorize` admits the fork only when that SHA is its current head, and the paid
+lane re-checks the head before provisioning. The approval covers running that
+code on the pod and on the hosted main-scoped jobs that build it, which is why it
+is bound to one commit. The `gpu-validated-locally` label does not apply to a
+fork PR.
+
+The approved run publishes no Checks API result on the fork commit. Its last job
+is named `Fork PR GPU verdict #<pr> @ <head sha>` and runs only when the gate
+passed with the paid path actually run. `CI_gpu.yml`'s PR-attached `CI GPU gate`
+job reads the base revision's `scripts/ci/fork_gpu_gate.py`, which accepts only
+that job, succeeded, in a `workflow_dispatch` run of the main
+`runpod-gpu-test.yml` in this repository. The gate waits up to 330 minutes; the
+verdict job re-runs a gate that already gave up. The `ubuntu-gpu` jobs of
+`CI_gpu.yml` run only on manual dispatch.
 
 ## RunPod trust boundary
 
 The RunPod workflow is triggered from trusted `main`, never from
 `pull_request_target`. Before any archive build or pod allocation it:
 
-1. authorizes the actor and rejects fork PRs;
-2. resolves an immutable same-repository PR revision and rechecks head
-   stability;
+1. authorizes the actor and rejects fork PRs, except a manual dispatch that
+   approves the fork's current head (above);
+2. resolves an immutable PR revision and rechecks head stability;
 3. obtains the complete changed-file list through the GitHub API and classifies
    it with the helper from trusted `main`;
 4. validates configured GPU IDs against RunPod's live `POST /pods` OpenAPI

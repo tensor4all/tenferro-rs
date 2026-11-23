@@ -17,6 +17,12 @@ on:
       pr_number:
         type: string
         required: true
+      fork_pr:
+        description: >-
+          The PR is a fork PR whose head a maintainer approved in the parent's
+          authorize job; that head is still the only one allowed to run
+        type: boolean
+        default: false
       archive_cache_key:
         type: string
         required: true
@@ -121,6 +127,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          FORK_PR: ${{ inputs.fork_pr }}
           TARGET_HEAD_SHA: ${{ inputs.target_head_sha }}
           TARGET_BASE_SHA: ${{ inputs.target_base_sha }}
           TESTED_REF: ${{ inputs.tenferro_ref }}
@@ -144,7 +151,8 @@ jobs:
             echo "PR #${PR_NUMBER} is ${pr_state}: skipping every paid step."
             exit 0
           fi
-          if gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
+          # A fork PR has no local gate: the label never skips its approved run.
+          if [ "${FORK_PR}" != true ] && gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels" \
             --jq '.[].name' | grep -Fxq "gpu-validated-locally"; then
             echo "run_paid_path=false" >> "${GITHUB_OUTPUT}"
             echo "decision=skip" >> "${GITHUB_OUTPUT}"
@@ -218,14 +226,18 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
           EXPECTED_HEAD: ${{ inputs.target_head_sha }}
           EXPECTED_BASE: ${{ inputs.target_base_sha }}
+          FORK_PR: ${{ inputs.fork_pr }}
         run: |
           set -euo pipefail
+          # A fork PR passes only at the head its maintainer approved; any push
+          # since then is unreviewed code and stops provisioning here.
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > /tmp/queued-pr.json
-          jq -e --arg repo "${GITHUB_REPOSITORY}" --arg head "${EXPECTED_HEAD}" --arg base "${EXPECTED_BASE}" '
-            .state == "open" and .head.repo.full_name == $repo and
+          jq -e --arg repo "${GITHUB_REPOSITORY}" --arg head "${EXPECTED_HEAD}" --arg base "${EXPECTED_BASE}" --arg fork "${FORK_PR}" '
+            .state == "open" and
+            (.head.repo.full_name == $repo or $fork == "true") and
             .head.sha == $head and ($base == "" or .base.sha == $base)
           ' /tmp/queued-pr.json >/dev/null || {
-            echo "::error::Queued PR is stale, closed or no longer same-repository; refusing provisioning."
+            echo "::error::Queued PR is stale, closed, or a fork PR without approval of this head; refusing provisioning."
             exit 1
           }
 

@@ -1,6 +1,6 @@
 """The CI GPU gate's wait loop must survive a transient checks-API failure.
 
-`CI_gpu.yml`'s "Require fork CUDA GPU tests or same-repo RunPod gate" step waits
+`CI_gpu.yml`'s "Require the RunPod gate (fork PRs after maintainer approval)" step waits
 up to 90 minutes for the RunPod workflow to publish the `CI GPU gate` check, and
 that check is required by branch protection. Two defects made it conclude a gate
 that had no verdict:
@@ -30,7 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKFLOW = ROOT / ".github" / "workflows" / "CI_gpu.yml"
-STEP_NAME = "Require fork CUDA GPU tests or same-repo RunPod gate"
+STEP_NAME = "Require the RunPod gate (fork PRs after maintainer approval)"
 
 RUN_URL = "https://example/actions/runs/4242"
 JOB_URL = "https://example/actions/runs/999/job/77"
@@ -155,6 +155,7 @@ class GatePollerTests(unittest.TestCase):
         labels_body: str | None = None,
         fail_until: int = 0,
         timeout: float = 30,
+        head_repo: str = "tensor4all/tenferro-rs",
     ) -> tuple[int, str]:
         (self.state / "fail_until").write_text(str(fail_until))
         (self.state / "checks.json").write_text(
@@ -181,9 +182,10 @@ class GatePollerTests(unittest.TestCase):
             GITHUB_REPOSITORY="tensor4all/tenferro-rs",
             HEAD_SHA="0" * 40,
             CURRENT_RUN_MARKER="/actions/runs/999",
-            HEAD_REPO="tensor4all/tenferro-rs",
+            HEAD_REPO=head_repo,
             PR_NUMBER="2163",
         )
+        env.pop("GH_TOKEN", None)
         try:
             done = subprocess.run(
                 ["bash", str(self.script)],
@@ -355,6 +357,26 @@ class GatePollerTests(unittest.TestCase):
         )
         self.assertEqual(code, 1, output)
         self.assertIn("local GPU gate concluded failure", output)
+
+    def test_a_fork_pr_waits_for_the_approved_runpod_verdict(self) -> None:
+        # The fork branch hands over to fork_gpu_gate.py; without a token the
+        # helper refuses at once, which shows it was reached and that no
+        # check-run of the fork commit was read as the verdict.
+        code, output = self.run_step(
+            check_runs=[check_run("success", details_url=RUN_URL)],
+            files=["crates/tenferro-gpu/src/lib.rs"],
+            head_repo="someone/tenferro-rs",
+        )
+        self.assertEqual(code, 2, output)
+        self.assertIn("GH_TOKEN is not set", output)
+        self.assertNotIn("RunPod CI GPU gate passed", output)
+
+    def test_a_fork_pr_that_needs_no_gpu_passes_on_the_host(self) -> None:
+        code, output = self.run_step(
+            files=["README.md"], head_repo="someone/tenferro-rs"
+        )
+        self.assertEqual(code, 0, output)
+        self.assertIn("GPU validation not required", output)
 
 
 if __name__ == "__main__":
