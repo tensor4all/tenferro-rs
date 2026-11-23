@@ -22,7 +22,10 @@ A new CPU engine uses RustFFT until a provider is explicitly installed. Use
 time candidate plans. A thread count above one requires FFTW 3.3.9 or later
 with threading support, either in the base library or in the FFTW threads
 companion library. Threaded providers make FFTW's planner thread safe and
-restore FFTW's process-wide planner thread count after each plan. Plans use FFTW's unaligned mode so cached plans can execute on Rust
+restore FFTW's process-wide planner thread count after each plan. FFTW does
+not lock that count, so another FFTW user in the same process can observe
+tenferro's value during planning or change the count a tenferro plan is made
+with. Plans use FFTW's unaligned mode so cached plans can execute on Rust
 lane buffers of different alignments, which can limit FFTW's use of SIMD.
 FFTW threads and tenferro lane parallelism never nest. A transform whose lanes
 can occupy every engine thread runs them in parallel with single-threaded FFTW

@@ -64,7 +64,10 @@ pub const fn fft_plan_cache_selector() -> ExtensionCacheSelector {
 /// The CPU backend stores RustFFT plans in the private `rustfft-plans`
 /// namespace. Its retained-byte estimate includes the exact plan key and the
 /// cache-owned `Arc` handle; allocations opaque to RustFFT are excluded.
-/// FFTW plans use the same cache under the private `fftw-plans` namespace.
+/// FFTW plans use the same cache under the private `fftw-plans` namespace and
+/// are charged the same way, so FFTW's internal plan memory is also excluded.
+/// The byte limit therefore does not bound memory held inside either
+/// provider's plans; the entry limit bounds how many plans are retained.
 /// The private `into-schedules` namespace accounts for owned request/spec
 /// metadata and logical intermediate tensor bytes. These namespaces share the
 /// default 64-entry and 64-MiB limits, configurable through [`Self::set_limits`],

@@ -166,6 +166,7 @@ mod cache;
 #[cfg(feature = "fftw")]
 mod fftw;
 #[cfg(feature = "fftw")]
+#[cfg_attr(docsrs, doc(cfg(feature = "fftw")))]
 pub use fftw::{Fftw, FftwError, FftwPlanning};
 mod cpu;
 #[cfg(feature = "cuda")]

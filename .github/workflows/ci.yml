@@ -167,10 +167,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libfftw3-double3 libfftw3-single3
-      - name: Run FFTW integration tests
+      - name: Run tenferro-fft tests with FFTW
         env:
           TENFERRO_TEST_REQUIRE_FFTW: '1'
-        run: cargo test --locked -p tenferro-fft --features fftw,autodiff --test fftw --test fftw_thread_state
+        run: cargo test --locked -p tenferro-fft --features fftw,autodiff
 
   mpi-adapter:
     name: MPI transport adapter

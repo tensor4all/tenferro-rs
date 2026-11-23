@@ -50,6 +50,7 @@ struct ThreadApi {
 /// assert!(error.to_string().contains("thread count"));
 /// ```
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum FftwError {
     /// A required FFTW shared library could not be loaded.
     #[error("could not load FFTW library {library:?}: {source}")]
@@ -138,6 +139,11 @@ impl Fftw {
     /// A thread count above one requires FFTW 3.3.9 or later, the first release
     /// that exports `fftw_planner_nthreads`.
     ///
+    /// FFTW's planner thread count is process-wide and unlocked. A threaded
+    /// provider sets it while planning and then restores the previous value,
+    /// but another FFTW user in the process can observe tenferro's count during
+    /// planning or change the count a tenferro plan is made with.
+    ///
     /// # Examples
     /// ```
     /// use std::num::NonZeroUsize;
@@ -162,6 +168,11 @@ impl Fftw {
     ///
     /// A thread count above one requires FFTW 3.3.9 or later, the first release
     /// that exports `fftw_planner_nthreads`.
+    ///
+    /// FFTW's planner thread count is process-wide and unlocked. A threaded
+    /// provider sets it while planning and then restores the previous value,
+    /// but another FFTW user in the process can observe tenferro's count during
+    /// planning or change the count a tenferro plan is made with.
     ///
     /// # Examples
     /// ```
