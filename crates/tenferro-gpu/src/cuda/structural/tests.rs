@@ -2877,8 +2877,10 @@ fn rank_26_views(engine: &CudaEngine) -> Vec<Rank26View> {
 ///
 /// Timing note, not asserted: on the reporter's A100 the same 2^26 f64 elements took 3.9 ms to
 /// gather at rank 3 and 40 ms at rank 26 through `t4a_cuda_gather_any`, and 2.3 ms vs 91 ms to
-/// concatenate through `t4a_cuda_concatenate_copy_any` (#2708). With the merged views both
-/// ranks launch the same rank-3 kernels; the issue's reproducer measures that.
+/// concatenate through `t4a_cuda_concatenate_copy_any` (#2708). With the merged views the
+/// rank-26 layout launches what the rank-3 one does: a rank-3 `t4a_cuda_gather`, and a rank-2
+/// `t4a_cuda_strided_to_strided` per concatenate input. This test does not time anything; the
+/// issue's reproducer measures it.
 #[test]
 #[ignore = "requires CUDA"]
 fn rank_26_gather_and_concatenate_read_the_merged_view() {

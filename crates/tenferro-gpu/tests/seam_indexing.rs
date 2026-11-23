@@ -426,10 +426,13 @@ fn float_indices_are_checked_for_exactness() {
 
 #[test]
 #[ignore = "requires CUDA"]
-fn a_rank_nine_concatenation_uses_the_general_path() {
+fn a_rank_nine_concatenation_with_singleton_axes() {
     let Some(mut engine) = engine() else { return };
-    // Nine axes exceed the by-value layout form. Concatenating the leading axis interleaves the
-    // inputs, so a wrong axis or offset cannot pass as a flat append.
+    // Nine axes, most of extent one: the non-empty inputs merge to rank one and two and take the
+    // by-value strided copy (#2708); the empty input below keeps its nine axes and the general
+    // path. `a_rank_nine_concatenation_that_does_not_merge_uses_the_general_path` covers the
+    // general path with data. Concatenating the leading axis interleaves the inputs, so a wrong
+    // axis or offset cannot pass as a flat append.
     let first_shape = vec![1usize, 2, 1, 1, 1, 1, 1, 1, 2];
     let second_shape = vec![2usize, 2, 1, 1, 1, 1, 1, 1, 2];
     let first_data: Vec<f64> = (0..4).map(|index| index as f64).collect();
@@ -554,11 +557,13 @@ fn a_rank_nine_dynamic_slice_uses_the_general_path() {
 
 #[test]
 #[ignore = "requires CUDA"]
-fn a_rank_nine_gather_and_scatter_use_the_general_path() {
+fn a_rank_nine_gather_with_singleton_axes_and_scatter() {
     let Some(mut engine) = engine() else { return };
-    // A rank-9 operand whose window rides axis 8 and whose start selects axis 7, so the plan's
-    // window, offset, start-map and slice-size arrays are all non-empty and distinct: a swapped
-    // pointer order would fail this.
+    // A rank-9 operand whose window rides axis 8 and whose start selects axis 7. The gather drops
+    // the collapsed extent-one axes and takes the by-value entry at rank three (#2708); the
+    // scatter keeps the general path, whose plan's window, offset, start-map and slice-size
+    // arrays are all non-empty and distinct: a swapped pointer order would fail this.
+    // `a_rank_nine_gather_that_does_not_merge_uses_the_general_path` covers the general gather.
     let operand_shape = vec![3usize, 1, 1, 1, 1, 1, 1, 2, 4];
     let operand_data: Vec<f64> = (0..24).map(|index| index as f64).collect();
     let operand = device(&engine, operand_shape.clone(), operand_data.clone());
@@ -616,6 +621,99 @@ fn a_rank_nine_gather_and_scatter_use_the_general_path() {
         }
     }
     assert_eq!(read(&engine, &scattered), expected);
+}
+
+/// A rank-9 view with extent two on every axis: the reversed axes of a compact tensor, so no
+/// two adjacent strides compose, merging leaves all nine axes and the entries keep the general
+/// path (#2708).
+struct RankNineReversed {
+    base: Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    /// The view's values in column-major order.
+    values: Vec<f64>,
+}
+
+impl RankNineReversed {
+    fn new(engine: &CudaEngine) -> Self {
+        let shape = vec![2usize; 9];
+        let data: Vec<f64> = (0..512).map(|element| element as f64).collect();
+        let strides: Vec<isize> = (0..9).rev().map(|axis| 1isize << axis).collect();
+        let values = region_values(&data, &shape, &strides, 0);
+        Self {
+            base: device(engine, vec![512], data),
+            shape,
+            strides,
+            values,
+        }
+    }
+
+    fn read(&self) -> TensorRead<'_> {
+        f64_region(&self.base, self.shape.clone(), self.strides.clone(), 0)
+    }
+
+    fn host(&self) -> Tensor {
+        Tensor::from_vec_col_major(self.shape.clone(), self.values.clone()).expect("host tensor")
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn a_rank_nine_concatenation_that_does_not_merge_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    let first = RankNineReversed::new(&engine);
+    let second_values: Vec<f64> = (0..512).map(|element| 1000.0 + element as f64).collect();
+    let second = device(&engine, first.shape.clone(), second_values.clone());
+    let host_second =
+        Tensor::from_vec_col_major(first.shape.clone(), second_values).expect("host tensor");
+    let cpu = &mut tenferro_cpu::CpuEngine::serial();
+    for axis in [0, 4, 8] {
+        let joined = engine
+            .concatenate_read(&[first.read(), TensorRead::from_tensor(&second)], axis)
+            .expect("rank-9 concatenate");
+        let expected = cpu
+            .concatenate(&[&first.host(), &host_second], axis)
+            .expect("CPU concatenate");
+        assert_eq!(joined.shape(), expected.shape(), "axis {axis}");
+        assert_eq!(
+            read(&engine, &joined),
+            expected.as_slice::<f64>().expect("f64 payload"),
+            "axis {axis}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA"]
+fn a_rank_nine_gather_that_does_not_merge_uses_the_general_path() {
+    let Some(mut engine) = engine() else { return };
+    use tenferro_tensor::Engine as _;
+    let operand = RankNineReversed::new(&engine);
+    let shape = operand.shape.clone();
+    // Select along axis 4 with a clamped index: the plan's window, offset, start-map and
+    // slice-size arrays are all non-empty and distinct, so a swapped pointer order fails this.
+    let mut slice_sizes = shape.clone();
+    slice_sizes[4] = 1;
+    let config = tenferro_tensor::GatherConfig {
+        offset_dims: vec![0, 1, 2, 3, 5, 6, 7, 8],
+        collapsed_slice_dims: vec![4],
+        start_index_map: vec![4],
+        index_vector_dim: 1,
+        slice_sizes,
+    };
+    let host_indices = Tensor::from_vec_col_major(vec![3, 1], vec![1i64, 0, 7]).expect("indices");
+    let indices = upload_tensor(engine.runtime(), &host_indices).expect("upload indices");
+    let gathered = engine
+        .gather_read(operand.read(), TensorRead::from_tensor(&indices), &config)
+        .expect("rank-9 gather");
+    let expected = tenferro_cpu::CpuEngine::serial()
+        .gather(&operand.host(), &host_indices, &config)
+        .expect("CPU gather");
+    assert_eq!(gathered.shape(), expected.shape());
+    assert_eq!(
+        read(&engine, &gathered),
+        expected.as_slice::<f64>().expect("f64 payload")
+    );
 }
 
 // --- Native read entries: the operand is read where it lives (#2223 item 1) ---
