@@ -62,12 +62,17 @@ pub(super) fn any_strided(operands: &[&ElementwiseOperand<'_>]) -> bool {
 }
 
 /// The compact, offset-zero layout of `shape`.
+///
+/// A zero extent multiplies into the following strides as one, so an empty destination keeps
+/// nonzero strides: the planners refuse a zero stride on a destination as a broadcast, and an
+/// empty launch is skipped anyway.
 pub(super) fn compact_destination_layout(
     shape: &[usize],
     op: &'static str,
 ) -> crate::Result<Layout> {
     let extents = catalogue_extents(shape, op)?;
-    let strides = catalogue_strides(&compact_strides(shape, op)?, op)?;
+    let padded: Vec<usize> = shape.iter().map(|&extent| extent.max(1)).collect();
+    let strides = catalogue_strides(&compact_strides(&padded, op)?, op)?;
     Layout::new(&extents, &strides, 0)
         .map_err(|error| crate::Error::runtime_state_source(op, error))
 }

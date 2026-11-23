@@ -3832,22 +3832,20 @@ impl CudaEngine {
         // A view of rank at most the by-value layout's is read in place by the first pass, which
         // takes the view's own layout (#2701); an owned tensor is its own compact region, and only
         // a wider view is staged.
-        // A strided view reduced over more than one axis is staged: its passes would fold the axes
-        // one by one, a different association than the single compact run the staged copy folds,
-        // so a product or a rounding-sensitive sum could change.
-        let mut distinct_axes = axes.to_vec();
-        distinct_axes.sort_unstable();
-        distinct_axes.dedup();
+        // Only a flat view (a compact eager value) is read in place: it is the compact run a staged
+        // copy would hold, so the reduction plans and folds exactly as on that copy. A strided view
+        // is still staged: the planner picks its strategy from the operand's layout, so reading a
+        // permuted view in place could change the fold association and, with it, a product or a
+        // rounding-sensitive sum. A view wider than the by-value layout is staged too.
         let (view_region, staged) = match &input {
             TensorRead::View(_) => match self.elementwise_operand(&input, name)? {
-                ElementwiseOperand::Flat(region) => (Some(region), None),
-                ElementwiseOperand::Strided(region) if distinct_axes.len() <= 1 => {
+                ElementwiseOperand::Flat(region)
+                    if region.extents.len() <= t4a_cuda_kernels::MAX_RANK =>
+                {
                     (Some(region), None)
                 }
-                ElementwiseOperand::Strided(_) => {
-                    (None, Some(self.device_read(input.clone(), name)?))
-                }
                 ElementwiseOperand::Staged(resolved) => (None, Some(resolved)),
+                _ => (None, Some(self.device_read(input.clone(), name)?)),
             },
             TensorRead::Tensor(_) => (None, None),
         };
@@ -3972,6 +3970,8 @@ impl CudaEngine {
             // The first pass over a strided view reads it through its own layout; every other
             // pass (and a flat or owned source) reads a compact run.
             let (in_layout, in_len) = match (&view_region, pass) {
+                // Unreachable today (an in-place view is flat, hence compact); kept so a strided
+                // region could never be addressed through a compact layout by mistake.
                 (Some(region), 0) if !compact => (region.layout(name)?, region.len(name)?),
                 _ => (
                     compact_layout(&shape, &compact_strides(&shape, name)?, name)?,
@@ -5114,11 +5114,8 @@ impl CudaEngine {
             return Ok(());
         }
         let scalar = self.factor_scalar(dtype, factor, op)?;
-        let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
-        let status = runtime
-            .zeroed_status_word()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        // A multiplication never writes the entry's status word, so it takes none.
         with_scalar!(dtype, |T| {
             dispatcher.binary(
                 t4a_cuda_kernels::BinaryOp::Mul,
@@ -5128,7 +5125,7 @@ impl CudaEngine {
                 super::dispatch::Dest::Init(self.allocation_of::<T>(tensor, op)?),
                 self.allocation_of::<T>(tensor, op)?,
                 self.allocation_of::<T>(&scalar, op)?,
-                Some(&status),
+                None,
             )
         })?;
         self.release_completed_staging();

@@ -8,12 +8,15 @@
 //! allocation) was copied by every allocating operation too. The layout-taking catalogue entries
 //! (ABI 15) read such an operand through its own layout instead.
 //!
-//! This pins the contract with the runtime's own counters, not timings. For every operation the
-//! GPU benchmark measures on a transposed read, the transposed operand costs exactly what a
-//! compact one does: one result allocation and one launch for an elementwise operation, and the
-//! same allocations and launches as the compact operand for a reduction. No staging copy and no
-//! upload enter the call. The result is bit-identical to the same entry on a compact copy of the
-//! transposed values.
+//! This pins the contract with the runtime's own counters, not timings. For every elementwise
+//! operation the GPU benchmark measures on a transposed read, the transposed operand costs exactly
+//! what a compact one does: one result allocation and one launch, no staging copy and no upload.
+//! The result is bit-identical to the same entry on a compact copy of the transposed values.
+//!
+//! A reduction over a strided view is still staged on purpose: the reduction planner picks its
+//! strategy from the operand's layout, so reading a permuted view in place could change the fold
+//! association. Its result is checked bit for bit against the compact operand; a flat view (a
+//! compact eager value) is read in place.
 //!
 //! Run with: `cargo test -p tenferro-ad --features cuda --test integration
 //! gpu_strided_reads_in_place -- --ignored --include-ignored`
@@ -251,10 +254,12 @@ fn transposed_reads_cost_what_compact_reads_cost_and_match_bit_for_bit() {
         let before = counters(&gpu);
         let out = strided(&mut gpu);
         let cost = (counters(&gpu).0 - before.0, counters(&gpu).1 - before.1);
-        assert_eq!(
-            cost, compact_cost,
-            "{name} on a transposed view must cost what a compact operand does (no staging copy)"
-        );
+        if !name.starts_with("reduce") {
+            assert_eq!(
+                cost, compact_cost,
+                "{name} on a transposed view must cost what a compact operand does (no staging copy)"
+            );
+        }
         assert_eq!(
             host_bits(&gpu, &out),
             host_bits(&gpu, &reference),
@@ -276,10 +281,12 @@ fn transposed_reads_cost_what_compact_reads_cost_and_match_bit_for_bit() {
             .with_eager_session(&mut gpu, |s| eager(s, &lhs_value, &rhs_value))
             .unwrap_or_else(|error| panic!("eager {name} on transposed values: {error}"));
         let cost = (counters(&gpu).0 - before.0, counters(&gpu).1 - before.1);
-        assert_eq!(
-            cost, compact_cost,
-            "eager {name} on a transposed value must cost what a compact operand does"
-        );
+        if !name.starts_with("reduce") {
+            assert_eq!(
+                cost, compact_cost,
+                "eager {name} on a transposed value must cost what a compact operand does"
+            );
+        }
         let value = ctx
             .with_eager_session(&mut gpu, |s| s.duplicate_value(&out))
             .expect("eager value");
@@ -384,6 +391,36 @@ fn in_place_routes_keep_the_staged_results_on_edge_cases() {
     let host = download_tensor(&rt, &dest).expect("download");
     assert_eq!(host.as_slice::<i32>().expect("i32"), &[77, 77, 77, 77]);
 
+    // A product over one axis of a transposed view keeps the compact fold: with 2^600 and 2^-600
+    // placed where a different lane split would pair them, the result stays 1.
+    let mut values = vec![1.0_f64; 2 * 512];
+    // Column-major [512, 2] host data whose [1, 0] view is the [2, 512] operand: logical row 0
+    // holds 2^600 at columns 0 and 32 and 2^-600 at columns 1 and 33.
+    for (column, value) in [
+        (0, 2f64.powi(600)),
+        (32, 2f64.powi(600)),
+        (1, 2f64.powi(-600)),
+        (33, 2f64.powi(-600)),
+    ] {
+        values[column] = value;
+    }
+    let wide = up(tensor([512, 2], values));
+    let prod = gpu
+        .reduce_prod_read(TensorRead::from_view(transpose_view(&wide)), &[1])
+        .expect("prod over axis 1");
+    assert_eq!(down_f64(&prod), vec![1.0, 1.0]);
+
+    // A rank-9 compact view reduces through the general path, without a panic.
+    let rank9 = up(Tensor::from_typed::<f64>(
+        T::from_vec_col_major(vec![2, 1, 1, 1, 1, 1, 1, 1, 2], vec![1.0, 2.0, 3.0, 4.0])
+            .expect("rank 9"),
+    ));
+    let rank9_view = TensorView::F64(rank9.as_typed::<f64>().expect("f64").as_view());
+    let sum = gpu
+        .reduce_sum_read(TensorRead::from_view(rank9_view), &[0])
+        .expect("rank-9 view reduction");
+    assert_eq!(down_f64(&sum), vec![3.0, 7.0]);
+
     // A zero-element strided view is an empty result, not a planner refusal.
     let empty = up(tensor([2, 0], Vec::<f64>::new()));
     let out = gpu
@@ -413,4 +450,24 @@ fn in_place_routes_keep_the_staged_results_on_edge_cases() {
         )
         .expect("rank-9 power");
     assert_eq!(down_f64(&out), vec![4.0, 9.0]);
+
+    // An empty base with the same offset scalar exponent is an empty result.
+    let empty_base = up(tensor([0, 2], Vec::<f64>::new()));
+    let exponent = TensorView::F64(
+        exponents
+            .as_typed::<f64>()
+            .expect("f64")
+            .as_view()
+            .slice_axis_view(0, tenferro_tensor::StridedSliceSpec::new(1, Some(2), 1))
+            .expect("offset slice")
+            .reshape_view(&[])
+            .expect("rank-0 view"),
+    );
+    let out = gpu
+        .pow_read(
+            TensorRead::from_tensor(&empty_base),
+            TensorRead::from_view(exponent),
+        )
+        .expect("empty power");
+    assert_eq!(out.shape(), &[0, 2]);
 }
