@@ -127,6 +127,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          # CONTRACT: read under `set -u`; test_runpod_cost_contracts.py sets it
+          # in its harness env. Keep both in sync.
           FORK_PR: ${{ inputs.fork_pr }}
           TARGET_HEAD_SHA: ${{ inputs.target_head_sha }}
           TARGET_BASE_SHA: ${{ inputs.target_base_sha }}

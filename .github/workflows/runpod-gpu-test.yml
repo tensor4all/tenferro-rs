@@ -926,6 +926,10 @@ jobs:
           GPU_REQUIRED: ${{ needs.authorize.outputs.gpu_required }}
           LOCAL_GPU_VALIDATION: ${{ needs.authorize.outputs.local_gpu_validation }}
           PR_NUMBER: ${{ needs.authorize.outputs.pr_number }}
+          # CONTRACT: the publish script runs under `set -u` and reads FORK_PR.
+          # scripts/ci/tests/test_gpu_gate_publication.py and
+          # test_runpod_cost_contracts.py set it in their harness env; add any
+          # new env var here to those too.
           FORK_PR: ${{ needs.authorize.outputs.fork_pr }}
           POLICY_REASON: ${{ needs.authorize.outputs.policy_reason }}
           CONTRACT_RESULT: ${{ needs.runpod-contract.result }}
