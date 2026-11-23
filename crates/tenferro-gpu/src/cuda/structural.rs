@@ -3832,18 +3832,29 @@ impl CudaEngine {
         // A view of rank at most the by-value layout's is read in place by the first pass, which
         // takes the view's own layout (#2701); an owned tensor is its own compact region, and only
         // a wider view is staged.
-        let view_region = match &input {
+        // A strided view reduced over more than one axis is staged: its passes would fold the axes
+        // one by one, a different association than the single compact run the staged copy folds,
+        // so a product or a rounding-sensitive sum could change.
+        let mut distinct_axes = axes.to_vec();
+        distinct_axes.sort_unstable();
+        distinct_axes.dedup();
+        let (view_region, staged) = match &input {
             TensorRead::View(_) => match self.elementwise_operand(&input, name)? {
-                ElementwiseOperand::Flat(region) | ElementwiseOperand::Strided(region) => {
-                    Some(region)
+                ElementwiseOperand::Flat(region) => (Some(region), None),
+                ElementwiseOperand::Strided(region) if distinct_axes.len() <= 1 => {
+                    (Some(region), None)
                 }
-                ElementwiseOperand::Staged(_) => None,
+                ElementwiseOperand::Strided(_) => {
+                    (None, Some(self.device_read(input.clone(), name)?))
+                }
+                ElementwiseOperand::Staged(resolved) => (None, Some(resolved)),
             },
-            TensorRead::Tensor(_) => None,
+            TensorRead::Tensor(_) => (None, None),
         };
-        let source = match &view_region {
-            Some(_) => None,
-            None => Some(self.device_read(input.clone(), name)?),
+        let source = match (&view_region, staged) {
+            (Some(_), _) => None,
+            (None, Some(staged)) => Some(staged),
+            (None, None) => Some(self.device_read(input.clone(), name)?),
         };
         let (dtype, mut shape) = match (&view_region, &source) {
             (Some(region), _) => (region.dtype, region.shape.clone()),
@@ -4272,10 +4283,16 @@ impl CudaEngine {
                 ))
             }
         };
-        let status = self
-            .runtime()
-            .zeroed_status_word()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        // Only the checked integer division writes the status word; the complex one takes none.
+        let status = if checked {
+            Some(
+                self.runtime()
+                    .zeroed_status_word()
+                    .map_err(|error| crate::Error::runtime_state_source(name, error))?,
+            )
+        } else {
+            None
+        };
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         dispatcher.binary(
             op,
@@ -4285,10 +4302,10 @@ impl CudaEngine {
             destination,
             left,
             right,
-            Some(&status),
+            status.as_ref(),
         )?;
         self.release_completed_staging();
-        if checked {
+        if let Some(status) = status {
             let flag = self
                 .runtime()
                 .download_bytes(&status)
@@ -4783,7 +4800,11 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                 // and no second copy (#2701), when the region shares its allocation with no
                 // operand: an overlapping read would otherwise race the writes. A rank the
                 // by-value layout cannot carry, or an operand that is staged, keeps the scratch.
-                if destination.extents.len() <= t4a_cuda_kernels::MAX_RANK {
+                // A checked integer division reports a zero divisor after its launch, and the
+                // caller's region must then be left as it was, so it keeps the scratch.
+                let checked = matches!(op, tenferro_tensor::ElementwiseReadOp::Divide)
+                    && matches!(destination.dtype, DType::I32 | DType::I64);
+                if !checked && destination.extents.len() <= t4a_cuda_kernels::MAX_RANK {
                     let operands: Vec<ElementwiseOperand<'_>> = inputs
                         .iter()
                         .map(|input| self.elementwise_operand(input, NAME))
@@ -4986,9 +5007,8 @@ impl CudaEngine {
     /// The `_into` elementwise operation through the layout-taking entries, writing `out` through
     /// `out_layout` (a compact destination, or a caller's writable region) (#2701).
     ///
-    /// The operands keep their own layouts. Real conjugation is the identity, so it is the
-    /// layout-taking negation's sibling copy: the unary entry's conjugation tag is the identity
-    /// on a real dtype, exactly as on the flat entry.
+    /// The operands keep their own layouts. The conjugation tag accepts the dtypes the flat unary
+    /// entry accepts for it, so a dtype the flat route refuses is refused here too.
     #[allow(clippy::too_many_arguments)]
     fn elementwise_into_layout(
         &mut self,
@@ -5000,6 +5020,9 @@ impl CudaEngine {
         shape: &[usize],
         name: &'static str,
     ) -> crate::Result<()> {
+        if shape.contains(&0) {
+            return Ok(());
+        }
         let dtype = operands[0].dtype();
         let binary = match op {
             tenferro_tensor::ElementwiseReadOp::Negate
@@ -7145,6 +7168,8 @@ impl CudaEngine {
                 ))
             }
         };
+        let left = self.stage_for_domain(left, &lhs, shape.len(), name)?;
+        let right = self.stage_for_domain(right, &rhs, shape.len(), name)?;
         let dtype = left.dtype();
         let kernel = kernel_dtype(dtype, name)?;
         let (op, strided) = match dtype {

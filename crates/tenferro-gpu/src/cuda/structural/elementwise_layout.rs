@@ -84,7 +84,9 @@ impl CudaEngine {
         op: &'static str,
     ) -> crate::Result<ElementwiseOperand<'v>> {
         let region = self.read_region(input, op)?;
-        if region_is_flat(&region) {
+        // A region with no element is read by no launch; the flat route serves it (it skips the
+        // zero-length launch), so it never needs a layout the planners would refuse.
+        if region_is_flat(&region) || region.shape.contains(&0) {
             return Ok(ElementwiseOperand::Flat(region));
         }
         if region.extents.len() <= t4a_cuda_kernels::MAX_RANK {
@@ -278,5 +280,27 @@ impl CudaEngine {
             (&false_layout, false_len, on_false),
             out,
         )
+    }
+}
+
+impl CudaEngine {
+    /// Stage every strided operand of a launch whose domain rank exceeds the by-value layout.
+    ///
+    /// An operand is classified by its own rank, but a rank-0 scalar side (a power's exponent) is
+    /// read over the result's domain, which may be wider than [`t4a_cuda_kernels::MAX_RANK`]; such
+    /// a launch keeps the flat route, so a strided scalar is staged into a compact copy.
+    pub(super) fn stage_for_domain<'v>(
+        &mut self,
+        operand: ElementwiseOperand<'v>,
+        input: &'v TensorRead<'v>,
+        domain_rank: usize,
+        op: &'static str,
+    ) -> crate::Result<ElementwiseOperand<'v>> {
+        if operand.is_strided() && domain_rank > t4a_cuda_kernels::MAX_RANK {
+            return self
+                .device_read(input.clone(), op)
+                .map(ElementwiseOperand::Staged);
+        }
+        Ok(operand)
     }
 }

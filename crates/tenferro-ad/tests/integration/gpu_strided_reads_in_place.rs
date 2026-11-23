@@ -328,3 +328,89 @@ fn allocating_eager_ops_read_compact_eager_values_in_place() {
         .expect("eager value");
     assert_eq!(host_bits(&gpu, &out), host_bits(&gpu, &reference));
 }
+
+/// The review counterexamples of the in-place routes (#2721): each keeps the staged route's
+/// observable result.
+#[test]
+#[ignore = "requires a CUDA device"]
+fn in_place_routes_keep_the_staged_results_on_edge_cases() {
+    use tenferro_tensor::{
+        TensorElementwise as _, TensorReduction as _, TensorViewMut, TensorWrite, TypedTensor as T,
+    };
+    assert!(gpu_available(), "CUDA test requires an available device");
+    let mut gpu = CudaEngine::open(CudaDeviceId::from_ordinal(0)).expect("open CUDA engine");
+    let rt = gpu.runtime().clone();
+    let up = |host: Tensor| upload_tensor(&rt, &host).expect("upload");
+    let down_f64 = |t: &Tensor| {
+        download_tensor(&rt, t)
+            .expect("download")
+            .as_slice::<f64>()
+            .expect("f64")
+            .to_vec()
+    };
+
+    // A product over both axes of a transposed view folds in the staged route's order:
+    // [1e200, 1e-200, 1e200, 1e-200] folds to 1, not to NaN (Inf * 0).
+    let m = up(tensor([2, 2], vec![1e200, 1e200, 1e-200, 1e-200]));
+    let prod = gpu
+        .reduce_prod_read(TensorRead::from_view(transpose_view(&m)), &[0, 1])
+        .expect("prod over both axes");
+    assert_eq!(down_f64(&prod), vec![1.0]);
+
+    // A checked integer division into a strided destination that fails leaves the destination
+    // untouched.
+    let lhs = up(Tensor::from_typed::<i32>(
+        T::from_vec_col_major(vec![2], vec![8, 9]).expect("lhs"),
+    ));
+    let rhs = up(Tensor::from_typed::<i32>(
+        T::from_vec_col_major(vec![2], vec![2, 0]).expect("rhs"),
+    ));
+    let mut dest = up(Tensor::from_typed::<i32>(
+        T::from_vec_col_major(vec![4], vec![77, 77, 77, 77]).expect("dest"),
+    ));
+    {
+        let typed = dest.as_typed_mut::<i32>().expect("i32");
+        let mut whole = typed.as_view_mut();
+        let view = whole
+            .slice_axis_view(0, tenferro_tensor::StridedSliceSpec::new(0, Some(4), 2))
+            .expect("stride-2 view");
+        let result = gpu.div_read_into(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            TensorWrite::View(TensorViewMut::I32(view)),
+        );
+        assert!(result.is_err(), "a zero divisor is reported");
+    }
+    let host = download_tensor(&rt, &dest).expect("download");
+    assert_eq!(host.as_slice::<i32>().expect("i32"), &[77, 77, 77, 77]);
+
+    // A zero-element strided view is an empty result, not a planner refusal.
+    let empty = up(tensor([2, 0], Vec::<f64>::new()));
+    let out = gpu
+        .neg_read(TensorRead::from_view(transpose_view(&empty)))
+        .expect("empty view");
+    assert_eq!(out.shape(), &[0, 2]);
+
+    // A rank-9 power whose rank-0 exponent is an offset view keeps the flat route.
+    let base = up(Tensor::from_typed::<f64>(
+        T::from_vec_col_major(vec![2, 1, 1, 1, 1, 1, 1, 1, 1], vec![2.0, 3.0]).expect("base"),
+    ));
+    let exponents = up(tensor([2, 1], vec![99.0, 2.0]));
+    let exponent = TensorView::F64(
+        exponents
+            .as_typed::<f64>()
+            .expect("f64")
+            .as_view()
+            .slice_axis_view(0, tenferro_tensor::StridedSliceSpec::new(1, Some(2), 1))
+            .expect("offset slice")
+            .reshape_view(&[])
+            .expect("rank-0 view"),
+    );
+    let out = gpu
+        .pow_read(
+            TensorRead::from_tensor(&base),
+            TensorRead::from_view(exponent),
+        )
+        .expect("rank-9 power");
+    assert_eq!(down_f64(&out), vec![4.0, 9.0]);
+}
