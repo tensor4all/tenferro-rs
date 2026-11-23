@@ -1,6 +1,11 @@
-//! Runtime FFTW loading and lane plans. FFTW planning and destruction are serialized,
-//! and threaded runtimes restore FFTW's process-wide planner thread count after planning.
+//! Runtime FFTW loading and lane plans.
+//!
+//! Every FFTW plan creation and destruction in the process passes through the
+//! planner hooks installed here, which serialize them under one lock. A tenferro
+//! plan sets FFTW's process-wide planner thread count and restores it inside
+//! that lock, so no other FFTW caller plans with tenferro's count.
 use std::any::Any;
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::{c_int, c_uint, c_void};
 use std::hash::{Hash, Hasher};
@@ -8,7 +13,7 @@ use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use libloading::Library;
 use num_complex::Complex;
@@ -17,10 +22,80 @@ use tenferro_runtime::{ExtensionCacheKey, ExtensionCacheStore};
 
 use crate::{FftOperation, FFT_EXTENSION_FAMILY_ID};
 
-// FFTW installs process-wide planner hooks pointing into the threading library.
-// Keep each initialized runtime loaded, including when its last plan is evicted.
-static PLANNER: Mutex<Vec<Arc<Api>>> = Mutex::new(Vec::new());
+#[cfg(test)]
+mod tests;
+
+// Runtimes that installed tenferro's planner hooks in their FFTW installation
+// or initialized its threads; the flag records the latter. FFTW keeps
+// process-wide pointers into these libraries (the threading library's solver
+// hooks), so they stay loaded after their last plan is evicted.
+static LOADED: Mutex<Vec<(Arc<Api>, bool)>> = Mutex::new(Vec::new());
 const UNALIGNED: c_uint = 1 << 1;
+
+/// State of the planner lock that tenferro's hooks take for every FFTW caller.
+struct Planner {
+    busy: bool,
+    /// Planner thread count to restore when the current holder leaves.
+    restore: Option<(SetThreads, c_int)>,
+}
+
+static PLANNER: Mutex<Planner> = Mutex::new(Planner {
+    busy: false,
+    restore: None,
+});
+static PLANNER_FREE: Condvar = Condvar::new();
+
+// Both cells are `Copy` with a const initializer, so they have no destructor and
+// stay accessible on every thread for its whole life, including while
+// thread-local destructors run; FFTW may call the hooks from any thread.
+thread_local! {
+    /// Planner thread count the next plan created on this thread must use.
+    static REQUEST: Cell<Option<(ThreadApi, c_int)>> = const { Cell::new(None) };
+    /// Whether this thread holds the planner lock.
+    static HOLDS_PLANNER: Cell<bool> = const { Cell::new(false) };
+}
+
+/// FFTW calls this before it creates or destroys any plan in the process.
+extern "C" fn before_planning() {
+    let request = REQUEST.with(Cell::take);
+    let mut planner = PLANNER.lock().unwrap_or_else(PoisonError::into_inner);
+    while planner.busy {
+        planner = PLANNER_FREE
+            .wait(planner)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+    planner.busy = true;
+    HOLDS_PLANNER.with(|holds| holds.set(true));
+    planner.restore = request.and_then(|(threads, count)| {
+        // SAFETY: the planner lock is held, so no FFTW planner reads or writes
+        // the count concurrently. The count differs from the default of one
+        // only after `plan_with_nthreads`, which initializes FFTW's threads, so
+        // a count that needs changing never triggers that initialization.
+        let previous = unsafe { (threads.get)() };
+        (previous != count).then(|| {
+            // SAFETY: as above.
+            unsafe { (threads.set)(count) };
+            (threads.set, previous)
+        })
+    });
+}
+
+/// FFTW calls this after it creates or destroys any plan in the process.
+extern "C" fn after_planning() {
+    // A plan that was already inside FFTW's planner when the hooks were
+    // installed returns through this hook without holding the lock.
+    if !HOLDS_PLANNER.with(|holds| holds.replace(false)) {
+        return;
+    }
+    let mut planner = PLANNER.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((set, previous)) = planner.restore.take() {
+        // SAFETY: the planner lock is still held.
+        unsafe { set(previous) };
+    }
+    planner.busy = false;
+    drop(planner);
+    PLANNER_FREE.notify_one();
+}
 
 type PlanComplex =
     unsafe extern "C" fn(c_int, *mut c_void, *mut c_void, c_int, c_uint) -> *mut c_void;
@@ -31,6 +106,7 @@ type InitThreads = unsafe extern "C" fn() -> c_int;
 type SetThreads = unsafe extern "C" fn(c_int);
 type GetThreads = unsafe extern "C" fn() -> c_int;
 type MakePlannerThreadSafe = unsafe extern "C" fn();
+type SetPlannerHooks = unsafe extern "C" fn(extern "C" fn(), extern "C" fn());
 
 /// FFTW 3.3.9+ threading entry points, from the core or the companion library.
 #[derive(Clone, Copy, Debug)]
@@ -139,10 +215,21 @@ impl Fftw {
     /// A thread count above one requires FFTW 3.3.9 or later, the first release
     /// that exports `fftw_planner_nthreads`.
     ///
-    /// FFTW's planner thread count is process-wide and unlocked. A threaded
-    /// provider sets it while planning and then restores the previous value,
-    /// but another FFTW user in the process can observe tenferro's count during
-    /// planning or change the count a tenferro plan is made with.
+    /// Loading installs planner hooks (`fftw_set_planner_hooks`) in each FFTW
+    /// library. They serialize every plan creation and destruction in the
+    /// process, other libraries' included, like `fftw_make_planner_thread_safe`,
+    /// whose hooks they replace. Inside that lock a tenferro plan sets FFTW's
+    /// process-wide planner thread count to the provider's count, or to one for
+    /// a plan that runs inside a parallel lane, and restores it afterward. A
+    /// single-threaded provider can do this only when the installation exports
+    /// FFTW's thread API, in the core library or in `fftw3_threads`; without it,
+    /// the provider plans with whatever count it finds.
+    ///
+    /// `fftw_plan_with_nthreads` itself takes no lock, so other code that calls
+    /// it while any thread is planning races with that planning; FFTW leaves
+    /// serializing it to the caller. Installing the hooks is not atomic either:
+    /// load the provider before other threads start planning with FFTW, and do
+    /// not let other code call `fftw_set_planner_hooks` afterward.
     ///
     /// # Examples
     /// ```
@@ -169,10 +256,21 @@ impl Fftw {
     /// A thread count above one requires FFTW 3.3.9 or later, the first release
     /// that exports `fftw_planner_nthreads`.
     ///
-    /// FFTW's planner thread count is process-wide and unlocked. A threaded
-    /// provider sets it while planning and then restores the previous value,
-    /// but another FFTW user in the process can observe tenferro's count during
-    /// planning or change the count a tenferro plan is made with.
+    /// Loading installs planner hooks (`fftw_set_planner_hooks`) in each FFTW
+    /// library. They serialize every plan creation and destruction in the
+    /// process, other libraries' included, like `fftw_make_planner_thread_safe`,
+    /// whose hooks they replace. Inside that lock a tenferro plan sets FFTW's
+    /// process-wide planner thread count to the provider's count, or to one for
+    /// a plan that runs inside a parallel lane, and restores it afterward. A
+    /// single-threaded provider can do this only when the installation exports
+    /// FFTW's thread API, in the core library or in `fftw3_threads`; without it,
+    /// the provider plans with whatever count it finds.
+    ///
+    /// `fftw_plan_with_nthreads` itself takes no lock, so other code that calls
+    /// it while any thread is planning races with that planning; FFTW leaves
+    /// serializing it to the caller. Installing the hooks is not atomic either:
+    /// load the provider before other threads start planning with FFTW, and do
+    /// not let other code call `fftw_set_planner_hooks` afterward.
     ///
     /// # Examples
     /// ```
@@ -202,10 +300,8 @@ impl Fftw {
             };
         let f64 = Arc::new(Api::load("fftw", "fftw3", directory, threads > 1)?);
         let f32 = Arc::new(Api::load("fftwf", "fftw3f", directory, threads > 1)?);
-        if threads > 1 {
-            f64.initialize_threads()?;
-            f32.initialize_threads()?;
-        }
+        f64.install(threads > 1)?;
+        f32.install(threads > 1)?;
         Ok(Self(Arc::new(Runtime {
             f64,
             f32,
@@ -307,6 +403,8 @@ struct Api {
     execute_r2c: Execute,
     execute_c2r: Execute,
     destroy: Destroy,
+    set_planner_hooks: SetPlannerHooks,
+    /// Required for a threaded runtime; otherwise present when the installation exports it.
     threads: Option<ThreadApi>,
     _library: Library,
     _thread_library: Option<Library>,
@@ -340,27 +438,43 @@ fn load_library(path: &Path) -> Result<Library, FftwError> {
 }
 
 impl Api {
-    fn initialize_threads(self: &Arc<Self>) -> Result<(), FftwError> {
-        let Some(threads) = self.threads else {
-            return Err(FftwError::ThreadInitialization);
-        };
-        let mut initialized = PLANNER
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !initialized.iter().any(|loaded| {
-            loaded
-                .threads
-                .is_some_and(|other| std::ptr::fn_addr_eq(other.init, threads.init))
-        }) {
-            // SAFETY: the runtime exports these signatures and PLANNER serializes
-            // initialization with every tenferro FFTW plan and destruction.
+    /// Install tenferro's planner hooks in this FFTW installation and, for a
+    /// threaded runtime, initialize FFTW's threads. Each happens once per
+    /// installation in the process.
+    fn install(self: &Arc<Self>, threaded: bool) -> Result<(), FftwError> {
+        let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut hooked = false;
+        let mut threads_ready = false;
+        for (other, initialized) in loaded.iter() {
+            if std::ptr::fn_addr_eq(other.set_planner_hooks, self.set_planner_hooks) {
+                hooked = true;
+                threads_ready |= *initialized;
+            }
+        }
+        let initialize = threaded && !threads_ready;
+        if initialize {
+            let threads = self.threads.ok_or(FftwError::ThreadInitialization)?;
+            // SAFETY: the installation exports this signature. LOADED serializes
+            // tenferro's initialization; FFTW requires it before threaded planning.
             if unsafe { (threads.init)() } == 0 {
                 return Err(FftwError::ThreadInitialization);
             }
-            // FFTW's planner lock also serializes planning by other FFTW users
-            // in the process, which PLANNER cannot reach.
-            unsafe { (threads.make_planner_thread_safe)() };
-            initialized.push(self.clone());
+        }
+        if !hooked {
+            if let Some(threads) = self.threads {
+                // FFTW installs its own planner hooks at most once per
+                // installation. Installing them first turns later calls of
+                // `fftw_make_planner_thread_safe` by other code into no-ops,
+                // so they cannot replace tenferro's hooks.
+                // SAFETY: the installation exports this signature.
+                unsafe { (threads.make_planner_thread_safe)() };
+            }
+            // SAFETY: the hooks are `extern "C"` functions with FFTW's
+            // `void (*)(void)` signature that live for the whole process.
+            unsafe { (self.set_planner_hooks)(before_planning, after_planning) };
+        }
+        if !hooked || initialize {
+            loaded.push((self.clone(), initialize));
         }
         Ok(())
     }
@@ -385,7 +499,7 @@ impl Api {
         }
         let complex_name = format!("{prefix}_plan_dft_1d");
         let complex: PlanComplex = symbol(&library, &path, complex_name.clone())?;
-        let (threads, thread_library) = if threaded {
+        let load_threads = || -> Result<(ThreadApi, Option<Library>), FftwError> {
             // Threading lives in the core library when it exports
             // `init_threads`, and otherwise in the companion library.
             let init_name = format!("{prefix}_init_threads");
@@ -394,7 +508,7 @@ impl Api {
             } else {
                 let path = library_path(directory, &format!("{stem}_threads"));
                 let library = load_library(&path)?;
-                let companion: PlanComplex = symbol(&library, &path, complex_name)?;
+                let companion: PlanComplex = symbol(&library, &path, complex_name.clone())?;
                 if !std::ptr::fn_addr_eq(companion, complex) {
                     return Err(FftwError::ThreadLibraryMismatch(path));
                 }
@@ -423,9 +537,15 @@ impl Api {
                     format!("{prefix}_make_planner_thread_safe"),
                 )?,
             };
-            (Some(threads), companion.map(|(library, _)| library))
-        } else {
-            (None, None)
+            Ok((threads, companion.map(|(library, _)| library)))
+        };
+        // A single-threaded runtime uses the thread API, when the installation
+        // has one, only to plan with one thread whatever count other code set.
+        let (threads, thread_library) = match load_threads() {
+            Ok((threads, library)) => (Some(threads), library),
+            Err(error @ FftwError::ThreadLibraryMismatch(_)) => return Err(error),
+            Err(error) if threaded => return Err(error),
+            Err(_) => (None, None),
         };
         Ok(Self {
             complex,
@@ -435,6 +555,7 @@ impl Api {
             execute_r2c: symbol(&library, &path, format!("{prefix}_execute_dft_r2c"))?,
             execute_c2r: symbol(&library, &path, format!("{prefix}_execute_dft_c2r"))?,
             destroy: symbol(&library, &path, format!("{prefix}_destroy_plan"))?,
+            set_planner_hooks: symbol(&library, &path, format!("{prefix}_set_planner_hooks"))?,
             threads,
             _library: library,
             _thread_library: thread_library,
@@ -453,7 +574,7 @@ pub(crate) struct LanePlan<T> {
 }
 
 // SAFETY: FFTW's new-array execute routines permit concurrent execution of
-// the same plan with disjoint arrays. Destruction is serialized under PLANNER.
+// the same plan with disjoint arrays. The planner hooks serialize destruction.
 unsafe impl<T: Send> Send for LanePlan<T> {}
 // SAFETY: shared methods execute against caller-provided, exclusively borrowed arrays.
 unsafe impl<T: Sync> Sync for LanePlan<T> {}
@@ -480,34 +601,25 @@ impl<T: crate::cache::CachedFftPlanScalar> LanePlan<T> {
         };
         let s = spectrum.as_mut_ptr().cast();
         let r = real.as_mut_ptr().cast();
-        let _lock = PLANNER
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The planner hooks set the thread count once they hold the planner lock.
+        REQUEST.with(|request| request.set(api.threads.map(|threads| (threads, plan_threads))));
         // SAFETY: the pointers have FFTW's prescribed lengths and element layout.
         // The complex plan is in place. Real plans receive disjoint input and output.
-        // Planning may overwrite these private allocations. PLANNER serializes the C calls.
+        // Planning may overwrite these private allocations. The planner hooks
+        // serialize the C calls with every other FFTW plan in the process.
         let raw = unsafe {
-            // The planner thread count is process-wide FFTW state. Restore the
-            // previous value so other FFTW users keep their setting. FFTW does not
-            // lock this setter, so a concurrent change outside tenferro can still
-            // reach this plan.
-            let previous = api.threads.map(|threads| (threads, (threads.get)()));
-            if let Some((threads, _)) = previous {
-                (threads.set)(plan_threads);
-            }
-            let raw = match operation {
+            match operation {
                 FftOperation::C2cForward => (api.complex)(n, s, s, -1, runtime.flags),
                 FftOperation::C2cInverse => (api.complex)(n, s, s, 1, runtime.flags),
                 FftOperation::R2cFull | FftOperation::R2cOnesided => {
                     (api.r2c)(n, r, s, runtime.flags)
                 }
                 FftOperation::C2r => (api.c2r)(n, s, r, runtime.flags),
-            };
-            if let Some((threads, count)) = previous {
-                (threads.set)(count);
             }
-            raw
         };
+        // FFTW can reject arguments before it enters its planner; a request left
+        // here would apply to the next FFTW plan created on this thread.
+        REQUEST.with(|request| request.set(None));
         Ok(Self {
             handle: NonNull::new(raw).ok_or(FftwError::Plan { operation, len })?,
             runtime,
@@ -552,10 +664,8 @@ impl<T: crate::cache::CachedFftPlanScalar> LanePlan<T> {
 
 impl<T> Drop for LanePlan<T> {
     fn drop(&mut self) {
-        let _lock = PLANNER
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // SAFETY: this plan is uniquely owned at destruction and the library is still loaded.
+        // SAFETY: this plan is uniquely owned at destruction and the library is
+        // still loaded. The planner hooks serialize destruction with planning.
         unsafe { (self.runtime.api::<T>().destroy)(self.handle.as_ptr()) };
     }
 }

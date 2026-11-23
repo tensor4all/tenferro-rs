@@ -71,7 +71,9 @@ const MIN_PARALLEL_ELEMENTS: usize = 32 * 1024;
 ///
 /// A threaded FFTW provider parallelizes within one lane. Lane jobs take
 /// precedence when they can occupy the whole engine budget; otherwise a single
-/// job runs threaded plans. The two kinds of threads never nest.
+/// job runs threaded plans. The two kinds of threads never nest. A one-slot
+/// token of a team (a share of a forked operation) runs single-threaded plans:
+/// its budget allows no parallelism, and its thread may be placed on one CPU.
 fn lane_parallelism(
     _plans: &mut (impl FftPlanProvider + ?Sized),
     lanes: usize,
@@ -84,6 +86,7 @@ fn lane_parallelism(
         .is_some_and(|(provider, _)| provider.threaded());
     #[cfg(not(feature = "fftw"))]
     let threaded = false;
+    let threaded = threaded && !(exec.is_serial() && exec.carries_team());
     let budget = exec.budget().get();
     let lane_jobs = if output_len < MIN_PARALLEL_ELEMENTS {
         1
@@ -94,6 +97,26 @@ fn lane_parallelism(
         (1, true)
     } else {
         (lane_jobs, false)
+    }
+}
+
+/// Run `f`, which plans or executes FFTW plans, so that threads FFTW starts
+/// are not confined to one CPU.
+///
+/// FFTW starts its worker threads from the thread that plans or executes, and
+/// they keep that thread's CPU mask for the rest of the process. A placed team
+/// leader or member runs on one CPU, so threaded FFTW work with a team token
+/// goes through [`Exec::external`], which runs it in the pool on a worker that
+/// restored its own mask. A serial token runs it inline: a `Serial` engine
+/// places nothing, so its calling thread keeps the caller's own mask, and
+/// [`lane_parallelism`] gives a team's one-slot token no threaded plans.
+/// Single-threaded plans start no FFTW threads and run inline.
+#[cfg(feature = "fftw")]
+fn fftw_region<R: Send>(threaded: bool, exec: Exec<'_>, f: impl FnOnce() -> R + Send) -> R {
+    if threaded {
+        exec.external(|_| f())
+    } else {
+        f()
     }
 }
 
@@ -116,7 +139,7 @@ pub(super) unsafe fn execute<T, O>(
     buffers: &mut BufferPool,
     output: &mut [MaybeUninit<O>],
     project: impl Fn(Complex<T>) -> O + Sync,
-    exec: Exec<'_>,
+    #[cfg_attr(not(feature = "fftw"), allow(unused_mut))] mut exec: Exec<'_>,
 ) -> tenferro_tensor::Result<()>
 where
     T: CachedFftPlanScalar,
@@ -172,7 +195,11 @@ where
     #[cfg(feature = "fftw")]
     let fftw = plans
         .fftw()
-        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, fftw_operation, fftw_threads))
+        .map(|(provider, cache)| {
+            fftw_region(fftw_threads, exec.reborrow(), || {
+                provider.plan::<T>(cache, fft_len, fftw_operation, fftw_threads)
+            })
+        })
         .transpose()?;
     #[cfg(feature = "fftw")]
     let plan = fftw
@@ -325,6 +352,9 @@ where
         }
     };
     if jobs == 1 {
+        #[cfg(feature = "fftw")]
+        fftw_region(fftw_threads, exec, || run(0, uninit));
+        #[cfg(not(feature = "fftw"))]
         run(0, uninit);
     } else {
         let slots = JobSlots(uninit.as_mut_ptr());
@@ -360,7 +390,7 @@ pub(super) unsafe fn execute_real<T, O>(
     buffers: &mut BufferPool,
     output: &mut [MaybeUninit<O>],
     project: impl Fn(Complex<T>) -> O + Sync,
-    exec: Exec<'_>,
+    #[cfg_attr(not(feature = "fftw"), allow(unused_mut))] mut exec: Exec<'_>,
 ) -> tenferro_tensor::Result<()>
 where
     T: CachedFftPlanScalar + PoolScalar,
@@ -396,7 +426,11 @@ where
     #[cfg(feature = "fftw")]
     let fftw = plans
         .fftw()
-        .map(|(provider, cache)| provider.plan::<T>(cache, fft_len, operation, fftw_threads))
+        .map(|(provider, cache)| {
+            fftw_region(fftw_threads, exec.reborrow(), || {
+                provider.plan::<T>(cache, fft_len, operation, fftw_threads)
+            })
+        })
         .transpose()?;
     #[cfg(feature = "fftw")]
     let plan = fftw
@@ -586,7 +620,13 @@ where
         Ok(())
     };
     let result = if jobs == 1 {
-        run(0, &mut real_lanes, &mut complex_lanes)
+        #[cfg(feature = "fftw")]
+        let result = fftw_region(fftw_threads, exec, || {
+            run(0, &mut real_lanes, &mut complex_lanes)
+        });
+        #[cfg(not(feature = "fftw"))]
+        let result = run(0, &mut real_lanes, &mut complex_lanes);
+        result
     } else {
         let real_slots = JobSlots(real_lanes.as_mut_ptr());
         let complex_slots = JobSlots(complex_lanes.as_mut_ptr());

@@ -104,7 +104,11 @@ As for RustFFT, the retained-byte estimate covers the key and the `Arc`
 handle; FFTW's internal plan allocations are excluded.
 FFTW threads and lane jobs never nest: lanes that can occupy the engine's
 whole thread budget run as parallel jobs with single-threaded plans, and other
-transforms run as one job with the provider's threaded plans.
+transforms run as one job with the provider's threaded plans. Threaded
+planning and execution run through `Exec::external`, because FFTW's worker
+threads keep the CPU mask of the thread that starts them. The provider's
+planner hooks serialize all FFTW planning in the process, and each tenferro
+plan sets and restores FFTW's planner thread count inside that lock.
 
 ### CUDA/cuFFT execution
 
