@@ -1,4 +1,10 @@
 name: RunPod tenferro-rs GPU Test
+# A fork approval names its run after the PR and the approved head so that
+# scripts/ci/fork_gpu_gate.py finds it from one run listing instead of reading
+# every run's jobs (approval_run_name there must match). Other runs keep a
+# descriptive, never-empty title. The name only narrows the search: the helper
+# still requires a workflow_dispatch run and the successful verdict job in it.
+run-name: "${{ inputs.approved_head_sha && format('Fork PR GPU approval #{0} @ {1}', inputs.pr_number, inputs.approved_head_sha) || github.event.workflow_run.display_title || github.workflow }}"
 
 # ---------------------------------------------------------------------------
 # Security policy for this workflow (tracked in issue #1; keep this comment

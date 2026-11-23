@@ -211,6 +211,25 @@ PR's own `CI GPU gate` job reads (`scripts/ci/fork_gpu_gate.py`). That job waits
 up to five and a half hours, and an approval that lands later re-runs it. A
 change that needs no GPU validation passes without an approval.
 
+For the Actions cache, an approval is close to a merge into `main`. The
+approved code runs inside a `workflow_dispatch` run on `refs/heads/main`.
+Code that runs there can take the runner's runtime token and create
+main-scoped cache entries under keys that later trusted `main` workflows
+restore. Cache entries cannot be overwritten, but future keys can be created
+in advance. The run also builds the fork's code on the hosted archive job and
+on the pod. Before approving, review everything that runs during the build and
+the tests, not only the library change:
+
+- `build.rs` files and proc-macro crates;
+- new or changed dependencies in `Cargo.lock` (and any `Cargo.lock` under
+  `ext/` or `tests/fixtures/`);
+- `.cargo/` configuration (build scripts, runners, aliases, `rustflags`);
+- `scripts/ci/**`, which the RunPod jobs run from the fork's checkout;
+- test code, including integration tests and benchmarks run by the GPU lane.
+
+If you are unsure about any of these, do not approve. Ask for the change to be
+split, or check it locally first.
+
 ### Local GPU validation instead of the paid gate
 
 The `CI GPU gate` normally needs a RunPod pod. A repository admin or maintainer

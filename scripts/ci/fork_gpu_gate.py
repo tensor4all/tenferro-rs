@@ -18,6 +18,14 @@ Only a run of the main-branch `runpod-gpu-test.yml` started by
 `workflow_dispatch` in this repository counts. Its `authorize` job admits a fork
 PR only for an `admin`/`maintain` dispatcher and only at the approved head, so
 the job name carries a verdict nobody else can produce.
+
+Polling stays cheap on the repository's shared `GITHUB_TOKEN` budget (1,000
+requests per hour on the Team plan, shared by every workflow): an approval run
+is named `approval_run_name(pr, sha)` by its `run-name:`, so a poll makes one
+run listing and reads jobs only for runs carrying that name; a completed run
+whose jobs were already read is not read again; and HTTP 403/429 doubles the
+poll interval up to `MAX_BACKOFF_SECONDS`. The run name only narrows the
+search: the verdict is still the successful job inside a trusted run.
 """
 
 from __future__ import annotations
@@ -38,6 +46,8 @@ RUNPOD_WORKFLOW = "runpod-gpu-test.yml"
 RUNPOD_WORKFLOW_PATH = f".github/workflows/{RUNPOD_WORKFLOW}"
 GATE_WORKFLOW = "CI_gpu.yml"
 RECENT_RUNS = 30
+MAX_BACKOFF_SECONDS = 900.0
+RATE_LIMIT_STATUSES = (403, 429)
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 # (method, url) -> (HTTP status, body)
@@ -48,10 +58,20 @@ class LookupFailed(RuntimeError):
     """A GitHub API response could not be read or had an unexpected shape."""
 
 
+class RateLimited(LookupFailed):
+    """GitHub refused a request with HTTP 403 or 429; the poller backs off."""
+
+
 def verdict_job_name(pr_number: int, head_sha: str) -> str:
     """Return the name of the RunPod job that carries a fork PR's verdict."""
 
     return f"Fork PR GPU verdict #{pr_number} @ {head_sha}"
+
+
+def approval_run_name(pr_number: int, head_sha: str) -> str:
+    """Return the `run-name` of the RunPod run that approves a fork PR head."""
+
+    return f"Fork PR GPU approval #{pr_number} @ {head_sha}"
 
 
 def approval_command(pr_number: int, head_sha: str) -> str:
@@ -65,6 +85,8 @@ def approval_command(pr_number: int, head_sha: str) -> str:
 
 def _get_json(transport: Transport, url: str) -> Mapping[str, Any]:
     status, body = transport("GET", url)
+    if status in RATE_LIMIT_STATUSES:
+        raise RateLimited(f"GET {url} returned HTTP {status}")
     if status != 200:
         raise LookupFailed(f"GET {url} returned HTTP {status}")
     try:
@@ -96,11 +118,60 @@ def is_trusted_runpod_run(run: Mapping[str, Any], repository: str) -> bool:
     )
 
 
-def find_verdict(
-    transport: Transport, repository: str, pr_number: int, head_sha: str
-) -> str | None:
-    """Return the URL of a passed verdict job for this PR head, if any."""
+RunKey = tuple[int, int]
 
+
+def _run_key(run: Mapping[str, Any]) -> RunKey | None:
+    run_id = run.get("id")
+    attempt = run.get("run_attempt", 1)
+    if not isinstance(run_id, int) or not isinstance(attempt, int):
+        return None
+    return (run_id, attempt)
+
+
+def candidate_runs(
+    runs: list[Mapping[str, Any]],
+    repository: str,
+    pr_number: int,
+    head_sha: str,
+    checked: set[RunKey],
+) -> list[Mapping[str, Any]]:
+    """Return the listed runs whose jobs are worth reading for this PR head.
+
+    Only a trusted run named for this exact approval qualifies, and a run
+    attempt that had already completed when its jobs were read is skipped: its
+    jobs cannot change, and a re-run is a new attempt with a new key.
+    """
+
+    wanted = approval_run_name(pr_number, head_sha)
+    selected = []
+    for run in runs:
+        key = _run_key(run)
+        if (
+            key is not None
+            and key not in checked
+            and run.get("display_title") == wanted
+            and is_trusted_runpod_run(run, repository)
+        ):
+            selected.append(run)
+    return selected
+
+
+def find_verdict(
+    transport: Transport,
+    repository: str,
+    pr_number: int,
+    head_sha: str,
+    checked: set[RunKey] | None = None,
+) -> str | None:
+    """Return the URL of a passed verdict job for this PR head, if any.
+
+    `checked` carries completed run attempts already read between polls; this
+    call adds the ones it reads.
+    """
+
+    if checked is None:
+        checked = set()
     query = urllib.parse.urlencode(
         {"event": "workflow_dispatch", "branch": "main", "per_page": RECENT_RUNS}
     )
@@ -110,20 +181,31 @@ def find_verdict(
     )
     runs = _list(_get_json(transport, url), "workflow_runs", url)
     wanted = verdict_job_name(pr_number, head_sha)
-    for run in runs:
-        if not is_trusted_runpod_run(run, repository):
-            continue
-        run_id = run.get("id")
-        if not isinstance(run_id, int):
-            continue
+    for run in candidate_runs(runs, repository, pr_number, head_sha, checked):
+        key = _run_key(run)
+        assert key is not None
         jobs_url = (
-            f"https://api.github.com/repos/{repository}/actions/runs/{run_id}"
+            f"https://api.github.com/repos/{repository}/actions/runs/{key[0]}"
             "/jobs?per_page=100"
         )
         for job in _list(_get_json(transport, jobs_url), "jobs", jobs_url):
             if job.get("name") == wanted and job.get("conclusion") == "success":
                 return str(job.get("html_url") or run.get("html_url") or "")
+        if run.get("status") == "completed":
+            checked.add(key)
     return None
+
+
+def next_poll_delay(poll_seconds: float, rate_limited_streak: int) -> float:
+    """Return the wait before the next poll after `rate_limited_streak` refusals.
+
+    Each consecutive 403/429 doubles the interval, up to `MAX_BACKOFF_SECONDS`;
+    any other outcome resets the streak to zero and the interval to normal.
+    """
+
+    if rate_limited_streak <= 0:
+        return poll_seconds
+    return min(poll_seconds * 2.0 ** min(rate_limited_streak, 32), MAX_BACKOFF_SECONDS)
 
 
 def wait_for_verdict(
@@ -145,10 +227,21 @@ def wait_for_verdict(
         f"{head_sha}. A maintainer who reviewed this head approves it with:\n"
         f"  {approval_command(pr_number, head_sha)}"
     )
+    checked: set[RunKey] = set()
+    rate_limited_streak = 0
     while True:
         try:
-            url = find_verdict(transport, repository, pr_number, head_sha)
+            url = find_verdict(transport, repository, pr_number, head_sha, checked)
+            rate_limited_streak = 0
+        except RateLimited as error:
+            rate_limited_streak += 1
+            print(
+                f"::warning::GitHub rate-limited the RunPod verdict lookup ({error}); "
+                f"backing off to {next_poll_delay(poll_seconds, rate_limited_streak):g} s."
+            )
+            url = None
         except LookupFailed as error:
+            rate_limited_streak = 0
             print(f"::warning::RunPod verdict lookup failed; still waiting: {error}")
             url = None
         if url is not None:
@@ -160,7 +253,8 @@ def wait_for_verdict(
                 f"{wait_minutes:g} minutes. Approving it later re-runs this gate."
             )
             return False
-        sleep(poll_seconds)
+        delay = next_poll_delay(poll_seconds, rate_limited_streak)
+        sleep(max(min(delay, deadline - clock()), 0.0))
 
 
 def rerun_gate(

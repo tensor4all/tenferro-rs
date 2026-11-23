@@ -192,12 +192,29 @@ is bound to one commit. The `gpu-validated-locally` label does not apply to a
 fork PR.
 
 The approved run publishes no Checks API result on the fork commit. Its last job
-is named `Fork PR GPU verdict #<pr> @ <head sha>` and runs only when the gate
-passed with the paid path actually run. `CI_gpu.yml`'s PR-attached `CI GPU gate`
-job reads the base revision's `scripts/ci/fork_gpu_gate.py`, which accepts only
-that job, succeeded, in a `workflow_dispatch` run of the main
-`runpod-gpu-test.yml` in this repository. The gate waits up to 330 minutes; the
-verdict job re-runs a gate that already gave up. The `ubuntu-gpu` jobs of
+is named `Fork PR GPU verdict #<pr> @ <head sha>` and runs only when that run's
+gate passed. That happens in two cases: the paid path ran and passed, or
+`main`'s change policy found no GPU validation needed (`GPU_REQUIRED=false`),
+in which case the verdict is emitted with no paid run. `CI_gpu.yml`'s
+PR-attached `CI GPU gate` job reads the base revision's
+`scripts/ci/fork_gpu_gate.py`, which accepts only that job, succeeded, in a
+`workflow_dispatch` run of the main `runpod-gpu-test.yml` in this repository.
+The approval run's `run-name` carries the PR number and approved head, so each
+poll is one run listing. Completed runs are read once, and HTTP 403/429 backs
+the poll off, so a waiting gate does not use up the repository's shared
+`GITHUB_TOKEN` rate limit. The gate waits up to 330 minutes; the verdict job
+re-runs a gate that already gave up.
+
+The base-revision checkout is defence in depth, not a trust boundary. The YAML
+that decides to call the helper is the `pull_request` merge-ref copy of
+`CI_gpu.yml`, which the fork controls. This was true before fork approvals
+existed: a fork PR can edit `CI_gpu.yml`, or add any workflow with a job named
+`CI GPU gate`, and report its own success. A Checks API publication from the
+trusted run would not prevent this, because both come from the GitHub Actions
+app. Only GitHub's per-push approval of fork workflow runs and CODEOWNERS
+review of `.github/workflows/` stand in the way, so a maintainer must not
+approve a fork run, or merge, a PR that touches workflows without reviewing
+those files. The `ubuntu-gpu` jobs of
 `CI_gpu.yml` run only on manual dispatch.
 
 ## RunPod trust boundary
