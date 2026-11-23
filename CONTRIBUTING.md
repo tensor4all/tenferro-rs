@@ -99,10 +99,11 @@ approval hold above; it is safe for a fork by construction instead. It checks
 out the **base** revision and treats pull request content as data, so nothing
 from an external branch is executed, it reads no secret, and its token is scoped
 to reading contents and writing the review comment. Every secret-bearing path
-stays same-repository: RunPod GPU execution authorizes `admin`/`maintain` actors
-and rejects fork PRs (`.github/workflows/runpod-gpu-test.yml`), the cache
-publisher runs only on main-scoped triggers, and a fork PR takes the legacy
-`CI_gpu.yml` gate instead of the RunPod one. See
+starts from trusted `main`: RunPod GPU execution authorizes `admin`/`maintain`
+actors (`.github/workflows/runpod-gpu-test.yml`), and the cache publisher runs
+only on main-scoped triggers. A fork PR never starts RunPod by itself; its GPU
+gate passes once a maintainer has reviewed its head and approved that exact
+commit to run on RunPod (see "GPU validation of a fork pull request" below). See
 [Change-aware CI and trusted RunPod recovery](docs/design/change-aware-ci.md).
 
 ## Local PR gate and hosted CI profiles
@@ -192,6 +193,43 @@ a PR-branch copy of that workflow with repository secrets. See
 [Change-aware CI and trusted RunPod recovery](docs/design/change-aware-ci.md)
 for the durable design and trust boundaries.
 
+### GPU validation of a fork pull request
+
+A fork PR's `CI GPU gate` waits for a maintainer's approval. After reviewing the
+code at the PR's current head, an admin or maintainer approves that exact
+commit:
+
+```bash
+python3 scripts/ci/recover_runpod_pr.py <number> --approve-head <full head SHA> --wait
+```
+
+Dispatching it is the approval to run the fork's code on RunPod and on the
+hosted jobs that build it. The workflow refuses any other head, so a push after
+the review needs a new review and approval. The approved run publishes no check
+on the fork commit; its `Fork PR GPU verdict #<number> @ <sha>` job is what the
+PR's own `CI GPU gate` job reads (`scripts/ci/fork_gpu_gate.py`). That job waits
+up to five and a half hours, and an approval that lands later re-runs it. A
+change that needs no GPU validation passes without an approval.
+
+For the Actions cache, an approval is close to a merge into `main`. The
+approved code runs inside a `workflow_dispatch` run on `refs/heads/main`.
+Code that runs there can take the runner's runtime token and create
+main-scoped cache entries under keys that later trusted `main` workflows
+restore. Cache entries cannot be overwritten, but future keys can be created
+in advance. The run also builds the fork's code on the hosted archive job and
+on the pod. Before approving, review everything that runs during the build and
+the tests, not only the library change:
+
+- `build.rs` files and proc-macro crates;
+- new or changed dependencies in `Cargo.lock` (and any `Cargo.lock` under
+  `ext/` or `tests/fixtures/`);
+- `.cargo/` configuration (build scripts, runners, aliases, `rustflags`);
+- `scripts/ci/**`, which the RunPod jobs run from the fork's checkout;
+- test code, including integration tests and benchmarks run by the GPU lane.
+
+If you are unsure about any of these, do not approve. Ask for the change to be
+split, or check it locally first.
+
 ### Local GPU validation instead of the paid gate
 
 The `CI GPU gate` normally needs a RunPod pod. A repository admin or maintainer
@@ -231,7 +269,8 @@ with a local NVIDIA GPU can satisfy it instead, with no pod at all:
    with the evidence as the check body.
 
 The gate is bound to the tested SHA: after any push, run and publish again. Fork
-PRs keep the hosted gate. Removing the label after a push leaves no publisher;
+PRs cannot use it; they take the approved RunPod run described above. Removing
+the label after a push leaves no publisher;
 recover through the paid gate with `scripts/ci/recover_runpod_pr.py`. The
 publication must come from an Actions run because branch protection pins
 `CI GPU gate` to the GitHub Actions app.

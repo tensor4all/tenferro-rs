@@ -23,6 +23,20 @@ class RecoverRunPodPrTests(unittest.TestCase):
             ],
         )
 
+    def test_a_fork_approval_names_the_reviewed_head(self) -> None:
+        sha = "ab" * 20
+        self.assertEqual(
+            build_dispatch_command(2717, wait=False, approve_head=sha)[-2:],
+            ["-f", f"approved_head_sha={sha}"],
+        )
+
+    def test_an_abbreviated_approval_is_rejected(self) -> None:
+        for value in ("d143ce2e", "AB" * 20):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, "full lowercase"
+            ):
+                build_dispatch_command(2717, wait=False, approve_head=value)
+
     def test_invalid_pr_numbers_are_rejected(self) -> None:
         for value in (0, -1):
             with self.subTest(value=value), self.assertRaisesRegex(
