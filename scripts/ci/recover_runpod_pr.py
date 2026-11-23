@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Recover one PR's GPU gate through the trusted main RunPod workflow.
 
-A fork PR needs `--approve-head SHA`: the full head commit the maintainer
-reviewed. Dispatching it is the approval to run that code on RunPod, and the
-workflow refuses any other head.
+Every PR needs `--approve-head SHA`: the full head commit the maintainer
+reviewed, for a fork and a same-repository PR alike. Dispatching it is the
+approval to run that code on RunPod, and the workflow refuses any other head;
+the PR author's repository role is not consulted.
 """
 
 from __future__ import annotations
@@ -21,14 +22,14 @@ SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 def build_dispatch_command(
-    pr_number: int, wait: bool = False, approve_head: str = ""
+    pr_number: int, wait: bool, approve_head: str
 ) -> list[str]:
     """Build the invariant main-ref dispatch command for a positive PR number."""
 
     del wait  # Waiting is a post-dispatch action and never changes trust inputs.
     if pr_number <= 0:
         raise ValueError("PR number must be positive")
-    if approve_head and not SHA_PATTERN.match(approve_head):
+    if not SHA_PATTERN.match(approve_head):
         raise ValueError("--approve-head must be a full lowercase commit SHA")
     command = [
         "gh",
@@ -39,9 +40,9 @@ def build_dispatch_command(
         "main",
         "-f",
         f"pr_number={pr_number}",
+        "-f",
+        f"approved_head_sha={approve_head}",
     ]
-    if approve_head:
-        command += ["-f", f"approved_head_sha={approve_head}"]
     return command
 
 
@@ -49,7 +50,7 @@ def recover_pr(
     pr_number: int,
     *,
     wait: bool,
-    approve_head: str = "",
+    approve_head: str,
     runner: Runner = subprocess.run,
 ) -> str:
     """Authenticate, dispatch, return the run URL, and optionally watch it."""
@@ -82,9 +83,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--wait", action="store_true")
     parser.add_argument(
         "--approve-head",
-        default="",
+        required=True,
         metavar="SHA",
-        help="fork PRs: the full head SHA you reviewed and approve to run on RunPod",
+        help="the full head SHA you reviewed and approve to run on RunPod",
     )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()

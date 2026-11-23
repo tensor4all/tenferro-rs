@@ -364,16 +364,18 @@ class WorkflowContractTests(unittest.TestCase):
             [
                 '            check_permission "${pr_author}" "PR author"',
                 '            check_permission "${WORKFLOW_RUN_ACTOR}" "Source workflow actor"',
+                # A manual PR dispatch never checks the PR author: the
+                # dispatching maintainer's approval of the head is the trust
+                # decision, for a fork and a same-repo PR alike.
                 '            check_permission "${GITHUB_ACTOR}" "Workflow actor"',
-                # Same-repo recovery only: a fork PR's author is external, and
-                # the dispatching maintainer's approval of its head stands in.
-                '                check_permission "${pr_author}" "PR author"',
             ],
         )
         manual = text[text.index('if [ "${MANUAL_PR_NUMBER}" -gt 0 ]; then') :]
-        fork = manual[: manual.index("              else\n")]
-        self.assertIn('"${pr_head_sha}" != "${MANUAL_APPROVED_HEAD_SHA}"', fork)
-        self.assertIn("^[0-9a-f]{40}$", fork)
+        fork, same_repo = manual.split("              else\n", 1)
+        same_repo = same_repo[: same_repo.index("refreshed_pr_json=")]
+        for branch in (fork, same_repo):
+            self.assertIn('"${pr_head_sha}" != "${MANUAL_APPROVED_HEAD_SHA}"', branch)
+            self.assertIn("^[0-9a-f]{40}$", branch)
 
     def test_review_labels_are_authorized_by_repository_role(self) -> None:
         """Both review exemptions authorize a maintainer, never a bare label.

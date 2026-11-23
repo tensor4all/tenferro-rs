@@ -324,12 +324,14 @@ on a miss. A tree is marked complete only after its library links resolve.
 Maintainers recover a PR by number with:
 
 ```bash
-python3 scripts/ci/recover_runpod_pr.py PR_NUMBER --wait
+python3 scripts/ci/recover_runpod_pr.py PR_NUMBER --approve-head HEAD_SHA --wait
 ```
 
 The command has no workflow-ref option and always dispatches
-`runpod-gpu-test.yml` at `main`. The trusted workflow verifies that the PR is
-open, same-repository, authorized, and head-stable; it derives both the tested
+`runpod-gpu-test.yml` at `main`. The trusted workflow verifies that the
+dispatcher is admin or maintain, that the PR is open and head-stable, and that
+`HEAD_SHA` is its current head: that approval, not the PR author's role,
+authorizes the run, for a fork and a same-repository PR alike; it derives both the tested
 revision and required-check target rather than accepting them from the caller.
 Raw revision dispatch remains available for trusted post-merge validation, but
 cannot be combined with PR-number recovery.
