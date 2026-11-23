@@ -212,7 +212,25 @@ impl SemanticProgramBuilder {
         &self,
         outputs: &[ProgramValue],
     ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
-        self.snapshot_pruned_with_aliases_and_specs(outputs, &[], &[])
+        self.snapshot_pruned_with_aliases_and_specs(outputs, &[], &[], 0)
+    }
+
+    /// Snapshot like [`snapshot_pruned`](Self::snapshot_pruned), but keep the
+    /// first `leading` inputs even when no output depends on them.
+    ///
+    /// A recorded sub-program's declared parameters are its signature, so an
+    /// unused parameter must stay an input.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed failures as
+    /// [`snapshot_pruned`](Self::snapshot_pruned).
+    pub(crate) fn snapshot_pruned_keeping_leading_inputs(
+        &self,
+        outputs: &[ProgramValue],
+        leading: usize,
+    ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
+        self.snapshot_pruned_with_aliases_and_specs(outputs, &[], &[], leading)
     }
 
     /// Snapshot with explicit declarations for kept inputs.
@@ -230,7 +248,7 @@ impl SemanticProgramBuilder {
         outputs: &[ProgramValue],
         input_specs: &[(usize, ProgramInputSpec)],
     ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
-        self.snapshot_pruned_with_aliases_and_specs(outputs, &[], input_specs)
+        self.snapshot_pruned_with_aliases_and_specs(outputs, &[], input_specs, 0)
     }
 
     /// Snapshot the live closure of `outputs`, substituting checkpoint aliases.
@@ -248,7 +266,7 @@ impl SemanticProgramBuilder {
         outputs: &[ProgramValue],
         aliases: &[crate::trace::CheckpointAlias],
     ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
-        self.snapshot_pruned_with_aliases_and_specs(outputs, aliases, &[])
+        self.snapshot_pruned_with_aliases_and_specs(outputs, aliases, &[], 0)
     }
 
     fn snapshot_pruned_with_aliases_and_specs(
@@ -256,6 +274,7 @@ impl SemanticProgramBuilder {
         outputs: &[ProgramValue],
         aliases: &[crate::trace::CheckpointAlias],
         input_specs: &[(usize, ProgramInputSpec)],
+        leading_inputs: usize,
     ) -> Result<(FrozenProgram, Vec<ProgramValue>), ProgramFinishError> {
         let value_count = self.values.len();
         let mut live = vec![false; value_count];
@@ -264,6 +283,11 @@ impl SemanticProgramBuilder {
                 return Err(ProgramFinishError::ForeignOutput);
             }
             live[output.slot as usize] = true;
+        }
+        // An input has no producer, so marking it live keeps it without
+        // affecting which operations are live.
+        for input in self.inputs.iter().take(leading_inputs) {
+            live[input.slot as usize] = true;
         }
         // An effectful operation is observable even when no caller asks for its
         // outputs, so the operation itself seeds liveness like a requested output,
@@ -534,6 +558,7 @@ impl SemanticProgramBuilder {
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            let operations_before = rebuild.operations.len();
             let rebuilt_outputs = match &operation.op {
                 SemanticOp::Core(core) => rebuild.add_op(core.clone(), &inputs),
                 SemanticOp::Extension(extension) => rebuild.add_extension(
@@ -544,6 +569,22 @@ impl SemanticProgramBuilder {
                 ),
             }
             .map_err(snapshot_rebuild)?;
+            if !operation.subprograms.is_empty() {
+                // A call names only the operation's own inputs, so it is copied
+                // unchanged onto the one operation the replay appended. A replay
+                // that appended anything else cannot say which operation owns
+                // the calls, so it is refused rather than guessed.
+                if rebuild.operations.len() != operations_before + 1 {
+                    return Err(ProgramFinishError::SnapshotRebuild {
+                        source: ProgramBuildError::InvalidImport {
+                            source: ProgramStructuralError::InvalidSsaOrder,
+                        },
+                    });
+                }
+                if let Some(rebuilt) = rebuild.operations.last_mut() {
+                    rebuilt.subprograms = operation.subprograms.clone();
+                }
+            }
             discharge_static_guards(&mut rebuild);
             let kept: Vec<ProgramValue> = operation
                 .outputs
@@ -581,6 +622,17 @@ impl SemanticProgramBuilder {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok((rebuild.finish(&mapped_outputs)?, kept_inputs))
+    }
+
+    /// Attach sub-program calls to the most recently added operation.
+    #[cfg(test)]
+    pub(crate) fn attach_subprograms_to_last_operation_for_test(
+        &mut self,
+        calls: Vec<super::subprogram::SubprogramCall>,
+    ) {
+        if let Some(operation) = self.operations.last_mut() {
+            operation.subprograms = calls.into_boxed_slice();
+        }
     }
 
     /// Consume this builder and atomically freeze semantic structure and bindings.
@@ -1148,6 +1200,7 @@ impl SemanticProgramBuilder {
             shape_guards: shape_guards.into(),
             placement: SemanticPlacementConstraint::any(),
             provenance,
+            subprograms: Box::default(),
         });
         Ok(outputs)
     }
@@ -1677,6 +1730,7 @@ impl ImportTransaction {
                 shape_guards: guards.into_boxed_slice(),
                 placement: operation.placement,
                 provenance: operation.provenance.clone(),
+                subprograms: operation.subprograms.clone(),
             });
         }
 

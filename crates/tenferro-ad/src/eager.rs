@@ -1940,8 +1940,9 @@ impl EagerSession<'_> {
     /// ```
     /// # Errors
     /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
-    /// externally defined scalar, or a backend error from the upload or broadcast.
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the shape
+    /// product overflows or `dtype` is an externally defined scalar, or a backend
+    /// error from the upload or broadcast.
     pub fn zeros(&mut self, dtype: DType, shape: impl IntoShapeVec) -> Result<EagerTensor> {
         self.full(dtype, shape, 0.0)
     }
@@ -1961,8 +1962,9 @@ impl EagerSession<'_> {
     /// ```
     /// # Errors
     /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `dtype` is an
-    /// externally defined scalar, or a backend error from the upload or broadcast.
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the shape
+    /// product overflows or `dtype` is an externally defined scalar, or a backend
+    /// error from the upload or broadcast.
     pub fn ones(&mut self, dtype: DType, shape: impl IntoShapeVec) -> Result<EagerTensor> {
         self.full(dtype, shape, 1.0)
     }
@@ -1988,9 +1990,10 @@ impl EagerSession<'_> {
     /// ```
     /// # Errors
     /// Returns [`Error::TensorRuntime`] with
-    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when `value` is not
-    /// representable in `dtype` or `dtype` is an externally defined scalar, or a
-    /// backend error from the upload or broadcast.
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when the shape
+    /// product overflows, `value` is not representable in `dtype`, or `dtype` is
+    /// an externally defined scalar, or a backend error from the upload or
+    /// broadcast.
     pub fn full(
         &mut self,
         dtype: DType,
@@ -1998,6 +2001,9 @@ impl EagerSession<'_> {
         value: f64,
     ) -> Result<EagerTensor> {
         let shape = shape.into_shape_vec();
+        // The target shape is known here, so an element count that overflows
+        // `usize` must fail before the scalar is uploaded or broadcast.
+        tenferro_tensor::validate::checked_shape_product("EagerSession::full", "shape", &shape)?;
         let scalar = self.constant_from_host(Tensor::full(dtype, [0_usize; 0], value)?)?;
         if shape.is_empty() {
             return Ok(scalar);
@@ -2424,6 +2430,314 @@ impl EagerSession<'_> {
     /// or a typed broadcast/backend error for the operands.
     pub fn add(&mut self, lhs: &EagerTensor, rhs: &EagerTensor) -> Result<EagerTensor> {
         self.run_binary("add", lhs, rhs, StdTensorOp::Add)
+    }
+
+    /// Overwrite a caller-provided destination with `lhs + rhs`.
+    ///
+    /// The output-reuse form of [`add`](Self::add): the operands are read in
+    /// place through their retained values (a view-backed eager tensor stays a
+    /// view) and the sum is written into `dest` without allocating a result. The
+    /// write follows the concrete `add_into` contract: both operands share the
+    /// destination's dtype (no promotion), their broadcast shape equals the
+    /// destination's shape, and only [`Dest::Overwrite`](tenferro_tensor::Dest::Overwrite) is
+    /// declared, so the previous destination contents are never read.
+    ///
+    /// The destination is a caller-owned tensor, not an eager value, so it has no
+    /// place in the reverse graph: while gradient recording is enabled, tracked
+    /// operands (or an active trace capture) are rejected instead of silently
+    /// dropping the gradient; under `no_grad` they are plain values. Use
+    /// [`add`](Self::add) when the result must be differentiable.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_tensor::Dest;
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    /// let y = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0])?)?;
+    /// let mut out = Tensor::from_vec_col_major(vec![2], vec![f64::NAN, f64::NAN])?;
+    /// ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+    ///     session.add_into(&x, &y, Dest::overwrite(&mut out))
+    /// })?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[11.0, 22.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate` /
+    /// `Dest::Scaled` destination, and a typed validation or backend error for
+    /// mismatched dtypes, shapes or placement. Every rejection happens before the
+    /// destination is written.
+    pub fn add_into(
+        &mut self,
+        lhs: &EagerTensor,
+        rhs: &EagerTensor,
+        dest: tenferro_tensor::Dest<tenferro_tensor::TensorWrite<'_>>,
+    ) -> Result<()> {
+        use tenferro_runtime::CoreOps;
+
+        self.check_untracked_into("EagerSession::add_into", "add", &[lhs, rhs])?;
+        lhs.tensor_read()
+            .add_into(&rhs.tensor_read(), &mut *self.engine, dest)
+            .map_err(Error::from)
+    }
+
+    /// Overwrite a caller-provided destination with `lhs - rhs`.
+    ///
+    /// The output-reuse form of [`sub`](Self::sub), with the same contract as
+    /// [`add_into`](Self::add_into): operands read in place, shared dtype with
+    /// the destination, `Dest::Overwrite` only, tracked operands rejected.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_tensor::Dest;
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0])?)?;
+    /// let y = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
+    /// let mut out = Tensor::from_vec_col_major(vec![2], vec![f64::NAN, f64::NAN])?;
+    /// ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+    ///     session.sub_into(&x, &y, Dest::overwrite(&mut out))
+    /// })?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[4.0, 5.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written.
+    pub fn sub_into(
+        &mut self,
+        lhs: &EagerTensor,
+        rhs: &EagerTensor,
+        dest: tenferro_tensor::Dest<tenferro_tensor::TensorWrite<'_>>,
+    ) -> Result<()> {
+        use tenferro_runtime::CoreOps;
+
+        self.check_untracked_into("EagerSession::sub_into", "sub", &[lhs, rhs])?;
+        lhs.tensor_read()
+            .sub_into(&rhs.tensor_read(), &mut *self.engine, dest)
+            .map_err(Error::from)
+    }
+
+    /// Overwrite a caller-provided destination with `lhs * rhs`.
+    ///
+    /// The output-reuse form of [`mul`](Self::mul), with the same contract as
+    /// [`add_into`](Self::add_into): operands read in place, shared dtype with
+    /// the destination, `Dest::Overwrite` only, tracked operands rejected.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_tensor::Dest;
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?)?;
+    /// let y = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0])?)?;
+    /// let mut out = Tensor::from_vec_col_major(vec![2], vec![f64::NAN, f64::NAN])?;
+    /// ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+    ///     session.mul_into(&x, &y, Dest::overwrite(&mut out))
+    /// })?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[8.0, 15.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written.
+    pub fn mul_into(
+        &mut self,
+        lhs: &EagerTensor,
+        rhs: &EagerTensor,
+        dest: tenferro_tensor::Dest<tenferro_tensor::TensorWrite<'_>>,
+    ) -> Result<()> {
+        use tenferro_runtime::CoreOps;
+
+        self.check_untracked_into("EagerSession::mul_into", "mul", &[lhs, rhs])?;
+        lhs.tensor_read()
+            .mul_into(&rhs.tensor_read(), &mut *self.engine, dest)
+            .map_err(Error::from)
+    }
+
+    /// Overwrite a caller-provided destination with `lhs / rhs`.
+    ///
+    /// The output-reuse form of [`div`](Self::div), with the same contract as
+    /// [`add_into`](Self::add_into): operands read in place, shared dtype with
+    /// the destination, `Dest::Overwrite` only, tracked operands rejected.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_tensor::Dest;
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![8.0_f64, 9.0])?)?;
+    /// let y = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0])?)?;
+    /// let mut out = Tensor::from_vec_col_major(vec![2], vec![f64::NAN, f64::NAN])?;
+    /// ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+    ///     session.div_into(&x, &y, Dest::overwrite(&mut out))
+    /// })?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[4.0, 3.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written. An integer division by zero is a numerical
+    /// failure that a device backend reports after the launch, which leaves the
+    /// destination contents unspecified.
+    pub fn div_into(
+        &mut self,
+        lhs: &EagerTensor,
+        rhs: &EagerTensor,
+        dest: tenferro_tensor::Dest<tenferro_tensor::TensorWrite<'_>>,
+    ) -> Result<()> {
+        use tenferro_runtime::CoreOps;
+
+        self.check_untracked_into("EagerSession::div_into", "div", &[lhs, rhs])?;
+        lhs.tensor_read()
+            .div_into(&rhs.tensor_read(), &mut *self.engine, dest)
+            .map_err(Error::from)
+    }
+
+    /// Overwrite a caller-provided destination with the elementwise negation of
+    /// `input`.
+    ///
+    /// The output-reuse form of [`neg`](Self::neg), with the same contract as
+    /// [`add_into`](Self::add_into): the operand is read in place, shares the
+    /// destination's dtype, `Dest::Overwrite` only, a tracked operand is rejected.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_tensor::Dest;
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.5_f64, -2.0])?)?;
+    /// let mut out = Tensor::from_vec_col_major(vec![2], vec![f64::NAN, f64::NAN])?;
+    /// ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+    ///     session.neg_into(&x, Dest::overwrite(&mut out))
+    /// })?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[-1.5, 2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written.
+    pub fn neg_into(
+        &mut self,
+        input: &EagerTensor,
+        dest: tenferro_tensor::Dest<tenferro_tensor::TensorWrite<'_>>,
+    ) -> Result<()> {
+        use tenferro_runtime::CoreOps;
+
+        self.check_untracked_into("EagerSession::neg_into", "neg", &[input])?;
+        input
+            .tensor_read()
+            .neg_into(&mut *self.engine, dest)
+            .map_err(Error::from)
+    }
+
+    /// Overwrite a caller-provided destination with the elementwise complex conjugate (the identity on real dtypes) of
+    /// `input`.
+    ///
+    /// The output-reuse form of [`conj`](Self::conj), with the same contract as
+    /// [`add_into`](Self::add_into): the operand is read in place, shares the
+    /// destination's dtype, `Dest::Overwrite` only, a tracked operand is rejected.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Tensor};
+    /// use tenferro_tensor::Dest;
+    ///
+    /// let ctx = EagerRuntime::new()?;
+    /// let x = ctx.constant_from(Tensor::from_vec_col_major(vec![2], vec![1.5_f64, -2.0])?)?;
+    /// let mut out = Tensor::from_vec_col_major(vec![2], vec![f64::NAN, f64::NAN])?;
+    /// ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+    ///     session.conj_into(&x, Dest::overwrite(&mut out))
+    /// })?;
+    /// assert_eq!(out.as_slice::<f64>()?, &[1.5, -2.0]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for an operand from another runtime,
+    /// an unsupported-operation error for a tracked operand or an active trace
+    /// capture while gradient recording is enabled, or for a `Dest::Accumulate`
+    /// / `Dest::Scaled` destination, and a validation error for an operand
+    /// dtype or shape mismatch with the destination. These are raised before
+    /// the destination is written.
+    pub fn conj_into(
+        &mut self,
+        input: &EagerTensor,
+        dest: tenferro_tensor::Dest<tenferro_tensor::TensorWrite<'_>>,
+    ) -> Result<()> {
+        use tenferro_runtime::CoreOps;
+
+        self.check_untracked_into("EagerSession::conj_into", "conj", &[input])?;
+        input
+            .tensor_read()
+            .conj_into(&mut *self.engine, dest)
+            .map_err(Error::from)
+    }
+
+    /// Check what every eager `_into` needs before touching its destination:
+    /// operands of this runtime, and no gradient that a caller-owned
+    /// destination would silently drop.
+    fn check_untracked_into(
+        &self,
+        op: &'static str,
+        allocating: &'static str,
+        operands: &[&EagerTensor],
+    ) -> Result<()> {
+        for operand in operands {
+            self.ensure_runtime(operand)?;
+        }
+        if !crate::eager_ops::untracked_fast_path_allowed(operands) {
+            return Err(Error::unsupported(
+                op,
+                ErrorPhase::Execution,
+                format!(
+                    "a caller-owned destination cannot record a gradient; use `{allocating}` \
+                     for a differentiable result, or detach the operands or call it under \
+                     `no_grad`"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Subtract eager tensors within this borrowed session.

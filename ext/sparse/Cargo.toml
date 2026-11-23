@@ -15,10 +15,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-autodiff = [
-    "dep:tenferro-ad",
-    "tenferro-internal-ops/autodiff",
-]
+autodiff = ["dep:tenferro-ad", "tenferro-ad/autodiff"]
 
 [dependencies]
 tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false, optional = true }

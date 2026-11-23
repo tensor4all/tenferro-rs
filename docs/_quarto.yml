@@ -112,6 +112,7 @@ website:
               - design/contraction-pipeline.md
               - design/dot-general-overhead.md
               - design/dynamic-symbolic-shapes.md
+              - design/subprograms.md
               - design/execution-engine-ownership.md
               - design/gpu-backend-design.md
               - design/cuda-surface.md

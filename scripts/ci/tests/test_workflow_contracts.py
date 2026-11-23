@@ -244,9 +244,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("python3 scripts/ci/run_profile.py", text)
         self.assertNotIn("grep -qE", text)
         self.assertIn(". -> ../target-${{ matrix.cfg.backend }}", text)
-        # The faer backend also verifies faer artifacts, in both Cargo layouts:
-        # ci/deps (before Cargo 1.100) and ci/build/<package>/<hash>/out.
-        self.assertIn('crates="${crates} faer"', text)
+        # The cpu-faer backend also verifies the linear-algebra crate's artifacts,
+        # in both Cargo layouts: ci/deps (before Cargo 1.100) and
+        # ci/build/<package>/<hash>/out. The artifact is named after the lib target,
+        # and colmat 0.34 kept `[lib] name = "colmat"` (t4a-faer <= 0.33 was
+        # `faer`), so the check must name colmat.
+        self.assertIn('crates="${crates} colmat"', text)
+        self.assertNotIn('crates="${crates} faer"', text)
         self.assertIn('-path "${profile_dir}/deps/*"', text)
         self.assertIn('-path "${profile_dir}/build/*/*/out/*"', text)
         self.assertIn("strided_view strided_traits strided_perm", text)

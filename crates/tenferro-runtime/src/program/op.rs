@@ -9,6 +9,7 @@ use tenferro_tensor::{
 };
 
 use super::metadata::SemanticProvenance;
+use super::subprogram::SubprogramCall;
 use super::{
     Alias, Effect, ProgramValue, SemanticPlacementConstraint, SemanticProvenanceView, ShapeGuard,
 };
@@ -360,6 +361,8 @@ pub(crate) struct SemanticOperation {
     pub(crate) shape_guards: Box<[ShapeGuard]>,
     pub(crate) placement: SemanticPlacementConstraint,
     pub(crate) provenance: SemanticProvenance,
+    /// Sub-programs this operation carries; empty for every operation today.
+    pub(crate) subprograms: Box<[SubprogramCall]>,
 }
 
 /// Borrowed semantic operation payload.

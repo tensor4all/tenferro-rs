@@ -4,7 +4,116 @@ All notable changes to the `tenferro-*` crates are recorded here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] - Unreleased
+
+### Breaking changes
+
+- **The custom compiler-pass API is removed from `tenferro_runtime::program`**
+  (#2689): `SemanticTransform`, `SemanticTransformContext`, `TransformIdentity`
+  and `SemanticTransformError`, with their private cache. Nothing in the
+  workspace called them outside tests; AD keeps its own transforms.
+- **`tenferro_runtime::ad_support::ones_tensor` and
+  `tenferro_runtime::composite::scalar_tensor` are removed** (#2642). Use
+  `Tensor::ones(dtype, shape)` and `Tensor::full(dtype, [0_usize; 0], value)`.
+  `composite::scalar_bytes` now also accepts `Bool`, and rejects an
+  unrepresentable value with `InvalidArgument` from `Tensor::full`.
+- **`CudaEngine::launch_completion_syncs` is removed** (#2667). It was a
+  `#[doc(hidden)]` `pub fn` that only counted the per-launch stream waits the
+  engine no longer performs; `CudaRuntime::stream_waits` is the counter the tests
+  pin now.
+- **Every semantic-program fingerprint value changes** (#2707): the identity
+  moves to `v2`. Fingerprints are process-local cache keys and nothing persists
+  them.
+
+### Added
+
+- **Filled constants on every layer (#2642).** `zeros(dtype, shape)`,
+  `ones(dtype, shape)` and `full(dtype, shape, value)` on `Tensor`,
+  `TraceContext` and `EagerSession`. The traced form is a rank-0 graph constant
+  broadcast to `shape`; the eager form uploads one element and returns an
+  untracked broadcast view. `value` is an `f64`, accepted by an integer dtype only
+  when exact and in range and by `Bool` only when `0` or `1`.
+
+- Recorded sub-programs, the first slice of #2691: `TraceContext::record`
+  traces a closure once over symbolic-extent parameters and returns a
+  `RecordedProgram`, which holds a closed, shape-generic
+  `tenferro_runtime::program::Subprogram` and the tensors the closure captured.
+  Tensors bound from data (`from_vec_col_major`, `from_tensor_concrete_shape`)
+  are captures, hoisted to trailing inputs, so two recordings of one closure
+  compare equal (`Eq`/`Hash`, and `Subprogram::semantic_fingerprint`, which
+  includes the parameter/capture split) whatever data they captured. Values
+  from constant constructors (`full`, `zeros`, `scalar`, ...) stay `Constant`
+  ops and are part of the identity. The semantic-program fingerprint moves to
+  `v2`, which also encodes the sub-program calls an operation carries. Every
+  fingerprint value changes, including where `Debug` prints one; fingerprints
+  are process-local cache keys and nothing persists them. Operations that carry and run sub-programs follow in the
+  next step; see `docs/design/subprograms.md`.
+
+- **Reusable overwrite destinations for FFTs (#2665).** All eight concrete `_into`
+  methods and `FftExecutor` write a caller-owned destination; shape, dtype,
+  placement, allocation domain and layout are checked before execution. Warmed
+  calls make no Rust heap allocation for C2C, R2C and C2R in `f32` and `f64`.
+  The eager and traced APIs are unchanged.
+
+- **`FftExecutor`'s allocating transforms take any `AsView` input (#2687).**
+  `fft_with`, `ifft_with`, `rfft_with`, `irfft_with`, `fftn_with`, `ifftn_with`,
+  `rfftn_with` and `irfftn_with` now take `&X` for `X: AsView + ?Sized`, the same
+  input as their `_into` twins, so a typed tensor, a compact borrowed read or a
+  supported strided view uses the executor's plan cache without being copied into
+  an owned `Tensor` first. An owned-`Tensor` call is unchanged. A borrowed view
+  that is not compact column-major is staged once into compact storage, as the
+  `_into` forms do.
+
+### Changed
+
+- **CUDA `vdot_read` is one cuBLAS conjugate dot** (#2624). The operation no
+  longer composes `conj_read` -> `mul_read` -> `reduce_axes`, which copied the
+  left operand for a conjugation that is the identity on a real dtype, wrote a
+  full product tensor and launched a separate reduction: it is one
+  `cublasDdot`/`cublasSdot` on the real widths and one
+  `cublasZdotc`/`cublasCdotc` on the complex ones, over the operands' compact
+  spans, writing the rank-0 result on the engine's stream. Semantics, layouts,
+  empty and rank-0 operands and aliasing are unchanged; a strided or offset view
+  keeps the staging copy it already took. The length travels as cuBLAS's 32-bit
+  argument, so a dot of more than `i32::MAX` elements is now refused with a typed
+  `Unsupported` error instead of being folded in two passes.
+
+- **A CUDA launch no longer drains the stream** (#2667). Work is observed at the
+  host's own barrier (a download waits for its own copy; `synchronize` is the
+  explicit one), as `docs/guides/devices-and-gpu.md` already documented. No
+  numerics change; the same kernels run in the same order. The one removed
+  public item is listed under Breaking changes.
+
+### Fixed
+
+- **`full` accepts every exactly representable integer and checks its shape first**
+  (#2698). `Tensor::full(DType::I64, ..)` rejected values of magnitude `9.0e15` and
+  above although they are exact in binary64; it now decides against
+  `-(2^63) <= value < 2^63`. Eager and traced `full` validate the shape product
+  before allocating or recording, so every surface reports the same typed
+  `InvalidArgument { argument: "shape" }` instead of a wrapped overflow.
+- **Concrete `cast` and `convert` read their operand once** (#2699). The bodies no
+  longer choose between the owned and the read engine entry. The registry
+  `layout:` text and the shipped skill cheatsheet claimed that every non-owned
+  receiver is gathered first; that was false (the CPU engine reads a strided or
+  offset view in place, CUDA gathers once into one flat-span `Convert`, and a
+  backend without a view-capable route returns an error). The text is corrected,
+  including the 0.12.0 line above.
+- **Metal checks element counts and byte lengths before allocating or launching**
+  (#2669, #2672). `MetalEngine::len`, `RuntimeCell::wrap` and
+  `MetalContext::element_bytes` used a wrapping product or a saturating byte
+  length; overflow is now `Error::RuntimeState`.
+
+### Internal
+
+- The checked-in `api/*.txt` snapshots are gone; the registry conformance check
+  on the generated surface is the verdict (#2664).
+- Creusot contracts for the contiguous mutable split in `tenferro-tensor`
+  (#2690, #2709); they compile only under `cfg(creusot)`.
+- README leads with the rationale and links `tenferro-examples` (#2681); shipped
+  examples bind and reuse one CPU engine (#2680).
+
+## [0.12.0] - 2026-11-19
 
 ### Breaking changes — one call grammar (#2552, ships in 0.12.0)
 
@@ -107,17 +216,11 @@ layer, generated from a per-family registry. The operation list, options,
   - core: concrete reductions, `transpose` and `reverse` reject a repeated
     axis as `DuplicateAxis { role: "axes" }` before the engine; a typed
     `where_select` whose branch has another dtype reports `Error::Internal`;
-    `convert` / `cast` accept any receiver and gather a non-owned one once.
+    `convert` / `cast` accept any receiver and read it through the engine's read entry
+    (a strided view is not staged first; see #2699 under 0.13.0, which corrects the
+    wording this release shipped with).
 
 ### Added
-
-- **Filled constants on every layer (#2642).** `zeros(dtype, shape)`,
-  `ones(dtype, shape)` and `full(dtype, shape, value)` on `Tensor`,
-  `TraceContext` and `EagerSession`. The traced form is a rank-0 graph constant
-  broadcast to `shape`; the eager form uploads one element and returns an
-  untracked broadcast view. `value` is an `f64`, accepted by an integer dtype only
-  when exact and in range and by `Bool` only when `0` or `1`. tenferro-linalg's
-  private `ones_like` helpers on the traced and eager layers now use them.
 
 - **`TensorStructural::cast_read` and `convert_read` (#2223).** The read form of the
   explicit dtype projection consumes a `TensorRead` where it lies, so a borrowed view
@@ -154,6 +257,18 @@ layer, generated from a per-family registry. The operation list, options,
 
 ### Changed
 
+- **Extension crates take the AD and CUDA capabilities from the public crates**
+  (#2694). `tenferro-ad` declares an `autodiff` feature — the AD vocabulary its
+  `tenferro-internal-ops` dependency already enables, now also a public name an
+  extension can forward — and its `cuda` feature forwards
+  `tenferro-internal-ops/cuda`. `tenferro-einsum`, `tenferro-fft`,
+  `tenferro-linalg`, `ext/sparse` and `ext/tropical` declare
+  `autodiff = ["tenferro-ad/autodiff"]` instead of
+  `tenferro-internal-ops/autodiff`, and the CUDA families drop their inert
+  `tenferro-internal-ops/cuda` forward. What is compiled is unchanged: no
+  extension gains or loses a code gate, and each crate's declared feature list
+  and its resolved `cargo tree -e features` output are unchanged.
+
 - **`CpuEngine`'s engine-wide cache controls cover its extension cache store**
   (#2587). `runtime_cache_stats` adds the store's entries and retained bytes to
   `entries` and `retained_bytes`; `hits`, `misses` and `evictions` stay the plan
@@ -161,18 +276,6 @@ layer, generated from a per-family registry. The operation list, options,
   `clear_runtime_caches` also clears the store. `ExecutionEngine::take_extension_caches`
   on `CpuEngine` and `CudaEngine` now moves the store out instead of building an
   empty placeholder store, so a take/restore round trip no longer allocates.
-
-- **CUDA `vdot_read` is one cuBLAS conjugate dot** (#2624). The operation no
-  longer composes `conj_read` -> `mul_read` -> `reduce_axes`, which copied the
-  left operand for a conjugation that is the identity on a real dtype, wrote a
-  full product tensor and launched a separate reduction: it is one
-  `cublasDdot`/`cublasSdot` on the real widths and one
-  `cublasZdotc`/`cublasCdotc` on the complex ones, over the operands' compact
-  spans, writing the rank-0 result on the engine's stream. Semantics, layouts,
-  empty and rank-0 operands and aliasing are unchanged; a strided or offset view
-  keeps the staging copy it already took. The length travels as cuBLAS's 32-bit
-  argument, so a dot of more than `i32::MAX` elements is now refused with a typed
-  `Unsupported` error instead of being folded in two passes.
 
 - **CUDA softplus is one fused launch** (#2530). `CudaEngine` now implements
   `Engine::fused_activation_read` for `softplus` on `F32`/`F64`, so concrete
@@ -187,12 +290,6 @@ layer, generated from a per-family registry. The operation list, options,
   payload.
 
 ### Removed
-
-- **`tenferro_runtime::ad_support::ones_tensor` and
-  `tenferro_runtime::composite::scalar_tensor`** (#2642). Use
-  `Tensor::ones(dtype, shape)` and `Tensor::full(dtype, [0_usize; 0], value)`.
-  `composite::scalar_bytes` now also accepts `Bool`, and rejects an unrepresentable
-  value with `InvalidArgument` from `Tensor::full`.
 
 - **The vendor BLAS/LAPACK CPU providers are gone, and with them the CPU backend
   feature** (#2608). Every build now links one faer-backed

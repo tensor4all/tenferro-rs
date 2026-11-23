@@ -35,6 +35,8 @@ mod dynamic_truncate;
 mod eager_backend_capability_contract;
 #[path = "integration/eager_device_placement_contract.rs"]
 mod eager_device_placement_contract;
+#[path = "integration/eager_elementwise_into.rs"]
+mod eager_elementwise_into;
 #[path = "integration/eager_fixed_pivot_cross.rs"]
 mod eager_fixed_pivot_cross;
 #[path = "integration/eager_runtime_api.rs"]
@@ -51,6 +53,8 @@ mod engine_eval;
 mod fallible_api;
 #[path = "integration/gpu_ad_tests.rs"]
 mod gpu_ad_tests;
+#[path = "integration/gpu_eager_borrowed_read_and_add_into.rs"]
+mod gpu_eager_borrowed_read_and_add_into;
 #[path = "integration/gpu_eager_chain_no_stream_drain.rs"]
 mod gpu_eager_chain_no_stream_drain;
 #[path = "integration/gpu_f32_fusion.rs"]

@@ -1,5 +1,17 @@
 use super::*;
 
+/// A host scalar handed to cuBLAS in host pointer mode, aligned for CUDA's
+/// widest scalar type (`cuDoubleComplex`, 16 bytes).
+#[repr(C, align(16))]
+struct AlignedHostScalar<T>(T);
+
+impl<T> AlignedHostScalar<T> {
+    /// The scalar's address; `repr(C)` puts the value at the aligned start.
+    fn as_ptr(&self) -> *const c_void {
+        std::ptr::from_ref(self).cast()
+    }
+}
+
 fn initialize_q_columns_typed<T>(
     backend: &mut CudaEngine,
     rows: usize,
@@ -41,18 +53,6 @@ where
         .map_err(|_| Error::Internal("explicit Householder vector changed dtype".into()))
 }
 
-fn linalg_scalar_bytes<T: LinalgScalar>(value: &T) -> &[u8] {
-    // SAFETY: LinalgScalar is sealed in this module to f32/f64/Complex32/
-    // Complex64, all of which have initialized byte representations without
-    // padding; the returned slice cannot outlive `value`.
-    unsafe {
-        std::slice::from_raw_parts(
-            std::ptr::from_ref(value).cast::<u8>(),
-            std::mem::size_of::<T>(),
-        )
-    }
-}
-
 fn apply_householder_reflectors_typed<T>(
     backend: &mut CudaEngine,
     packed: &TypedTensor<T>,
@@ -87,9 +87,12 @@ where
         i64::try_from(m).map_err(|_| Error::invalid_argument(op, "m", "dimension exceeds i64"))?;
     let k_i64 =
         i64::try_from(k).map_err(|_| Error::invalid_argument(op, "k", "dimension exceeds i64"))?;
-    let one = T::one();
-    let zero = T::zero();
-    let minus_one = -one;
+    // CUDA's complex scalars are 16-byte aligned (`double2`) while `num_complex`
+    // values are 8-aligned, and cuBLAS >= 12.9 faults on a misaligned host scalar
+    // (#1870), so each one lives in 16-byte-aligned storage.
+    let one = AlignedHostScalar(T::one());
+    let zero = AlignedHostScalar(T::zero());
+    let minus_one = AlignedHostScalar(-T::one());
 
     backend.with_raw(op, |raw| {
         let handles = raw.resource(CudaLinalgHandles::load)?;
@@ -98,15 +101,12 @@ where
         handles.cusolver().set_stream(stream, op)?;
         handles.cublas().set_stream(stream, op)?;
 
-        let one_device = raw.upload_bytes(linalg_scalar_bytes(&one), op)?;
-        let zero_device = raw.upload_bytes(linalg_scalar_bytes(&zero), op)?;
-        let minus_one_device = raw.upload_bytes(linalg_scalar_bytes(&minus_one), op)?;
-        let mut one_ptr = std::ptr::null_mut::<c_void>();
-        let mut zero_ptr = std::ptr::null_mut::<c_void>();
-        let mut minus_one_ptr = std::ptr::null_mut::<c_void>();
-        one_device.with_ptr(|ptr| one_ptr = ptr);
-        zero_device.with_ptr(|ptr| zero_ptr = ptr);
-        minus_one_device.with_ptr(|ptr| minus_one_ptr = ptr);
+        // The gemm scalars stay on the host: in `CublasPointerMode::Host` cuBLAS
+        // reads alpha/beta when the call is enqueued, so no per-call scalar
+        // allocation or host-to-device upload is needed (#2701).
+        let one_ptr = one.as_ptr();
+        let zero_ptr = zero.as_ptr();
+        let minus_one_ptr = minus_one.as_ptr();
 
         let t = raw.alloc_output::<T>(&[k, k])?;
         let w = raw.alloc_output::<T>(&[k, columns])?;
@@ -176,78 +176,70 @@ where
 
             handles
                 .cublas()
-                .set_pointer_mode(CublasPointerMode::Device, op)?;
-            let computation = (|| -> Result<()> {
-                let adjoint_v = match T::DATA_TYPE {
-                    CudaDataType::F32 | CudaDataType::F64 => CublasOperation::T,
-                    CudaDataType::Complex32 | CudaDataType::Complex64 => CublasOperation::C,
-                };
-                let apply_t = if adjoint {
-                    adjoint_v
-                } else {
-                    CublasOperation::N
-                };
-                // SAFETY: dimensions and leading dimensions describe live
-                // column-major V, T, W, W2, and target device allocations.
-                handles.cublas().gemm(
-                    T::DATA_TYPE,
-                    adjoint_v,
-                    CublasOperation::N,
-                    k_i32,
-                    columns_i32,
-                    m_i32,
-                    one_ptr.cast_const(),
-                    v_ptr,
-                    m_i32,
-                    target_ptr.cast_const(),
-                    m_i32,
-                    zero_ptr.cast_const(),
-                    w_ptr,
-                    k_i32,
-                    op,
-                )?;
-                handles.cublas().gemm(
-                    T::DATA_TYPE,
-                    apply_t,
-                    CublasOperation::N,
-                    k_i32,
-                    columns_i32,
-                    k_i32,
-                    one_ptr.cast_const(),
-                    t_ptr.cast_const(),
-                    k_i32,
-                    w_ptr.cast_const(),
-                    k_i32,
-                    zero_ptr.cast_const(),
-                    w2_ptr,
-                    k_i32,
-                    op,
-                )?;
-                handles.cublas().gemm(
-                    T::DATA_TYPE,
-                    CublasOperation::N,
-                    CublasOperation::N,
-                    m_i32,
-                    columns_i32,
-                    k_i32,
-                    minus_one_ptr.cast_const(),
-                    v_ptr,
-                    m_i32,
-                    w2_ptr.cast_const(),
-                    k_i32,
-                    one_ptr.cast_const(),
-                    target_ptr,
-                    m_i32,
-                    op,
-                )?;
-
-                Ok(())
-            })();
-            let reset = handles
-                .cublas()
-                .set_pointer_mode(CublasPointerMode::Host, op);
-            computation?;
-            reset
+                .set_pointer_mode(CublasPointerMode::Host, op)?;
+            let adjoint_v = match T::DATA_TYPE {
+                CudaDataType::F32 | CudaDataType::F64 => CublasOperation::T,
+                CudaDataType::Complex32 | CudaDataType::Complex64 => CublasOperation::C,
+            };
+            let apply_t = if adjoint {
+                adjoint_v
+            } else {
+                CublasOperation::N
+            };
+            // SAFETY: dimensions and leading dimensions describe live
+            // column-major V, T, W, W2, and target device allocations.
+            handles.cublas().gemm(
+                T::DATA_TYPE,
+                adjoint_v,
+                CublasOperation::N,
+                k_i32,
+                columns_i32,
+                m_i32,
+                one_ptr,
+                v_ptr,
+                m_i32,
+                target_ptr.cast_const(),
+                m_i32,
+                zero_ptr,
+                w_ptr,
+                k_i32,
+                op,
+            )?;
+            handles.cublas().gemm(
+                T::DATA_TYPE,
+                apply_t,
+                CublasOperation::N,
+                k_i32,
+                columns_i32,
+                k_i32,
+                one_ptr,
+                t_ptr.cast_const(),
+                k_i32,
+                w_ptr.cast_const(),
+                k_i32,
+                zero_ptr,
+                w2_ptr,
+                k_i32,
+                op,
+            )?;
+            handles.cublas().gemm(
+                T::DATA_TYPE,
+                CublasOperation::N,
+                CublasOperation::N,
+                m_i32,
+                columns_i32,
+                k_i32,
+                minus_one_ptr,
+                v_ptr,
+                m_i32,
+                w2_ptr.cast_const(),
+                k_i32,
+                one_ptr,
+                target_ptr,
+                m_i32,
+                op,
+            )?;
+            Ok(())
         }
     })
 }
@@ -438,8 +430,8 @@ where
     let m_i32 = as_i32(m, op, "gemm m")?;
     let n_i32 = as_i32(n, op, "gemm n")?;
     let k_i32 = as_i32(k, op, "gemm k")?;
-    let alpha = T::one();
-    let beta = T::zero();
+    let alpha = AlignedHostScalar(T::one());
+    let beta = AlignedHostScalar(T::zero());
     backend.with_raw(op, |raw| {
         let handles = raw.resource(CudaLinalgHandles::load)?;
         // SAFETY: stream handle is valid for this raw-session scope.
@@ -462,12 +454,12 @@ where
                 m_i32,
                 n_i32,
                 k_i32,
-                std::ptr::from_ref(&alpha).cast(),
+                alpha.as_ptr(),
                 lhs_ref.raw_ptr() as *const _,
                 m_i32,
                 rhs_ref.raw_ptr() as *const _,
                 k_i32,
-                std::ptr::from_ref(&beta).cast(),
+                beta.as_ptr(),
                 output_ref.raw_ptr(),
                 m_i32,
                 op,

@@ -26,31 +26,30 @@ __bench_unification_semantic_ad_api = []
 autodiff = [
     "dep:computegraph",
     "dep:tenferro-ad",
-    "tenferro-internal-ops/autodiff",
+    "tenferro-ad/autodiff",
 ]
 cuda = [
     "tenferro-gpu/cuda",
     "tenferro-ad?/cuda",
-    "tenferro-internal-ops/cuda",
     "dep:cudarc",
     "dep:libloading",
     "dep:tenferro-gpu",
 ]
 
 [dependencies]
-tenferro-runtime = { path = "../tenferro-runtime", version = "0.12.0", default-features = false }
-tenferro-ad = { path = "../tenferro-ad", version = "0.12.0", default-features = false, optional = true }
-tenferro-gpu = { path = "../tenferro-gpu", version = "0.12.0", default-features = false, optional = true }
-tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.12.0" }
-tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.12.0", default-features = false }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.12.0", default-features = false }
-tenferro-cpu = { path = "../tenferro-cpu", version = "0.12.0", default-features = false }
+tenferro-runtime = { path = "../tenferro-runtime", version = "0.13.0", default-features = false }
+tenferro-ad = { path = "../tenferro-ad", version = "0.13.0", default-features = false, optional = true }
+tenferro-gpu = { path = "../tenferro-gpu", version = "0.13.0", default-features = false, optional = true }
+tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.13.0" }
+tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.13.0", default-features = false }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.13.0", default-features = false }
+tenferro-cpu = { path = "../tenferro-cpu", version = "0.13.0", default-features = false }
 computegraph = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
 faer.workspace = true
 # The extracted tensor-free linalg provider (tlinalg-rs). The interface it is adapted to lives in
 # this crate. Its requirement lives in the workspace manifest, next to the rest of the CPU stack:
-# tlinalg 0.11 takes the engine's `tcontract_exec::Exec` bundle by `&mut` (`*_workspace` entries by
+# tlinalg takes the engine's `tcontract_exec::Exec` bundle by `&mut` (`*_workspace` entries by
 # `&`) and forks its batch lanes over that token.
 tlinalg.workspace = true
 tcontract-exec = { workspace = true, features = ["faer"] }

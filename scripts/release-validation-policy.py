@@ -58,6 +58,8 @@ RELEASE_HELPER_PATHS = frozenset(
         "scripts/release-publish.py",
         "scripts/check-publish-layout.py",
         "scripts/check-git-pin-content.py",
+        "scripts/check-stack-versions.py",
+        "scripts/test-check-stack-versions.py",
         "scripts/git-pin-content-exceptions.toml",
         "scripts/release-validation-policy.py",
         "scripts/ci/run_profile.py",

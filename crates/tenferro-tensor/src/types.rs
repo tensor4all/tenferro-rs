@@ -23,6 +23,7 @@ use crate::storage::{
 mod accessors;
 mod col_major;
 mod shape_packing;
+mod split_ranges;
 mod strided_view;
 #[cfg(test)]
 mod tests;
@@ -5515,7 +5516,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
                 let second_offset = adjusted_view_offset(second_layout.offset(), second_span.0)?;
                 let (first_data, second_data) = match &mut self.buffer {
                     TensorStorageRefMut::Host(data) => {
-                        match split_two_mut_ranges(data, first_span, second_span) {
+                        match split_ranges::split_two_mut_ranges(data, first_span, second_span) {
                             Some(ranges) => ranges,
                             None => return Ok(None),
                         }
@@ -10001,28 +10002,6 @@ fn reachable_layout_span(
     Ok(Some((min_offset, max_offset)))
 }
 
-fn split_two_mut_ranges<T>(
-    data: &mut [T],
-    first: (usize, usize),
-    second: (usize, usize),
-) -> Option<(&mut [T], &mut [T])> {
-    if first.1 < second.0 {
-        let (_, after_first_start) = data.split_at_mut(first.0);
-        let (first_slice, after_first) = after_first_start.split_at_mut(first.1 - first.0 + 1);
-        let (_, after_gap) = after_first.split_at_mut(second.0 - first.1 - 1);
-        let (second_slice, _) = after_gap.split_at_mut(second.1 - second.0 + 1);
-        Some((first_slice, second_slice))
-    } else if second.1 < first.0 {
-        let (_, after_second_start) = data.split_at_mut(second.0);
-        let (second_slice, after_second) = after_second_start.split_at_mut(second.1 - second.0 + 1);
-        let (_, after_gap) = after_second.split_at_mut(first.0 - second.1 - 1);
-        let (first_slice, _) = after_gap.split_at_mut(first.1 - first.0 + 1);
-        Some((first_slice, second_slice))
-    } else {
-        None
-    }
-}
-
 fn adjusted_view_offset(offset: isize, span_start: usize) -> crate::Result<isize> {
     let span_start = isize::try_from(span_start).map_err(|_| {
         crate::Error::validation(
@@ -12384,8 +12363,13 @@ impl Tensor {
                 format!("{value} is not representable in {dtype:?}"),
             )
         };
-        // Below 2^53 (~9.007e15) every integer is exact in f64, so `as i64` loses nothing.
-        let integer = (value.fract() == 0.0 && value.abs() < 9.0e15)
+        // Both bounds are exact in binary64, so they decide representability
+        // without the saturating `as i64` cast: 2^53 and every integral binary64
+        // value up to the largest one below 2^63 are exactly representable (and
+        // NaN/infinity fail the `fract` test).
+        const I64_MIN: f64 = -9_223_372_036_854_775_808.0; // -(2^63)
+        const I64_MAX_EXCLUSIVE: f64 = 9_223_372_036_854_775_808.0; // 2^63
+        let integer = (value.fract() == 0.0 && (I64_MIN..I64_MAX_EXCLUSIVE).contains(&value))
             .then_some(value as i64)
             .ok_or_else(not_representable);
         match dtype {

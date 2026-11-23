@@ -865,7 +865,7 @@ assert!((v - 1.0).abs() < 1e-12);
             category: "cache owner";
             owner_module: "tenferro_fft";
             reason: "the receiver is the plan cache, not the input; the transforms take the input, the options and the engine in grammar order";
-            verification: "src/api/tests/registry.rs: every `_with` equals the `FftOps` result bit for bit and fills the caller's plan cache";
+            verification: "src/api/tests/registry.rs: every `_with` equals the `FftOps` result bit for bit and fills the caller's plan cache, and every `AsView` input form gives the owned input's shape, dtype and bits while reusing its warmed plans";
             exit_condition: "plan caches owned by the engine for every caller";
             status: retained;
         }

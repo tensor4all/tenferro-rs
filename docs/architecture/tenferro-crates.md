@@ -61,6 +61,16 @@ optional `tenferro-mpi` adapter. Crates with
 `internal` in their name are
 implementation crates and should not be presented as user-facing API surfaces.
 
+Operation families outside the core (`tenferro-einsum`, `tenferro-fft`,
+`tenferro-linalg`, `ext/*`) take the `autodiff` and `cuda` capabilities from the
+public crates: `tenferro-ad` owns both names, so an extension declares
+`autodiff = ["tenferro-ad/autodiff"]` and reaches CUDA through
+`tenferro-gpu/cuda` and `tenferro-ad/cuda`. No extension forwards a feature of a
+`tenferro-internal-*` crate; `scripts/check-crate-boundaries.py` checks that, and
+the same script owns the extension-crate boundary rules. `tenferro-runtime`
+declares no feature at all, because AD must not cross its boundary
+(`scripts/check-ad-boundaries.py`).
+
 ### External CPU numeric dependencies
 
 `tenferro-cpu` does not depend on `tblis-ffi` or `t4a-tblis-src`, and it has no

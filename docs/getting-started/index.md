@@ -38,9 +38,9 @@ extension from crates.io:
 
 ```toml
 [dependencies]
-tenferro-runtime = "0.12"
-tenferro-cpu = "0.12"
-tenferro-linalg = "0.12"
+tenferro-runtime = "0.13"
+tenferro-cpu = "0.13"
+tenferro-linalg = "0.13"
 ```
 
 For development against a local checkout of this repository, use path
@@ -153,9 +153,9 @@ Add `tenferro-ad` when the same tensor stack needs graph-based derivatives:
 
 ```toml
 [dependencies]
-tenferro-runtime = "0.12"
-tenferro-cpu = "0.12"
-tenferro-ad = "0.12"
+tenferro-runtime = "0.13"
+tenferro-cpu = "0.13"
+tenferro-ad = "0.13"
 ```
 
 <!-- snippet-source: docs/tutorial-code/src/bin/traced_autodiff_jax_style.rs -->
@@ -175,17 +175,19 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
     }
 }
 
-fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, Box<dyn std::error::Error>> {
+fn run(
+    tensor: &TracedTensor,
+    engine: &mut CpuEngine,
+) -> Result<tenferro_runtime::Tensor, Box<dyn std::error::Error>> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(tensor)?;
-    let mut engine = CpuEngine::serial();
     let mut builder = Runtime::builder();
-    builder.register_engine(tenferro_cpu::runtime_engine_registration(&engine)?)?;
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(engine)?)?;
     let runtime = builder.build()?;
     let prepared = runtime.prepare(&program, &[], &[engine.target()])?;
-    let mut outputs = runtime.run(&mut [&mut engine], &prepared, &[])?;
+    let mut outputs = runtime.run(&mut [engine], &prepared, &[])?;
     assert_eq!(outputs.len(), 1);
-    Ok(outputs.remove(0).into_tensor(&mut engine)?)
+    Ok(outputs.remove(0).into_tensor(engine)?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -193,18 +195,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let x = trace.from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
     let y = (&x * &x)?.reduce_sum(Some(&[0]))?;
 
-    let y_value = run(&y)?;
+    let mut engine = CpuEngine::serial();
+    let y_value = run(&y, &mut engine)?;
     assert_eq!(y_value.shape(), &[] as &[usize]);
     assert_close(y_value.as_slice::<f64>().unwrap(), &[14.0]);
 
     let grad = y.grad(&x)?;
-    let grad_value = run(&grad)?;
+    let grad_value = run(&grad, &mut engine)?;
     assert_eq!(grad_value.shape(), &[3]);
     assert_close(grad_value.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
     let tangent = trace.from_vec_col_major(vec![3], vec![0.1_f64, 1.0, -2.0])?;
     let directional = y.jvp(&x, &tangent)?;
-    let directional_value = run(&directional)?;
+    let directional_value = run(&directional, &mut engine)?;
     assert_eq!(directional_value.shape(), &[] as &[usize]);
     assert_close(directional_value.as_slice::<f64>().unwrap(), &[-7.8]);
 

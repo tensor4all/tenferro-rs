@@ -41,27 +41,84 @@ where
     <X::Repr as CoreRepr>::wrap_bool(op, t)
 }
 
-pub(crate) fn add_into<X: AsView + ?Sized>(
-    a: &X,
-    b: &impl AsView<Repr = X::Repr>,
-    e: &mut dyn Engine,
-    dest: Dest<<X::Repr as Repr>::Write<'_>>,
-) -> Res<()>
-where
-    X::Repr: CoreRepr,
-{
-    // Rejected before `dest` is touched.
+/// The `Dest` modes the elementwise `_into` forms declare: overwrite only.
+/// Rejected before `dest` is touched, so an undeclared mode writes nothing.
+fn overwrite_target<W>(op: &'static str, dest: Dest<W>) -> Res<W> {
     if dest.mode() != DestMode::Overwrite {
         return Err(Error::unsupported(
-            "add_into",
+            op,
             format!(
-                "destination mode {:?} is not supported; add_into overwrites its destination",
+                "destination mode {:?} is not supported; {op} overwrites its destination",
                 dest.mode()
             ),
         ));
     }
-    let out = <X::Repr as Repr>::erase_write(dest.into_target());
-    body::add_into(a.as_read(), b.as_read(), e, out)
+    Ok(dest.into_target())
+}
+
+/// The elementwise `_into` forms do not promote: every operand has the
+/// destination's dtype. Checked before dispatch, so a backend whose allocating
+/// kernel would promote (a real scalar against a complex one) never writes.
+fn same_dtype_as_destination(
+    op: &'static str,
+    operands: &[&tenferro_tensor::TensorRead<'_>],
+    out: &tenferro_tensor::TensorWrite<'_>,
+) -> Res<()> {
+    for operand in operands {
+        if operand.dtype() != out.dtype() {
+            return Err(Error::dtype_mismatch(op, out.dtype(), operand.dtype()));
+        }
+    }
+    Ok(())
+}
+
+macro_rules! binary_into {
+    ($($name:ident => $body:ident;)*) => {$(
+        pub(crate) fn $name<X: AsView + ?Sized>(
+            a: &X,
+            b: &impl AsView<Repr = X::Repr>,
+            e: &mut dyn Engine,
+            dest: Dest<<X::Repr as Repr>::Write<'_>>,
+        ) -> Res<()>
+        where
+            X::Repr: CoreRepr,
+        {
+            let out = <X::Repr as Repr>::erase_write(overwrite_target(stringify!($name), dest)?);
+            let (a, b) = (a.as_read(), b.as_read());
+            same_dtype_as_destination(stringify!($name), &[&a, &b], &out)?;
+            body::$body(a, b, e, out)
+        }
+    )*};
+}
+
+binary_into! {
+    add_into => add_into;
+    sub_into => sub_into;
+    mul_into => mul_into;
+    div_into => div_into;
+}
+
+macro_rules! unary_into {
+    ($($name:ident => $body:ident;)*) => {$(
+        pub(crate) fn $name<X: AsView + ?Sized>(
+            a: &X,
+            e: &mut dyn Engine,
+            dest: Dest<<X::Repr as Repr>::Write<'_>>,
+        ) -> Res<()>
+        where
+            X::Repr: CoreRepr,
+        {
+            let out = <X::Repr as Repr>::erase_write(overwrite_target(stringify!($name), dest)?);
+            let a = a.as_read();
+            same_dtype_as_destination(stringify!($name), &[&a], &out)?;
+            body::$body(a, e, out)
+        }
+    )*};
+}
+
+unary_into! {
+    neg_into => neg_into;
+    conj_into => conj_into;
 }
 
 pub(crate) fn where_select<X: AsView + ?Sized, Y: SelectOperand<X::Repr> + ?Sized>(

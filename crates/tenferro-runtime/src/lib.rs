@@ -92,6 +92,7 @@ pub mod sym_dim;
 mod tensor;
 mod trace;
 mod trace_ops;
+mod trace_record;
 pub mod traced;
 mod typed_tensor;
 
@@ -149,5 +150,6 @@ pub use tenferro_tensor::{
     TypedTensor, TypedTensorView,
 };
 pub use trace::{TraceContext, TraceValue, TracedGraph};
+pub use trace_record::RecordedProgram;
 
 pub use traced::TracedTensor;
