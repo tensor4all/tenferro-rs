@@ -952,7 +952,8 @@ impl CudaRuntime {
     }
 
     /// Host-to-device copies this runtime admitted, cumulative, by every upload path (a tensor
-    /// upload, a raw byte upload, an extension scope's upload).
+    /// upload, a raw byte upload, a pending upload from a pinned source, an extension scope's
+    /// upload).
     ///
     /// Exposed so the regression tests can assert that a steady-state operation transfers nothing
     /// to the device: a pinned staging chunk is reused once idle, so the chunk counter alone can

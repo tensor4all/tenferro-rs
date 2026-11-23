@@ -44,12 +44,15 @@ fn composite_constants_are_reused_without_gradient_recording() -> TestResult {
 fn full_values_stay_uniquely_owned() -> TestResult {
     let ctx = EagerRuntime::new()?;
     let _no_grad = ctx.no_grad();
-    let value = ctx.with_eager_session(&mut CpuEngine::serial(), |s| {
-        s.full(DType::F64, Vec::<usize>::new(), 2.0)
-    })?;
-    let tensor = value
-        .into_value()
-        .unwrap_or_else(|_| panic!("a full value is uniquely owned"));
-    assert_eq!(tensor.as_slice::<f64>()?, &[2.0]);
-    Ok(())
+    ctx.with_eager_session(&mut CpuEngine::serial(), |s| {
+        // A composite constant of the same value is held by the session first, so a cached
+        // `full` would come back shared.
+        let _held = s.composite_constant(DType::F64, 2.0)?;
+        let value = s.full(DType::F64, Vec::<usize>::new(), 2.0)?;
+        let tensor = value
+            .into_value()
+            .unwrap_or_else(|_| panic!("a full value is uniquely owned inside the session"));
+        assert_eq!(tensor.as_slice::<f64>()?, &[2.0]);
+        Ok(())
+    })
 }

@@ -16,10 +16,10 @@ pub(crate) fn slogdet(
     if a.shape()[0] == 0 && a.shape()[1] == 0 {
         ensure_float_or_complex("slogdet", a.dtype())?;
         let batch_shape = &a.shape()[2..];
-        let sign_scalar = scalar_real(session, a, 1.0)?;
-        let sign = broadcast_scalar(session, &sign_scalar, batch_shape)?;
-        let log_scalar = session_scalar(session, real_values_dtype(a.dtype()), 0.0)?;
-        let logabsdet = broadcast_scalar(session, &log_scalar, batch_shape)?;
+        // The results are fresh values of their own: a shared composite constant must never be
+        // returned to the caller, whose gradient or ownership would then alias it.
+        let sign = session.composite_filled(a.dtype(), batch_shape, 1.0)?;
+        let logabsdet = session.composite_filled(real_values_dtype(a.dtype()), batch_shape, 0.0)?;
         return Ok((sign, logabsdet));
     }
     let (_p, _l, u, parity) = session.lu(a)?;
@@ -292,17 +292,6 @@ fn eye_like(
     vector_shape.extend_from_slice(&anchor.shape()[2..]);
     let ones = session.composite_filled(anchor.dtype(), &vector_shape, 1.0)?;
     session.embed_diag(&ones, 0, 1)
-}
-
-fn broadcast_scalar(
-    session: &mut EagerSession<'_>,
-    input: &EagerTensor,
-    shape: &[usize],
-) -> Result<EagerTensor> {
-    if input.shape() == shape {
-        return Ok(input.clone());
-    }
-    session.broadcast_in_dim(input, shape, &[])
 }
 
 fn broadcast_batch_scalar_to_leading_axis(

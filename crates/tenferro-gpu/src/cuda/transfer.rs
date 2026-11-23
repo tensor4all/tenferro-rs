@@ -219,6 +219,7 @@ pub fn upload_pending(
         })));
     }
 
+    runtime.note_host_upload();
     let completion = {
         let mut guard = runtime.submit();
         let host = source.as_slice().as_ptr();
