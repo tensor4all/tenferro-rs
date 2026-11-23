@@ -7665,13 +7665,14 @@ impl tenferro_tensor::Engine for CudaEngine {
                 let merged_plan = gather_plan(&merged_config, rank);
                 let merged_out = gather_shape(indices_shape, &merged_plan, &merged_config)?;
                 // Drops remove extent-one axes and merges fold an extent into the run's head, so
-                // the output holds as many elements as before; the planner's span check alone
-                // would accept a smaller merged output.
-                debug_assert_eq!(
-                    merged_out.iter().product::<usize>(),
-                    out_shape.iter().product::<usize>(),
-                    "a merged gather must write every output element"
-                );
+                // the output holds as many elements as before. The planner's span check alone
+                // would accept a smaller merged output and leave the rest of it unwritten.
+                if merged_out.iter().product::<usize>() != out_shape.iter().product::<usize>() {
+                    return Err(crate::Error::runtime_state(
+                        OP,
+                        "the merged gather view names a different element count",
+                    ));
+                }
                 (extents, strides, merged_plan, merged_out)
             }
             None => (

@@ -428,9 +428,9 @@ fn float_indices_are_checked_for_exactness() {
 #[ignore = "requires CUDA"]
 fn a_rank_nine_concatenation_with_singleton_axes() {
     let Some(mut engine) = engine() else { return };
-    // Nine axes, most of extent one: the non-empty inputs merge to rank one and two and take the
-    // by-value strided copy (#2708); the empty input below keeps its nine axes and the general
-    // path. `a_rank_nine_concatenation_that_does_not_merge_uses_the_general_path` covers the
+    // Nine axes, most of extent one: the two inputs merge to rank one and two, so the first call
+    // takes the by-value strided copy (#2708). The entry is chosen per call: the empty input in
+    // the second call keeps its nine axes, so that whole call takes the general path. `a_rank_nine_concatenation_that_does_not_merge_uses_the_general_path` covers the
     // general path with data. Concatenating the leading axis interleaves the inputs, so a wrong
     // axis or offset cannot pass as a flat append.
     let first_shape = vec![1usize, 2, 1, 1, 1, 1, 1, 1, 2];
@@ -560,7 +560,8 @@ fn a_rank_nine_dynamic_slice_uses_the_general_path() {
 fn a_rank_nine_gather_with_singleton_axes_and_scatter() {
     let Some(mut engine) = engine() else { return };
     // A rank-9 operand whose window rides axis 8 and whose start selects axis 7. The gather drops
-    // the collapsed extent-one axes and takes the by-value entry at rank two (#2708); the
+    // the collapsed extent-one axes, so its operand reaches the by-value entry as rank three
+    // `[3, 2, 4]` (#2708); the
     // scatter keeps the general path, whose plan's window, offset, start-map and slice-size
     // arrays are all non-empty and distinct: a swapped pointer order would fail this.
     // `a_rank_nine_gather_that_does_not_merge_uses_the_general_path` covers the general gather.
