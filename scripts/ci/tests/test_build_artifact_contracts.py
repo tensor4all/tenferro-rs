@@ -215,6 +215,9 @@ class BuildArtifactContracts(unittest.TestCase):
         for name in ("t4a-cuda-runtime", "t4a-cuda-kernels"):
             with self.subTest(dependency=name):
                 spec = workspace[name]
+                if isinstance(spec, str):
+                    # A bare `"=X.Y.Z"` is the registry form of the same pin.
+                    spec = {"version": spec}
                 self.assertNotIn("branch", spec)
                 self.assertNotIn("tag", spec)
                 self.assertRegex(spec["version"], r"^=\d+\.\d+\.\d+$")
