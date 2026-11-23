@@ -123,10 +123,10 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 # crates.io at exact versions, so `cargo publish` keeps the same dependency;
 # `t4a-metal-sys` 0.1.0 comes in transitively through the Metal runtime.
 t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "147af9e03e5169ec7cef6f6d869e27ed70a43a05", version = "=0.1.1" }
-# The kernel catalogue is pinned to tensor4all/t4a-cuda-kernels#37 (ABI 15, the
-# layout-taking elementwise entries, tenferro-rs#2701) until 0.4.0 is published;
-# the pin then returns to the crates.io exact version.
-t4a-cuda-kernels = { git = "https://github.com/tensor4all/t4a-cuda-kernels", rev = "1cf73b463fe446add25a0659005b6c88928cfd8f", version = "=0.4.0" }
+# The kernel catalogue is the published crates.io exact version (ABI 15, the
+# layout-taking elementwise entries, tenferro-rs#2701); it was pinned to
+# tensor4all/t4a-cuda-kernels#37 until 0.4.0 was published.
+t4a-cuda-kernels = "=0.4.0"
 t4a-metal-runtime = { version = "=0.1.2" }
 sha2 = "0.10"
 omeco = "0.2.4"
