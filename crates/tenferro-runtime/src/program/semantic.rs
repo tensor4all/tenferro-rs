@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use super::identity::SemanticIdentity;
 use super::op::{CoreSemanticOp, SemanticOp, SemanticOperation};
+use super::subprogram::SubprogramCall;
 use super::value::ProgramBuilderNonce;
 use super::{
     Alias, Effect, ProgramBindings, ProgramQueryError, ProgramValue, ProgramValueMetadata,
@@ -144,6 +145,16 @@ fn semantic_operation_retained_bytes(operation: &SemanticOperation) -> Option<us
                 .map(ShapeGuard::logical_retained_bytes),
         )?,
         operation.provenance.view().label().map_or(0, str::len),
+        operation
+            .subprograms
+            .len()
+            .checked_mul(size_of::<SubprogramCall>())?,
+        checked_sum_options(
+            operation
+                .subprograms
+                .iter()
+                .map(SubprogramCall::logical_retained_bytes),
+        )?,
     ])
 }
 

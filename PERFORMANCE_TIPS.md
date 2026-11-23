@@ -582,12 +582,18 @@ thread count, nothing across thread counts — is owned by `docs/spec/reproducib
   a different pool. A kernel that needs every worker at once (a barrier team)
   asks `Exec::can_broadcast` and takes a barrier-free path when it is refused.
 - threadteam places the team; tenferro makes no `sched_setaffinity` call and
-  has no affinity setting of its own. Placement is on by default (threadteam
-  0.5): member `k` gets CPU `S[k]` of the calling thread's set `S`, and the
-  team's creator (the engine's leader) stays pinned to `{S[0]}` for the team's
-  life. A call from a member uses `Exec::external` over `S`. Nothing wraps:
-  when `S` has fewer CPUs than participants nobody is placed and
-  `Pool::pin_skips()` counts those scopes; opt out with
+  has no affinity setting of its own. Placement is on by default on Linux
+  (threadteam 0.6): member `k` gets the `k`-th CPU of the calling thread's set
+  `S` in the pool's `PinStrategy` order. The default `Spread` deals `S`
+  round-robin over its NUMA nodes; `Pack` keeps ascending order (`S[k]`).
+  Creating the engine does not narrow its creator's mask. The thread that
+  leads an operation is pinned to `{S[0]}` for a team scope or parallel section
+  (threadteam 0.6.0), or from the token's first one until the token is dropped
+  (0.6.1). A provider that starts its own threads is called through `external`,
+  from that leader or from a member, so it sees `S`. Two teams built in one
+  mask get the same CPUs: engines that run concurrently need disjoint masks
+  from the caller. Nothing wraps: when `S` has fewer CPUs than participants
+  nobody is placed and `Pool::pin_skips()` counts those scopes; opt out with
   `Pool::builder().pin_participants(false)`.
 - `PoolBuilder` reserves 16 MiB per worker by default rather than the
   `std::thread` default of 2 MiB, because provider kernels recurse with large

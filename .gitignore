@@ -139,3 +139,8 @@ docs/superpowers/plans/
 !/GOVERNANCE.md
 !/IMPLEMENTATION-PLAN.md
 !/PERFORMANCE_TIPS.md
+
+# Creusot proof output and proof-script cache (`cargo creusot`)
+verif/
+.why3find/
+why3find.proofs

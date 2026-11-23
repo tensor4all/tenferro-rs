@@ -1144,8 +1144,8 @@ fn elementwise_read_into_refuses_a_mismatched_operand_before_staging_the_scratch
             .expect_err("a shape mismatch must be refused")
     };
     assert!(
-        format!("{error}").contains("every operand must share the destination's shape and dtype"),
-        "unexpected refusal: {error}"
+        matches!(error.kind(), tenferro_tensor::ErrorKind::Validation(_)),
+        "a shape mismatch is a typed validation error: {error}"
     );
     assert_eq!(
         engine.staged_reads(),

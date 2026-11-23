@@ -7,6 +7,7 @@ use tenferro_tensor::{
 
 use super::op::{SemanticOp, SemanticOperation};
 use super::semantic::SemanticProgram;
+use super::subprogram::SubprogramCall;
 use super::{
     Alias, AliasKind, CoreSemanticOp, Effect, EffectAccess, ProgramShapeRelation, ProgramValue,
     ProgramValueMetadata, SemanticPlacementConstraint, SemanticPlacementKind, ShapeGuard,
@@ -24,6 +25,16 @@ impl SemanticFingerprint {
     /// Borrow the cached hash bytes.
     pub const fn as_bytes(&self) -> &[u8; 16] {
         &self.0
+    }
+
+    /// Fingerprint of a sub-program: this program fingerprint combined with
+    /// how many leading inputs are parameters rather than captures.
+    pub(crate) fn with_parameter_split(self, parameters: usize) -> Self {
+        let mut encoder = CanonicalEncoder::new();
+        encoder.bytes(b"tenferro.subprogram.v1");
+        encoder.raw(&self.0);
+        encoder.usize(parameters);
+        Self(encoder.finalize())
     }
 }
 
@@ -44,7 +55,10 @@ impl SemanticIdentity {
     ) -> Self {
         let ordinals = normalized_ordinals(inputs, values.len(), operations);
         let mut encoder = CanonicalEncoder::new();
-        encoder.bytes(b"tenferro.semantic-program.v1");
+        // v2 appends each operation's sub-program calls. Fingerprints are
+        // process-local cache keys (`DefaultHasher` is not stable across
+        // toolchains), so no persisted v1 value can exist to stay compatible with.
+        encoder.bytes(b"tenferro.semantic-program.v2");
         encoder.usize(inputs.len());
         for input in inputs {
             encode_metadata(&mut encoder, &values[input.slot as usize]);
@@ -169,6 +183,12 @@ fn operation_exact_eq(
         && left.aliases == right.aliases
         && left.shape_guards == right.shape_guards
         && left.placement == right.placement
+        && left.subprograms.len() == right.subprograms.len()
+        && left
+            .subprograms
+            .iter()
+            .zip(&right.subprograms)
+            .all(|(left, right)| left.exact_eq(right))
 }
 
 fn semantic_op_exact_eq(left: &SemanticOp, right: &SemanticOp) -> bool {
@@ -338,6 +358,24 @@ fn encode_operation(
     encode_aliases(encoder, &operation.aliases);
     encode_shape_guards(encoder, &operation.shape_guards);
     encode_placement(encoder, operation.placement);
+    encode_subprogram_calls(encoder, &operation.subprograms);
+}
+
+/// Encode each call as the callee's cached sub-program fingerprint (program
+/// structure plus parameter split) and the call-site input metadata.
+///
+/// The callee fingerprint was computed when the callee was frozen, so encoding
+/// costs O(calls) per operation however deeply sub-programs nest.
+fn encode_subprogram_calls(encoder: &mut CanonicalEncoder, calls: &[SubprogramCall]) {
+    encoder.usize(calls.len());
+    for call in calls {
+        // The sub-program fingerprint already covers the parameter split.
+        encoder.raw(call.program.semantic_fingerprint().as_bytes());
+        encoder.usize(call.input_meta.len());
+        for metadata in &call.input_meta {
+            encode_metadata(encoder, metadata);
+        }
+    }
 }
 
 fn encode_core_op(encoder: &mut CanonicalEncoder, op: &CoreSemanticOp) {

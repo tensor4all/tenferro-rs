@@ -4120,6 +4120,42 @@ impl CudaEngine {
         len: i64,
         name: &'static str,
     ) -> crate::Result<Tensor> {
+        with_scalar!(dtype, |T| {
+            self.dispatch_division(
+                self.allocation_of::<T>(left, name)?,
+                self.allocation_of::<T>(right, name)?,
+                super::dispatch::Dest::Uninit(&output),
+                kernel,
+                dtype,
+                len,
+                name,
+            )
+        })?;
+        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+        let output = unsafe { output.assume_init() };
+        tensor_from_buffer(self.runtime(), dtype, shape, output)
+    }
+
+    /// The division launch for a dtype without a plain `/` entry, into `destination`.
+    ///
+    /// Integers use the checked division and observe its status word, a zeroed 4-byte scratch
+    /// (a device memset, not an upload); complex values use the robust complex division. A
+    /// division by zero is a numerical failure reported after the launch, so a caller-provided
+    /// destination's contents are then unspecified.
+    // INVARIANT: the arguments are the launch's two operand buffers, its destination, the kernel
+    // and tensor dtypes, the length and the op name; bundling them would add a one-use struct.
+    #[allow(clippy::too_many_arguments)]
+    fn dispatch_division(
+        &mut self,
+        left: &t4a_cuda_runtime::Buffer,
+        right: &t4a_cuda_runtime::Buffer,
+        destination: super::dispatch::Dest<'_>,
+        kernel: t4a_cuda_kernels::DType,
+        dtype: DType,
+        len: i64,
+        name: &'static str,
+    ) -> crate::Result<()> {
+        let checked = matches!(dtype, DType::I32 | DType::I64);
         let op = match dtype {
             DType::I32 | DType::I64 => t4a_cuda_kernels::BinaryOp::DivChecked,
             DType::C32 | DType::C64 => t4a_cuda_kernels::BinaryOp::DivComplex,
@@ -4130,39 +4166,35 @@ impl CudaEngine {
                 ))
             }
         };
-        let runtime = self.runtime().clone();
-        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
-        let status = runtime
-            .upload_bytes(&[0u8; 4])
+        let status = self
+            .runtime()
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
-        with_scalar!(dtype, |T| {
-            dispatcher.binary(
-                op,
-                kernel,
-                t4a_cuda_kernels::ScalarSide::Both,
-                len,
-                super::dispatch::Dest::Uninit(&output),
-                self.allocation_of::<T>(left, name)?,
-                self.allocation_of::<T>(right, name)?,
-                &status,
-            )
-        })?;
+        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
+        dispatcher.binary(
+            op,
+            kernel,
+            t4a_cuda_kernels::ScalarSide::Both,
+            len,
+            destination,
+            left,
+            right,
+            &status,
+        )?;
         self.release_completed_staging();
-        if matches!(dtype, DType::I32 | DType::I64) {
+        if checked {
             let flag = self
                 .runtime()
                 .download_bytes(&status)
                 .map_err(|error| crate::Error::runtime_state_source(name, error))?;
             if flag.iter().any(|byte| *byte != 0) {
-                return Err(crate::Error::unsupported(
+                return Err(numerical_failure(
                     name,
                     "the checked division reported a division by zero",
                 ));
             }
         }
-        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
-        let output = unsafe { output.assume_init() };
-        tensor_from_buffer(self.runtime(), dtype, shape, output)
+        Ok(())
     }
 
     /// One unary elementwise operation over a device tensor.
@@ -4235,7 +4267,7 @@ impl CudaEngine {
         // The entry always takes a status word for its checked-integer route; a
         // comparison of two full buffers never sets it.
         let status = runtime
-            .upload_bytes(&[0u8; 4])
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
         with_scalar!(dtype, |T| {
             dispatcher.binary(
@@ -4295,7 +4327,7 @@ impl CudaEngine {
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         let status = runtime
-            .upload_bytes(&[0u8; 4])
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
         with_scalar!(dtype, |T| {
             dispatcher.binary(
@@ -4616,10 +4648,15 @@ impl CudaEngine {
         for input in inputs {
             // The read boundary's residency refusals, from metadata only.
             self.read_region(input, name)?;
-            if input.dtype() != dtype || input.shape() != shape {
-                return Err(crate::Error::unsupported(
+            // A mismatch is a caller error, typed like the CPU path's, not an unserved case.
+            if input.dtype() != dtype {
+                return Err(crate::Error::dtype_mismatch(name, dtype, input.dtype()));
+            }
+            if input.shape() != shape {
+                return Err(crate::Error::shape_mismatch(
                     name,
-                    "every operand must share the destination's shape and dtype on this path",
+                    input.shape().to_vec(),
+                    shape.to_vec(),
                 ));
             }
         }
@@ -4640,10 +4677,29 @@ impl CudaEngine {
         let dtype = destination.dtype();
         let kernel = kernel_dtype(dtype, name)?;
         let len = count_i64(destination.shape(), name)?;
-        let sources: Vec<Resolved<'_>> = inputs
+        // A flat operand (one compact span at its allocation's base, which is what an owned
+        // tensor and a compact eager value are) is read where it lies; only a permuted, offset,
+        // broadcast or reversed region is staged into a compact copy, since the flat kernels
+        // address no layout (#2701).
+        let staged: Vec<Option<Resolved<'_>>> = inputs
             .iter()
-            .map(|input| self.device_read(input.clone(), name))
+            .map(|input| {
+                let region = self.read_region(input, name)?;
+                if region_is_flat(&region) {
+                    Ok(None)
+                } else {
+                    self.device_read(input.clone(), name).map(Some)
+                }
+            })
             .collect::<crate::Result<_>>()?;
+        let mut source_buffers: Vec<&t4a_cuda_runtime::Buffer> = Vec::with_capacity(inputs.len());
+        for (input, staged) in inputs.iter().zip(&staged) {
+            let buffer = match staged {
+                Some(resolved) => with_scalar!(dtype, |T| self.allocation_of::<T>(resolved, name))?,
+                None => self.read_region(input, name)?.storage.allocation(),
+            };
+            source_buffers.push(buffer);
+        }
         match op {
             tenferro_tensor::ElementwiseReadOp::Negate => {
                 let mut dispatcher = self.dispatcher(&[Entry::Unary])?;
@@ -4654,7 +4710,7 @@ impl CudaEngine {
                         kernel,
                         len,
                         super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
-                        self.allocation_of::<T>(&sources[0], name)?,
+                        source_buffers[0],
                     )
                 })?;
             }
@@ -4667,9 +4723,23 @@ impl CudaEngine {
                         kernel,
                         len,
                         super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
-                        self.allocation_of::<T>(&sources[0], name)?,
+                        source_buffers[0],
                     )
                 })?;
+            }
+            tenferro_tensor::ElementwiseReadOp::Divide
+                if !matches!(dtype, DType::F32 | DType::F64) =>
+            {
+                let out = with_scalar!(dtype, |T| self.allocation_of::<T>(destination, name))?;
+                self.dispatch_division(
+                    source_buffers[0],
+                    source_buffers[1],
+                    super::dispatch::Dest::Init(out),
+                    kernel,
+                    dtype,
+                    len,
+                    name,
+                )?;
             }
             binary => {
                 let entry = match binary {
@@ -4685,8 +4755,8 @@ impl CudaEngine {
                         kernel,
                         len,
                         super::dispatch::Dest::Init(self.allocation_of::<T>(destination, name)?),
-                        self.allocation_of::<T>(&sources[0], name)?,
-                        self.allocation_of::<T>(&sources[1], name)?,
+                        source_buffers[0],
+                        source_buffers[1],
                     )
                 })?;
             }
@@ -4740,7 +4810,7 @@ impl CudaEngine {
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         let status = runtime
-            .upload_bytes(&[0u8; 4])
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(op, error))?;
         with_scalar!(dtype, |T| {
             dispatcher.binary(
@@ -6824,7 +6894,7 @@ impl CudaEngine {
         let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         let status = runtime
-            .upload_bytes(&[0u8; 4])
+            .zeroed_status_word()
             .map_err(|error| crate::Error::runtime_state_source(name, error))?;
         with_scalar!(dtype, |T| {
             dispatcher.binary(

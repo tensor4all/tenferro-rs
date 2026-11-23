@@ -118,6 +118,24 @@ lower-level `engine.runtime().synchronize()` barrier. See
 
 For a time-axis diagram, see [Execution Models](execution-models.md).
 
+### Eager strided reads and output reuse
+
+`s.transpose(&x, &[1, 0])` on a CUDA-resident eager tensor returns an `EagerTensor` that
+reads as a strided view. CUDA elementwise operations may gather a permuted, offset, broadcast
+or reversed operand once into a compact device buffer of the same placement, on the eager and
+the direct route alike; the operation registry states the layout handling per operation.
+
+`EagerSession::{add,sub,mul,div}_into(&x, &y, dest)` and `{neg,conj}_into(&x, dest)` are the
+eager output-reuse forms of those operations: they write into a caller-owned, preallocated
+`Tensor` (device-resident for a CUDA session) without allocating a result. They follow the
+concrete `_into` contract (shared dtype, `Dest::Overwrite` only). While gradient recording is
+enabled they reject tracked operands or an active trace capture, because a caller-owned
+destination has no place in the reverse graph; under `no_grad` such operands are plain values.
+On compact operands a call allocates no result and copies no operand. An integer division by
+zero is reported as a numerical failure and leaves the destination contents unspecified.
+Other eager operations return fresh values; see the
+[operation registry](../spec/generated/api-ops.md).
+
 ## CUDA Quickstart
 
 <!-- snippet-source: crates/tenferro-gpu/examples/cuda_quickstart.rs -->

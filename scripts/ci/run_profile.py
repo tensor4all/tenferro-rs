@@ -149,6 +149,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     "ci-config": (
         "python3 scripts/test-release-publish.py",
         "python3 scripts/test-check-publish-layout.py",
+        "python3 scripts/test-check-stack-versions.py",
         "python3 scripts/test-check-git-pin-content.py",
         "python3 scripts/test-release-validation-policy.py",
         "python3 scripts/check-publish-layout.py",

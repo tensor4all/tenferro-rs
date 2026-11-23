@@ -27,8 +27,7 @@ Every operation family (core, linalg, einsum, FFT) uses one grammar:
   `DotGeneralOptions::default().lhs(Conj::Yes)`.
 - `_into` writes into a `tenferro_tensor::Dest` (`Dest::overwrite(out)`,
   accumulate, or scaled by `alpha`/`beta`) and exists only where the registry
-  declares it: `add_into`, `solve_into`, and the eight FFT operations
-  (overwrite only), `einsum_into` (overwrite, accumulate, scaled).
+  declares it, with only the modes it declares (see the generated list below).
 - Axes are `isize`; a negative axis counts from the end (`-1` is the last).
 - Multi-output factorizations return structs with named fields:
   `let Svd { u, s, vh } = a.svd(exec)?;` (also `Qr`, `Lu`, `FullPivLu`,
@@ -70,8 +69,8 @@ receiver methods mirror the eager session methods with the engine last
 (`x.gather(&idx, config, &mut engine)`, `x.reduce_max(Some(&[-1]), &mut engine)`,
 `x.dot_general(&y, config, &mut engine)`), including indexing, padding,
 concatenation and the triangular/diagonal ops. The dtype-changing `convert` /
-`cast` return a dtype-erased `Tensor`; a receiver other than an owned `Tensor`
-is gathered once first.
+`cast` return a dtype-erased `Tensor` and read every receiver through the engine's
+read entry, so a strided or offset view is not gathered first on CPU.
 
 ## Eager tensors
 
