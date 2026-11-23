@@ -978,6 +978,219 @@ pub enum ElementwiseReadOp {
     Divide,
 }
 
+/// Binary operation of [`Engine::binary_scalar_read`].
+///
+/// Each variant names the `*_read` entry it agrees with: `Add` is
+/// [`TensorElementwise::add_read`], `Maximum` is
+/// [`TensorElementwise::maximum_read`], and so on.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::ScalarBinaryOp;
+/// assert_eq!(ScalarBinaryOp::Maximum.label(), "maximum");
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScalarBinaryOp {
+    /// Addition.
+    Add,
+    /// Subtraction.
+    Subtract,
+    /// Multiplication.
+    Multiply,
+    /// Division.
+    Divide,
+    /// NaN-propagating maximum.
+    Maximum,
+}
+
+impl ScalarBinaryOp {
+    /// Stable operation label used in errors and profiling.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::ScalarBinaryOp;
+    /// assert_eq!(ScalarBinaryOp::Add.label(), "add");
+    /// ```
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Subtract => "sub",
+            Self::Multiply => "mul",
+            Self::Divide => "div",
+            Self::Maximum => "maximum",
+        }
+    }
+}
+
+/// Which operand position a host scalar takes in [`Engine::binary_scalar_read`]
+/// (`Left` is the left operand) and [`Engine::select_scalar_read`] (`Left` is the
+/// `on_true` branch).
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::ScalarOperandSide;
+/// assert_ne!(ScalarOperandSide::Left, ScalarOperandSide::Right);
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScalarOperandSide {
+    /// The scalar is the left operand (`on_true` for a select).
+    Left,
+    /// The scalar is the right operand (`on_false` for a select).
+    Right,
+}
+
+/// A rank-0 host tensor holding `scalar`.
+fn scalar_host_tensor(scalar: ContractionScalar) -> crate::Result<Tensor> {
+    match scalar {
+        ContractionScalar::F32(value) => Tensor::from_vec_col_major(Vec::new(), vec![value]),
+        ContractionScalar::F64(value) => Tensor::from_vec_col_major(Vec::new(), vec![value]),
+        ContractionScalar::C32(value) => Tensor::from_vec_col_major(Vec::new(), vec![value]),
+        ContractionScalar::C64(value) => Tensor::from_vec_col_major(Vec::new(), vec![value]),
+    }
+}
+
+/// Refuse a scalar whose dtype is not the tensor operand's; nothing is promoted.
+fn check_scalar_dtype(
+    op: &'static str,
+    tensor: &TensorRead<'_>,
+    scalar: ContractionScalar,
+) -> crate::Result<()> {
+    if scalar.dtype() == tensor.dtype() {
+        Ok(())
+    } else {
+        Err(Error::dtype_mismatch(op, tensor.dtype(), scalar.dtype()))
+    }
+}
+
+/// The portable [`Engine::binary_scalar_read`]: upload the scalar, read it as a
+/// zero-stride view of the tensor's shape, and run the matching `*_read` entry.
+///
+/// A backend overrides the hook to keep its device scalars instead of uploading
+/// one per call; the result must equal this one bit for bit.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{
+///     default_binary_scalar_read, ContractionScalar, Engine, ScalarBinaryOp, ScalarOperandSide,
+///     TensorRead,
+/// };
+///
+/// fn plus_one(engine: &mut dyn Engine, x: TensorRead<'_>)
+///     -> tenferro_tensor::Result<tenferro_tensor::Tensor>
+/// {
+///     default_binary_scalar_read(
+///         engine,
+///         ScalarBinaryOp::Add,
+///         x,
+///         ContractionScalar::F64(1.0),
+///         ScalarOperandSide::Right,
+///     )
+/// }
+/// ```
+///
+/// # Errors
+///
+/// [`crate::Error::Validation`] with `DTypeMismatch` when the scalar's dtype is
+/// not the tensor's, the upload's error, or the `*_read` entry's error.
+pub fn default_binary_scalar_read<E: Engine + ?Sized>(
+    engine: &mut E,
+    op: ScalarBinaryOp,
+    tensor: TensorRead<'_>,
+    scalar: ContractionScalar,
+    side: ScalarOperandSide,
+) -> crate::Result<Tensor> {
+    check_scalar_dtype(op.label(), &tensor, scalar)?;
+    let device =
+        engine.upload_host_tensor(TensorRead::from_tensor(&scalar_host_tensor(scalar)?))?;
+    let splat = TensorRead::from_tensor(&device).broadcast_in_dim_view(tensor.shape(), &[])?;
+    let (lhs, rhs) = match side {
+        ScalarOperandSide::Left => (splat, tensor),
+        ScalarOperandSide::Right => (tensor, splat),
+    };
+    match op {
+        ScalarBinaryOp::Add => engine.add_read(lhs, rhs),
+        ScalarBinaryOp::Subtract => engine.sub_read(lhs, rhs),
+        ScalarBinaryOp::Multiply => engine.mul_read(lhs, rhs),
+        ScalarBinaryOp::Divide => engine.div_read(lhs, rhs),
+        ScalarBinaryOp::Maximum => engine.maximum_read(lhs, rhs),
+    }
+}
+
+/// The portable [`Engine::select_scalar_read`]: upload the scalar, read it as a
+/// zero-stride view of the tensor's shape, and run [`TensorElementwise::select_read`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{
+///     default_select_scalar_read, ContractionScalar, Engine, ScalarOperandSide, TensorRead,
+/// };
+///
+/// fn zero_where_false(engine: &mut dyn Engine, keep: TensorRead<'_>, x: TensorRead<'_>)
+///     -> tenferro_tensor::Result<tenferro_tensor::Tensor>
+/// {
+///     default_select_scalar_read(engine, keep, x, ContractionScalar::F64(0.0), ScalarOperandSide::Right)
+/// }
+/// ```
+///
+/// # Errors
+///
+/// [`crate::Error::Validation`] with `DTypeMismatch` when the scalar's dtype is
+/// not the tensor's, the upload's error, or `select_read`'s error.
+pub fn default_select_scalar_read<E: Engine + ?Sized>(
+    engine: &mut E,
+    predicate: TensorRead<'_>,
+    tensor: TensorRead<'_>,
+    scalar: ContractionScalar,
+    side: ScalarOperandSide,
+) -> crate::Result<Tensor> {
+    check_scalar_dtype("select", &tensor, scalar)?;
+    let device =
+        engine.upload_host_tensor(TensorRead::from_tensor(&scalar_host_tensor(scalar)?))?;
+    let splat = TensorRead::from_tensor(&device).broadcast_in_dim_view(tensor.shape(), &[])?;
+    let (on_true, on_false) = match side {
+        ScalarOperandSide::Left => (splat, tensor),
+        ScalarOperandSide::Right => (tensor, splat),
+    };
+    engine.select_read(predicate, on_true, on_false)
+}
+
+/// The portable [`Engine::fill_scalar`]: upload the scalar and broadcast it into
+/// a fresh compact tensor of `shape`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{default_fill_scalar, ContractionScalar, Engine};
+///
+/// fn ones(engine: &mut dyn Engine, n: usize) -> tenferro_tensor::Result<tenferro_tensor::Tensor> {
+///     default_fill_scalar(engine, &[n], ContractionScalar::F64(1.0))
+/// }
+/// ```
+///
+/// # Errors
+///
+/// [`Error::Unsupported`] when the engine cannot transfer a host tensor, or
+/// [`Error::Validation`] with `InvalidArgument` when the element count of
+/// `shape` overflows.
+pub fn default_fill_scalar<E: Engine + ?Sized>(
+    engine: &mut E,
+    shape: &[usize],
+    scalar: ContractionScalar,
+) -> crate::Result<Tensor> {
+    let device =
+        engine.upload_host_tensor(TensorRead::from_tensor(&scalar_host_tensor(scalar)?))?;
+    if shape.is_empty() {
+        return Ok(device);
+    }
+    engine.broadcast_in_dim_read(TensorRead::from_tensor(&device), shape, &[])
+}
+
 /// Fused real-float activation applied in one elementwise pass.
 ///
 /// The variants name the same functions the composite activation vocabulary
@@ -3823,6 +4036,118 @@ pub trait Engine: TensorBackendOps + SessionCachedDot + TensorDeviceTransfer {
     ) -> crate::Result<Option<Tensor>> {
         let _ = (input, axis);
         Ok(None)
+    }
+
+    /// Elementwise `op` between `tensor` and a host `scalar` broadcast to the tensor's shape.
+    ///
+    /// `side` says which operand the scalar is. The scalar must have the tensor's
+    /// dtype; nothing is promoted. The result has the tensor's shape and equals
+    /// the matching `*_read` entry applied to the tensor and a zero-stride view of
+    /// the uploaded scalar, bit for bit.
+    ///
+    /// The default uploads the scalar on every call
+    /// ([`default_binary_scalar_read`]). A device backend overrides it to keep
+    /// its scalars resident, so a composite that calls it repeatedly (an
+    /// activation constant, a normalization epsilon, a mean's count) does no
+    /// host-to-device transfer after the first call.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{ContractionScalar, Engine, ScalarBinaryOp, ScalarOperandSide, TensorRead};
+    ///
+    /// fn halve(session: &mut dyn Engine, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<tenferro_tensor::Tensor>
+    /// {
+    ///     session.binary_scalar_read(
+    ///         ScalarBinaryOp::Multiply,
+    ///         x,
+    ///         ContractionScalar::F64(0.5),
+    ///         ScalarOperandSide::Right,
+    ///     )
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Validation`] with `DTypeMismatch` when the scalar's dtype is not
+    /// the tensor's, a transfer error, or the matching `*_read` entry's error.
+    fn binary_scalar_read(
+        &mut self,
+        op: ScalarBinaryOp,
+        tensor: TensorRead<'_>,
+        scalar: ContractionScalar,
+        side: ScalarOperandSide,
+    ) -> crate::Result<Tensor> {
+        default_binary_scalar_read(self, op, tensor, scalar, side)
+    }
+
+    /// Select between `tensor` and a host `scalar` broadcast to the tensor's shape.
+    ///
+    /// `side` says which branch the scalar is (`Left` is `on_true`). The
+    /// predicate must have the tensor's shape. The result equals
+    /// [`TensorElementwise::select_read`] with a zero-stride view of the uploaded
+    /// scalar, bit for bit; the default uploads per call
+    /// ([`default_select_scalar_read`]) and a device backend keeps its scalars
+    /// resident instead.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{ContractionScalar, Engine, ScalarOperandSide, TensorRead};
+    ///
+    /// fn mask_out(session: &mut dyn Engine, keep: TensorRead<'_>, x: TensorRead<'_>)
+    ///     -> tenferro_tensor::Result<tenferro_tensor::Tensor>
+    /// {
+    ///     session.select_scalar_read(
+    ///         keep,
+    ///         x,
+    ///         ContractionScalar::F64(f64::NEG_INFINITY),
+    ///         ScalarOperandSide::Right,
+    ///     )
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Validation`] with `DTypeMismatch` when the scalar's dtype is not
+    /// the tensor's, a transfer error, or `select_read`'s error.
+    fn select_scalar_read(
+        &mut self,
+        predicate: TensorRead<'_>,
+        tensor: TensorRead<'_>,
+        scalar: ContractionScalar,
+        side: ScalarOperandSide,
+    ) -> crate::Result<Tensor> {
+        default_select_scalar_read(self, predicate, tensor, scalar, side)
+    }
+
+    /// A fresh compact tensor of `shape` with every element `scalar`.
+    ///
+    /// The default uploads the scalar on every call and broadcasts it
+    /// ([`default_fill_scalar`]); a device engine overrides it to fill from a
+    /// scalar it keeps resident, so a composite constant (an identity's diagonal,
+    /// a ones vector) costs no host-to-device transfer per call.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{ContractionScalar, Engine};
+    ///
+    /// fn ones(session: &mut dyn Engine, n: usize)
+    ///     -> tenferro_tensor::Result<tenferro_tensor::Tensor>
+    /// {
+    ///     session.fill_scalar(&[n], ContractionScalar::F64(1.0))
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] when the engine cannot transfer a host tensor, or
+    /// [`Error::Validation`] with `InvalidArgument` when the element count of
+    /// `shape` overflows.
+    fn fill_scalar(&mut self, shape: &[usize], scalar: ContractionScalar) -> crate::Result<Tensor> {
+        default_fill_scalar(self, shape, scalar)
     }
 
     /// Apply `y <- alpha * x + beta * y` in one pass into caller-owned storage.

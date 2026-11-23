@@ -18,8 +18,7 @@ pub(crate) fn slogdet(
         let batch_shape = &a.shape()[2..];
         let sign_scalar = scalar_real(session, a, 1.0)?;
         let sign = broadcast_scalar(session, &sign_scalar, batch_shape)?;
-        let log_scalar =
-            session.constant_from_host(scalar_real_tensor(real_values_dtype(a.dtype()), 0.0)?)?;
+        let log_scalar = session_scalar(session, real_values_dtype(a.dtype()), 0.0)?;
         let logabsdet = broadcast_scalar(session, &log_scalar, batch_shape)?;
         return Ok((sign, logabsdet));
     }
@@ -153,8 +152,7 @@ pub(crate) fn pinv_with_rtol(
     let (u, s, vt) = session.svd(a)?;
     let abs_s = session.abs(&s)?;
     let s_max = session.reduce_max(&abs_s, Some(&[0]))?;
-    let threshold_scalar =
-        session.constant_from_host(scalar_real_tensor(s.dtype(), rtol.max(0.0))?)?;
+    let threshold_scalar = session_scalar(session, s.dtype(), rtol.max(0.0))?;
     let threshold = session.mul(&s_max, &threshold_scalar)?;
     let threshold = broadcast_batch_scalar_to_leading_axis(session, &threshold, s.shape())?;
     let compare = session.compare(&abs_s, &threshold, CompareDir::Gt)?;
@@ -226,7 +224,21 @@ fn scalar_real(
     anchor: &EagerTensor,
     value: f64,
 ) -> Result<EagerTensor> {
-    session.constant_from_host(scalar_real_tensor(anchor.dtype(), value)?)
+    session_scalar(session, anchor.dtype(), value)
+}
+
+/// The rank-0 constant `value` of `dtype` on this session's engine.
+///
+/// A float or complex constant goes through [`EagerSession::full`], which uploads it once
+/// per session and reuses it afterwards, so a repeated composite transfers nothing per
+/// call (#2701). Other dtypes keep their own literal conversion and are uploaded.
+fn session_scalar(session: &mut EagerSession<'_>, dtype: DType, value: f64) -> Result<EagerTensor> {
+    match dtype {
+        DType::F32 | DType::F64 | DType::C32 | DType::C64 => {
+            session.full(dtype, Vec::<usize>::new(), value)
+        }
+        _ => session.constant_from_host(scalar_real_tensor(dtype, value)?),
+    }
 }
 
 fn scalar_real_tensor(dtype: DType, value: f64) -> Result<Tensor> {

@@ -53,6 +53,8 @@ mod engine_eval;
 mod fallible_api;
 #[path = "integration/gpu_ad_tests.rs"]
 mod gpu_ad_tests;
+#[path = "integration/gpu_composite_setup_hoisted.rs"]
+mod gpu_composite_setup_hoisted;
 #[path = "integration/gpu_eager_borrowed_read_and_add_into.rs"]
 mod gpu_eager_borrowed_read_and_add_into;
 #[path = "integration/gpu_eager_chain_no_stream_drain.rs"]

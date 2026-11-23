@@ -98,6 +98,9 @@ pub struct CudaEngine {
     /// `FusedActivationKernels` for the ownership and capacity contract.
     pub(crate) fused_activations:
         std::cell::RefCell<super::structural::activation::FusedActivationKernels>,
+    /// Host scalars uploaded once and kept for the scalar-operand hooks (#2701); see
+    /// `DeviceScalars` for the ownership and capacity contract.
+    pub(crate) device_scalars: super::structural::device_scalars::DeviceScalars,
     /// Prepared-program runs whose device work may still be in flight; they are retired at the
     /// next synchronise, when the queue grows past [`MAX_PENDING_RUNS`], or at drop.
     pending_runs: Vec<Box<dyn tenferro_runtime::EventDomainRun>>,
@@ -172,6 +175,7 @@ impl CudaEngine {
             vendor_resource_inits: std::cell::Cell::new(0),
             prepared: std::cell::RefCell::new(super::dispatch::PreparedDispatchers::default()),
             fused_activations: std::cell::RefCell::default(),
+            device_scalars: Default::default(),
             pending_runs: Vec::new(),
             broken: false,
             staged_reads: std::cell::Cell::new(0),
