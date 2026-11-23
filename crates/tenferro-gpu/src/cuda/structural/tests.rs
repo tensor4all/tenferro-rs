@@ -2720,18 +2720,31 @@ fn a_coalesced_gather_reads_the_elements_the_original_names() {
         ),
         Some(2)
     );
-    // A permuted operand whose strides do not compose keeps every axis.
-    let shape = [2i64, 3, 4];
-    let strides = [12i64, 4, 1];
+    // A permuted operand whose strides do not compose keeps every axis: its two leading
+    // window axes are free, full and adjacent, so only the stride check stops the merge.
+    let shape = [2i64, 2, 3];
+    let strides = [2i64, 1, 4];
     assert_eq!(
         merged_gather_rank(
             "permuted operand",
             (&shape, &strides, 0),
-            &select_config(&shape, 1),
+            &select_config(&shape, 2),
             &[2, 1],
             &swap,
         ),
         None
+    );
+    // The same axes in their compact order do merge.
+    let strides = compact_strides_of(&shape);
+    assert_eq!(
+        merged_gather_rank(
+            "compact operand",
+            (&shape, &strides, 0),
+            &select_config(&shape, 2),
+            &[2, 1],
+            &swap,
+        ),
+        Some(2)
     );
 }
 

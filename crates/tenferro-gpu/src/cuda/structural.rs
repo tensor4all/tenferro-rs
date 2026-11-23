@@ -6500,7 +6500,8 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
         // Each input is a copy into its slab of the compact output, so the axes its region and
         // the slab advance through together are merged before the entry is chosen (#2708): the
         // axes before the concatenated one merge with it, and the axes after it with each other.
-        // A compact input of any rank is then a rank-2 strided copy.
+        // A compact input of any rank is then a strided copy of rank two at most (rank one when
+        // nothing follows the concatenated axis).
         let views: Vec<(Vec<i64>, Vec<i64>, Vec<i64>)> = regions
             .iter()
             .map(|region| coalesce_strided_pair(&region.extents, &region.strides, &out_strides))
