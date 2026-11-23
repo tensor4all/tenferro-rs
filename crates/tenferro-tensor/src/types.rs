@@ -4175,6 +4175,15 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
 
     /// Return a metadata-only dynamic-rank reshape for contiguous column-major views.
     ///
+    /// The source does not have to be strictly compact. Every axis with an
+    /// extent greater than one must have the column-major stride implied by
+    /// the axes before it, but the stride of a length-one axis is ignored, and
+    /// a source with zero elements always qualifies. The element count of
+    /// `shape` must equal the source element count. The result keeps the
+    /// source offset and uses compact column-major strides. This is weaker
+    /// than the strict check behind `is_col_major_contiguous` and `as_slice`,
+    /// which keep rejecting such sources.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -4183,13 +4192,24 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     /// let data = [1_i32, 2, 3, 4];
     /// let view = TypedTensorView::from_slice(vec![2, 2], vec![1, 2], 0, &data)?;
     /// assert_eq!(view.reshape_view(&[4])?.shape(), &[4]);
+    ///
+    /// // The stride of the length-one leading axis does not constrain the reshape,
+    /// // although the view is not strictly compact and cannot be read as a slice.
+    /// let data = [1.0_f64, 2.0, 3.0, 4.0];
+    /// let view = TypedTensorView::from_slice(vec![1, 4], vec![17, 1], 0, &data)?;
+    /// assert!(!view.is_col_major_contiguous()?);
+    /// assert!(view.as_slice().is_err());
+    /// let flat = view.reshape_view(&[4])?;
+    /// assert_eq!(flat.shape(), &[4]);
+    /// assert_eq!(flat.strides(), &[1]);
+    /// assert_eq!(flat.get(&[2]), Some(&3.0));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
     /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
-    /// the source is not compact column-major,
+    /// the view's strides cannot express the new shape,
     /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
     /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
     /// records the counts) when element counts differ,
@@ -5599,6 +5619,15 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
 
     /// Return a mutable metadata-only dynamic-rank reshape for contiguous views.
     ///
+    /// The source does not have to be strictly compact. Every axis with an
+    /// extent greater than one must have the column-major stride implied by
+    /// the axes before it, but the stride of a length-one axis is ignored, and
+    /// a source with zero elements always qualifies. The element count of
+    /// `shape` must equal the source element count. The result keeps the
+    /// source offset and uses compact column-major strides. This is weaker
+    /// than the strict check behind `is_col_major_contiguous` and `as_slice`,
+    /// which keep rejecting such sources.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -5613,7 +5642,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     ///
     /// Returns [`crate::Error::Validation`] with
     /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
-    /// the source is not compact column-major,
+    /// the view's strides cannot express the new shape,
     /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
     /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
     /// records the counts) when element counts differ,
@@ -7437,13 +7466,24 @@ impl TensorValue {
         })
     }
 
-    // INVARIANT: unchanged-owner recovery is part of the consuming view
-    // contract, so this intentionally carries the large move-only error.
+    /// Return a metadata-only dynamic-rank reshape of this value, handing the
+    /// unchanged value back with the error when the reshape is rejected.
+    ///
+    /// The source does not have to be strictly compact. Every axis with an
+    /// extent greater than one must have the column-major stride implied by
+    /// the axes before it, but the stride of a length-one axis is ignored, and
+    /// a source with zero elements always qualifies. The element count of
+    /// `shape` must equal the source element count. The result keeps the
+    /// source offset and uses compact column-major strides. This is weaker
+    /// than the strict check behind `is_col_major_contiguous` and `as_slice`,
+    /// which keep rejecting such sources.
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with
+    /// Returns [`TensorValueViewError`] holding the unchanged value and a
+    /// [`crate::Error::Validation`] with
     /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
-    /// the source is not compact column-major,
+    /// the view's strides cannot express the new shape,
     /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
     /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
     /// records the counts) when element counts differ,
@@ -7451,7 +7491,6 @@ impl TensorValue {
     /// arithmetic overflow, or
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// reshaped view exceeds the backing buffer.
-    #[allow(clippy::result_large_err)]
     ///
     /// # Examples
     ///
@@ -7463,6 +7502,9 @@ impl TensorValue {
     /// assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    // INVARIANT: unchanged-owner recovery is part of the consuming view
+    // contract, so this intentionally carries the large move-only error.
+    #[allow(clippy::result_large_err)]
     pub fn try_reshape_view(
         self,
         shape: impl tenferro_tensor_core::IntoShapeVec,
@@ -7483,12 +7525,24 @@ impl TensorValue {
         })
     }
 
+    /// Return a metadata-only dynamic-rank reshape of this value.
+    ///
+    /// The source does not have to be strictly compact. Every axis with an
+    /// extent greater than one must have the column-major stride implied by
+    /// the axes before it, but the stride of a length-one axis is ignored, and
+    /// a source with zero elements always qualifies. The element count of
+    /// `shape` must equal the source element count. The result keeps the
+    /// source offset and uses compact column-major strides. This is weaker
+    /// than the strict check behind `is_col_major_contiguous` and `as_slice`,
+    /// which keep rejecting such sources.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`]
-    /// when the source is not compact, [`tenferro_tensor_core::ValidationError::ShapeMismatch`]
-    /// when element counts differ, or [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
+    /// the view's strides cannot express the new shape,
+    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] when element
+    /// counts differ, or [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
     /// / [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] for invalid
     /// target-shape arithmetic or bounds.
     ///
