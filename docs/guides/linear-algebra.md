@@ -620,10 +620,14 @@ assert_eq!(result.as_slice::<f64>()?, &[2.0, 3.0]);
 ## Complete-Pivot LU Solve
 
 `full_piv_lu` returns `FullPivLu { p, l, u, q, parity }` with the reconstruction convention
-`A = P^T * L * U * Q`, equivalently `P * A * Q^T = L * U`. The `parity` output
+`A = P^T * L * U * Q`, equivalently `P * A * Q^T = L * U`. The input may be square or
+rectangular: for an `m x n` matrix with `k = min(m, n)`, `P` is `m x m`, `L` is unit lower
+triangular `m x k`, `U` is upper triangular `k x n` and `Q` is `n x n`, so the leading `rank`
+diagonal entries of `U` reveal the rank. Its derivative covers both shapes (the tangents of `L`
+and `U`; `P`, `Q` and `parity` are locally constant). The `parity` output
 is a scalar tensor containing `+1` or `-1`. On an owned `Tensor` it is real (`F32` for `F32`/`C32` inputs
 and `F64` for `F64`/`C64` inputs); the borrowed route returns it in the input dtype, and a typed complex call
-returns `Unsupported` until the two routes agree (#2552 Q21). `full_piv_lu_solve` solves `A * x = b`; the lower-level backend contract also
+returns `Unsupported` until the two routes agree (#2552 Q21). `full_piv_lu_solve` stays square-only and solves `A * x = b`; the lower-level backend contract also
 exposes an explicit transpose flag.
 
 <!-- snippet-source: docs/tutorial-code/src/bin/math_snippets.rs#linear_algebra_11 -->
