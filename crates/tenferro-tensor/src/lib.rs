@@ -94,10 +94,11 @@ pub mod types;
 pub mod validate;
 
 pub use backend::{
+    default_binary_scalar_read, default_fill_scalar, default_select_scalar_read, scalar_splat,
     ActivationOp, ContractionScalar, DotGeneralAccumulation, ElementwiseReadOp, Engine,
-    SessionCachedDot, TensorAnalytic, TensorBackendOps, TensorBuffer, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
-    TensorViewCanonicalization,
+    ScalarBinaryOp, ScalarOperandSide, SessionCachedDot, TensorAnalytic, TensorBackendOps,
+    TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorReduction, TensorStructural, TensorViewCanonicalization,
 };
 pub use cache::{CacheStats, RuntimeCacheControl};
 pub use capability::{

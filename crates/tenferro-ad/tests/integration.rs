@@ -33,6 +33,8 @@ mod duplicate_axis_payload_parity;
 mod dynamic_truncate;
 #[path = "integration/eager_backend_capability_contract.rs"]
 mod eager_backend_capability_contract;
+#[path = "integration/eager_composite_constants.rs"]
+mod eager_composite_constants;
 #[path = "integration/eager_device_placement_contract.rs"]
 mod eager_device_placement_contract;
 #[path = "integration/eager_elementwise_into.rs"]
@@ -53,6 +55,8 @@ mod engine_eval;
 mod fallible_api;
 #[path = "integration/gpu_ad_tests.rs"]
 mod gpu_ad_tests;
+#[path = "integration/gpu_composite_setup_hoisted.rs"]
+mod gpu_composite_setup_hoisted;
 #[path = "integration/gpu_eager_borrowed_read_and_add_into.rs"]
 mod gpu_eager_borrowed_read_and_add_into;
 #[path = "integration/gpu_eager_chain_no_stream_drain.rs"]
@@ -61,6 +65,8 @@ mod gpu_eager_chain_no_stream_drain;
 mod gpu_f32_fusion;
 #[path = "integration/gpu_nn_composites.rs"]
 mod gpu_nn_composites;
+#[path = "integration/gpu_strided_reads_in_place.rs"]
+mod gpu_strided_reads_in_place;
 #[path = "integration/graph_compile.rs"]
 mod graph_compile;
 #[path = "integration/hvp.rs"]

@@ -3658,6 +3658,14 @@ fn count_i64(shape: &[usize], op: &'static str) -> crate::Result<i64> {
 #[path = "structural/activation.rs"]
 pub(super) mod activation;
 
+#[path = "structural/device_scalars.rs"]
+pub(super) mod device_scalars;
+
+#[path = "structural/elementwise_layout.rs"]
+mod elementwise_layout;
+use elementwise_layout::{any_strided, compact_destination_layout, ElementwiseOperand};
+use t4a_cuda_kernels::StridedBinaryOp;
+
 #[cfg(test)]
 #[path = "structural/tests.rs"]
 mod tests;
@@ -3824,11 +3832,38 @@ impl CudaEngine {
         op: ReduceOp,
         name: &'static str,
     ) -> crate::Result<Tensor> {
-        let source = self.device_read(input, name)?;
-        let dtype = source.dtype();
+        // A view of rank at most the by-value layout's is read in place by the first pass, which
+        // takes the view's own layout (#2701); an owned tensor is its own compact region, and only
+        // a wider view is staged.
+        // Only a flat view (a compact eager value) is read in place: it is the compact run a staged
+        // copy would hold, so the reduction plans and folds exactly as on that copy. A strided view
+        // is still staged: the planner picks its strategy from the operand's layout, so reading a
+        // permuted view in place could change the fold association and, with it, a product or a
+        // rounding-sensitive sum. A view wider than the by-value layout is staged too.
+        let (view_region, staged) = match &input {
+            TensorRead::View(_) => match self.elementwise_operand(&input, name)? {
+                ElementwiseOperand::Flat(region)
+                    if region.extents.len() <= t4a_cuda_kernels::MAX_RANK =>
+                {
+                    (Some(region), None)
+                }
+                ElementwiseOperand::Staged(resolved) => (None, Some(resolved)),
+                _ => (None, Some(self.device_read(input.clone(), name)?)),
+            },
+            TensorRead::Tensor(_) => (None, None),
+        };
+        let source = match (&view_region, staged) {
+            (Some(_), _) => None,
+            (None, Some(staged)) => Some(staged),
+            (None, None) => Some(self.device_read(input.clone(), name)?),
+        };
+        let (dtype, mut shape) = match (&view_region, &source) {
+            (Some(region), _) => (region.dtype, region.shape.clone()),
+            (None, Some(source)) => (source.dtype(), source.shape().to_vec()),
+            (None, None) => unreachable!("an operand is either read in place or resolved"),
+        };
         let kernel = kernel_dtype(dtype, name)?;
         let kernel_op = reduction_op(op);
-        let mut shape = source.shape().to_vec();
         let mut ordered: Vec<usize> = axes.to_vec();
         ordered.sort_unstable();
         ordered.dedup();
@@ -3870,20 +3905,22 @@ impl CudaEngine {
             return self.empty_fold(squeezed.as_slice(), dtype, unit, name);
         }
         if ordered.is_empty() {
-            let shape = source.shape().to_vec();
             // Reducing over no axis leaves each element alone, except for the squared norm whose
-            // identity is the square.
+            // identity is the square. Both entries read a view where it lies.
             if matches!(op, ReduceOp::SumSquares) {
                 use tenferro_tensor::TensorElementwise as _;
-                return self.mul_read(
-                    TensorRead::from_tensor(&source),
-                    TensorRead::from_tensor(&source),
-                );
+                return self.mul_read(input.clone(), input);
             }
-            return self.copy_to_fresh(&source, shape, name);
+            return match &source {
+                Some(source) => self.copy_to_fresh(source, shape.clone(), name),
+                None => TensorStructural::to_contiguous_read(self, input),
+            };
         }
         if shape.len() > t4a_cuda_kernels::MAX_RANK {
-            return self.reduce_axes_wide(&source, &ordered, op, name);
+            let source = source
+                .as_ref()
+                .expect("a wider operand is resolved, not read in place");
+            return self.reduce_axes_wide(source, &ordered, op, name);
         }
         // The first pass reads the caller's tensor; later passes read the previous result.
         let mut owned: Option<Tensor> = None;
@@ -3897,7 +3934,13 @@ impl CudaEngine {
         // would name a different set of elements, so a read that is not compact keeps the logical
         // shape and order. `device_read` materializes a view into a compact tensor, so this holds
         // for every path that reaches here, and it is checked rather than assumed.
-        let compact = self.strides_of(&source, name)? == compact_strides(&shape, name)?;
+        let compact = match (&view_region, &source) {
+            (Some(region), _) => region_is_flat(region),
+            (None, Some(source)) => {
+                self.strides_of(source, name)? == compact_strides(&shape, name)?
+            }
+            (None, None) => unreachable!("an operand is either read in place or resolved"),
+        };
         let presentation = if compact {
             reduction_passes(&shape, &ordered)
                 .filter(|(work, _)| work.len() <= t4a_cuda_kernels::MAX_RANK)
@@ -3927,9 +3970,12 @@ impl CudaEngine {
                 next
             };
             let out_layout = compact_layout(&out_shape, &compact_strides(&out_shape, name)?, name)?;
+            // The first pass over a strided view reads it through its own layout; every other
+            // pass (and a flat or owned source) reads a compact run.
+            // An in-place view is flat, so every pass reads a compact run.
             let in_layout = compact_layout(&shape, &compact_strides(&shape, name)?, name)?;
-            let out_len = count_i64(&out_shape, name)?;
             let in_len = count_i64(&shape, name)?;
+            let out_len = count_i64(&out_shape, name)?;
             let result_shape: &[usize] = if pass + 1 == pass_count {
                 &squeezed
             } else {
@@ -3977,26 +4023,31 @@ impl CudaEngine {
                     &[scratch],
                 )?)
             };
-            let source_tensor: &Tensor = owned.as_ref().map_or(source.tensor(), |tensor| tensor);
+            let input_buffer: &t4a_cuda_runtime::Buffer = match (&owned, &view_region, &source) {
+                (Some(previous), _, _) => device_tensor_allocation(previous, name)?,
+                (None, Some(region), _) => region.storage.allocation(),
+                (None, None, Some(source)) => device_tensor_allocation(source, name)?,
+                (None, None, None) => {
+                    unreachable!("an operand is either read in place or resolved")
+                }
+            };
             // Preparing an entry binds its translation unit, so ask only for the one the plan uses.
             let entries: &[Entry] = match &planned {
                 ReductionPlan::Split { .. } => &[Entry::Reduce, Entry::ReducePartials],
                 ReductionPlan::Direct { .. } => &[Entry::Reduce],
             };
             let mut dispatcher = self.dispatcher(entries)?;
-            with_scalar!(dtype, |T| {
-                dispatcher.reduce_planned(
-                    &planned,
-                    kernel,
-                    pass_op,
-                    &out_layout,
-                    &in_layout,
-                    axis as u32,
-                    &output,
-                    self.allocation_of::<T>(source_tensor, name)?,
-                    partials,
-                )
-            })?;
+            dispatcher.reduce_planned(
+                &planned,
+                kernel,
+                pass_op,
+                &out_layout,
+                &in_layout,
+                axis as u32,
+                &output,
+                input_buffer,
+                partials,
+            )?;
             drop(dispatcher);
             // SAFETY: `reduce_planned` checked that `output` holds exactly the output layout and
             // admitted the launch that writes each of its elements on this buffer's stream, so
@@ -4049,6 +4100,9 @@ enum Elementwise {
 
 impl CudaEngine {
     /// One same-shape binary elementwise operation over two device tensors.
+    ///
+    /// Each operand is read where it lies (#2701): flat operands go to the flat entry, and a
+    /// strided, offset or broadcast view sends the launch to the layout-taking entry.
     fn elementwise_binary(
         &mut self,
         lhs: TensorRead<'_>,
@@ -4056,8 +4110,8 @@ impl CudaEngine {
         op: Elementwise,
         name: &'static str,
     ) -> crate::Result<Tensor> {
-        let left = self.device_read(lhs, name)?;
-        let right = self.device_read(rhs, name)?;
+        let left = self.elementwise_operand(&lhs, name)?;
+        let right = self.elementwise_operand(&rhs, name)?;
         if left.shape() != right.shape() {
             return Err(crate::Error::unsupported(
                 name,
@@ -4077,11 +4131,50 @@ impl CudaEngine {
         // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
         // each of the `len` destination elements once (#2529).
         let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
+        if any_strided(&[&left, &right]) {
+            let strided = match (op, dtype) {
+                (Elementwise::Add, _) => StridedBinaryOp::Add,
+                (Elementwise::Sub, _) => StridedBinaryOp::Sub,
+                (Elementwise::Mul, _) => StridedBinaryOp::Mul,
+                (Elementwise::Div, DType::I32 | DType::I64) => StridedBinaryOp::DivChecked,
+                (Elementwise::Div, _) => StridedBinaryOp::Div,
+            };
+            let layout = compact_destination_layout(&shape, name)?;
+            self.strided_binary_checked(
+                strided,
+                dtype,
+                super::dispatch::Dest::Uninit(&output),
+                &layout,
+                len,
+                [&left, &right],
+                &shape,
+                |name| numerical_failure(name, "the checked division reported a division by zero"),
+                name,
+            )?;
+            // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+            let output = unsafe { output.assume_init() };
+            return tensor_from_buffer(self.runtime(), dtype, &shape, output);
+        }
+        let (left, right) = (
+            self.elementwise_operand_buffer(&left, name)?,
+            self.elementwise_operand_buffer(&right, name)?,
+        );
         // Only a floating division has its own entry: an integer division is the checked one (its
         // status word reports a division by zero) and a complex one needs the robust complex entry,
         // which also means the buffers hold two components per element.
         if matches!(op, Elementwise::Div) && !matches!(dtype, DType::F32 | DType::F64) {
-            return self.division(&left, &right, output, kernel, dtype, &shape, len, name);
+            self.dispatch_division(
+                left,
+                right,
+                super::dispatch::Dest::Uninit(&output),
+                kernel,
+                dtype,
+                len,
+                name,
+            )?;
+            // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+            let output = unsafe { output.assume_init() };
+            return tensor_from_buffer(self.runtime(), dtype, &shape, output);
         }
         let entry = match op {
             Elementwise::Add => Entry::Add,
@@ -4090,50 +4183,71 @@ impl CudaEngine {
             Elementwise::Div => Entry::Div,
         };
         let mut dispatcher = self.dispatcher(&[entry])?;
-        with_scalar!(dtype, |T| {
-            dispatcher.arithmetic(
-                entry,
-                kernel,
-                len,
-                super::dispatch::Dest::Uninit(&output),
-                self.allocation_of::<T>(&left, name)?,
-                self.allocation_of::<T>(&right, name)?,
-            )
-        })?;
+        dispatcher.arithmetic(
+            entry,
+            kernel,
+            len,
+            super::dispatch::Dest::Uninit(&output),
+            left,
+            right,
+        )?;
+        drop(dispatcher);
         self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
         tensor_from_buffer(self.runtime(), dtype, &shape, output)
     }
 
-    /// Division whose dtype has no plain `/` entry: integers use the checked one and observe its
-    /// status word, complex values use the robust complex division.
+    /// A layout-taking binary launch, with the checked integer forms' status word.
+    ///
+    /// The status word is allocated and read back only for a checked operation (it is the
+    /// division-by-zero or negative-exponent report); every other operation passes none. A
+    /// rejected element is reported as `failure` builds it, the same error the flat route of the
+    /// same operation returns.
     #[allow(clippy::too_many_arguments)]
-    fn division(
+    fn strided_binary_checked(
         &mut self,
-        left: &Tensor,
-        right: &Tensor,
-        output: t4a_cuda_runtime::UninitBuffer,
-        kernel: t4a_cuda_kernels::DType,
+        op: StridedBinaryOp,
         dtype: DType,
+        out: super::dispatch::Dest<'_>,
+        out_layout: &Layout,
+        out_len: i64,
+        operands: [&ElementwiseOperand<'_>; 2],
         shape: &[usize],
-        len: i64,
+        failure: fn(&'static str) -> crate::Error,
         name: &'static str,
-    ) -> crate::Result<Tensor> {
-        with_scalar!(dtype, |T| {
-            self.dispatch_division(
-                self.allocation_of::<T>(left, name)?,
-                self.allocation_of::<T>(right, name)?,
-                super::dispatch::Dest::Uninit(&output),
-                kernel,
-                dtype,
-                len,
-                name,
+    ) -> crate::Result<()> {
+        let status = if op.uses_status() {
+            Some(
+                self.runtime()
+                    .zeroed_status_word()
+                    .map_err(|error| crate::Error::runtime_state_source(name, error))?,
             )
-        })?;
-        // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
-        let output = unsafe { output.assume_init() };
-        tensor_from_buffer(self.runtime(), dtype, shape, output)
+        } else {
+            None
+        };
+        self.strided_binary_launch(
+            op,
+            dtype,
+            out,
+            out_layout,
+            out_len,
+            operands,
+            shape,
+            status.as_ref(),
+            name,
+        )?;
+        self.release_completed_staging();
+        if let Some(status) = status {
+            let flag = self
+                .runtime()
+                .download_bytes(&status)
+                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            if flag.iter().any(|byte| *byte != 0) {
+                return Err(failure(name));
+            }
+        }
+        Ok(())
     }
 
     /// The division launch for a dtype without a plain `/` entry, into `destination`.
@@ -4166,10 +4280,16 @@ impl CudaEngine {
                 ))
             }
         };
-        let status = self
-            .runtime()
-            .zeroed_status_word()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+        // Only the checked integer division writes the status word; the complex one takes none.
+        let status = if checked {
+            Some(
+                self.runtime()
+                    .zeroed_status_word()
+                    .map_err(|error| crate::Error::runtime_state_source(name, error))?,
+            )
+        } else {
+            None
+        };
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
         dispatcher.binary(
             op,
@@ -4179,10 +4299,10 @@ impl CudaEngine {
             destination,
             left,
             right,
-            &status,
+            status.as_ref(),
         )?;
         self.release_completed_staging();
-        if checked {
+        if let Some(status) = status {
             let flag = self
                 .runtime()
                 .download_bytes(&status)
@@ -4197,14 +4317,14 @@ impl CudaEngine {
         Ok(())
     }
 
-    /// One unary elementwise operation over a device tensor.
+    /// One unary elementwise operation over a device tensor, read where it lies (#2701).
     fn elementwise_unary(
         &mut self,
         input: TensorRead<'_>,
         op: t4a_cuda_kernels::UnaryOp,
         name: &'static str,
     ) -> crate::Result<Tensor> {
-        let source = self.device_read(input, name)?;
+        let source = self.elementwise_operand(&input, name)?;
         let dtype = source.dtype();
         let kernel = kernel_dtype(dtype, name)?;
         // The complex absolute value is the one unequal pair: it lands in the real dtype.
@@ -4219,27 +4339,37 @@ impl CudaEngine {
         // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
         // each of the `len` destination elements once (#2529).
         let output = alloc_uninit_tensor_bytes(self.runtime(), out_dtype, &shape)?;
-        let mut dispatcher = self.dispatcher(&[Entry::Unary])?;
-        with_scalar!(out_dtype, |T| {
-            let out = super::dispatch::Dest::Uninit(&output);
-            with_scalar!(dtype, |S| {
-                dispatcher.unary(
-                    op,
-                    out_kernel,
-                    kernel,
-                    len,
-                    out,
-                    self.allocation_of::<S>(&source, name)?,
-                )
-            })
-        })?;
+        if source.is_strided() {
+            let layout = compact_destination_layout(&shape, name)?;
+            self.strided_unary_launch(
+                op,
+                out_dtype,
+                super::dispatch::Dest::Uninit(&output),
+                &layout,
+                len,
+                &source,
+                &shape,
+                name,
+            )?;
+        } else {
+            let buffer = self.elementwise_operand_buffer(&source, name)?;
+            let mut dispatcher = self.dispatcher(&[Entry::Unary])?;
+            dispatcher.unary(
+                op,
+                out_kernel,
+                kernel,
+                len,
+                super::dispatch::Dest::Uninit(&output),
+                buffer,
+            )?;
+        }
         self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
         tensor_from_buffer(self.runtime(), out_dtype, &shape, output)
     }
 
-    /// One binary selection (`maximum`/`minimum`) over two device tensors.
+    /// One binary selection (`maximum`/`minimum`) over two device tensors, read where they lie.
     fn elementwise_extreme(
         &mut self,
         lhs: TensorRead<'_>,
@@ -4247,8 +4377,8 @@ impl CudaEngine {
         op: t4a_cuda_kernels::BinaryOp,
         name: &'static str,
     ) -> crate::Result<Tensor> {
-        let left = self.device_read(lhs, name)?;
-        let right = self.device_read(rhs, name)?;
+        let left = self.elementwise_operand(&lhs, name)?;
+        let right = self.elementwise_operand(&rhs, name)?;
         if left.shape() != right.shape() || left.dtype() != right.dtype() {
             return Err(crate::Error::unsupported(
                 name,
@@ -4262,26 +4392,43 @@ impl CudaEngine {
         // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
         // each of the `len` destination elements once (#2529).
         let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
-        let runtime = self.runtime().clone();
-        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
-        // The entry always takes a status word for its checked-integer route; a
-        // comparison of two full buffers never sets it.
-        let status = runtime
-            .zeroed_status_word()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
-        with_scalar!(dtype, |T| {
+        if any_strided(&[&left, &right]) {
+            let strided = match op {
+                t4a_cuda_kernels::BinaryOp::Max => StridedBinaryOp::Max,
+                _ => StridedBinaryOp::Min,
+            };
+            let layout = compact_destination_layout(&shape, name)?;
+            self.strided_binary_checked(
+                strided,
+                dtype,
+                super::dispatch::Dest::Uninit(&output),
+                &layout,
+                len,
+                [&left, &right],
+                &shape,
+                |name| crate::Error::runtime_state(name, "a selection never reports a status"),
+                name,
+            )?;
+        } else {
+            let (left, right) = (
+                self.elementwise_operand_buffer(&left, name)?,
+                self.elementwise_operand_buffer(&right, name)?,
+            );
+            let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
+            // A selection never writes the entry's status word, so it takes none.
             dispatcher.binary(
                 op,
                 kernel,
                 t4a_cuda_kernels::ScalarSide::Both,
                 len,
                 super::dispatch::Dest::Uninit(&output),
-                self.allocation_of::<T>(&left, name)?,
-                self.allocation_of::<T>(&right, name)?,
-                &status,
-            )
-        })?;
-        self.release_completed_staging();
+                left,
+                right,
+                None,
+            )?;
+            drop(dispatcher);
+            self.release_completed_staging();
+        }
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
         tensor_from_buffer(self.runtime(), dtype, &shape, output)
@@ -4299,8 +4446,8 @@ impl CudaEngine {
         rhs: TensorRead<'_>,
         name: &'static str,
     ) -> crate::Result<Tensor> {
-        let left = self.device_read(lhs, name)?;
-        let right = self.device_read(rhs, name)?;
+        let left = self.elementwise_operand(&lhs, name)?;
+        let right = self.elementwise_operand(&rhs, name)?;
         if left.shape() != right.shape() || left.dtype() != right.dtype() {
             return Err(crate::Error::unsupported(
                 name,
@@ -4309,9 +4456,12 @@ impl CudaEngine {
         }
         let dtype = left.dtype();
         let kernel = kernel_dtype(dtype, name)?;
-        let op = match dtype {
-            DType::F32 | DType::F64 => t4a_cuda_kernels::BinaryOp::Rem,
-            DType::I32 | DType::I64 => t4a_cuda_kernels::BinaryOp::RemChecked,
+        let (op, strided) = match dtype {
+            DType::F32 | DType::F64 => (t4a_cuda_kernels::BinaryOp::Rem, StridedBinaryOp::Rem),
+            DType::I32 | DType::I64 => (
+                t4a_cuda_kernels::BinaryOp::RemChecked,
+                StridedBinaryOp::RemChecked,
+            ),
             other => {
                 return Err(crate::Error::unsupported(
                     name,
@@ -4324,33 +4474,68 @@ impl CudaEngine {
         // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
         // each of the `len` destination elements once (#2529).
         let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
-        let runtime = self.runtime().clone();
-        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
-        let status = runtime
-            .zeroed_status_word()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
-        with_scalar!(dtype, |T| {
-            dispatcher.binary(
-                op,
-                kernel,
-                t4a_cuda_kernels::ScalarSide::Both,
-                len,
+        if any_strided(&[&left, &right]) {
+            let layout = compact_destination_layout(&shape, name)?;
+            self.strided_binary_checked(
+                strided,
+                dtype,
                 super::dispatch::Dest::Uninit(&output),
-                self.allocation_of::<T>(&left, name)?,
-                self.allocation_of::<T>(&right, name)?,
-                &status,
-            )
-        })?;
-        self.release_completed_staging();
-        let flag = self
-            .runtime()
-            .download_bytes(&status)
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
-        if flag.iter().any(|byte| *byte != 0) {
-            return Err(crate::Error::unsupported(
+                &layout,
+                len,
+                [&left, &right],
+                &shape,
+                |name| {
+                    crate::Error::unsupported(
+                        name,
+                        "the checked remainder reported a division by zero",
+                    )
+                },
                 name,
-                "the checked remainder reported a division by zero",
-            ));
+            )?;
+            // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
+            let output = unsafe { output.assume_init() };
+            return tensor_from_buffer(self.runtime(), dtype, &shape, output);
+        }
+        // Only the checked integer remainder writes the status word, so only it allocates one and
+        // waits to read it back; the floating remainder neither allocates nor waits.
+        let checked = matches!(dtype, DType::I32 | DType::I64);
+        let status = if checked {
+            Some(
+                self.runtime()
+                    .zeroed_status_word()
+                    .map_err(|error| crate::Error::runtime_state_source(name, error))?,
+            )
+        } else {
+            None
+        };
+        let (left, right) = (
+            self.elementwise_operand_buffer(&left, name)?,
+            self.elementwise_operand_buffer(&right, name)?,
+        );
+        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
+        dispatcher.binary(
+            op,
+            kernel,
+            t4a_cuda_kernels::ScalarSide::Both,
+            len,
+            super::dispatch::Dest::Uninit(&output),
+            left,
+            right,
+            status.as_ref(),
+        )?;
+        drop(dispatcher);
+        self.release_completed_staging();
+        if let Some(status) = status {
+            let flag = self
+                .runtime()
+                .download_bytes(&status)
+                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            if flag.iter().any(|byte| *byte != 0) {
+                return Err(crate::Error::unsupported(
+                    name,
+                    "the checked remainder reported a division by zero",
+                ));
+            }
         }
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
@@ -4380,16 +4565,15 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
     }
 
     fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        // Conjugation is the identity on a real dtype; only the complex widths have the entry.
-        let source = self.device_read(input, "conj_read")?;
-        if !matches!(source.dtype(), DType::C32 | DType::C64) {
-            return self.to_contiguous(&source);
+        // Conjugation is the identity on a real dtype: the result is a compact copy of the input,
+        // read where it lies. Only the complex widths have the entry.
+        if !matches!(input.dtype(), DType::C32 | DType::C64) {
+            // The read boundary's refusals first: a host operand stays refused here, as on every
+            // other elementwise read entry, rather than duplicated on the host.
+            self.read_region(&input, "conj_read")?;
+            return tenferro_tensor::TensorStructural::to_contiguous_read(self, input);
         }
-        self.elementwise_unary(
-            TensorRead::from_tensor(&source),
-            t4a_cuda_kernels::UnaryOp::Conj,
-            "conj_read",
-        )
+        self.elementwise_unary(input, t4a_cuda_kernels::UnaryOp::Conj, "conj_read")
     }
 
     fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -4459,8 +4643,8 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         dir: &tenferro_tensor::CompareDir,
     ) -> crate::Result<Tensor> {
         let name = "compare_read";
-        let left = self.device_read(lhs, name)?;
-        let right = self.device_read(rhs, name)?;
+        let left = self.elementwise_operand(&lhs, name)?;
+        let right = self.elementwise_operand(&rhs, name)?;
         if left.shape() != right.shape() || left.dtype() != right.dtype() {
             return Err(crate::Error::unsupported(
                 name,
@@ -4482,18 +4666,27 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
         // each of the `len` destination elements once (#2529).
         let output = alloc_uninit_tensor_bytes(self.runtime(), DType::Bool, &shape)?;
-        let mut dispatcher = self.dispatcher(&[Entry::Compare])?;
         let out = super::dispatch::Dest::Uninit(&output);
-        with_scalar!(dtype, |T| {
-            dispatcher.compare(
+        if any_strided(&[&left, &right]) {
+            let layout = compact_destination_layout(&shape, name)?;
+            self.strided_compare_launch(
                 op,
-                kernel,
-                len,
+                dtype,
                 out,
-                self.allocation_of::<T>(&left, name)?,
-                self.allocation_of::<T>(&right, name)?,
-            )
-        })?;
+                &layout,
+                len,
+                [&left, &right],
+                &shape,
+                name,
+            )?;
+        } else {
+            let (left, right) = (
+                self.elementwise_operand_buffer(&left, name)?,
+                self.elementwise_operand_buffer(&right, name)?,
+            );
+            let mut dispatcher = self.dispatcher(&[Entry::Compare])?;
+            dispatcher.compare(op, kernel, len, out, left, right)?;
+        }
         self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
@@ -4507,9 +4700,9 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         on_false: TensorRead<'_>,
     ) -> crate::Result<Tensor> {
         let name = "select_read";
-        let predicate = self.device_read(pred, name)?;
-        let when_true = self.device_read(on_true, name)?;
-        let when_false = self.device_read(on_false, name)?;
+        let predicate = self.elementwise_operand(&pred, name)?;
+        let when_true = self.elementwise_operand(&on_true, name)?;
+        let when_false = self.elementwise_operand(&on_false, name)?;
         if predicate.dtype() != DType::Bool {
             return Err(crate::Error::unsupported(
                 name,
@@ -4535,18 +4728,25 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
         // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
         // each of the `len` destination elements once (#2529).
         let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
-        let mut dispatcher = self.dispatcher(&[Entry::Select])?;
-        let predicate_buffer = self.allocation_of::<bool>(&predicate, name)?;
-        with_scalar!(dtype, |T| {
-            dispatcher.select(
-                kernel,
+        let out = super::dispatch::Dest::Uninit(&output);
+        if any_strided(&[&predicate, &when_true, &when_false]) {
+            let layout = compact_destination_layout(&shape, name)?;
+            self.strided_select_launch(
+                dtype,
+                out,
+                &layout,
                 len,
-                super::dispatch::Dest::Uninit(&output),
-                predicate_buffer,
-                self.allocation_of::<T>(&when_true, name)?,
-                self.allocation_of::<T>(&when_false, name)?,
-            )
-        })?;
+                [&predicate, &when_true, &when_false],
+                &shape,
+                name,
+            )?;
+        } else {
+            let predicate = self.elementwise_operand_buffer(&predicate, name)?;
+            let when_true = self.elementwise_operand_buffer(&when_true, name)?;
+            let when_false = self.elementwise_operand_buffer(&when_false, name)?;
+            let mut dispatcher = self.dispatcher(&[Entry::Select])?;
+            dispatcher.select(kernel, len, out, predicate, when_true, when_false)?;
+        }
         self.release_completed_staging();
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
@@ -4593,6 +4793,39 @@ impl tenferro_tensor::TensorElementwise for CudaEngine {
                     &destination.shape,
                     NAME,
                 )?;
+                // The layout-taking entries write the caller's region directly, with no scratch
+                // and no second copy (#2701), when the region shares its allocation with no
+                // operand: an overlapping read would otherwise race the writes. A rank the
+                // by-value layout cannot carry, or an operand that is staged, keeps the scratch.
+                // A checked integer division reports a zero divisor after its launch, and the
+                // caller's region must then be left as it was, so it keeps the scratch.
+                let checked = matches!(op, tenferro_tensor::ElementwiseReadOp::Divide)
+                    && matches!(destination.dtype, DType::I32 | DType::I64);
+                if !checked && destination.extents.len() <= t4a_cuda_kernels::MAX_RANK {
+                    let operands: Vec<ElementwiseOperand<'_>> = inputs
+                        .iter()
+                        .map(|input| self.elementwise_operand(input, NAME))
+                        .collect::<crate::Result<_>>()?;
+                    let disjoint = operands.iter().all(|operand| match operand {
+                        ElementwiseOperand::Flat(region) | ElementwiseOperand::Strided(region) => {
+                            region.storage.allocation_id() != destination.storage.allocation_id()
+                        }
+                        ElementwiseOperand::Staged(_) => false,
+                    });
+                    if disjoint {
+                        let layout = destination.layout(NAME)?;
+                        let out_len = destination.len(NAME)?;
+                        return self.elementwise_into_layout(
+                            op,
+                            &operands,
+                            super::dispatch::Dest::Init(destination.storage.allocation()),
+                            &layout,
+                            out_len,
+                            &destination.shape,
+                            NAME,
+                        );
+                    }
+                }
                 let scratch = alloc_tensor(self.runtime(), destination.dtype, &destination.shape)?;
                 self.elementwise_into_compact(op, inputs, &scratch, NAME)?;
                 self.contiguous_into_write(&scratch, &destination, NAME)
@@ -4677,28 +4910,29 @@ impl CudaEngine {
         let dtype = destination.dtype();
         let kernel = kernel_dtype(dtype, name)?;
         let len = count_i64(destination.shape(), name)?;
-        // A flat operand (one compact span at its allocation's base, which is what an owned
-        // tensor and a compact eager value are) is read where it lies; only a permuted, offset,
-        // broadcast or reversed region is staged into a compact copy, since the flat kernels
-        // address no layout (#2701).
-        let staged: Vec<Option<Resolved<'_>>> = inputs
+        // Every operand is read where it lies (#2701): a flat one (an owned tensor, a compact
+        // eager value) by the flat entry, and a permuted, offset, broadcast or reversed region by
+        // the layout-taking entry, which then serves the whole launch.
+        let operands: Vec<ElementwiseOperand<'_>> = inputs
             .iter()
-            .map(|input| {
-                let region = self.read_region(input, name)?;
-                if region_is_flat(&region) {
-                    Ok(None)
-                } else {
-                    self.device_read(input.clone(), name).map(Some)
-                }
-            })
+            .map(|input| self.elementwise_operand(input, name))
             .collect::<crate::Result<_>>()?;
+        if operands.iter().any(ElementwiseOperand::is_strided) {
+            let out = with_scalar!(dtype, |T| self.allocation_of::<T>(destination, name))?;
+            let layout = compact_destination_layout(destination.shape(), name)?;
+            return self.elementwise_into_layout(
+                op,
+                &operands,
+                super::dispatch::Dest::Init(out),
+                &layout,
+                len,
+                destination.shape(),
+                name,
+            );
+        }
         let mut source_buffers: Vec<&t4a_cuda_runtime::Buffer> = Vec::with_capacity(inputs.len());
-        for (input, staged) in inputs.iter().zip(&staged) {
-            let buffer = match staged {
-                Some(resolved) => with_scalar!(dtype, |T| self.allocation_of::<T>(resolved, name))?,
-                None => self.read_region(input, name)?.storage.allocation(),
-            };
-            source_buffers.push(buffer);
+        for operand in &operands {
+            source_buffers.push(self.elementwise_operand_buffer(operand, name)?);
         }
         match op {
             tenferro_tensor::ElementwiseReadOp::Negate => {
@@ -4766,6 +5000,75 @@ impl CudaEngine {
     }
 }
 
+impl CudaEngine {
+    /// The `_into` elementwise operation through the layout-taking entries, writing `out` through
+    /// `out_layout` (a compact destination, or a caller's writable region) (#2701).
+    ///
+    /// The operands keep their own layouts. The conjugation tag accepts the dtypes the flat unary
+    /// entry accepts for it, so a dtype the flat route refuses is refused here too.
+    #[allow(clippy::too_many_arguments)]
+    fn elementwise_into_layout(
+        &mut self,
+        op: tenferro_tensor::ElementwiseReadOp,
+        operands: &[ElementwiseOperand<'_>],
+        out: super::dispatch::Dest<'_>,
+        out_layout: &Layout,
+        out_len: i64,
+        shape: &[usize],
+        name: &'static str,
+    ) -> crate::Result<()> {
+        // An empty domain still goes through the planners, so a dtype the operation does not
+        // serve is refused at length zero too; the empty launch itself is skipped.
+        let dtype = operands[0].dtype();
+        let binary = match op {
+            tenferro_tensor::ElementwiseReadOp::Negate
+            | tenferro_tensor::ElementwiseReadOp::Conj => {
+                let unary = if matches!(op, tenferro_tensor::ElementwiseReadOp::Negate) {
+                    t4a_cuda_kernels::UnaryOp::Neg
+                } else {
+                    t4a_cuda_kernels::UnaryOp::Conj
+                };
+                self.strided_unary_launch(
+                    unary,
+                    dtype,
+                    out,
+                    out_layout,
+                    out_len,
+                    &operands[0],
+                    shape,
+                    name,
+                )?;
+                self.release_completed_staging();
+                return Ok(());
+            }
+            tenferro_tensor::ElementwiseReadOp::Add => StridedBinaryOp::Add,
+            tenferro_tensor::ElementwiseReadOp::Subtract => StridedBinaryOp::Sub,
+            tenferro_tensor::ElementwiseReadOp::Multiply => StridedBinaryOp::Mul,
+            tenferro_tensor::ElementwiseReadOp::Divide => match dtype {
+                DType::I32 | DType::I64 => StridedBinaryOp::DivChecked,
+                _ => StridedBinaryOp::Div,
+            },
+            other => {
+                return Err(crate::Error::unsupported(
+                    name,
+                    format!("{other:?} has no layout-taking form"),
+                ))
+            }
+        };
+        self.strided_binary_checked(
+            binary,
+            dtype,
+            out,
+            out_layout,
+            out_len,
+            [&operands[0], &operands[1]],
+            shape,
+            |name| numerical_failure(name, "the checked division reported a division by zero"),
+            name,
+        )
+    }
+}
+
 /// The kernel crate's dtype tag for a contraction, which cuTENSOR serves for all four.
 fn contraction_dtype(dtype: DType, op: &'static str) -> crate::Result<t4a_cuda_kernels::DType> {
     Ok(match dtype {
@@ -4807,11 +5110,8 @@ impl CudaEngine {
             return Ok(());
         }
         let scalar = self.factor_scalar(dtype, factor, op)?;
-        let runtime = self.runtime().clone();
         let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
-        let status = runtime
-            .zeroed_status_word()
-            .map_err(|error| crate::Error::runtime_state_source(op, error))?;
+        // A multiplication never writes the entry's status word, so it takes none.
         with_scalar!(dtype, |T| {
             dispatcher.binary(
                 t4a_cuda_kernels::BinaryOp::Mul,
@@ -4821,7 +5121,7 @@ impl CudaEngine {
                 super::dispatch::Dest::Init(self.allocation_of::<T>(tensor, op)?),
                 self.allocation_of::<T>(tensor, op)?,
                 self.allocation_of::<T>(&scalar, op)?,
-                &status,
+                None,
             )
         })?;
         self.release_completed_staging();
@@ -6639,20 +6939,6 @@ impl tenferro_tensor::TensorDot for CudaEngine {
 }
 
 impl CudaEngine {
-    /// A compact device copy of `tensor`.
-    ///
-    /// # Errors
-    ///
-    /// The structural surface's own refusal for a host tensor, and the runtime's failure.
-    #[doc(hidden)]
-    // Named after the `TensorStructural` method it forwards to; the lint exempts exported
-    // API, so narrowing this wrapper is what surfaces it.
-    #[expect(clippy::wrong_self_convention)]
-    pub(crate) fn to_contiguous(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
-        use tenferro_tensor::TensorStructural as _;
-        self.to_contiguous_read(tenferro_tensor::TensorRead::from_tensor(tensor))
-    }
-
     /// A compact device copy of a borrowed device view.
     ///
     /// An extension that hands a caller's view to a vendor library canonicalizes it first: the view
@@ -6849,8 +7135,8 @@ impl CudaEngine {
         rhs: TensorRead<'_>,
         name: &'static str,
     ) -> crate::Result<Tensor> {
-        let left = self.device_read(lhs, name)?;
-        let right = self.device_read(rhs, name)?;
+        let left = self.elementwise_operand(&lhs, name)?;
+        let right = self.elementwise_operand(&rhs, name)?;
         if left.dtype() != right.dtype() {
             return Err(crate::Error::dtype_mismatch(
                 name,
@@ -6875,11 +7161,16 @@ impl CudaEngine {
                 ))
             }
         };
+        let left = self.stage_for_domain(left, &lhs, shape.len(), name)?;
+        let right = self.stage_for_domain(right, &rhs, shape.len(), name)?;
         let dtype = left.dtype();
         let kernel = kernel_dtype(dtype, name)?;
-        let op = match dtype {
-            DType::F32 | DType::F64 => t4a_cuda_kernels::BinaryOp::Pow,
-            DType::I32 | DType::I64 => t4a_cuda_kernels::BinaryOp::PowChecked,
+        let (op, strided) = match dtype {
+            DType::F32 | DType::F64 => (t4a_cuda_kernels::BinaryOp::Pow, StridedBinaryOp::Pow),
+            DType::I32 | DType::I64 => (
+                t4a_cuda_kernels::BinaryOp::PowChecked,
+                StridedBinaryOp::PowChecked,
+            ),
             other => {
                 return Err(crate::Error::unsupported(
                     name,
@@ -6888,45 +7179,71 @@ impl CudaEngine {
             }
         };
         let len = count_i64(&shape, name)?;
-        // INVARIANT: uninitialised on purpose, not a missing zero fill: `t4a_cuda_binary` writes
+        // INVARIANT: uninitialised on purpose, not a missing zero fill: the launch below writes
         // each of the `len` destination elements once (#2529).
         let output = alloc_uninit_tensor_bytes(self.runtime(), dtype, &shape)?;
-        let runtime = self.runtime().clone();
-        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
-        let status = runtime
-            .zeroed_status_word()
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
-        with_scalar!(dtype, |T| {
-            dispatcher.binary(
-                op,
-                kernel,
-                side,
-                len,
-                super::dispatch::Dest::Uninit(&output),
-                self.allocation_of::<T>(&left, name)?,
-                self.allocation_of::<T>(&right, name)?,
-                &status,
+        let failure: fn(&'static str) -> crate::Error = |name| {
+            numerical_failure(
+                name,
+                "an integer power with a negative exponent has no integer result",
             )
-        })?;
-        let integral = matches!(dtype, DType::I32 | DType::I64);
-        if !integral {
-            // The floating entry never touches the status word; reading it back would wait
-            // for nothing this route needs.
-            self.release_completed_staging();
+        };
+        if any_strided(&[&left, &right]) {
+            // A rank-0 scalar side is read through stride zero over the result's domain.
+            let layout = compact_destination_layout(&shape, name)?;
+            self.strided_binary_checked(
+                strided,
+                dtype,
+                super::dispatch::Dest::Uninit(&output),
+                &layout,
+                len,
+                [&left, &right],
+                &shape,
+                failure,
+                name,
+            )?;
             // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
             let output = unsafe { output.assume_init() };
             return tensor_from_buffer(self.runtime(), dtype, &shape, output);
         }
-        // The flagged route is the checked integer one; reading the flag waits for it.
-        let flag = self
-            .runtime()
-            .download_bytes(&status)
-            .map_err(|error| crate::Error::runtime_state_source(name, error))?;
-        if flag.iter().any(|byte| *byte != 0) {
-            return Err(numerical_failure(
-                name,
-                "an integer power with a negative exponent has no integer result",
-            ));
+        // Only the checked integer power writes the status word, so only it allocates one and
+        // waits to read it back.
+        let integral = matches!(dtype, DType::I32 | DType::I64);
+        let status = if integral {
+            Some(
+                self.runtime()
+                    .zeroed_status_word()
+                    .map_err(|error| crate::Error::runtime_state_source(name, error))?,
+            )
+        } else {
+            None
+        };
+        let (left, right) = (
+            self.elementwise_operand_buffer(&left, name)?,
+            self.elementwise_operand_buffer(&right, name)?,
+        );
+        let mut dispatcher = self.dispatcher(&[Entry::Binary])?;
+        dispatcher.binary(
+            op,
+            kernel,
+            side,
+            len,
+            super::dispatch::Dest::Uninit(&output),
+            left,
+            right,
+            status.as_ref(),
+        )?;
+        drop(dispatcher);
+        self.release_completed_staging();
+        if let Some(status) = status {
+            // The flagged route is the checked integer one; reading the flag waits for it.
+            let flag = self
+                .runtime()
+                .download_bytes(&status)
+                .map_err(|error| crate::Error::runtime_state_source(name, error))?;
+            if flag.iter().any(|byte| *byte != 0) {
+                return Err(failure(name));
+            }
         }
         // SAFETY: the launch admitted above writes all `len` destination elements on this stream.
         let output = unsafe { output.assume_init() };
@@ -7014,6 +7331,34 @@ impl tenferro_tensor::TensorAnalytic for CudaEngine {
 }
 
 impl tenferro_tensor::Engine for CudaEngine {
+    fn binary_scalar_read(
+        &mut self,
+        op: tenferro_tensor::ScalarBinaryOp,
+        tensor: TensorRead<'_>,
+        scalar: tenferro_tensor::ContractionScalar,
+        side: tenferro_tensor::ScalarOperandSide,
+    ) -> crate::Result<Tensor> {
+        self.binary_with_device_scalar(op, tensor, scalar, side)
+    }
+
+    fn select_scalar_read(
+        &mut self,
+        predicate: TensorRead<'_>,
+        tensor: TensorRead<'_>,
+        scalar: tenferro_tensor::ContractionScalar,
+        side: tenferro_tensor::ScalarOperandSide,
+    ) -> crate::Result<Tensor> {
+        self.select_with_device_scalar(predicate, tensor, scalar, side)
+    }
+
+    fn fill_scalar(
+        &mut self,
+        shape: &[usize],
+        scalar: tenferro_tensor::ContractionScalar,
+    ) -> crate::Result<Tensor> {
+        self.fill_with_device_scalar(shape, scalar)
+    }
+
     /// XLA-style gather over the operand's own layout.
     ///
     /// The index operand must be `I32`, `I64`, `F32` or `F64`; a float index is checked for an

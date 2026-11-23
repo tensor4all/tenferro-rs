@@ -6,7 +6,7 @@
 //! round, reject and convert factors identically.
 
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::{DType, Error, Result, Tensor};
+use tenferro_tensor::{ContractionScalar, DType, Error, Result, Tensor};
 
 fn invalid_factor(op: &'static str, message: String) -> Error {
     Error::invalid_argument(op, "factor", message)
@@ -113,4 +113,16 @@ pub fn complex_scale_scalar(dtype: DType, factor: Complex64) -> Result<Tensor> {
             format!("requires complex tensor dtype, got {dtype:?}"),
         )),
     }
+}
+
+/// The host scalar a rank-0 float or complex scale factor holds; `None` for an
+/// integer or `Bool` factor, which has no [`ContractionScalar`] form.
+pub(crate) fn contraction_scalar(scalar: &Tensor) -> Result<Option<ContractionScalar>> {
+    Ok(match scalar.dtype() {
+        DType::F32 => Some(ContractionScalar::F32(scalar.as_slice::<f32>()?[0])),
+        DType::F64 => Some(ContractionScalar::F64(scalar.as_slice::<f64>()?[0])),
+        DType::C32 => Some(ContractionScalar::C32(scalar.as_slice::<Complex32>()?[0])),
+        DType::C64 => Some(ContractionScalar::C64(scalar.as_slice::<Complex64>()?[0])),
+        _ => None,
+    })
 }

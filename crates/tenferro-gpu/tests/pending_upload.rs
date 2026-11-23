@@ -56,7 +56,10 @@ fn pending_upload_reports_not_ready_then_publishes_the_values() {
         .expect("device destination");
 
     let source = pinned_source(&runtime, &data);
+    let uploads_before = runtime.host_uploads();
     let mut pending = upload_pending(&runtime, source, destination).expect("pending upload");
+    // The pending path is one of the counted host-to-device copies (#2701).
+    assert_eq!(runtime.host_uploads() - uploads_before, 1);
 
     let mut observed_not_ready = false;
     for _ in 0..8 {
