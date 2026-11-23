@@ -22,7 +22,10 @@ run-name: "${{ inputs.approved_head_sha && format('Fork PR GPU approval #{0} @ {
 #   * A fork PR reaches the pod only through a manual dispatch by an
 #     `admin`/`maintain` actor that names the reviewed head in
 #     `approved_head_sha` (`recover_runpod_pr.py PR --approve-head SHA`).
-#     That dispatch is the approval: the maintainer has read the fork's code
+#     A manual dispatch for a same-repository PR needs the same approval and
+#     ignores the PR author's role, so a `write` contributor's PR is
+#     validated once a maintainer approves its head.
+#     That dispatch is the approval: the maintainer has read the PR's code
 #     at that commit and accepts running it here, including on the
 #     main-scoped hosted jobs that build it. `authorize` refuses any other
 #     head, and the paid lane re-checks it before provisioning, so a push after
@@ -72,7 +75,7 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: Open PR number to recover (same repository) or approve (fork) through trusted main
+        description: Open PR number to approve (with approved_head_sha) through trusted main
         required: false
         default: 0
         type: number
@@ -88,8 +91,8 @@ on:
         type: string
       approved_head_sha:
         description: >-
-          Fork PRs only: the full head SHA you reviewed. Running it on RunPod is
-          your approval; a later push needs a new one
+          Required with pr_number: the full head SHA you reviewed. Running it on
+          RunPod is your approval; a later push needs a new one
         required: false
         default: ""
         type: string
@@ -374,12 +377,20 @@ jobs:
                 fork_pr=true
                 echo "Fork PR #${MANUAL_PR_NUMBER} (${pr_head_repo}) approved by ${GITHUB_ACTOR} at ${pr_head_sha}."
               else
-                if [ -n "${MANUAL_APPROVED_HEAD_SHA}" ] && [ "${MANUAL_APPROVED_HEAD_SHA}" != "${pr_head_sha}" ]; then
-                  echo "::error::PR #${MANUAL_PR_NUMBER} head is ${pr_head_sha}, not approved_head_sha ${MANUAL_APPROVED_HEAD_SHA}."
+                # A same-repository PR is approved the same way: the
+                # dispatching maintainer (checked above) names the head they
+                # reviewed. That approval, not the PR author's repository role,
+                # decides whether the code reaches the pod, so a write-role
+                # contributor's PR can be validated after review.
+                if ! [[ "${MANUAL_APPROVED_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+                  echo "::error::PR #${MANUAL_PR_NUMBER}: review it and pass its full head SHA as approved_head_sha."
                   exit 1
                 fi
-                pr_author="$(jq -r '.user.login' <<<"${pr_json}")"
-                check_permission "${pr_author}" "PR author"
+                if [ "${pr_head_sha}" != "${MANUAL_APPROVED_HEAD_SHA}" ]; then
+                  echo "::error::PR #${MANUAL_PR_NUMBER} head is ${pr_head_sha}, not the approved ${MANUAL_APPROVED_HEAD_SHA}; review the new head and approve it."
+                  exit 1
+                fi
+                echo "PR #${MANUAL_PR_NUMBER} approved by ${GITHUB_ACTOR} at ${pr_head_sha}."
               fi
               refreshed_pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${MANUAL_PR_NUMBER}")"
               refreshed_head_sha="$(jq -r '.head.sha' <<<"${refreshed_pr_json}")"
