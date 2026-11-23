@@ -26,12 +26,11 @@ __bench_unification_semantic_ad_api = []
 autodiff = [
     "dep:computegraph",
     "dep:tenferro-ad",
-    "tenferro-internal-ops/autodiff",
+    "tenferro-ad/autodiff",
 ]
 cuda = [
     "tenferro-gpu/cuda",
     "tenferro-ad?/cuda",
-    "tenferro-internal-ops/cuda",
     "dep:cudarc",
     "dep:libloading",
     "dep:tenferro-gpu",

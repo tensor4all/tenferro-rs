@@ -21,7 +21,7 @@ default = []
 autodiff = [
     "dep:computegraph",
     "dep:tenferro-ad",
-    "tenferro-internal-ops/autodiff",
+    "tenferro-ad/autodiff",
 ]
 tropical-gemm = ["dep:tropical-gemm"]
 
