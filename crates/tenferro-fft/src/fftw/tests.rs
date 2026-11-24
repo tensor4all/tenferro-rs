@@ -83,6 +83,12 @@ fn foreign_plan(api: &Api, buffer: &mut [Complex<f64>]) -> String {
     description
 }
 
+/// The ambient planner thread count is process-wide, and both tests below play
+/// "another FFTW caller" that sets it and expects it to hold until they restore
+/// it. Running them concurrently lets one restore the count while the other's
+/// plans still depend on it, so each holds this lock for its whole body.
+static AMBIENT: Mutex<()> = Mutex::new(());
+
 /// Set the ambient planner thread count the way another FFTW caller does,
 /// holding the planner lock so that the setter does not race with tenferro
 /// plans created by other tests in this binary.
@@ -101,6 +107,7 @@ fn single_threaded_plans_ignore_an_ambient_thread_count() {
     let (Some(threaded), Some(single)) = (load(3), load(1)) else {
         return;
     };
+    let _ambient = AMBIENT.lock().unwrap_or_else(PoisonError::into_inner);
     let threads = threaded.0.f64.threads.unwrap();
     assert!(
         single.0.f64.threads.is_some(),
@@ -122,6 +129,7 @@ fn concurrent_foreign_plans_keep_their_own_thread_count() {
     let Some(provider) = load(2) else {
         return;
     };
+    let _ambient = AMBIENT.lock().unwrap_or_else(PoisonError::into_inner);
     let api = provider.0.f64.clone();
     let threads = api.threads.unwrap();
     let previous = set_ambient(threads, 3);

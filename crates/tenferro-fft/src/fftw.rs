@@ -97,6 +97,30 @@ extern "C" fn after_planning() {
     PLANNER_FREE.notify_one();
 }
 
+/// Run `f` holding the planner lock that the hooks take, for FFTW calls that
+/// change the global planner without going through the hooks. `f` must not
+/// create or destroy a plan: the hooks would wait for this same lock.
+fn with_planner_locked<R>(f: impl FnOnce() -> R) -> R {
+    let mut planner = PLANNER.lock().unwrap_or_else(PoisonError::into_inner);
+    while planner.busy {
+        planner = PLANNER_FREE
+            .wait(planner)
+            .unwrap_or_else(PoisonError::into_inner);
+    }
+    planner.busy = true;
+    drop(planner);
+    // Release the lock even if `f` unwinds, so later plans do not wait forever.
+    struct Release;
+    impl Drop for Release {
+        fn drop(&mut self) {
+            PLANNER.lock().unwrap_or_else(PoisonError::into_inner).busy = false;
+            PLANNER_FREE.notify_one();
+        }
+    }
+    let _release = Release;
+    f()
+}
+
 type PlanComplex =
     unsafe extern "C" fn(c_int, *mut c_void, *mut c_void, c_int, c_uint) -> *mut c_void;
 type PlanReal = unsafe extern "C" fn(c_int, *mut c_void, *mut c_void, c_uint) -> *mut c_void;
@@ -454,9 +478,19 @@ impl Api {
         let initialize = threaded && !threads_ready;
         if initialize {
             let threads = self.threads.ok_or(FftwError::ThreadInitialization)?;
-            // SAFETY: the installation exports this signature. LOADED serializes
-            // tenferro's initialization; FFTW requires it before threaded planning.
-            if unsafe { (threads.init)() } == 0 {
+            // `fftw_init_threads` creates the installation's global planner if no
+            // plan has yet, and adds the threaded solvers to it. It runs outside
+            // FFTW's planner hooks, so it takes the planner lock itself: a plan
+            // being created on another thread must not see the planner created
+            // or changed under it (#2677: SIGSEGV in `fftw_mkplan_d`).
+            let initialized = with_planner_locked(|| {
+                // SAFETY: the installation exports this signature. LOADED
+                // serializes tenferro's initialization and the planner lock
+                // serializes it with every hooked plan; FFTW requires it before
+                // threaded planning, and it creates or destroys no plan.
+                unsafe { (threads.init)() }
+            });
+            if initialized == 0 {
                 return Err(FftwError::ThreadInitialization);
             }
         }
