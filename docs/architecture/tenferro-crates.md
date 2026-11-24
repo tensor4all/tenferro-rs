@@ -183,7 +183,6 @@ tenferro-fft              -> tenferro-runtime, tenferro-internal-ops,
                               tenferro-tensor, tenferro-cpu,
                               tenferro-internal-extension-macros
 tenferro-mpi              -> tenferro-tensor
-tenferro-random-core      -> (no dependencies)
 ```
 
 Additional internal dependencies:
