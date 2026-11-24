@@ -384,6 +384,7 @@ gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_eager_values
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_composites_traced_values_match_cpu
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_softmax_nan_and_infinity_policy_matches_cpu
 gpu	tenferro-ad::integration	gpu_nn_composites::test_gpu_softplus_is_one_fused_launch_matching_the_composite
+host	tenferro-ad::integration	graph_compile::compile_with_inputs_puts_loss_and_gradients_in_one_program_with_parameters_first
 host	tenferro-ad::integration	graph_compile::graph_compiler_compile_many_returns_multi_output_program
 host	tenferro-ad::integration	graph_compile::graph_compiler_compiler_options_setter_updates_options
 host	tenferro-ad::integration	graph_compile::graph_compiler_compiles_without_backend

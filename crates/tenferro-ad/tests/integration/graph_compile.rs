@@ -132,3 +132,38 @@ fn graph_compiler_compile_many_returns_multi_output_program() {
     assert_eq!(program.input_count(), 1);
     assert_eq!(program.output_count(), 2);
 }
+
+#[test]
+fn compile_with_inputs_puts_loss_and_gradients_in_one_program_with_parameters_first() {
+    use tenferro_ad::TracedTensorAdExt;
+    use tenferro_runtime::Tensor;
+
+    let trace = TraceContext::new();
+    // Data first in the context, parameters first in the program.
+    let x = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
+    let t = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
+    let w = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
+    let b = trace.input_concrete_shape(DType::F64, &[2]).unwrap();
+    let residual = (&(&(&w * &x).unwrap() + &b).unwrap() - &t).unwrap();
+    let loss = (&residual * &residual).unwrap().reduce_sum(None).unwrap();
+    let (loss, grads) = loss.value_and_grad(&[&w, &b]).unwrap();
+    let (gw, gb) = (grads[0].clone().unwrap(), grads[1].clone().unwrap());
+
+    let program = GraphCompiler::new()
+        .compile_with_inputs(&[&loss, &gw, &gb], &[&w, &b, &x, &t])
+        .unwrap();
+    let values = [[1.0, 2.0], [0.5, 0.5], [3.0, 4.0], [1.0, 1.0]]
+        .map(|v| Tensor::from_vec_col_major(vec![2], v.to_vec()).unwrap());
+    let outputs = crate::support::run_on_cpu(
+        &crate::support::cpu_runtime(),
+        &program,
+        &values.iter().collect::<Vec<_>>(),
+    )
+    .unwrap();
+    // residual = w x + b - t = [2.5, 7.5]; loss = Σ r², ∂w = 2 r x, ∂b = 2 r.
+    let got: Vec<Vec<f64>> = outputs
+        .iter()
+        .map(|o| o.as_slice::<f64>().unwrap().to_vec())
+        .collect();
+    assert_eq!(got, [vec![62.5], vec![15.0, 60.0], vec![5.0, 15.0]]);
+}
