@@ -13,6 +13,7 @@ members = [
     "crates/tenferro-ad",
     "crates/tenferro-internal-extension-macros",
     "crates/tenferro-core-ops",
+    "crates/tenferro-random-core",
     "crates/tenferro-internal-ops",
     "crates/tenferro-einsum",
     "crates/tenferro-linalg",
@@ -82,39 +83,40 @@ syn = "2"
 # a single version, so the strided crates are ordinary caret requirements at the
 # patch each API needs; the committed `Cargo.lock` fixes the exact versions a
 # build uses, and `cargo update -p <crate>` moves them. Every fan-out entry of
-# strided 0.11 takes a `threadteam::Exec` token as its last parameter and decides
+# strided takes a `threadteam::Exec` token as its last parameter and decides
 # its parallel width from that token's dispatch costs. `threadteam` (formerly
 # `strided-exec`) is the only crate that depends on Rayon (see `deny.toml`);
 # tenferro starts no task itself.
-strided-view = "0.7.1"
+strided-view = "0.8.1"
 strided-traits = "0.7.0"
-threadteam = "0.5.1"
-strided-perm = { version = "0.12.0", features = ["parallel"] }
+threadteam = "0.6.0"
+strided-perm = { version = "0.15.0", features = ["parallel"] }
 # The CPU stack resolves to one release train of the strided and tcontract families; one
 # `tcontract-exec` (check `cargo tree -i tcontract-exec`) keeps `Exec` one type.
-cpueinsum = "0.12.0"
-tcontract-exec = "0.12.0"
-tlinalg = "0.11.0"
-strided-basic = { version = "0.12.0", default-features = false }
+cpueinsum = "0.13.0"
+tcontract-exec = "0.13.0"
+tlinalg = "0.12.0"
+strided-basic = { version = "0.15.0", default-features = false }
 # Fused NN kernels moved out of this repository (#2272): axis-0 softmax with a
 # tensor-free contract, caller-provided scratch and the caller's `Exec` token.
-strided-nn = "0.12.0"
-strided-fused = { version = "0.12.0", default-features = false, features = ["parallel"] }
-strided-kernel = { version = "0.12.0", features = ["parallel"] }
+strided-nn = "0.15.0"
+strided-fused = { version = "0.15.0", default-features = false, features = ["parallel"] }
+strided-kernel = { version = "0.15.0", features = ["parallel"] }
 libloading = "0.8"
 # One faer identity for the CPU stack (#1939): tlinalg and this
-# dependency use compatible t4a-faer ranges. 0.30 has threadteam 0.4 in its
-# public API; 0.24.8 fixed divide-and-conquer SVD secular-root stagnation
+# dependency use compatible ranges of tensor4all's faer, published as `colmat`
+# from 0.34 on (`t4a-faer` up to 0.33). 0.34 has threadteam 0.6 in its public
+# API; 0.24.8 fixed divide-and-conquer SVD secular-root stagnation
 # (tensor4all/faer#28). Later patch fixes need only a targeted lock update, not
 # another manifest-bump cascade. Keep the `faer` key
 # and library name: tenferro-cpu re-exports this build as `tenferro_cpu::faer`.
-faer = { package = "t4a-faer", version = "0.33.0", default-features = false, features = ["std", "rayon", "threadteam"] }
+faer = { package = "colmat", version = "0.34.0", default-features = false, features = ["std", "rayon", "threadteam"] }
 # CUDA 12.8 bindings; dynamic runtime gating keeps the baseline compatible with
 # CUDA 12.4 driver/NVRTC libraries.
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"] }
 # The standalone CUDA runtime (tensor4all/t4a-gpu-backend) and the kernel
 # catalogue with its NVRTC sources (tensor4all/t4a-cuda-kernels, ABI revision
-# 14) that tenferro-gpu's CUDA engine is built on (#2208), plus the Metal
+# 15) that tenferro-gpu's CUDA engine is built on (#2208), plus the Metal
 # runtime and the Metal source set the Metal engine is built on (#2402 U4).
 # The CUDA runtime keeps the git pin whose revision is the one its crates.io
 # release (0.1.1) was published from; scripts/check-git-pin-content.py checks
@@ -122,7 +124,10 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 # crates.io at exact versions, so `cargo publish` keeps the same dependency;
 # `t4a-metal-sys` 0.1.0 comes in transitively through the Metal runtime.
 t4a-cuda-runtime = { git = "https://github.com/tensor4all/t4a-gpu-backend", rev = "147af9e03e5169ec7cef6f6d869e27ed70a43a05", version = "=0.1.1" }
-t4a-cuda-kernels = { version = "=0.3.0" }
+# The kernel catalogue is the published crates.io exact version (ABI 15, the
+# layout-taking elementwise entries, tenferro-rs#2701); it was pinned to
+# tensor4all/t4a-cuda-kernels#37 until 0.4.0 was published.
+t4a-cuda-kernels = "=0.4.0"
 t4a-metal-runtime = { version = "=0.1.2" }
 sha2 = "0.10"
 omeco = "0.2.4"

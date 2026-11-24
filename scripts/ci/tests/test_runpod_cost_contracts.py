@@ -40,7 +40,10 @@ def steps(job_text: str) -> list[str]:
 
 def step(workflow: str, name: str) -> str:
     body = workflow.split(f"      - name: {name}\n", 1)[1]
-    return body.split("\n      - ", 1)[0]
+    body = body.split("\n      - ", 1)[0]
+    # The last step of a job must not swallow the next job (e.g. the
+    # `fork-pr-verdict` job that follows `ci-gpu-gate` in runpod-gpu-test.yml).
+    return re.split(r"\n  [A-Za-z0-9_-]+:\n", body, maxsplit=1)[0]
 
 
 def step_script(workflow: str, name: str) -> str:
@@ -83,6 +86,8 @@ class GateReuseDecisionTests(unittest.TestCase):
                 GITHUB_REPOSITORY="tensor4all/tenferro-rs",
                 GITHUB_OUTPUT=str(output),
                 PR_NUMBER=pr_number,
+                # Contract: runpod-gpu-execute.yml passes inputs.fork_pr as FORK_PR.
+                FORK_PR="false",
                 TARGET_HEAD_SHA=HEAD,
                 TESTED_REF=REF,
                 FILES=" ".join(files),
@@ -189,6 +194,8 @@ class GatePublicationTests(unittest.TestCase):
                 GPU_REQUIRED="true",
                 LOCAL_GPU_VALIDATION="false",
                 PR_NUMBER="7",
+                # Contract: authorize.outputs.fork_pr feeds FORK_PR in the publish step.
+                FORK_PR="false",
                 POLICY_REASON="code",
                 CONTRACT_RESULT="success",
                 PRE_RUNPOD_RESULT="success",

@@ -9,8 +9,9 @@ from scripts.ci.recover_runpod_pr import (
 
 class RecoverRunPodPrTests(unittest.TestCase):
     def test_dispatch_always_uses_trusted_main(self) -> None:
+        sha = "ab" * 20
         self.assertEqual(
-            build_dispatch_command(1379, wait=False),
+            build_dispatch_command(1379, wait=False, approve_head=sha),
             [
                 "gh",
                 "workflow",
@@ -20,15 +21,31 @@ class RecoverRunPodPrTests(unittest.TestCase):
                 "main",
                 "-f",
                 "pr_number=1379",
+                "-f",
+                f"approved_head_sha={sha}",
             ],
         )
+
+    def test_every_dispatch_names_the_reviewed_head(self) -> None:
+        sha = "ab" * 20
+        self.assertEqual(
+            build_dispatch_command(2717, wait=False, approve_head=sha)[-2:],
+            ["-f", f"approved_head_sha={sha}"],
+        )
+
+    def test_an_abbreviated_approval_is_rejected(self) -> None:
+        for value in ("", "d143ce2e", "AB" * 20):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                ValueError, "full lowercase"
+            ):
+                build_dispatch_command(2717, wait=False, approve_head=value)
 
     def test_invalid_pr_numbers_are_rejected(self) -> None:
         for value in (0, -1):
             with self.subTest(value=value), self.assertRaisesRegex(
                 ValueError, "positive"
             ):
-                build_dispatch_command(value, wait=False)
+                build_dispatch_command(value, wait=False, approve_head="ab" * 20)
 
     def test_recovery_authenticates_dispatches_and_watches_returned_run(self) -> None:
         commands: list[list[str]] = []
@@ -44,7 +61,7 @@ class RecoverRunPodPrTests(unittest.TestCase):
             )
             return subprocess.CompletedProcess(command, 0, stdout, "")
 
-        url = recover_pr(1379, wait=True, runner=runner)
+        url = recover_pr(1379, wait=True, approve_head="ab" * 20, runner=runner)
         self.assertEqual(
             url,
             "https://github.com/tensor4all/tenferro-rs/actions/runs/12345",
@@ -59,7 +76,7 @@ class RecoverRunPodPrTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "dispatched\n", "")
 
         with self.assertRaisesRegex(RuntimeError, "run URL"):
-            recover_pr(1379, wait=False, runner=runner)
+            recover_pr(1379, wait=False, approve_head="ab" * 20, runner=runner)
 
 
 if __name__ == "__main__":

@@ -1850,11 +1850,13 @@ fn full_piv_lu_meta(
     dtype: DType,
     shape: &[SymDim],
 ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-    let (n, _, batch) = matrix_meta_parts("tenferro-linalg.full_piv_lu", shape)?;
+    // `P (m x m)`, `L (m x k)`, `U (k x n)`, `Q (n x n)`, `k = min(m, n)`, then the parity.
+    let (m, n, batch) = matrix_meta_parts("tenferro-linalg.full_piv_lu", shape)?;
+    let k = m.clone().min(n.clone());
     Ok(vec![
-        (dtype, matrix_shape(n.clone(), n.clone(), batch)),
-        (dtype, matrix_shape(n.clone(), n.clone(), batch)),
-        (dtype, matrix_shape(n.clone(), n.clone(), batch)),
+        (dtype, matrix_shape(m.clone(), m.clone(), batch)),
+        (dtype, matrix_shape(m, k.clone(), batch)),
+        (dtype, matrix_shape(k, n.clone(), batch)),
         (dtype, matrix_shape(n.clone(), n, batch)),
         (singular_values_dtype(dtype), batch.to_vec()),
     ])

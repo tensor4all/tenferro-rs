@@ -106,6 +106,9 @@ jobs:
           workspaces: |
             . -> ../target-${{ matrix.cfg.backend }}
           shared-key: ci-workspace-${{ matrix.cfg.backend }}
+          # No `key:` here: rust-cache ignores `key` when `shared-key` is set, and its
+          # default `add-rust-environment-hash-key` already hashes the workspace
+          # Cargo.lock, so a dependency-source switch produces a different key.
       - name: Verify restored dependency artifacts
         if: matrix.cfg.profile != '' && steps.rust_cache.outputs.cache-hit == 'true'
         run: |
@@ -113,7 +116,10 @@ jobs:
           # Cargo before 1.100 keeps dependency artifacts in ci/deps; Cargo
           # 1.100's build-dir layout keeps them in ci/build/<package>/<hash>/out.
           profile_dir="${CARGO_TARGET_DIR}/ci"
-          test -d "${profile_dir}"
+          if [ ! -d "${profile_dir}" ]; then
+            echo "::error::restored cache has no ${profile_dir}; the cache key is stale"
+            exit 1
+          fi
           has_artifact() {
             local dirs=()
             [ -d "${profile_dir}/deps" ] && dirs+=("${profile_dir}/deps")
@@ -126,14 +132,22 @@ jobs:
           }
           crates="strided_view strided_traits strided_perm strided_basic strided_fused strided_kernel"
           if [ "${{ matrix.cfg.backend }}" = cpu-faer ]; then
-            crates="${crates} faer"
+            # colmat 0.34 keeps `[lib] name = "colmat"`, so the artifact is
+            # libcolmat-*.rlib. The old `faer` name only matched t4a-faer <= 0.33.
+            crates="${crates} colmat"
           fi
+          missing=""
           for crate in ${crates}; do
-            has_artifact "${crate}" || {
-              echo "restored cache is missing ${crate} artifacts under ${profile_dir}/{deps,build}" >&2
-              exit 1
-            }
+            has_artifact "${crate}" || missing="${missing} ${crate}"
           done
+          if [ -n "${missing}" ]; then
+            # A full cache hit cannot be healed from here: rust-cache skips its
+            # post-step save on a full match, so deleting the tree would only make
+            # every later run cold-rebuild silently. Fail instead, so a stale entry
+            # is visible and the key gets fixed.
+            echo "::error::restored cache is missing:${missing} under ${profile_dir}/{deps,build}"
+            exit 1
+          fi
           echo "Verified restored Cargo dependency artifacts under ${profile_dir}."
       - uses: taiki-e/install-action@nextest
         if: matrix.cfg.profile != ''

@@ -46,6 +46,15 @@ An extension crate is responsible for:
   automatic differentiation,
 - clear errors when a dtype, shape, backend, or AD path is not supported.
 
+The crate's `autodiff` and `cuda` features come from the public crates, never
+from a `tenferro-internal-*` crate: declare `autodiff = ["dep:tenferro-ad",
+"tenferro-ad/autodiff"]` and, for a CUDA path, `dep:tenferro-gpu` and
+`tenferro-gpu/cuda`, plus `tenferro-ad?/cuda` when the crate also takes
+`tenferro-ad`. `scripts/check-crate-boundaries.py` rejects an extension feature
+that forwards an internal crate's feature; it covers the standard families in
+this repository (`tenferro-einsum`, `tenferro-fft`, `tenferro-linalg`,
+`ext/sparse`, `ext/tropical`).
+
 ## Cache Ownership
 
 Keep operation identity and runtime caches separate.

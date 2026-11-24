@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -33,6 +34,9 @@ PY
 def publish_script() -> str:
     text = (ROOT / ".github/workflows/runpod-gpu-test.yml").read_text()
     step = text.split("      - name: Publish required PR check\n", 1)[1]
+    # Stop at the next step/job: later jobs (e.g. `fork-pr-verdict`) are not
+    # part of this script.
+    step = re.split(r"\n      - |\n  [A-Za-z0-9_-]+:\n", step, maxsplit=1)[0]
     return textwrap.dedent(step.split("        run: |\n", 1)[1])
 
 
@@ -49,6 +53,10 @@ class GpuGatePublicationTests(unittest.TestCase):
             "GPU_REQUIRED": "",
             "LOCAL_GPU_VALIDATION": "false",
             "PR_NUMBER": "",
+            # Contract: authorize.outputs.fork_pr feeds FORK_PR in the publish
+            # step (runpod-gpu-test.yml); the step runs under `set -u`, so every
+            # harness must define it.
+            "FORK_PR": "false",
             "POLICY_REASON": "",
             "CONTRACT_RESULT": "skipped",
             "PRE_RUNPOD_RESULT": "skipped",

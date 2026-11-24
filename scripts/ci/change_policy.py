@@ -139,18 +139,19 @@ _GPU_DEVICE_CONTROL_FILES = frozenset(
 # The paid lane's host-side half: how the gate is waited on, reused, priced, and
 # reclaimed, and the local GPU gate that replaces the pod for a labelled PR.
 # None of it changes what the pod executes, and running the device suite cannot
-# observe any of it - `test_gpu_gate_poller.py`, `test_gpu_gate_reuse.py` and
-# `test_local_gpu_gate.py` are the checks that can. A CI-only diff that touches
-# only these therefore skips the paid path, and the gate publishes "not
-# required" instead of provisioning a pod (REPOSITORY_RULES.md, CI Cost
-# Discipline). `.github/workflows/CI_gpu.yml` is the required-gate contract plus
-# the fork lane, which runs on GitHub-hosted and `ubuntu-gpu` runners, never on
-# a RunPod pod; #2163 spent a pod on a wait-loop fix before this split existed.
+# observe any of it - `test_gpu_gate_poller.py`, `test_gpu_gate_reuse.py`,
+# `test_local_gpu_gate.py` and `test_fork_gpu_gate.py` are the checks that can.
+# A CI-only diff that touches only these therefore skips the paid path, and the
+# gate publishes "not required" instead of provisioning a pod
+# (REPOSITORY_RULES.md, CI Cost Discipline). `.github/workflows/CI_gpu.yml` is
+# the required-gate contract plus a manual `ubuntu-gpu` fallback, never run on a
+# RunPod pod; #2163 spent a pod on a wait-loop fix before this split existed.
 _GPU_HOSTED_ONLY_FILES = frozenset(
     {
         ".github/workflows/CI_gpu.yml",
         ".github/workflows/local-gpu-gate.yml",
         ".github/workflows/runpod-reap.yml",
+        "scripts/ci/fork_gpu_gate.py",
         "scripts/ci/gpu_gate_reuse.py",
         "scripts/ci/local_gpu_gate.py",
         "scripts/ci/runpod_pricing.py",

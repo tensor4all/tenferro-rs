@@ -2421,3 +2421,604 @@ fn a_refused_vendor_plan_keeps_the_reused_destination_copy() {
         "every handle an aborted plan build created was destroyed"
     );
 }
+
+// --- Merged views for gather and concatenate (#2708) ---
+
+/// The data a view of `extents` / `strides` at `offset` reaches: `0, 1, 2, ...` up to its
+/// highest element, so every reachable element is distinct.
+fn view_data(extents: &[i64], strides: &[i64], offset: i64) -> Vec<f64> {
+    let high = offset
+        + extents
+            .iter()
+            .zip(strides)
+            .map(|(&extent, &stride)| (extent - 1) * stride.max(0))
+            .sum::<i64>();
+    (0..=high).map(|element| element as f64).collect()
+}
+
+/// The element offsets a view names, in column-major logical order.
+fn view_offsets(extents: &[i64], strides: &[i64], offset: i64) -> Vec<i64> {
+    let count: i64 = extents.iter().product();
+    (0..count)
+        .map(|mut flat| {
+            let mut element = offset;
+            for (&extent, &stride) in extents.iter().zip(strides) {
+                element += (flat % extent) * stride;
+                flat /= extent;
+            }
+            element
+        })
+        .collect()
+}
+
+/// StableHLO gather on the host, over an operand view: the un-merged reference.
+///
+/// Start indices are clamped to `[0, extent - slice]`, as the device kernels and the CPU engine
+/// do, so an out-of-range index exercises the same clamp on merged and un-merged axes.
+fn host_gather(
+    data: &[f64],
+    (extents, strides, offset): (&[i64], &[i64], i64),
+    config: &tenferro_tensor::GatherConfig,
+    indices_shape: &[usize],
+    indices: &[i64],
+) -> (Vec<usize>, Vec<f64>) {
+    let rank = extents.len();
+    let plan = super::gather_plan(config, rank as u32);
+    let out_shape = super::gather_shape(indices_shape, &plan, config).expect("gather shape");
+    let batch_axes: Vec<usize> = (0..out_shape.len())
+        .filter(|axis| !config.offset_dims.contains(axis))
+        .collect();
+    let windows: Vec<usize> = (0..rank)
+        .filter(|axis| !config.collapsed_slice_dims.contains(axis))
+        .collect();
+    let has_vector = config.index_vector_dim < indices_shape.len();
+    let count: usize = out_shape.iter().product();
+    let mut out = Vec::with_capacity(count);
+    for flat in 0..count {
+        let mut rest = flat;
+        let coords: Vec<usize> = out_shape
+            .iter()
+            .map(|&extent| {
+                let coord = rest % extent;
+                rest /= extent;
+                coord
+            })
+            .collect();
+        let batch: Vec<usize> = batch_axes.iter().map(|&axis| coords[axis]).collect();
+        let mut start = vec![0i64; rank];
+        for (component, &axis) in config.start_index_map.iter().enumerate() {
+            let mut index_coords = batch.clone();
+            if has_vector {
+                index_coords.insert(config.index_vector_dim, component);
+            }
+            // The column-major flat position of the index coordinate, slowest axis first.
+            let position = index_coords
+                .iter()
+                .zip(indices_shape)
+                .rev()
+                .fold(0usize, |flat, (&coord, &extent)| flat * extent + coord);
+            let slice = config.slice_sizes[axis] as i64;
+            start[axis] = indices[position].clamp(0, extents[axis] - slice);
+        }
+        let mut element = offset;
+        for axis in 0..rank {
+            let window = windows
+                .iter()
+                .position(|&window| window == axis)
+                .map_or(0, |position| coords[config.offset_dims[position]] as i64);
+            element += (start[axis] + window) * strides[axis];
+        }
+        out.push(data[element as usize]);
+    }
+    (out_shape, out)
+}
+
+/// Gather through the merged view and through the original one, require the same elements in
+/// the same order, and return the merged operand rank (`None`: nothing merged).
+fn merged_gather_rank(
+    case: &str,
+    view: (&[i64], &[i64], i64),
+    config: &tenferro_tensor::GatherConfig,
+    indices_shape: &[usize],
+    indices: &[i64],
+) -> Option<usize> {
+    let data = view_data(view.0, view.1, view.2);
+    let (shape, expected) = host_gather(&data, view, config, indices_shape, indices);
+    let (extents, strides, merged) = super::coalesce_gather_view(view.0, view.1, config)?;
+    let (merged_shape, observed) = host_gather(
+        &data,
+        (&extents, &strides, view.2),
+        &merged,
+        indices_shape,
+        indices,
+    );
+    assert_eq!(
+        merged_shape.iter().product::<usize>(),
+        shape.iter().product::<usize>(),
+        "{case}: the merged output holds a different element count"
+    );
+    assert_eq!(
+        observed, expected,
+        "{case}: merged as {extents:?} / {merged:?}"
+    );
+    Some(extents.len())
+}
+
+/// `index_select` along `axis` of a compact operand as a gather with `[n, 1]` indices.
+fn select_config(shape: &[i64], axis: usize) -> tenferro_tensor::GatherConfig {
+    let mut slice_sizes: Vec<usize> = shape.iter().map(|&extent| extent as usize).collect();
+    slice_sizes[axis] = 1;
+    tenferro_tensor::GatherConfig {
+        offset_dims: (0..shape.len()).filter(|&other| other != axis).collect(),
+        collapsed_slice_dims: vec![axis],
+        start_index_map: vec![axis],
+        index_vector_dim: 1,
+        slice_sizes,
+    }
+}
+
+fn compact_strides_of(extents: &[i64]) -> Vec<i64> {
+    extents
+        .iter()
+        .scan(1i64, |step, &extent| {
+            let stride = *step;
+            *step *= extent;
+            Some(stride)
+        })
+        .collect()
+}
+
+/// The reporter's rank-26 layout merges to the rank-3 one: the free window axes on either side
+/// of the selected axis become one axis each, and the configuration is renumbered onto them.
+#[test]
+fn a_rank_26_select_merges_to_three_axes() {
+    let extents = vec![2i64; 26];
+    let strides = compact_strides_of(&extents);
+    let (merged_extents, merged_strides, merged) =
+        super::coalesce_gather_view(&extents, &strides, &select_config(&extents, 13))
+            .expect("the free window axes merge");
+    assert_eq!(merged_extents, vec![1 << 13, 2, 1 << 12]);
+    assert_eq!(merged_strides, vec![1, 1 << 13, 1 << 14]);
+    assert_eq!(
+        merged,
+        tenferro_tensor::GatherConfig {
+            offset_dims: vec![0, 2],
+            collapsed_slice_dims: vec![1],
+            start_index_map: vec![1],
+            index_vector_dim: 1,
+            slice_sizes: vec![1 << 13, 1, 1 << 12],
+        }
+    );
+}
+
+/// Every merged gather reads the elements the original configuration names, in its order.
+#[test]
+fn a_coalesced_gather_reads_the_elements_the_original_names() {
+    let swap = [1i64, 0];
+    // A rank-12 select along its first, a middle and its last axis.
+    let shape = vec![2i64; 12];
+    let strides = compact_strides_of(&shape);
+    for (axis, rank) in [(0, 2), (6, 3), (11, 2)] {
+        assert_eq!(
+            merged_gather_rank(
+                &format!("rank-12 select on axis {axis}"),
+                (&shape, &strides, 0),
+                &select_config(&shape, axis),
+                &[2, 1],
+                &swap,
+            ),
+            Some(rank)
+        );
+    }
+    // Rank 26 with extent-one axes among the extent-two ones, and a clamped index.
+    let shape: Vec<i64> = (0..26)
+        .map(|axis| if axis % 3 == 1 { 1 } else { 2 })
+        .collect();
+    let strides = compact_strides_of(&shape);
+    assert_eq!(
+        merged_gather_rank(
+            "rank-26 select with extent-one axes",
+            (&shape, &strides, 0),
+            &select_config(&shape, 12),
+            &[3, 1],
+            &[1, 0, 7],
+        ),
+        Some(3)
+    );
+    // A window narrower than its axis must not merge with the next axis ...
+    let shape = [4i64, 3, 5];
+    let strides = compact_strides_of(&shape);
+    let narrow = tenferro_tensor::GatherConfig {
+        offset_dims: vec![0, 1],
+        collapsed_slice_dims: vec![2],
+        start_index_map: vec![2],
+        index_vector_dim: 1,
+        slice_sizes: vec![2, 3, 1],
+    };
+    assert_eq!(
+        merged_gather_rank(
+            "narrow fast window",
+            (&shape, &strides, 0),
+            &narrow,
+            &[3, 1],
+            &[4, 0, 7]
+        ),
+        None
+    );
+    // ... while a narrow window on the slower axis of a full one does.
+    let narrow_slow = tenferro_tensor::GatherConfig {
+        slice_sizes: vec![4, 2, 1],
+        ..narrow
+    };
+    assert_eq!(
+        merged_gather_rank(
+            "narrow slow window",
+            (&shape, &strides, 0),
+            &narrow_slow,
+            &[3, 1],
+            &[4, 0, 7]
+        ),
+        Some(2)
+    );
+    // Zero strides (a broadcast pair) and negative strides (a reversed run) at an offset.
+    let shape = [3i64, 2, 5, 2, 4];
+    let strides = [0i64, 0, 1, -5, -10];
+    let indexed = tenferro_tensor::GatherConfig {
+        offset_dims: vec![0, 1, 2, 3],
+        collapsed_slice_dims: vec![2],
+        start_index_map: vec![2],
+        index_vector_dim: 1,
+        slice_sizes: vec![3, 2, 1, 2, 4],
+    };
+    assert_eq!(
+        merged_gather_rank(
+            "zero and negative strides",
+            (&shape, &strides, 35),
+            &indexed,
+            &[3, 1],
+            &[4, 0, 2],
+        ),
+        Some(3)
+    );
+    // Two indexed axes, one of them a partial window, with free axes merging after them.
+    let shape = [2i64, 3, 4, 5, 2];
+    let strides = compact_strides_of(&shape);
+    let two_axes = tenferro_tensor::GatherConfig {
+        offset_dims: vec![0, 1, 2, 3],
+        collapsed_slice_dims: vec![1],
+        start_index_map: vec![1, 2],
+        index_vector_dim: 1,
+        slice_sizes: vec![2, 1, 2, 5, 2],
+    };
+    assert_eq!(
+        merged_gather_rank(
+            "two indexed axes",
+            (&shape, &strides, 0),
+            &two_axes,
+            &[3, 2],
+            &[0, 2, 1, 3, 1, 9],
+        ),
+        Some(4)
+    );
+    // Extent-one axes drop (a collapsed one and a window one with its output axis), letting the
+    // windows around them merge; an indexed extent-one axis keeps its entry.
+    let shape = [1i64, 4, 1, 3, 1];
+    let strides = compact_strides_of(&shape);
+    let singletons = tenferro_tensor::GatherConfig {
+        offset_dims: vec![0, 1, 2],
+        collapsed_slice_dims: vec![0, 4],
+        start_index_map: vec![4],
+        index_vector_dim: 1,
+        slice_sizes: vec![1, 4, 1, 3, 1],
+    };
+    assert_eq!(
+        merged_gather_rank(
+            "extent-one axes",
+            (&shape, &strides, 0),
+            &singletons,
+            &[2],
+            &[0, 5]
+        ),
+        Some(2)
+    );
+    // A permuted operand whose strides do not compose keeps every axis: its two leading
+    // window axes are free, full and adjacent, so only the stride check stops the merge.
+    let shape = [2i64, 2, 3];
+    let strides = [2i64, 1, 4];
+    assert_eq!(
+        merged_gather_rank(
+            "permuted operand",
+            (&shape, &strides, 0),
+            &select_config(&shape, 2),
+            &[2, 1],
+            &swap,
+        ),
+        None
+    );
+    // Window axes whose output axes are swapped must not merge, even though their strides
+    // compose: the merged run would write the output transposed.
+    let matrix = [3i64, 4];
+    let matrix_strides = compact_strides_of(&matrix);
+    let swapped_outputs = tenferro_tensor::GatherConfig {
+        offset_dims: vec![1, 0],
+        collapsed_slice_dims: vec![],
+        start_index_map: vec![],
+        index_vector_dim: 0,
+        slice_sizes: vec![3, 4],
+    };
+    assert_eq!(
+        merged_gather_rank(
+            "swapped output axes",
+            (&matrix, &matrix_strides, 1),
+            &swapped_outputs,
+            &[0],
+            &[],
+        ),
+        None
+    );
+    // The same axes in their compact order do merge.
+    let strides = compact_strides_of(&shape);
+    assert_eq!(
+        merged_gather_rank(
+            "compact operand",
+            (&shape, &strides, 0),
+            &select_config(&shape, 2),
+            &[2, 1],
+            &swap,
+        ),
+        Some(2)
+    );
+}
+
+/// The concatenate slab and its input merge only the axes both advance through together.
+#[test]
+fn a_strided_pair_merges_only_the_axes_both_views_continue() {
+    let pair = super::coalesce_strided_pair;
+    // A rank-26 compact input into its slab of a two-input concatenation along axis 13: the
+    // axes up to the concatenated one merge, and so do the axes after it.
+    let extents = vec![2i64; 26];
+    let source = compact_strides_of(&extents);
+    let mut out_extents = extents.clone();
+    out_extents[13] = 4;
+    let destination = compact_strides_of(&out_extents);
+    assert_eq!(
+        pair(&extents, &source, &destination),
+        (vec![1 << 14, 1 << 12], vec![1, 1 << 14], vec![1, 1 << 15])
+    );
+    // Same elements in the same order on both sides, for merging and non-merging views.
+    let cases: [(&[i64], &[i64], &[i64]); 5] = [
+        (&[2, 3, 2, 4], &[1, 2, 6, 12], &[1, 2, 12, 24]),
+        // A permuted source does not compose: nothing merges across it.
+        (&[2, 3, 4], &[12, 4, 1], &[1, 2, 6]),
+        // A broadcast pair and a reversed run in the source.
+        (&[3, 2, 2, 4], &[0, 0, -1, -2], &[1, 3, 6, 12]),
+        // Extent-one axes drop wherever they sit.
+        (&[1, 4, 1, 3], &[7, 1, 9, 4], &[5, 1, 3, 4]),
+        // An all-singleton view comes back as it is.
+        (&[1, 1], &[1, 1], &[1, 1]),
+    ];
+    for (extents, source, destination) in cases {
+        let (merged, merged_source, merged_destination) = pair(extents, source, destination);
+        assert_eq!(
+            view_offsets(&merged, &merged_source, 7),
+            view_offsets(extents, source, 7),
+            "source of {extents:?}"
+        );
+        assert_eq!(
+            view_offsets(&merged, &merged_destination, 0),
+            view_offsets(extents, destination, 0),
+            "destination of {extents:?}"
+        );
+    }
+    assert_eq!(pair(&[2, 3, 4], &[12, 4, 1], &[1, 2, 6]).0, vec![2, 3, 4]);
+    // An empty view is returned as it is.
+    assert_eq!(
+        pair(&[4, 0], &[1, 4], &[1, 4]),
+        (vec![4, 0], vec![1, 4], vec![1, 4])
+    );
+}
+
+/// A rank-26 shape of 2^18 elements: extent two on every axis but each third one, which has
+/// extent one, so the free window axes merge across dropped axes too.
+fn rank_26_shape() -> Vec<usize> {
+    (0..26)
+        .map(|axis| if axis % 3 == 2 { 1 } else { 2 })
+        .collect()
+}
+
+fn usize_strides(shape: &[usize]) -> Vec<isize> {
+    shape
+        .iter()
+        .scan(1isize, |step, &extent| {
+            let stride = *step;
+            *step *= extent as isize;
+            Some(stride)
+        })
+        .collect()
+}
+
+/// One borrowed rank-26 operand over a device allocation, with its host values.
+struct Rank26View {
+    name: &'static str,
+    base: Tensor,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+    /// Whether the view's axes merge to the by-value rank, so the entry reads it in place.
+    merges: bool,
+    values: Vec<f64>,
+}
+
+impl Rank26View {
+    fn read(&self) -> TensorRead<'_> {
+        region(
+            &self.base,
+            self.shape.clone(),
+            self.strides.clone(),
+            self.offset,
+        )
+    }
+
+    fn host(&self) -> Tensor {
+        Tensor::from_vec_col_major(self.shape.clone(), self.values.clone()).expect("host tensor")
+    }
+}
+
+/// Rank-26 operands: compact at an offset, every other element (non-contiguous, but the
+/// strides still compose), and the axes reversed (the strides compose nowhere).
+fn rank_26_views(engine: &CudaEngine) -> Vec<Rank26View> {
+    let shape = rank_26_shape();
+    let len: usize = shape.iter().product();
+    let compact = usize_strides(&shape);
+    let view = |name: &'static str, shape: Vec<usize>, strides: Vec<isize>, offset, merges| {
+        let data: Vec<f64> = (0..2 * len + 5).map(|element| element as f64).collect();
+        let values = host_compact(&data, &shape, &strides, offset);
+        Rank26View {
+            name,
+            base: device(engine, vec![data.len()], data),
+            shape,
+            strides,
+            offset,
+            merges,
+            values,
+        }
+    };
+    vec![
+        view("offset", shape.clone(), compact.clone(), 5, true),
+        view(
+            "every other element",
+            shape.clone(),
+            compact.iter().map(|&stride| 2 * stride).collect(),
+            1,
+            true,
+        ),
+        view(
+            "reversed axes",
+            shape.iter().rev().copied().collect(),
+            compact.iter().rev().copied().collect(),
+            0,
+            false,
+        ),
+    ]
+}
+
+/// Rank-26 gathers and concatenations through the merged views match the CPU engine, which
+/// reads the un-merged layout, and the views that merge are read in place (#2708).
+///
+/// A view whose axes merge to the by-value rank reaches `t4a_cuda_gather` and
+/// `t4a_cuda_strided_to_strided` and reads the operand where it lives; one that still exceeds
+/// it keeps the general entries, which stage a compact copy first. The staging counter tells
+/// the two routes apart.
+///
+/// Timing note, not asserted: on the reporter's A100 the same 2^26 f64 elements took 3.9 ms to
+/// gather at rank 3 and 40 ms at rank 26 through `t4a_cuda_gather_any`, and 2.3 ms vs 91 ms to
+/// concatenate through `t4a_cuda_concatenate_copy_any` (#2708). With the merged views the
+/// rank-26 layout launches what the rank-3 one does: a rank-3 `t4a_cuda_gather`, and a rank-2
+/// `t4a_cuda_strided_to_strided` per concatenate input. This test does not time anything; the
+/// issue's reproducer measures it.
+#[test]
+#[ignore = "requires CUDA"]
+fn rank_26_gather_and_concatenate_read_the_merged_view() {
+    let Some(mut engine) = engine() else { return };
+    let cpu = &mut tenferro_cpu::CpuEngine::serial();
+    let upload_indices = |engine: &CudaEngine, shape: Vec<usize>, values: Vec<i64>| {
+        let host = Tensor::from_vec_col_major(shape, values).expect("indices");
+        let device = upload_tensor(engine.runtime(), &host).expect("upload indices");
+        (host, device)
+    };
+    for view in rank_26_views(&engine) {
+        let shape = view.shape.clone();
+        let rank = shape.len();
+        // A select along the first, a middle and the last axis, and a gather of two axes.
+        let mut configs: Vec<(String, tenferro_tensor::GatherConfig, Vec<usize>, Vec<i64>)> =
+            [0usize, 13, 25]
+                .into_iter()
+                .map(|axis| {
+                    let mut slice_sizes = shape.clone();
+                    slice_sizes[axis] = 1;
+                    let config = tenferro_tensor::GatherConfig {
+                        offset_dims: (0..rank).filter(|&other| other != axis).collect(),
+                        collapsed_slice_dims: vec![axis],
+                        start_index_map: vec![axis],
+                        index_vector_dim: 1,
+                        slice_sizes,
+                    };
+                    (
+                        format!("select on axis {axis}"),
+                        config,
+                        vec![3, 1],
+                        vec![1, 0, 7],
+                    )
+                })
+                .collect();
+        let mut slice_sizes = shape.clone();
+        slice_sizes[0] = 1;
+        slice_sizes[rank - 1] = 1;
+        configs.push((
+            "two indexed axes".to_string(),
+            tenferro_tensor::GatherConfig {
+                offset_dims: (0..rank - 2).collect(),
+                collapsed_slice_dims: vec![0, rank - 1],
+                start_index_map: vec![0, rank - 1],
+                index_vector_dim: 1,
+                slice_sizes,
+            },
+            vec![3, 2],
+            vec![0, 1, 1, 1, 0, 1],
+        ));
+        for (case, config, indices_shape, indices) in configs {
+            let (host_indices, device_indices) = upload_indices(&engine, indices_shape, indices);
+            let expected = cpu
+                .gather(&view.host(), &host_indices, &config)
+                .expect("CPU gather");
+            let staged = engine.staged_reads();
+            let observed = engine
+                .gather_read(
+                    view.read(),
+                    TensorRead::from_tensor(&device_indices),
+                    &config,
+                )
+                .expect("rank-26 gather");
+            assert_eq!(observed.shape(), expected.shape(), "{}: {case}", view.name);
+            assert_eq!(
+                read(&engine, &observed),
+                expected.as_slice::<f64>().expect("f64 payload"),
+                "{}: {case}",
+                view.name
+            );
+            assert_eq!(
+                engine.staged_reads() == staged,
+                view.merges,
+                "{}: {case} took the wrong entry",
+                view.name
+            );
+        }
+
+        // Two inputs side by side along axis 13: the view and a compact tensor.
+        let other_values: Vec<f64> = (0..view.values.len())
+            .map(|element| -(element as f64))
+            .collect();
+        let other = device(&engine, shape.clone(), other_values.clone());
+        let host_other = Tensor::from_vec_col_major(shape.clone(), other_values).expect("host");
+        let expected = cpu
+            .concatenate(&[&view.host(), &host_other], 13)
+            .expect("CPU concatenate");
+        let staged = engine.staged_reads();
+        let observed = engine
+            .concatenate_read(&[view.read(), TensorRead::from_tensor(&other)], 13)
+            .expect("rank-26 concatenate");
+        assert_eq!(observed.shape(), expected.shape(), "{}", view.name);
+        assert_eq!(
+            read(&engine, &observed),
+            expected.as_slice::<f64>().expect("f64 payload"),
+            "{}: concatenate",
+            view.name
+        );
+        assert_eq!(
+            engine.staged_reads() == staged,
+            view.merges,
+            "{}: concatenate took the wrong entry",
+            view.name
+        );
+    }
+}

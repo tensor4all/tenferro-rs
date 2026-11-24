@@ -872,6 +872,49 @@ pub struct EagerRuntime {
 pub struct EagerSession<'a> {
     runtime: &'a Arc<EagerRuntime>,
     engine: &'a mut dyn ExecutionEngine,
+    /// Rank-0 constants this session already uploaded, reused by later composites.
+    constants: SessionConstants,
+}
+
+/// Most constants one session keeps; a composite uses a handful, so the bound only
+/// stops a caller that sweeps many distinct values from growing the list.
+const SESSION_CONSTANT_CAPACITY: usize = 32;
+
+/// The rank-0 constants a session uploaded, keyed by dtype and bit pattern.
+///
+/// A composite (an activation coefficient, a normalization epsilon, a mean's count,
+/// a scale factor) asks for the same few constants on every call. The first call
+/// uploads each one; later calls in the same session reuse the uploaded value, so
+/// no host-to-device transfer happens per call (#2701). The constants are untracked
+/// leaves of this session's engine and die with the session.
+#[derive(Default)]
+struct SessionConstants {
+    entries: Vec<(DType, u128, EagerTensor)>,
+}
+
+/// The dtype and bit pattern of a rank-0 host constant, or `None` when it has no
+/// exact bit key (an externally defined payload, or not rank 0).
+fn constant_key(tensor: &Tensor) -> Option<(DType, u128)> {
+    if !tensor.shape().is_empty() {
+        return None;
+    }
+    let bits = match tensor.dtype() {
+        DType::F32 => u128::from(tensor.as_slice::<f32>().ok()?[0].to_bits()),
+        DType::F64 => u128::from(tensor.as_slice::<f64>().ok()?[0].to_bits()),
+        DType::I32 => u128::from(tensor.as_slice::<i32>().ok()?[0] as u32),
+        DType::I64 => u128::from(tensor.as_slice::<i64>().ok()?[0] as u64),
+        DType::Bool => u128::from(tensor.as_slice::<bool>().ok()?[0]),
+        DType::C32 => {
+            let value = tensor.as_slice::<num_complex::Complex32>().ok()?[0];
+            (u128::from(value.re.to_bits()) << 64) | u128::from(value.im.to_bits())
+        }
+        DType::C64 => {
+            let value = tensor.as_slice::<num_complex::Complex64>().ok()?[0];
+            (u128::from(value.re.to_bits()) << 64) | u128::from(value.im.to_bits())
+        }
+        DType::External(_) => return None,
+    };
+    Some((tensor.dtype(), bits))
 }
 
 impl fmt::Debug for EagerSession<'_> {
@@ -1923,6 +1966,123 @@ impl EagerSession<'_> {
             .upload_host_tensor(TensorRead::from_tensor(&tensor))
             .map_err(Error::from)?;
         self.constant_from(uploaded)
+    }
+
+    /// The rank-0 host constant `tensor` as an untracked value of this session, uploaded
+    /// on its first use and reused afterwards.
+    ///
+    /// Composites and the scale entries ask for their constants through this, so a
+    /// repeated call in one session transfers nothing to the device (#2701). The reuse
+    /// applies only while gradient recording is off; with it on, and for a value without
+    /// an exact bit key or past the session's capacity, the value is uploaded as by
+    /// [`Self::constant_from_host`].
+    pub(crate) fn session_constant(&mut self, tensor: Tensor) -> Result<EagerTensor> {
+        // With gradient recording on, every constant keeps its own value identity: a shared one
+        // would let a gradient taken with respect to one constant see the other's uses.
+        if eager_grad_recording_enabled() {
+            return self.constant_from_host(tensor);
+        }
+        let Some(key) = constant_key(&tensor) else {
+            return self.constant_from_host(tensor);
+        };
+        if let Some((_, _, value)) = self
+            .constants
+            .entries
+            .iter()
+            .find(|(dtype, bits, _)| (*dtype, *bits) == key)
+        {
+            return Ok(value.clone());
+        }
+        let value = self.constant_from_host(tensor)?;
+        if self.constants.entries.len() < SESSION_CONSTANT_CAPACITY {
+            self.constants.entries.push((key.0, key.1, value.clone()));
+        }
+        Ok(value)
+    }
+
+    /// A rank-0 untracked constant of a composite, shared within this session.
+    ///
+    /// Composite formulations in other crates (the linalg eager composites) ask for
+    /// their constants here. While gradient recording is off, the constant is uploaded
+    /// once per session and value and the same value is returned afterwards, so it is not
+    /// uniquely owned; with recording on, each call uploads a fresh constant. `value`
+    /// converts as in [`Tensor::full`].
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{DType, EagerRuntime};
+    /// let ctx = EagerRuntime::new()?;
+    /// let two = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let c = s.composite_constant(DType::F64, 2.0)?;
+    ///     s.duplicate_value(&c)
+    /// })?;
+    /// assert_eq!(two.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns [`Error::TensorRuntime`] when `value` is not representable in `dtype` or
+    /// `dtype` is an externally defined scalar, or a backend error from the upload.
+    #[doc(hidden)]
+    pub fn composite_constant(&mut self, dtype: DType, value: f64) -> Result<EagerTensor> {
+        self.session_constant(Tensor::full(dtype, [0_usize; 0], value)?)
+    }
+
+    /// An untracked compact tensor of `shape` filled with `value`, for a composite.
+    ///
+    /// While gradient recording is off, a float or complex fill runs through the engine's
+    /// [`tenferro_tensor::Engine::fill_scalar`], which a device engine serves from a scalar it
+    /// keeps resident: no host-to-device copy and no duplicated broadcast base per call (#2701).
+    /// Otherwise it is [`Self::full`] (a broadcast view of an uploaded rank-0 value).
+    ///
+    /// # Examples
+    /// ```rust
+    /// use tenferro_ad::{DType, EagerRuntime};
+    /// let ctx = EagerRuntime::new()?;
+    /// let ones = ctx.with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |s| {
+    ///     let o = s.composite_filled(DType::F64, &[3], 1.0)?;
+    ///     s.duplicate_value(&o)
+    /// })?;
+    /// assert_eq!(ones.as_slice::<f64>()?, &[1.0, 1.0, 1.0]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    /// # Errors
+    /// Returns [`Error::TensorRuntime`] when `value` is not representable in `dtype`, the
+    /// shape's element count overflows, or the backend fill or upload fails.
+    #[doc(hidden)]
+    pub fn composite_filled(
+        &mut self,
+        dtype: DType,
+        shape: &[usize],
+        value: f64,
+    ) -> Result<EagerTensor> {
+        let scalar = match dtype {
+            DType::F32 => Some(tenferro_tensor::ContractionScalar::F32(value as f32)),
+            DType::F64 => Some(tenferro_tensor::ContractionScalar::F64(value)),
+            DType::C32 => Some(tenferro_tensor::ContractionScalar::C32(
+                num_complex::Complex32::new(value as f32, 0.0),
+            )),
+            DType::C64 => Some(tenferro_tensor::ContractionScalar::C64(
+                num_complex::Complex64::new(value, 0.0),
+            )),
+            _ => None,
+        };
+        match scalar {
+            Some(scalar) if !eager_grad_recording_enabled() => {
+                tenferro_tensor::validate::checked_shape_product(
+                    "EagerSession::composite_filled",
+                    "shape",
+                    shape,
+                )?;
+                let filled = self
+                    .engine
+                    .fill_scalar(shape, scalar)
+                    .map_err(Error::from)?;
+                // A constant leaf, as `full` makes, so a later gradient taken with respect to it
+                // behaves as before; the filled tensor is adopted, not copied.
+                self.constant_from(filled)
+            }
+            _ => self.full(dtype, shape.to_vec(), value),
+        }
     }
 
     /// A zero-filled untracked tensor of `dtype` and `shape` on this session's backend.
@@ -3069,7 +3229,7 @@ impl EagerSession<'_> {
     pub fn scale_real(&mut self, input: &EagerTensor, factor: f64) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
         let scalar = tenferro_runtime::scale::real_scale_scalar(input.dtype(), factor)?;
-        let scalar = self.constant_from_host(scalar)?;
+        let scalar = self.session_constant(scalar)?;
         self.mul(input, &scalar)
     }
 
@@ -3095,7 +3255,7 @@ impl EagerSession<'_> {
     pub fn scale_complex(&mut self, input: &EagerTensor, factor: Complex64) -> Result<EagerTensor> {
         self.ensure_runtime(input)?;
         let scalar = tenferro_runtime::scale::complex_scale_scalar(input.dtype(), factor)?;
-        let scalar = self.constant_from_host(scalar)?;
+        let scalar = self.session_constant(scalar)?;
         self.mul(input, &scalar)
     }
 
@@ -3221,6 +3381,11 @@ impl EagerSession<'_> {
     ) -> Result<EagerTensor> {
         self.ensure_runtime(lhs)?;
         self.ensure_runtime(rhs)?;
+        if let Some(out) =
+            crate::eager_ops::untracked_broadcast_op(name, &[lhs, rhs], &op, &mut *self.engine)?
+        {
+            return Ok(out);
+        }
         let (lhs, rhs) = crate::eager_ops::broadcast_binary_in_session(name, lhs, rhs, self)?;
         EagerTensor::nary_op_in_session(&[lhs.as_ref(), rhs.as_ref()], op, &mut *self.engine)
     }
@@ -3236,6 +3401,14 @@ impl EagerSession<'_> {
         self.ensure_runtime(first)?;
         self.ensure_runtime(second)?;
         self.ensure_runtime(third)?;
+        if let Some(out) = crate::eager_ops::untracked_broadcast_op(
+            name,
+            &[first, second, third],
+            &op,
+            &mut *self.engine,
+        )? {
+            return Ok(out);
+        }
         let (first, second, third) =
             crate::eager_ops::broadcast_ternary_in_session(name, first, second, third, self)?;
         EagerTensor::nary_op_in_session(&[&first, &second, &third], op, &mut *self.engine)
@@ -3940,6 +4113,7 @@ impl EagerRuntime {
         f(&mut EagerSession {
             runtime: self,
             engine,
+            constants: SessionConstants::default(),
         })
     }
 
