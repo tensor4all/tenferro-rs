@@ -167,6 +167,7 @@ to run publication personally; agents never bypass a failed check with it.
    is:
 
    ```text
+   tenferro-random-core
    tenferro-core-ops
    tenferro-internal-extension-macros
    tenferro-tensor-core
