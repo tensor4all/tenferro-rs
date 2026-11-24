@@ -27,6 +27,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`GraphCompiler::compile_with_inputs(outputs, inputs)` (#2642).** One entry
+  point for any number of outputs and a fixed input order: the listed
+  placeholders come first, in the given order, then the remaining live inputs in
+  context order. It takes no dtype or shape: a placeholder keeps the declaration
+  it was traced with. `compile`, `compile_many` and `compile_with_input_specs`
+  stay; the guides now use `compile_with_inputs`.
+
 - **`tenferro-random-core`, the reference for random numbers (#2714, step 1).**
   A new dependency-free crate with the `CounterRng` trait, the
   `philox4x32-10` (default) and `threefry2x32-20` algorithms, key seed, split

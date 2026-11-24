@@ -173,7 +173,7 @@ let input = trace.input_concrete_shape(DType::F64, &[2])?;
 let doubled = input.scale_real(2.0)?;
 
 let mut compiler = GraphCompiler::new();
-let program = compiler.compile_with_input_specs(&doubled, &[(&input, DType::F64, &[2])])?;
+let program = compiler.compile_with_inputs(&[&doubled], &[&input])?;
 
 let mut engine = CpuEngine::serial();
 let mut builder = Runtime::builder();

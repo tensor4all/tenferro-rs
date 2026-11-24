@@ -950,7 +950,10 @@ fn snapshot_remaps_declared_extents_to_the_creation_order() {
     let (frozen, _) = builder
         .snapshot_pruned_with_input_specs(
             &[total],
-            &[(1, ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))],
+            &[(
+                1,
+                Some(ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)])),
+            )],
         )
         .unwrap();
     let program = frozen.program.as_ref();
