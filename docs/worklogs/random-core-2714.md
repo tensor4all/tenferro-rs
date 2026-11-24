@@ -48,10 +48,13 @@ it left open. The frozen sample layout itself is documented in the crate
   and fold-in match an independent Python implementation of the layout
   (`reference/samples.py`); normal samples are frozen bits within 1 ulp of the
   mpmath value of the same Box–Muller draw.
-- `log` and `sincospi` are within 1 ulp of mpmath at all fixed points. An
-  offline sweep (about 140,000 points against mpmath, and all 2^23 `f32`
-  inputs Box–Muller can produce against an `f64` reference) found maxima of
-  0.81 ulp (`log`) and 0.99 ulp (`sinpi`, `cospi`); the design target is 2 ulp.
+- `log` and `sincospi` are within 1 ulp of mpmath at all fixed points. Two
+  sweeps outside the default suite found no error above 1 ulp (the design
+  target is 2 ulp): about 140,000 points against mpmath
+  (`reference/accuracy_sweep.py`; maxima 0.76 ulp `log`, 0.98 `sinpi`, 0.93
+  `cospi` in f64), and all 2^23 `f32` inputs Box–Muller can produce against an
+  `f64` reference (the ignored test `f32_functions_over_every_box_muller_input`;
+  maxima 0.81 ulp `log`, 0.99 `sinpi` and `cospi`).
 - Bit identity with CUDA is not tested here: the CUDA block functions and
   templates are step 2 (t4a-cuda-kernels) and the CPU-against-CUDA test step 4.
   They must evaluate the same operation sequence with `--fmad=false`, no

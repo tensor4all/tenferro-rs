@@ -269,12 +269,13 @@ fn sincospi_special_values_follow_ieee_sinpi_cospi() {
     assert_eq!((sin, cos.to_bits()), (-1.0, 0));
 }
 
-#[test]
-fn f32_functions_stay_within_one_ulp_over_the_box_muller_inputs() {
-    // Every 1021st of the 2^23 inputs Box–Muller gives log (1 - k 2^-23) and
-    // sincospi (k 2^-22). The reference is f64 arithmetic, whose own error is
-    // below 2^-28 f32 ulp. The full sweep, run offline, has maxima 0.81 ulp
-    // (log) and 0.99 ulp (sin, cos).
+/// The largest errors in ulp of `log`, `sinpi` and `cospi` over the f32
+/// inputs Box–Muller gives: `log(1 - k 2^-23)` and `sincospi(k 2^-22)` for
+/// every `step`-th `k` in `0..2^23`, plus `k = 1` and `k = 2^23 - 1`.
+///
+/// The reference is f64 arithmetic (the argument of the sine and cosine is
+/// reduced exactly first), whose own error is below 2^-28 f32 ulp.
+fn box_muller_f32_errors(step: usize) -> [f64; 3] {
     fn ulp_error(got: f32, exact: f64) -> f64 {
         if exact == 0.0 {
             return if got == 0.0 { 0.0 } else { f64::INFINITY };
@@ -282,10 +283,10 @@ fn f32_functions_stay_within_one_ulp_over_the_box_muller_inputs() {
         let exponent = (exact.abs().log2().floor() as i32).max(-126);
         (f64::from(got) - exact).abs() / 2f64.powi(exponent - 23)
     }
-    let mut worst = (0.0_f64, 0.0_f64);
-    for k in (0..1u32 << 23).step_by(1021).chain([1, (1 << 23) - 1]) {
+    let mut worst = [0.0_f64; 3];
+    for k in (0..1u32 << 23).step_by(step).chain([1, (1 << 23) - 1]) {
         let u = 1.0 - k as f32 * 2f32.powi(-23);
-        worst.0 = worst.0.max(ulp_error(log(u), f64::from(u).ln()));
+        worst[0] = worst[0].max(ulp_error(log(u), f64::from(u).ln()));
 
         let x = k as f32 * 2f32.powi(-22);
         let (sin, cos) = sincospi(x);
@@ -299,11 +300,26 @@ fn f32_functions_stay_within_one_ulp_over_the_box_muller_inputs() {
             2 => (-s, -c),
             _ => (-c, s),
         };
-        worst.1 = worst
-            .1
-            .max(ulp_error(sin, sin_exact))
-            .max(ulp_error(cos, cos_exact));
+        worst[1] = worst[1].max(ulp_error(sin, sin_exact));
+        worst[2] = worst[2].max(ulp_error(cos, cos_exact));
     }
-    assert!(worst.0 < 1.0, "log f32 error {} ulp", worst.0);
-    assert!(worst.1 < 1.0, "sincospi f32 error {} ulp", worst.1);
+    worst
+}
+
+#[test]
+fn f32_functions_stay_within_one_ulp_over_the_box_muller_inputs() {
+    // Every 1021st input; the ignored test below covers all of them.
+    let [log_error, sin_error, cos_error] = box_muller_f32_errors(1021);
+    assert!(log_error < 1.0, "log f32 error {log_error} ulp");
+    assert!(sin_error < 1.0, "sinpi f32 error {sin_error} ulp");
+    assert!(cos_error < 1.0, "cospi f32 error {cos_error} ulp");
+}
+
+#[test]
+#[ignore = "exhaustive: 2^23 inputs per function; run with --ignored --nocapture"]
+fn f32_functions_over_every_box_muller_input() {
+    // Recorded maxima: log 0.8092, sinpi 0.9929, cospi 0.9929 ulp.
+    let [log_error, sin_error, cos_error] = box_muller_f32_errors(1);
+    println!("f32 max error: log {log_error:.4}, sinpi {sin_error:.4}, cospi {cos_error:.4} ulp");
+    assert!(log_error < 1.0 && sin_error < 1.0 && cos_error < 1.0);
 }

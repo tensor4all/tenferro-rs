@@ -5,6 +5,27 @@ computed by JAX, for `tests/threefry.rs`. Recorded with JAX 0.12.1 (CPU),
 where `jax_threefry_partitionable` is on by default:
 
     python3 reference/jax_threefry.py
+
+Its output with JAX 0.12.1 (CPU), copied into the tests:
+
+    jax 0.12.1
+    block key=0x13198a2e, 0x03707344 counter=0x243f6a88, 0x85a308d3 -> 0xc4923a9c, 0x483df7a0
+    block key=0x00000000, 0x00000007 counter=0x00000000, 0x00000005 -> 0xd5917e25, 0x7415e54e
+    block key=0xdeadbeef, 0x01234567 counter=0xffffffff, 0x00000001 -> 0x0c8f26c9, 0xe6d6c435
+    seed 0x0 -> 0x00000000, 0x00000000
+    seed 0x2a -> 0x00000000, 0x0000002a
+    seed 0x123456789abcdef -> 0x01234567, 0x89abcdef
+    split(seed 42, 4) -> 0x6d3e048f, 0x1022172d, 0x03d7b32d, 0xadd083f4, 0x92fb20ea, 0x0f38d913, 0xbad56946, 0x354ba891
+    fold_in(seed 42, 0x0) -> 0x6d3e048f, 0x1022172d
+    fold_in(seed 42, 0x1) -> 0x03d7b32d, 0xadd083f4
+    fold_in(seed 42, 0x7) -> 0x97d0552f, 0x51bf719f
+    fold_in(seed 42, 0xffffffff) -> 0x8ef6c48d, 0xe7eb97ca
+
+With `jax_threefry_partitionable` off (the pre-0.5.0 default), `split` gives
+different values: that mode encrypts the two halves of a flattened counter
+array, so key `i` depends on the split size (`split(seed 42, 2)` is then
+`[0x92fb20ea, 0xdb4c98db], [0x0f38d913, 0x0ff68959]`). `fold_in` is the same in
+both modes.
 """
 
 import jax
