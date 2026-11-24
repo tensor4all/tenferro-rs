@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
-"""Recover one PR's GPU gate through the trusted main RunPod workflow."""
+"""Recover one PR's GPU gate through the trusted main RunPod workflow.
+
+Every PR needs `--approve-head SHA`: the full head commit the maintainer
+reviewed, for a fork and a same-repository PR alike. Dispatching it is the
+approval to run that code on RunPod, and the workflow refuses any other head;
+the PR author's repository role is not consulted.
+"""
 
 from __future__ import annotations
 
 import argparse
+import re
 import shlex
 import subprocess
 import sys
@@ -11,15 +18,20 @@ from collections.abc import Callable
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
-def build_dispatch_command(pr_number: int, wait: bool = False) -> list[str]:
+def build_dispatch_command(
+    pr_number: int, wait: bool, approve_head: str
+) -> list[str]:
     """Build the invariant main-ref dispatch command for a positive PR number."""
 
     del wait  # Waiting is a post-dispatch action and never changes trust inputs.
     if pr_number <= 0:
         raise ValueError("PR number must be positive")
-    return [
+    if not SHA_PATTERN.match(approve_head):
+        raise ValueError("--approve-head must be a full lowercase commit SHA")
+    command = [
         "gh",
         "workflow",
         "run",
@@ -28,17 +40,24 @@ def build_dispatch_command(pr_number: int, wait: bool = False) -> list[str]:
         "main",
         "-f",
         f"pr_number={pr_number}",
+        "-f",
+        f"approved_head_sha={approve_head}",
     ]
+    return command
 
 
 def recover_pr(
-    pr_number: int, *, wait: bool, runner: Runner = subprocess.run
+    pr_number: int,
+    *,
+    wait: bool,
+    approve_head: str,
+    runner: Runner = subprocess.run,
 ) -> str:
     """Authenticate, dispatch, return the run URL, and optionally watch it."""
 
     common = {"check": True, "text": True, "capture_output": True}
     runner(["gh", "auth", "status"], **common)
-    result = runner(build_dispatch_command(pr_number, wait), **common)
+    result = runner(build_dispatch_command(pr_number, wait, approve_head), **common)
     url = next(
         (
             token
@@ -62,6 +81,12 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pr_number", type=int)
     parser.add_argument("--wait", action="store_true")
+    parser.add_argument(
+        "--approve-head",
+        required=True,
+        metavar="SHA",
+        help="the full head SHA you reviewed and approve to run on RunPod",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -69,11 +94,11 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     try:
-        command = build_dispatch_command(args.pr_number, args.wait)
+        command = build_dispatch_command(args.pr_number, args.wait, args.approve_head)
         if args.dry_run:
             print(shlex.join(command))
             return 0
-        url = recover_pr(args.pr_number, wait=args.wait)
+        url = recover_pr(args.pr_number, wait=args.wait, approve_head=args.approve_head)
         print(url)
     except (ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"RunPod PR recovery failed: {error}", file=sys.stderr)

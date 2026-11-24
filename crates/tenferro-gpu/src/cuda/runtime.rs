@@ -156,6 +156,8 @@ pub(crate) struct CudaRuntimeState {
     /// Stream barriers this runtime ran, whoever asked: a download or a caller's explicit
     /// synchronize.
     pub(crate) stream_waits: std::sync::atomic::AtomicU64,
+    /// Host-to-device copies this runtime admitted, by any upload path (#2701).
+    pub(crate) host_uploads: std::sync::atomic::AtomicU64,
 }
 
 /// One dropped handle retained until its completion is observed.
@@ -460,6 +462,7 @@ impl CudaRuntime {
                 identity: CudaRuntimeIdentity::fresh(),
                 detached: Mutex::new(Vec::new()),
                 stream_waits: std::sync::atomic::AtomicU64::new(0),
+                host_uploads: std::sync::atomic::AtomicU64::new(0),
                 completion_checkpoints: std::sync::atomic::AtomicU64::new(0),
                 pinned_staging: Mutex::new(None),
                 pinned_staging_accounting: crate::cuda::raw::StagingAccounting::new(
@@ -725,6 +728,7 @@ impl CudaRuntime {
     /// the copy.
     #[doc(hidden)]
     pub fn upload_bytes(&self, bytes: &[u8]) -> Result<t4a_cuda_runtime::Buffer, CudaDeviceError> {
+        self.note_host_upload();
         let mut guard = self.submit();
         guard
             .upload(bytes)
@@ -955,6 +959,27 @@ impl CudaRuntime {
         self.inner
             .stream_waits
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Host-to-device copies this runtime admitted, cumulative, by every upload path (a tensor
+    /// upload, a raw byte upload, a pending upload from a pinned source, an extension scope's
+    /// upload).
+    ///
+    /// Exposed so the regression tests can assert that a steady-state operation transfers nothing
+    /// to the device: a pinned staging chunk is reused once idle, so the chunk counter alone can
+    /// miss a copy (#2701).
+    #[doc(hidden)]
+    pub fn host_uploads(&self) -> u64 {
+        self.inner
+            .host_uploads
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Record one admitted host-to-device copy.
+    pub(crate) fn note_host_upload(&self) {
+        self.inner
+            .host_uploads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Idle device memory the allocation pool keeps mapped before returning it to the driver.

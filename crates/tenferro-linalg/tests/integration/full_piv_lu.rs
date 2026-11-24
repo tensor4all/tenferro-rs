@@ -367,3 +367,266 @@ fn full_piv_lu_solve_rejects_exactly_singular_system() {
     .unwrap_err();
     assert_eq!(error.kind(), tenferro_tensor::ErrorKind::NumericalFailure);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Rectangular input (#2488 step 1): `A` is `m x n`, `k = min(m, n)`, and the factors are
+// `P (m x m)`, `L (m x k)`, `U (k x n)`, `Q (n x n)` with `P A Qᵀ = L U`.
+// ---------------------------------------------------------------------------------------------
+
+fn transpose(backend: &mut CpuEngine, tensor: &Tensor) -> Tensor {
+    backend
+        .transpose_read(TensorRead::from_tensor(tensor), &[1, 0])
+        .unwrap()
+}
+
+/// Every entry is 0 or 1 and every row and column holds exactly one 1.
+fn assert_permutation_matrix(name: &str, data: &[f64], n: usize) {
+    assert_eq!(data.len(), n * n, "{name}: {n} x {n} expected");
+    assert!(
+        data.iter().all(|&x| x == 0.0 || x == 1.0),
+        "{name}: {data:?}"
+    );
+    for i in 0..n {
+        let row: f64 = (0..n).map(|j| data[i + n * j]).sum();
+        let col: f64 = (0..n).map(|j| data[j + n * i]).sum();
+        assert_eq!((row, col), (1.0, 1.0), "{name}: row/column {i} of {data:?}");
+    }
+}
+
+/// Factor one `m x n` f64 matrix, check the shapes, the triangular structure, the permutations
+/// and `P A Qᵀ = L U`, and return the `|U_ii|`, `i < k`.
+fn check_rectangular_factorization(a: &Tensor, m: usize, n: usize) -> Vec<f64> {
+    let k = m.min(n);
+    let mut backend = CpuEngine::serial();
+    let outputs = support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(a)).unwrap();
+    let [p, l, u, q, parity]: [Tensor; 5] = outputs.try_into().unwrap();
+
+    assert_eq!(p.shape(), &[m, m]);
+    assert_eq!(l.shape(), &[m, k]);
+    assert_eq!(u.shape(), &[k, n]);
+    assert_eq!(q.shape(), &[n, n]);
+    assert_eq!(parity.shape(), &[] as &[usize]);
+    assert!(f64_data(&parity)[0] == 1.0 || f64_data(&parity)[0] == -1.0);
+    assert_permutation_matrix("P", f64_data(&p), m);
+    assert_permutation_matrix("Q", f64_data(&q), n);
+    let (l_data, u_data) = (f64_data(&l), f64_data(&u));
+    for j in 0..k {
+        assert_eq!(l_data[j + m * j], 1.0, "L must be unit diagonal");
+        for i in 0..j {
+            assert_eq!(l_data[i + m * j], 0.0, "L must be lower triangular");
+        }
+    }
+    for j in 0..n {
+        for i in (j + 1)..k {
+            assert_eq!(u_data[i + k * j], 0.0, "U must be upper triangular");
+        }
+    }
+
+    let qt = transpose(&mut backend, &q);
+    let pa = matmul(&mut backend, &p, a);
+    let paqt = matmul(&mut backend, &pa, &qt);
+    let lu = matmul(&mut backend, &l, &u);
+    assert_eq!(paqt.shape(), &[m, n]);
+    assert_close(f64_data(&paqt), f64_data(&lu));
+    // The documented inverse form, `A = Pᵀ L U Q`.
+    let pt = transpose(&mut backend, &p);
+    let ptlu = matmul(&mut backend, &pt, &lu);
+    assert_close(f64_data(&matmul(&mut backend, &ptlu, &q)), f64_data(a));
+
+    (0..k).map(|i| u_data[i + k * i].abs()).collect()
+}
+
+fn numerical_rank(diagonal: &[f64]) -> usize {
+    let largest = diagonal.iter().copied().fold(0.0_f64, f64::max);
+    diagonal
+        .iter()
+        .filter(|&&d| d > 64.0 * f64::EPSILON * largest)
+        .count()
+}
+
+#[test]
+fn full_piv_lu_factors_a_tall_matrix() {
+    // 4 x 3, column major, full column rank.
+    let a = f64_tensor(
+        vec![4, 3],
+        vec![
+            1.0, 2.0, -1.0, 0.5, //
+            3.0, -0.5, 2.0, 1.0, //
+            -2.0, 4.0, 0.25, 7.0,
+        ],
+    );
+    let diagonal = check_rectangular_factorization(&a, 4, 3);
+    assert_eq!(numerical_rank(&diagonal), 3);
+    // Complete pivoting takes the largest entry first: |U_00| = max |A_ij| = 7.
+    assert_eq!(diagonal[0], 7.0);
+}
+
+#[test]
+fn full_piv_lu_factors_a_wide_matrix() {
+    // 2 x 5, column major, full row rank.
+    let a = f64_tensor(
+        vec![2, 5],
+        vec![1.0, 2.0, -3.0, 0.5, 4.0, -1.0, 0.25, 9.0, 2.0, 2.0],
+    );
+    let diagonal = check_rectangular_factorization(&a, 2, 5);
+    assert_eq!(numerical_rank(&diagonal), 2);
+    assert_eq!(diagonal[0], 9.0);
+}
+
+#[test]
+fn full_piv_lu_reveals_the_rank_of_rank_deficient_rectangular_matrices() {
+    // Columns: c0, c1, c2 = c0 + 2 c1, so the 4 x 3 matrix has rank 2.
+    let c0 = [1.0, 2.0, -1.0, 3.0];
+    let c1 = [0.5, -1.0, 2.0, 1.0];
+    let tall: Vec<f64> = c0
+        .iter()
+        .chain(&c1)
+        .copied()
+        .chain(c0.iter().zip(&c1).map(|(x, y)| x + 2.0 * y))
+        .collect();
+    let a = f64_tensor(vec![4, 3], tall.clone());
+    assert_eq!(
+        numerical_rank(&check_rectangular_factorization(&a, 4, 3)),
+        2
+    );
+
+    // Its 3 x 4 transpose has the same rank.
+    let wide: Vec<f64> = (0..4)
+        .flat_map(|j| (0..3).map(move |i| (i, j)))
+        .map(|(i, j)| tall[j + 4 * i])
+        .collect();
+    let at = f64_tensor(vec![3, 4], wide);
+    assert_eq!(
+        numerical_rank(&check_rectangular_factorization(&at, 3, 4)),
+        2
+    );
+
+    // A rank-1 wide matrix: every row a multiple of the first.
+    let rank_one = f64_tensor(vec![2, 3], vec![1.0, -2.0, 3.0, -6.0, 0.5, -1.0]);
+    assert_eq!(
+        numerical_rank(&check_rectangular_factorization(&rank_one, 2, 3)),
+        1
+    );
+}
+
+#[test]
+fn full_piv_lu_factors_a_batch_of_rectangular_matrices() {
+    // Two 3 x 2 items in batch order; each item must equal its own unbatched factorization.
+    let items = [
+        vec![1.0, 2.0, 3.0, -4.0, 0.5, 6.0],
+        vec![0.0, 1.0, 0.0, 2.0, 0.0, 5.0],
+    ];
+    let batched = f64_tensor(vec![3, 2, 2], items.concat());
+    let mut backend = CpuEngine::serial();
+    let outputs =
+        support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&batched)).unwrap();
+    let shapes: Vec<&[usize]> = outputs.iter().map(|t| t.shape()).collect();
+    assert_eq!(
+        shapes,
+        vec![
+            &[3, 3, 2][..],
+            &[3, 2, 2][..],
+            &[2, 2, 2][..],
+            &[2, 2, 2][..],
+            &[2][..]
+        ]
+    );
+    for (index, item) in items.iter().enumerate() {
+        let single = f64_tensor(vec![3, 2], item.clone());
+        check_rectangular_factorization(&single, 3, 2);
+        let expected =
+            support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&single)).unwrap();
+        for (factor, (batch_out, item_out)) in outputs.iter().zip(&expected).enumerate() {
+            let len = item_out.shape().iter().product::<usize>();
+            assert_eq!(
+                &f64_data(batch_out)[index * len..(index + 1) * len],
+                f64_data(item_out),
+                "batch item {index}, factor {factor}"
+            );
+        }
+    }
+}
+
+#[test]
+fn full_piv_lu_factors_rectangular_f32_and_complex_matrices() {
+    let mut backend = CpuEngine::serial();
+    let a = f32_tensor(vec![3, 2], vec![1.0, -2.0, 0.5, 4.0, 3.0, -1.0]);
+    let outputs =
+        support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
+    let shapes: Vec<&[usize]> = outputs.iter().map(|t| t.shape()).collect();
+    assert_eq!(
+        shapes,
+        vec![&[3, 3][..], &[3, 2][..], &[2, 2][..], &[2, 2][..], &[][..]]
+    );
+    let lu = matmul(&mut backend, &outputs[1], &outputs[2]);
+    let pa = matmul(&mut backend, &outputs[0], &a);
+    let qt = transpose(&mut backend, &outputs[3]);
+    let paqt = matmul(&mut backend, &pa, &qt);
+    for (x, y) in paqt
+        .as_slice::<f32>()
+        .unwrap()
+        .iter()
+        .zip(lu.as_slice::<f32>().unwrap())
+    {
+        assert!((x - y).abs() < 1.0e-5, "f32: {x} vs {y}");
+    }
+
+    let a = Tensor::from_typed::<Complex64>(
+        TypedTensor::from_vec_col_major(
+            vec![2, 3],
+            vec![
+                Complex64::new(1.0, 1.0),
+                Complex64::new(0.0, -2.0),
+                Complex64::new(3.0, 0.5),
+                Complex64::new(-1.0, 0.0),
+                Complex64::new(0.25, 4.0),
+                Complex64::new(2.0, 2.0),
+            ],
+        )
+        .unwrap(),
+    );
+    let outputs =
+        support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
+    let shapes: Vec<&[usize]> = outputs.iter().map(|t| t.shape()).collect();
+    assert_eq!(
+        shapes,
+        vec![&[2, 2][..], &[2, 2][..], &[2, 3][..], &[3, 3][..], &[][..]]
+    );
+    assert_eq!(outputs[4].dtype(), DType::F64);
+    let lu = matmul(&mut backend, &outputs[1], &outputs[2]);
+    let pa = matmul(&mut backend, &outputs[0], &a);
+    let qt = transpose(&mut backend, &outputs[3]);
+    let paqt = matmul(&mut backend, &pa, &qt);
+    for (x, y) in c64_data(&paqt).iter().zip(c64_data(&lu)) {
+        assert!((x - y).norm() < 1.0e-12, "c64: {x} vs {y}");
+    }
+}
+
+#[test]
+fn full_piv_lu_accepts_empty_rectangular_shapes() {
+    let mut backend = CpuEngine::serial();
+    // (input shape, P, L, U, Q, parity)
+    let cases: [(&[usize], [&[usize]; 5]); 4] = [
+        (&[3, 0], [&[3, 3], &[3, 0], &[0, 0], &[0, 0], &[]]),
+        (&[0, 3], [&[0, 0], &[0, 0], &[0, 3], &[3, 3], &[]]),
+        (&[0, 0], [&[0, 0], &[0, 0], &[0, 0], &[0, 0], &[]]),
+        (
+            &[2, 3, 0],
+            [&[2, 2, 0], &[2, 2, 0], &[2, 3, 0], &[3, 3, 0], &[0]],
+        ),
+    ];
+    for (shape, expected) in cases {
+        let a = f64_tensor(shape.to_vec(), vec![]);
+        let outputs =
+            support::with_cpu_linalg(&mut backend, |backend| backend.full_piv_lu(&a)).unwrap();
+        let shapes: Vec<&[usize]> = outputs.iter().map(|t| t.shape()).collect();
+        assert_eq!(shapes, expected.to_vec(), "input {shape:?}");
+        if shape.len() == 2 {
+            // One item: the permutations are identities and the parity is +1.
+            let (m, n) = (shape[0], shape[1]);
+            assert_permutation_matrix("P", f64_data(&outputs[0]), m);
+            assert_permutation_matrix("Q", f64_data(&outputs[3]), n);
+            assert_eq!(f64_data(&outputs[4]), &[1.0], "input {shape:?}");
+        }
+    }
+}

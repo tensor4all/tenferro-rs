@@ -401,7 +401,7 @@ mod faer_limit {
     /// length-k complex dot product cancels; the bound below is what is checked.
     ///
     /// The two calls reach the same kernel family but not the same entry point:
-    /// tcontract multiplies through the t4a-faer conj-aware entry, on a
+    /// tcontract multiplies through the colmat conj-aware entry, on a
     /// destination it may leave uninitialized, while the reference here calls
     /// `matmul` on an initialized one, so the accumulation order is not required
     /// to match.

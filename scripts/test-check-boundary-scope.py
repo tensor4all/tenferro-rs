@@ -4,7 +4,9 @@
 import contextlib
 import importlib.util
 import io
+import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -113,6 +115,46 @@ use tenferro_ad::EagerTensor;
         checker = load("check-api-consistency")
         paths = {crate.path.relative_to(checker.ROOT).as_posix() for crate in checker.workspace_crates(checker.ROOT)}
         self.assertTrue({"ext/sparse", "ext/tropical"} <= paths)
+
+    def test_extension_features_take_capabilities_from_public_crates_only(self):
+        checker = load("check-crate-boundaries")
+        with tempfile.TemporaryDirectory() as directory:
+            checker.ROOT = root = Path(directory)
+            for name in checker.EXTENSION_CRATES:
+                crate = root / name
+                crate.mkdir(parents=True)
+                (crate / "Cargo.toml").write_text(
+                    '[package]\nname="ext"\n'
+                    '[features]\nautodiff=["tenferro-ad/autodiff"]\n'
+                    'cuda=["tenferro-gpu/cuda", "tenferro-ad?/cuda"]\n'
+                    '[dependencies]\n'
+                    'tenferro-ad={path="../tenferro-ad", optional=true}\n'
+                    'tenferro-gpu={path="../tenferro-gpu", optional=true}\n'
+                )
+            manifest = root / "crates/tenferro-fft/Cargo.toml"
+            accepted = manifest.read_text()
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(
+                io.StringIO()
+            ):
+                self.assertEqual(checker.main(), 0)
+            for forward, dependencies in (
+                ("tenferro-internal-ops/autodiff", ""),
+                # A local alias must not hide the internal package.
+                ("ops/cuda", 'ops={package="tenferro-internal-ops", path="../ops"}\n'),
+            ):
+                manifest.write_text(
+                    re.sub(r'autodiff=\["[^"]*"\]', f'autodiff=["{forward}"]', accepted)
+                    + dependencies
+                )
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    self.assertEqual(checker.main(), 1, forward)
+                self.assertIn("internal package", stderr.getvalue())
+            manifest.write_text(accepted)
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(
+                io.StringIO()
+            ):
+                self.assertEqual(checker.main(), 0)
 
 
 if __name__ == "__main__":

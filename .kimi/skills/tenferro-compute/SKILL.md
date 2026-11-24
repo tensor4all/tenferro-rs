@@ -49,7 +49,7 @@ not when changing tenferro itself.
   autodiff. A supported tensor operation stays there even when you do not want
   AD (`LinalgOps::cholesky` on a `TypedTensor` takes no AD and runs on the
   caller's engine, CUDA included); do not re-implement it. Call the dense library
-  `t4a-faer` (package `t4a-faer`, library `faer`) directly for a matrix routine
+  `colmat` (formerly `t4a-faer`; re-exported as `tenferro_cpu::faer`) directly for a matrix routine
   the tensor surface does not expose, on host column-major buffers (a
   CUDA-resident buffer cannot be borrowed as host data — download first), with
   your own scratch buffer and your own `Par`; read its [usage

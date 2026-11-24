@@ -124,7 +124,7 @@ fn binary_matches_the_host_reference() {
             Dest::Init(&out),
             &lhs,
             &rhs,
-            &status,
+            Some(&status),
         )
         .expect("launch");
     let observed = from_f64_bytes(&runtime.download_bytes(&out).expect("download"));

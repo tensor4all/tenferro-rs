@@ -155,12 +155,77 @@ pub(crate) fn linearize_lu(
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_lu");
     let concrete_dims = concrete_rectangular_dims(m, n, ctx, "linearize_lu")?;
-    let k = DimExpr::min(m.clone(), n.clone());
     let rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let p = ValueRef::External(primal_out[0].clone());
-    let l = ValueRef::External(primal_out[1].clone());
-    let u = ValueRef::External(primal_out[2].clone());
+    let pd_a = matmul_linear(builder, p, ValueRef::Local(da), vec![false, true], rank);
+    let (dl, du) = lu_factor_tangents(
+        builder,
+        LuTangentFactors {
+            l: ValueRef::External(primal_out[1].clone()),
+            u: ValueRef::External(primal_out[2].clone()),
+            l_active,
+            u_active,
+        },
+        LuTangentShape {
+            m,
+            n,
+            batch_shape,
+            concrete_dims,
+            dtype,
+            rank,
+        },
+        pd_a,
+    );
+    Ok(vec![None, dl, du, None])
+}
+
+/// The two factors of `B = L U` whose tangents [`lu_factor_tangents`] returns, and which of them
+/// the caller needs.
+struct LuTangentFactors {
+    l: ValueRef<StdTensorOp>,
+    u: ValueRef<StdTensorOp>,
+    l_active: bool,
+    u_active: bool,
+}
+
+/// The shape of the factored `m x n` matrix `B`, as the linearize rules resolve it.
+struct LuTangentShape<'a> {
+    m: &'a DimExpr,
+    n: &'a DimExpr,
+    batch_shape: &'a [DimExpr],
+    concrete_dims: Option<(usize, usize)>,
+    dtype: DType,
+    rank: usize,
+}
+
+/// `(dL, dU)` of a pivot-free rectangular LU `B = L U` (`L` unit-lower `m x k`, `U` upper
+/// `k x n`, `k = min(m, n)`) for a tangent `dB` of `B`.
+///
+/// `L` and `U` are embedded into square `m x m` and `n x n` factors, `X = L⁻¹ dB U⁻¹` is split
+/// into its strictly lower and upper parts, and the tangents are cut back to `m x k` and `k x n`.
+/// The partial-pivot rule passes `dB = P dA`, the complete-pivot rule `dB = P dA Qᵀ`.
+fn lu_factor_tangents(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    factors: LuTangentFactors,
+    shape: LuTangentShape<'_>,
+    d_b: LocalValueId,
+) -> (Option<LocalValueId>, Option<LocalValueId>) {
+    let LuTangentFactors {
+        l,
+        u,
+        l_active,
+        u_active,
+    } = factors;
+    let LuTangentShape {
+        m,
+        n,
+        batch_shape,
+        concrete_dims,
+        dtype,
+        rank,
+    } = shape;
+    let k = DimExpr::min(m.clone(), n.clone());
     let (l_square, u_square, symbolic_l_selector, symbolic_u_selector_t) =
         if let Some((m_size, n_size)) = concrete_dims {
             let l_square = if m_size > n_size {
@@ -253,7 +318,6 @@ pub(crate) fn linearize_lu(
             )
         };
 
-    let pd_a = matmul_linear(builder, p, ValueRef::Local(da), vec![false, true], rank);
     let la = builder.add_operation(
         linalg_std_op(LinalgOp::TriangularSolve {
             left_side: true,
@@ -261,7 +325,7 @@ pub(crate) fn linearize_lu(
             transpose_a: false,
             unit_diagonal: true,
         }),
-        vec![l_square.clone(), ValueRef::Local(pd_a)],
+        vec![l_square.clone(), ValueRef::Local(d_b)],
         OperationRole::Linearized {
             active_mask: vec![false, true],
         },
@@ -334,7 +398,7 @@ pub(crate) fn linearize_lu(
         None
     };
 
-    Ok(vec![None, dl, du, None])
+    (dl, du)
 }
 
 pub(crate) fn linearize_logabsdet_from_lu_factor(
@@ -454,40 +518,25 @@ pub(crate) fn linearize_full_piv_lu(
         return Ok(vec![None, None, None, None, None]);
     };
 
+    let l_active = ctx.is_value_active_in_linearize(&primal_out[1]);
+    let u_active = ctx.is_value_active_in_linearize(&primal_out[2]);
+    if !l_active && !u_active {
+        return Ok(vec![None, None, None, None, None]);
+    }
+
     let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
         return Ok(vec![None, None, None, None, None]);
     };
     let input_shape = input_shape.as_slice();
-    let (rows, cols, _batch_shape) = matrix_shape_parts(input_shape, "linearize_full_piv_lu");
-    // The rule differentiates the square factorization only. A rectangular input is refused here
-    // rather than answered with zero tangents, so a caller never reads a silently wrong derivative.
-    match concrete_rectangular_dims(rows, cols, ctx, "linearize_full_piv_lu")? {
-        Some((rows_size, cols_size)) if rows_size != cols_size => {
-            return Err(ADRuleError::invalid_input(
-                "tenferro-linalg.linearize_full_piv_lu",
-                ADRuleKind::Jvp,
-                format!(
-                    "full-pivot LU differentiation requires a square matrix, got {rows_size} x {cols_size}"
-                ),
-            ));
-        }
-        None if rows != cols => {
-            return Err(ADRuleError::invalid_input(
-                "tenferro-linalg.linearize_full_piv_lu",
-                ADRuleKind::Jvp,
-                "full-pivot LU differentiation requires provably equal symbolic matrix dimensions",
-            ));
-        }
-        _ => {}
-    }
-
+    let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_full_piv_lu");
+    // `P A Qᵀ = L U` with `P` and `Q` locally constant, so the tangent is the pivot-free LU tangent
+    // of `B = P A Qᵀ` at `dB = P dA Qᵀ`, for square and rectangular `m x n` alike.
+    let concrete_dims = concrete_rectangular_dims(m, n, ctx, "linearize_full_piv_lu")?;
     let rank = input_shape.len();
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let p = ValueRef::External(primal_out[0].clone());
-    let l = ValueRef::External(primal_out[1].clone());
-    let u = ValueRef::External(primal_out[2].clone());
     let q = ValueRef::External(primal_out[3].clone());
     let q_t = transpose_matrix_fixed(builder, q, rank);
-
     let pd_a = matmul_linear(builder, p, ValueRef::Local(da), vec![false, true], rank);
     let pd_a_qt = matmul_linear(
         builder,
@@ -496,49 +545,26 @@ pub(crate) fn linearize_full_piv_lu(
         vec![true, false],
         rank,
     );
-    let la = builder.add_operation(
-        linalg_std_op(LinalgOp::TriangularSolve {
-            left_side: true,
-            lower: true,
-            transpose_a: false,
-            unit_diagonal: true,
-        }),
-        vec![l.clone(), ValueRef::Local(pd_a_qt)],
-        OperationRole::Linearized {
-            active_mask: vec![false, true],
-        },
-    )[0];
-    let x = builder.add_operation(
-        linalg_std_op(LinalgOp::TriangularSolve {
-            left_side: false,
-            lower: false,
-            transpose_a: false,
-            unit_diagonal: false,
-        }),
-        vec![u.clone(), ValueRef::Local(la)],
-        OperationRole::Linearized {
-            active_mask: vec![false, true],
-        },
-    )[0];
-
-    let x_lower = linear_unary(builder, StdTensorOp::Tril { k: -1 }, x);
-    let x_upper = linear_unary(builder, StdTensorOp::Triu { k: 0 }, x);
-    let dl = matmul_linear(
+    let (dl, du) = lu_factor_tangents(
         builder,
-        l,
-        ValueRef::Local(x_lower),
-        vec![false, true],
-        rank,
-    );
-    let du = matmul_linear(
-        builder,
-        ValueRef::Local(x_upper),
-        u,
-        vec![true, false],
-        rank,
+        LuTangentFactors {
+            l: ValueRef::External(primal_out[1].clone()),
+            u: ValueRef::External(primal_out[2].clone()),
+            l_active,
+            u_active,
+        },
+        LuTangentShape {
+            m,
+            n,
+            batch_shape,
+            concrete_dims,
+            dtype,
+            rank,
+        },
+        pd_a_qt,
     );
 
-    Ok(vec![None, Some(dl), Some(du), None, None])
+    Ok(vec![None, dl, du, None, None])
 }
 
 pub(crate) fn linearize_eig(

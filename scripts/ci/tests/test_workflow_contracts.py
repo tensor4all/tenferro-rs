@@ -102,19 +102,23 @@ class WorkflowContractTests(unittest.TestCase):
         gpu = child.split("  run-gpu-tests:", 1)[1].split("  cleanup-runpod:", 1)[0]
         self.assertNotIn("secrets.", gpu)
 
-    def test_queued_head_guard_rejects_stale_closed_and_forked_prs(self) -> None:
+    def test_queued_head_guard_rejects_stale_closed_and_unapproved_fork_prs(self) -> None:
         child = (ROOT / ".github/workflows/runpod-gpu-execute.yml").read_text()
         step = child.split("      - name: Revalidate queued PR before provisioning\n", 1)[1].split("      - name:", 1)[0]
         script = textwrap.dedent(step.split("        run: |\n", 1)[1])
-        for head, base, state, repo, expected in (
-            ("head", "base", "open", "tensor4all/tenferro-rs", 0),
-            ("new", "base", "open", "tensor4all/tenferro-rs", 1),
-            ("head", "new", "open", "tensor4all/tenferro-rs", 1),
-            ("head", "base", "closed", "tensor4all/tenferro-rs", 1),
-            ("head", "base", "open", "fork/tenferro-rs", 1),
+        # A fork PR passes only when the parent approved it (FORK_PR=true), and
+        # then still only at the approved head.
+        for head, base, state, repo, fork, expected in (
+            ("head", "base", "open", "tensor4all/tenferro-rs", "false", 0),
+            ("new", "base", "open", "tensor4all/tenferro-rs", "false", 1),
+            ("head", "new", "open", "tensor4all/tenferro-rs", "false", 1),
+            ("head", "base", "closed", "tensor4all/tenferro-rs", "false", 1),
+            ("head", "base", "open", "fork/tenferro-rs", "false", 1),
+            ("head", "base", "open", "fork/tenferro-rs", "true", 0),
+            ("new", "base", "open", "fork/tenferro-rs", "true", 1),
         ):
-            with self.subTest(head=head, base=base, state=state, repo=repo), tempfile.TemporaryDirectory() as directory:
-                env = dict(os.environ, GITHUB_REPOSITORY="tensor4all/tenferro-rs", PR_NUMBER="1", EXPECTED_HEAD="head", EXPECTED_BASE="base")
+            with self.subTest(head=head, base=base, state=state, repo=repo, fork=fork), tempfile.TemporaryDirectory() as directory:
+                env = dict(os.environ, GITHUB_REPOSITORY="tensor4all/tenferro-rs", PR_NUMBER="1", EXPECTED_HEAD="head", EXPECTED_BASE="base", FORK_PR=fork)
                 env["PR_JSON"] = json.dumps({"state": state, "head": {"sha": head, "repo": {"full_name": repo}}, "base": {"sha": base}})
                 result = subprocess.run(
                     ["bash", "-c", 'gh() { printf "%s\\n" "$PR_JSON"; };\n' + script.replace("/tmp/queued-pr.json", directory + "/pr.json")],
@@ -244,9 +248,13 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("python3 scripts/ci/run_profile.py", text)
         self.assertNotIn("grep -qE", text)
         self.assertIn(". -> ../target-${{ matrix.cfg.backend }}", text)
-        # The faer backend also verifies faer artifacts, in both Cargo layouts:
-        # ci/deps (before Cargo 1.100) and ci/build/<package>/<hash>/out.
-        self.assertIn('crates="${crates} faer"', text)
+        # The cpu-faer backend also verifies the linear-algebra crate's artifacts,
+        # in both Cargo layouts: ci/deps (before Cargo 1.100) and
+        # ci/build/<package>/<hash>/out. The artifact is named after the lib target,
+        # and colmat 0.34 kept `[lib] name = "colmat"` (t4a-faer <= 0.33 was
+        # `faer`), so the check must name colmat.
+        self.assertIn('crates="${crates} colmat"', text)
+        self.assertNotIn('crates="${crates} faer"', text)
         self.assertIn('-path "${profile_dir}/deps/*"', text)
         self.assertIn('-path "${profile_dir}/build/*/*/out/*"', text)
         self.assertIn("strided_view strided_traits strided_perm", text)
@@ -356,10 +364,18 @@ class WorkflowContractTests(unittest.TestCase):
             [
                 '            check_permission "${pr_author}" "PR author"',
                 '            check_permission "${WORKFLOW_RUN_ACTOR}" "Source workflow actor"',
+                # A manual PR dispatch never checks the PR author: the
+                # dispatching maintainer's approval of the head is the trust
+                # decision, for a fork and a same-repo PR alike.
                 '            check_permission "${GITHUB_ACTOR}" "Workflow actor"',
-                '              check_permission "${pr_author}" "PR author"',
             ],
         )
+        manual = text[text.index('if [ "${MANUAL_PR_NUMBER}" -gt 0 ]; then') :]
+        fork, same_repo = manual.split("              else\n", 1)
+        same_repo = same_repo[: same_repo.index("refreshed_pr_json=")]
+        for branch in (fork, same_repo):
+            self.assertIn('"${pr_head_sha}" != "${MANUAL_APPROVED_HEAD_SHA}"', branch)
+            self.assertIn("^[0-9a-f]{40}$", branch)
 
     def test_review_labels_are_authorized_by_repository_role(self) -> None:
         """Both review exemptions authorize a maintainer, never a bare label.
@@ -946,12 +962,18 @@ class WorkflowContractTests(unittest.TestCase):
         permissions = permissions[: permissions.index("\n\n")]
         self.assertNotIn("write", permissions)
         # Only the trusted hosted lifecycle watcher and its caller ceiling may
-        # cancel a workflow after deleting its pod. PR builds/pod jobs remain
-        # readers, including when inherited through the reusable workflow.
+        # cancel a workflow after deleting its pod, and the fork verdict job may
+        # re-run the fork PR's gate; it builds nothing and checks out only its
+        # helper. PR builds/pod jobs remain readers, including when inherited
+        # through the reusable workflow.
+        writers = {"gpu-execution", "setup-watchdog", "fork-pr-verdict"}
         for match in re.finditer(r"^  ([a-z][a-z0-9-]*):\n(.*?)(?=^  [a-z][a-z0-9-]*:|\Z)",
                                  text[text.index("jobs:"):], re.MULTILINE | re.DOTALL):
             for scope in re.findall(r"(?m)^      actions: (\S+)", match[2]):
-                self.assertEqual(scope, "write" if match[1] in {"gpu-execution", "setup-watchdog"} else "read")
+                self.assertEqual(scope, "write" if match[1] in writers else "read")
+        verdict = text[text.index("  fork-pr-verdict:") :]
+        self.assertIn("sparse-checkout: scripts/ci/fork_gpu_gate.py", verdict)
+        self.assertNotIn("secrets.", verdict)
         child = (ROOT / ".github/workflows/runpod-gpu-execute.yml").read_text()
         self.assertNotIn("write", child.split("\npermissions:\n")[1].split("\nenv:\n")[0])
 

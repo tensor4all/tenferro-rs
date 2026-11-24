@@ -42,3 +42,63 @@
   borrowed-allocation `Resolved` in the CUDA `device_read`.
 - Remaining unsupported benchmark classes, and which are reference-API limitations
   (JAX/PyTorch), are listed in the PR description's ledger.
+
+## Second round: in-place strided reads and hoisted composite setup
+
+### Decisions
+
+- Strided, offset, reversed and broadcast operands are read where they lie. The flat CUDA
+  elementwise entries address `len` consecutive elements, so the fix lives in the kernel
+  catalogue: `t4a-cuda-kernels` ABI 15 adds layout-taking unary, binary, compare and select
+  entries that compute the flat entries' per-element formulas with the same device helpers. The
+  engine resolves each operand once: a flat region goes to the flat entry at its own allocation, any
+  other region of rank at most `MAX_RANK` goes to the layout-taking entry, and only a wider view (or
+  a strided scalar side over a wider domain) is still staged. This also removes the staging of
+  compact eager values by allocating ops, the open finding of the first round.
+- Reductions read only flat views (compact eager values) in place. A strided view is still staged
+  on purpose: the reduction planner picks its strategy from the operand's layout, so reading a
+  permuted view in place could change the fold association (a review built a product that turned
+  into NaN). The five eager `reduce_*_strided_read` benchmark rows stay unavailable for that reason.
+- A checked integer division into a strided destination keeps its scratch, so a zero divisor leaves
+  the caller's region untouched; every other `_into` writes a strided destination directly when it
+  shares no allocation with an operand.
+- Composite constants stay host values until an operation consumes them. `Engine` gets three
+  provided hooks (`binary_scalar_read`, `select_scalar_read`, `fill_scalar`) whose defaults upload
+  per call, exactly as before. The CUDA engine keeps a bounded set of resident device scalars and
+  lends them to the same formula (the scalar itself for a rank-0 operand, a zero-stride view
+  otherwise, plus the matching `*_read` entry), so its result equals the portable hook's bit for
+  bit. A cached device scalar cannot be handed out as a value: `Tensor` and `TensorValue` have one
+  move-only owner, so the hook is operation-level.
+- An eager session shares its rank-0 composite constants only while gradient recording is off; with
+  recording on, every constant keeps its own value identity. A shared constant is only ever an
+  operand, never a result, and `full`/`ones`/`zeros` are not cached, so their values stay uniquely
+  owned. Composite fills (`composite_filled`) go through `Engine::fill_scalar` and are adopted as
+  constant leaves.
+- An untracked eager op on a GPU reads a broadcast operand as a zero-stride view instead of
+  recording an eager `broadcast_in_dim`, which duplicates its base by design (an eager output cannot
+  borrow another value's allocation group). With recording on, the broadcast is recorded once per
+  pending value, as before.
+- Eager output reuse for `dot_general`/einsum (and the accumulating `axpby`), eager immediate
+  `vdot`/`norm_squared`, and an eager prepared einsum plan are not added here. They extend the
+  #2552 registry grammar on the eager layer, which the first round already marked as a separate
+  decision.
+
+### Verification conclusions and constraints
+
+- On the A100, every elementwise operation the benchmark measures on a transposed read costs what a
+  compact operand costs (one allocation and one launch) on the direct and eager routes, and is
+  bit-identical to the compact operand on non-NaN data (the sign and payload of a NaN result are
+  unspecified in the catalogue's ABI).
+- In steady state every benchmarked composite (activations, softmax family, layer/RMS norm,
+  reduce_mean, scale_real/complex) makes no host-to-device copy (the runtime counts every upload
+  path), launches exactly the primitives of its formulation and allocates only their results; eager
+  costs what direct costs and returns the same bits. Softmax went from 15 allocations, 11 launches
+  and 2 transfers to 7, 7 and 0 on the direct route.
+- inv, pinv and unbatched lstsq make no host-to-device copy in steady state. A batched lstsq still
+  uploads the pointer arrays of its batched triangular solve.
+- The benchmark run (tensor4all/tenferro-benchmark#511) maps the 126 previously unsupported
+  tenferro cells to 105 `ok` and 21 remaining: 14 need the eager-grammar decision above, 5 are the
+  deliberately staged strided reductions, 2 are eager lazy views by design.
+- The layout-taking entries index with 64-bit coordinates, so a strided read is slower per element
+  than a flat one; PyTorch's strided `exp`/`add` are still faster. Compact operands keep the flat
+  entries.

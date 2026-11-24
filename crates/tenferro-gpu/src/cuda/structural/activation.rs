@@ -115,8 +115,8 @@ impl CudaEngine {
     /// The CUDA [`tenferro_tensor::Engine::fused_activation_read`] fast path.
     ///
     /// Declines (`Ok(None)`) an activation without a fused region or a dtype other than
-    /// `F32`/`F64`. A borrowed view is staged once into a compact operand by the shared
-    /// `device_read`, as every element-wise entry does. The output is a fresh compact
+    /// `F32`/`F64`. A flat operand is read in place; a strided view is staged once, since the
+    /// emitted region addresses a flat domain. The output is a fresh compact
     /// tensor allocated like the per-operation element-wise outputs.
     pub(super) fn fused_activation(
         &mut self,
@@ -127,9 +127,16 @@ impl CudaEngine {
             return Ok(None);
         }
         let name = op.label();
-        let source = self.device_read(input, name)?;
-        let dtype = source.dtype();
-        let shape = source.shape().to_vec();
+        // A flat operand (an owned tensor, a compact eager value) is read where it lies; the
+        // emitted region is flat-only, so any other view is staged once (#2701).
+        let operand = self.elementwise_operand(&input, name)?;
+        let staged = if operand.is_strided() {
+            Some(self.device_read(input.clone(), name)?)
+        } else {
+            None
+        };
+        let dtype = operand.dtype();
+        let shape = operand.shape().to_vec();
         let len = count_i64(&shape, name)?;
         let output = alloc_tensor(self.runtime(), dtype, &shape)?;
         if len == 0 {
@@ -145,7 +152,10 @@ impl CudaEngine {
                     len,
                     &[
                         self.allocation_of::<T>(&output, name)?,
-                        self.allocation_of::<T>(&source, name)?,
+                        match &staged {
+                            Some(source) => self.allocation_of::<T>(source, name)?,
+                            None => self.elementwise_operand_buffer(&operand, name)?,
+                        },
                     ],
                 )
             })?;

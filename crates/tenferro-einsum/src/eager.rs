@@ -515,8 +515,12 @@ fn transpose_to_labels<'a>(
         return Ok(operand);
     }
 
-    let operand_tensor = operand.tensor_owned(exec)?;
-    let tensor = exec.transpose_read(TensorRead::from_tensor(&operand_tensor), &perm)?;
+    // `transpose_read` accepts an owned tensor or a strided view as-is, so
+    // materialising a contiguous copy first only adds a full pass over the
+    // result. In particular, a fast `dot_general_read` returns an owned,
+    // compact tensor; copying it before the transpose made the copy dominate
+    // a large reordered binary contraction (#2715).
+    let tensor = exec.transpose_read(operand.tensor_read(), &perm)?;
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
         tensor: TensorValue::Owned(tensor),

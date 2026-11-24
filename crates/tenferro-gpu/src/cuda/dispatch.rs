@@ -399,8 +399,9 @@ impl Dispatcher {
 
     /// `t4a_cuda_binary`: one binary operation, optionally with a scalar side.
     ///
-    /// The trailing status word is the entry's checked-integer error flag; the caller
-    /// supplies it zeroed and inspects it afterwards.
+    /// The trailing status word is the entry's checked-integer error flag: a checked operation's
+    /// caller supplies it zeroed and inspects it afterwards, and every other operation passes
+    /// `None`, since the entry writes the word only for the checked tags.
     ///
     /// # Errors
     ///
@@ -416,9 +417,15 @@ impl Dispatcher {
         out: Dest<'_>,
         lhs: &t4a_cuda_runtime::Buffer,
         rhs: &t4a_cuda_runtime::Buffer,
-        status: &t4a_cuda_runtime::Buffer,
+        status: Option<&t4a_cuda_runtime::Buffer>,
     ) -> crate::Result<()> {
         let plan = plan_binary(op, dtype, side, len).map_err(plan_error)?;
+        // Only the checked integer operations write the status word; the others take a null
+        // pointer and never touch it.
+        let status = match status {
+            Some(buffer) => Arg::DevicePtr(buffer),
+            None => Arg::U64(0),
+        };
         self.run(
             Entry::Binary,
             plan,
@@ -430,7 +437,7 @@ impl Dispatcher {
                 Arg::I32(op.tag()),
                 Arg::I32(side.tag()),
                 Arg::U64(len as u64),
-                Arg::DevicePtr(status),
+                status,
             ],
         )
     }
@@ -1059,6 +1066,203 @@ impl Dispatcher {
                 Arg::U32(dtype.tag() as u32),
                 Arg::I32(op.tag()),
                 Arg::U64(out_count as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_strided_unary`: [`Self::unary`]'s operation over one logical domain, reading the
+    /// input through its own layout and writing the destination through its layout (#2701).
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the layouts, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn strided_unary(
+        &mut self,
+        op: UnaryOp,
+        dst_dtype: DType,
+        src_dtype: DType,
+        out: &Layout,
+        out_len: i64,
+        input: &Layout,
+        in_len: i64,
+        out_buffer: Dest<'_>,
+        in_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = t4a_cuda_kernels::plan_strided_unary(
+            op, dst_dtype, src_dtype, out, out_len, input, in_len,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let in_layout = t4a_cuda_kernels::CLayout::new(input);
+        let count = out.element_count().map_err(plan_error)?;
+        self.run(
+            Entry::StridedUnary,
+            launch,
+            &[
+                out_buffer.arg(),
+                Arg::DevicePtr(in_buffer),
+                layout_arg(&out_layout),
+                layout_arg(&in_layout),
+                Arg::U32(dst_dtype.tag() as u32),
+                Arg::U32(src_dtype.tag() as u32),
+                Arg::I32(op.tag()),
+                Arg::U64(count as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_strided_binary`: one logical domain re-addressed through each operand layout.
+    ///
+    /// `status` is the zeroed 4-byte word a checked integer operation reports through; the other
+    /// operations never touch it and take a null pointer.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the layouts, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn strided_binary(
+        &mut self,
+        op: t4a_cuda_kernels::StridedBinaryOp,
+        dtype: DType,
+        out: &Layout,
+        out_len: i64,
+        lhs: &Layout,
+        lhs_len: i64,
+        rhs: &Layout,
+        rhs_len: i64,
+        out_buffer: Dest<'_>,
+        lhs_buffer: &t4a_cuda_runtime::Buffer,
+        rhs_buffer: &t4a_cuda_runtime::Buffer,
+        status: Option<&t4a_cuda_runtime::Buffer>,
+    ) -> crate::Result<()> {
+        let launch = t4a_cuda_kernels::plan_strided_binary(
+            op, dtype, out, out_len, lhs, lhs_len, rhs, rhs_len,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let lhs_layout = t4a_cuda_kernels::CLayout::new(lhs);
+        let rhs_layout = t4a_cuda_kernels::CLayout::new(rhs);
+        let count = out.element_count().map_err(plan_error)?;
+        let status = match status {
+            Some(buffer) => Arg::DevicePtr(buffer),
+            None => Arg::U64(0),
+        };
+        self.run(
+            Entry::StridedBinary,
+            launch,
+            &[
+                out_buffer.arg(),
+                Arg::DevicePtr(lhs_buffer),
+                Arg::DevicePtr(rhs_buffer),
+                layout_arg(&out_layout),
+                layout_arg(&lhs_layout),
+                layout_arg(&rhs_layout),
+                Arg::U32(dtype.tag() as u32),
+                Arg::I32(op.tag()),
+                Arg::U64(count as u64),
+                status,
+            ],
+        )
+    }
+
+    /// `t4a_cuda_strided_compare`: [`Self::compare`]'s predicate over operand layouts, one Bool
+    /// byte per element written through the destination layout.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the layouts, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn strided_compare(
+        &mut self,
+        op: t4a_cuda_kernels::CompareOp,
+        dtype: DType,
+        out: &Layout,
+        out_len: i64,
+        lhs: &Layout,
+        lhs_len: i64,
+        rhs: &Layout,
+        rhs_len: i64,
+        out_buffer: Dest<'_>,
+        lhs_buffer: &t4a_cuda_runtime::Buffer,
+        rhs_buffer: &t4a_cuda_runtime::Buffer,
+    ) -> crate::Result<()> {
+        let launch = t4a_cuda_kernels::plan_strided_compare(
+            op, dtype, out, out_len, lhs, lhs_len, rhs, rhs_len,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let lhs_layout = t4a_cuda_kernels::CLayout::new(lhs);
+        let rhs_layout = t4a_cuda_kernels::CLayout::new(rhs);
+        let count = out.element_count().map_err(plan_error)?;
+        self.run(
+            Entry::StridedCompare,
+            launch,
+            &[
+                out_buffer.arg(),
+                Arg::DevicePtr(lhs_buffer),
+                Arg::DevicePtr(rhs_buffer),
+                layout_arg(&out_layout),
+                layout_arg(&lhs_layout),
+                layout_arg(&rhs_layout),
+                Arg::U32(dtype.tag() as u32),
+                Arg::I32(op.tag()),
+                Arg::U64(count as u64),
+            ],
+        )
+    }
+
+    /// `t4a_cuda_strided_select`: [`Self::select`]'s selection over operand layouts.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::RuntimeState`] when the planner refuses the layouts, and
+    /// [`crate::Error::RuntimeStateSource`] when binding or admitting the launch fails.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn strided_select(
+        &mut self,
+        dtype: DType,
+        out: &Layout,
+        out_len: i64,
+        predicate: (&Layout, i64, &t4a_cuda_runtime::Buffer),
+        on_true: (&Layout, i64, &t4a_cuda_runtime::Buffer),
+        on_false: (&Layout, i64, &t4a_cuda_runtime::Buffer),
+        out_buffer: Dest<'_>,
+    ) -> crate::Result<()> {
+        let launch = t4a_cuda_kernels::plan_strided_select(
+            dtype,
+            out,
+            out_len,
+            predicate.0,
+            predicate.1,
+            on_true.0,
+            on_true.1,
+            on_false.0,
+            on_false.1,
+        )
+        .map_err(plan_error)?;
+        let out_layout = t4a_cuda_kernels::CLayout::new(out);
+        let predicate_layout = t4a_cuda_kernels::CLayout::new(predicate.0);
+        let true_layout = t4a_cuda_kernels::CLayout::new(on_true.0);
+        let false_layout = t4a_cuda_kernels::CLayout::new(on_false.0);
+        let count = out.element_count().map_err(plan_error)?;
+        self.run(
+            Entry::StridedSelect,
+            launch,
+            &[
+                out_buffer.arg(),
+                Arg::DevicePtr(predicate.2),
+                Arg::DevicePtr(on_true.2),
+                Arg::DevicePtr(on_false.2),
+                layout_arg(&out_layout),
+                layout_arg(&predicate_layout),
+                layout_arg(&true_layout),
+                layout_arg(&false_layout),
+                Arg::U32(dtype.tag() as u32),
+                Arg::U64(count as u64),
             ],
         )
     }

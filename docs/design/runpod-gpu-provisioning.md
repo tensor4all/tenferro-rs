@@ -317,7 +317,8 @@ scheduled stale-pin check. This avoids repeating the old-runner outage in
 
 ## Security invariants (unchanged)
 
-JIT runner registration, maintainer/admin authorization, fork rejection,
+JIT runner registration, maintainer/admin authorization, fork rejection
+outside a maintainer's head-bound approval (`docs/design/change-aware-ci.md`),
 read-only workflow permissions, and unconditional cleanup are preserved.
 Secret isolation, precisely: the long-lived RunPod API key and GitHub App
 token never reach the pod; the single-use, single-job JIT runner config is

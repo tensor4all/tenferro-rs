@@ -23,7 +23,15 @@ features = ["cuda"]
 name = "tenferro_ad"
 
 [features]
-cuda = ["dep:tenferro-gpu", "tenferro-gpu/cuda"]
+# The public spelling of the AD capability (#2694), which an extension crate forwards instead of
+# naming `tenferro-internal-ops` itself. The dependency below enables the same vocabulary
+# unconditionally, because this crate's AD code needs it.
+autodiff = ["tenferro-internal-ops/autodiff"]
+cuda = [
+    "dep:tenferro-gpu",
+    "tenferro-gpu/cuda",
+    "tenferro-internal-ops/cuda",
+]
 
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.13.0", default-features = false }
