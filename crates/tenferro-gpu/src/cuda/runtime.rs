@@ -209,7 +209,8 @@ fn default_config(total_memory_bytes: u64) -> t4a_cuda_runtime::Config {
 
 /// The least idle device memory the pool keeps mapped, whatever the device size.
 const MIN_POOL_RELEASE_BYTES: usize = 256 << 20;
-/// The most idle device memory the pool keeps mapped, whatever the device size.
+/// The most idle device memory the default budget keeps mapped, whatever the device size. An
+/// explicit `TENFERRO_CUDA_POOL_RELEASE_MIB` may go above it, up to the device's memory.
 const MAX_POOL_RELEASE_BYTES: usize = 4 << 30;
 /// The share of the device's memory the pool may keep mapped.
 const POOL_RELEASE_SHARE: u64 = 8;
@@ -222,8 +223,12 @@ const POOL_RELEASE_SHARE: u64 = 8;
 /// `cuMemAllocFromPoolAsync` per call, 87 of 87 calls on the A100 host, reproducing in plain CUDA
 /// once six buffers are live (#2381). A budget scaled to the device keeps those pages.
 ///
-/// `TENFERRO_CUDA_POOL_RELEASE_MIB` overrides the result, in MiB. The budget is a ceiling on
-/// retained *idle* memory, not a reservation: nothing is allocated before it is needed.
+/// `TENFERRO_CUDA_POOL_RELEASE_MIB` overrides the result, in MiB. An explicit value keeps the
+/// 256 MiB floor, and its ceiling is the device's memory rather than the default's 4 GiB (still
+/// 4 GiB on a smaller device or one of unknown size). A working set of multi-GiB buffers needs
+/// that: with a smaller budget, each synchronisation hands the idle buffers back and the next large
+/// allocation maps them again (#2706). The budget is a ceiling on retained *idle* memory, not a
+/// reservation: nothing is allocated before it is needed.
 fn pool_release_threshold_bytes(total_memory_bytes: u64) -> usize {
     let override_mib = std::env::var("TENFERRO_CUDA_POOL_RELEASE_MIB")
         .ok()
@@ -234,9 +239,14 @@ fn pool_release_threshold_bytes(total_memory_bytes: u64) -> usize {
 /// [`pool_release_threshold_bytes`] with the environment's override supplied explicitly.
 fn pool_release_threshold_from(override_mib: Option<u64>, total_memory_bytes: u64) -> usize {
     if let Some(mib) = override_mib {
+        // The caller sized this budget for its own working set, so only the device bounds it. A
+        // device smaller than the default ceiling, or of unknown size, keeps that ceiling.
+        let ceiling = usize::try_from(total_memory_bytes)
+            .unwrap_or(usize::MAX)
+            .max(MAX_POOL_RELEASE_BYTES);
         return usize::try_from(mib.saturating_mul(1 << 20))
             .unwrap_or(usize::MAX)
-            .clamp(MIN_POOL_RELEASE_BYTES, MAX_POOL_RELEASE_BYTES);
+            .clamp(MIN_POOL_RELEASE_BYTES, ceiling);
     }
     let share = usize::try_from(total_memory_bytes / POOL_RELEASE_SHARE).unwrap_or(usize::MAX);
     share.clamp(MIN_POOL_RELEASE_BYTES, MAX_POOL_RELEASE_BYTES)

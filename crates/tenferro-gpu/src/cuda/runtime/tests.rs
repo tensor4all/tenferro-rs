@@ -152,13 +152,29 @@ fn the_environment_overrides_the_budget_in_mib() {
         pool_release_threshold_from(Some(1024), 80 * GIB),
         (1024 * MIB) as usize
     );
-    // An override below the floor or above the ceiling is clamped, not honoured literally.
+    // An override below the floor is clamped up, not honoured literally.
     assert_eq!(
         pool_release_threshold_from(Some(1), 80 * GIB),
         MIN_POOL_RELEASE_BYTES
     );
+    // Above the default ceiling an override takes effect, so a working set of multi-GiB buffers
+    // stays mapped across synchronisations (#2706).
+    assert_eq!(
+        pool_release_threshold_from(Some(16 * 1024), 80 * GIB),
+        (16 * GIB) as usize
+    );
+    // The device's memory bounds it.
     assert_eq!(
         pool_release_threshold_from(Some(1_000_000), 80 * GIB),
+        (80 * GIB) as usize
+    );
+    // A device smaller than the default ceiling, or of unknown size, keeps that ceiling.
+    assert_eq!(
+        pool_release_threshold_from(Some(1_000_000), GIB),
+        MAX_POOL_RELEASE_BYTES
+    );
+    assert_eq!(
+        pool_release_threshold_from(Some(1_000_000), 0),
         MAX_POOL_RELEASE_BYTES
     );
 }
