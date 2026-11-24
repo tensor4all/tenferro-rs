@@ -58,13 +58,29 @@ asynchronous device retirement, or numerical execution.
 
 Cross-repository rules live in `tensor4all-agent-rules`; do not vendor a copy.
 Tenferro-specific durable rules live in `REPOSITORY_RULES.md`; performance,
-layout, cache, threading, and Faer contracts live in `PERFORMANCE_TIPS.md`.
+layout, cache, threading, and Faer contracts live in `PERFORMANCE_TIPS.md`;
+incident-seeded rules scoped to one crate live in `ai/crate-rules/` (see
+`## Crate Rules`).
 This file is the entry point and orientation; do not duplicate the detailed
 performance, layout, CPU kernel, slicing, cache, threading, or GPU backend
 rules here. Both rule files are routing input for
 `scripts/repository-rules-review.py`: when adding or renaming a `##` section
 in either, update that script's routed or human-only section lists in the same
 change.
+
+## Crate Rules
+
+Before editing `src/`, `tests/`, or `benches/` of a crate listed here, read its
+file under [`ai/crate-rules/`](ai/crate-rules/README.md). Each entry is seeded
+from a real incident and names the code it applies to and the check that catches
+a violation.
+
+- `tenferro-linalg`: [`ai/crate-rules/tenferro-linalg.md`](ai/crate-rules/tenferro-linalg.md)
+  (scale before multiplying; benchmark arms doing the same work)
+- `tenferro-fft`: [`ai/crate-rules/tenferro-fft.md`](ai/crate-rules/tenferro-fft.md)
+  (new tests need a line in the GPU test partition)
+- `tenferro-ad`: [`ai/crate-rules/tenferro-ad.md`](ai/crate-rules/tenferro-ad.md)
+  (tests assert the changed property where it runs; per-call test counters)
 
 ## Contribution Workflow Assets
 

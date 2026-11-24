@@ -495,3 +495,44 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
 fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
     Tensor::from_typed::<Complex64>(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
+
+#[test]
+fn traced_norm_over_an_empty_axis_is_a_real_zero() {
+    let trace = tenferro_runtime::TraceContext::new();
+    let a = trace
+        .from_vec_col_major(vec![0, 2], Vec::<Complex64>::new())
+        .unwrap();
+    let norm = a
+        .norm_with(&NormOptions::default().axes(Some([0].into_iter().collect::<AxisVec>())))
+        .unwrap();
+    let results = run_many(&[&norm]);
+
+    assert_tensor_f64_eq(get_f64_data(&results[0]), &[0.0, 0.0]);
+}
+
+#[test]
+fn traced_pinv_rtol_and_p_norm_use_their_scalars() {
+    let trace = tenferro_runtime::TraceContext::new();
+    let a = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![2.0, 0.0, 0.0, 0.5]))
+        .unwrap();
+    // The threshold is `rtol * max(s)` = 1, so 0.5 is dropped and 2 is inverted.
+    let inverse = a
+        .pinv_with(&tenferro_linalg::PinvOptions::default().rtol(Some(0.5)))
+        .unwrap();
+    // Columns `[1, 1]` and `[2, 0]`: two nonzeros, so swapping `p` and `1/p` gives 8, not 2^(1/3).
+    let b = trace
+        .from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 1.0, 2.0, 0.0]))
+        .unwrap();
+    let p_norm = b
+        .norm_with(
+            &NormOptions::default()
+                .ord(NormOrd::P(3.0))
+                .axes(Some([0].into_iter().collect::<AxisVec>())),
+        )
+        .unwrap();
+    let results = run_many(&[&inverse, &p_norm]);
+
+    assert_tensor_f64_eq(get_f64_data(&results[0]), &[0.5, 0.0, 0.0, 0.0]);
+    assert_tensor_f64_eq(get_f64_data(&results[1]), &[2.0_f64.cbrt(), 2.0]);
+}

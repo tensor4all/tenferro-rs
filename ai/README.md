@@ -14,6 +14,9 @@ optional sibling checkout fallback documented in `AGENTS.md`.
   maintainer release/publish.
 - `agent-workflow-lessons.md`: model-independent process checks for long-running
   multi-phase implementation work.
+- `crate-rules/`: short crate-scoped rules, each seeded from a cited incident
+  and naming the code it applies to and the check that catches a violation.
+  Indexed from `AGENTS.md`; see `crate-rules/README.md` for the entry template.
 - `repo-settings.json`: the expected GitHub repository settings and required
   branch protection checks for this repository.
 - `run-codex-solve-bug.sh`, `run-claude-solve-bug.sh`, and
@@ -25,4 +28,6 @@ optional sibling checkout fallback documented in `AGENTS.md`.
 - Do not add agent asset lockfiles or sync manifests for external templates.
 - Keep durable tenferro-specific policy in `REPOSITORY_RULES.md` and
   performance contracts in `PERFORMANCE_TIPS.md`.
+  The exception is `crate-rules/`: incident-seeded rules scoped to one crate,
+  each naming its code and its check.
 - Keep contribution policy in `CONTRIBUTING.md`; keep workflow mechanics here.

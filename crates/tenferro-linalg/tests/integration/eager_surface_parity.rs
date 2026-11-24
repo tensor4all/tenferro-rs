@@ -644,3 +644,26 @@ fn zero_order_norm_counts_nan_entries_as_nonzero() {
         assert!((f64_values(&value)[0] - 2.0).abs() < 1.0e-12);
     }
 }
+
+#[test]
+fn eager_pinv_rtol_drops_singular_values_below_the_threshold() {
+    let a = eager(vec![2.0, 0.0, 0.0, 0.5], vec![2, 2]);
+    // The threshold is `rtol * max(s)` = 1, so 0.5 is dropped and 2 is inverted.
+    let inverse = a
+        .runtime()
+        .with_eager_session(&mut tenferro_cpu::CpuEngine::serial(), |session| {
+            session.pinv_with(&a, &PinvOptions::default().rtol(Some(0.5)))
+        })
+        .unwrap();
+    assert_eq!(f64_values(&inverse), vec![0.5, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn eager_p_norm_raises_to_p_then_to_one_over_p() {
+    // Columns `[1, 1]` and `[2, 0]`: two nonzeros, so swapping `p` and `1/p` gives 8, not 2^(1/3).
+    let a = eager(vec![1.0, 1.0, 2.0, 0.0], vec![2, 2]);
+    let norm = eager_norm(&a, Some(3.0), Some(&[0]), false).unwrap();
+    let values = f64_values(&norm);
+    assert!((values[0] - 2.0_f64.cbrt()).abs() < 1.0e-12, "{values:?}");
+    assert!((values[1] - 2.0).abs() < 1.0e-12, "{values:?}");
+}
