@@ -6,9 +6,8 @@ name: CI_gpu
 # fork PR waits for a RunPod run that a maintainer approved for its head
 # (`scripts/ci/fork_gpu_gate.py`). The `ubuntu-gpu` jobs remain only as a manual
 # legacy fallback (`workflow_dispatch`); no PR starts them.
-# Maintainers recover a same-repository PR with
-# `python3 scripts/ci/recover_runpod_pr.py PR_NUMBER --wait`, and approve a
-# reviewed fork PR head with
+# Maintainers approve a reviewed PR head (same-repository or fork, whatever the
+# author's role) with
 # `python3 scripts/ci/recover_runpod_pr.py PR_NUMBER --approve-head SHA --wait`.
 
 on:

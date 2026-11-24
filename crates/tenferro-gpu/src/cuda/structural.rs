@@ -721,6 +721,228 @@ pub(super) fn coalesce_compact_view(extents: &[i64], strides: &[i64]) -> (Vec<i6
     (merged_extents, merged_strides)
 }
 
+/// A copy between two strided views of the same extents, with the axes both views advance
+/// through together merged.
+///
+/// This is [`coalesce_compact_view`] for a destination that is not compact: axes `k` and
+/// `k + 1` merge when the source *and* the destination advance by `stride[k] * extent[k]`
+/// along `k + 1`, so both name the same elements in the same order through fewer axes. A
+/// concatenation writes each input into a slab of its compact output: the slab's strides are
+/// the output's, so the axes before the concatenated one merge with it, and the axes after it
+/// merge with each other (#2708). An axis of extent one is dropped. A view with an empty axis,
+/// or whose every axis has extent one, is returned as it is.
+pub(super) fn coalesce_strided_pair(
+    extents: &[i64],
+    source_strides: &[i64],
+    destination_strides: &[i64],
+) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
+    let unchanged = || {
+        (
+            extents.to_vec(),
+            source_strides.to_vec(),
+            destination_strides.to_vec(),
+        )
+    };
+    if extents.len() != source_strides.len()
+        || extents.len() != destination_strides.len()
+        || extents.contains(&0)
+    {
+        return unchanged();
+    }
+    let mut merged_extents: Vec<i64> = Vec::with_capacity(extents.len());
+    let mut merged_source: Vec<i64> = Vec::with_capacity(extents.len());
+    let mut merged_destination: Vec<i64> = Vec::with_capacity(extents.len());
+    for ((&extent, &source), &destination) in
+        extents.iter().zip(source_strides).zip(destination_strides)
+    {
+        if extent == 1 {
+            continue;
+        }
+        if let (Some(last_extent), Some(&last_source), Some(&last_destination)) = (
+            merged_extents.last_mut(),
+            merged_source.last(),
+            merged_destination.last(),
+        ) {
+            let continues = last_source.checked_mul(*last_extent) == Some(source)
+                && last_destination.checked_mul(*last_extent) == Some(destination);
+            if let (true, Some(product)) = (continues, last_extent.checked_mul(extent)) {
+                *last_extent = product;
+                continue;
+            }
+        }
+        merged_extents.push(extent);
+        merged_source.push(source);
+        merged_destination.push(destination);
+    }
+    if merged_extents.is_empty() {
+        return unchanged();
+    }
+    (merged_extents, merged_source, merged_destination)
+}
+
+/// One operand axis of a gather after [`coalesce_gather_view`]: an original axis together with
+/// the run of free window axes merged into it.
+struct GatherAxis {
+    extent: i64,
+    stride: i64,
+    slice: i64,
+    /// Whether the run is a window axis that no start index moves.
+    free: bool,
+    /// The output axis of the run's first and of its last window axis.
+    head_out: Option<usize>,
+    tail_out: Option<usize>,
+}
+
+/// A gather's operand view and configuration with the operand axes it reads as one run merged.
+///
+/// The gather writes a compact output, so two adjacent operand axes `a` and `a + 1` are one
+/// axis of extent `e[a] * e[a + 1]` when all of these hold:
+///
+/// - both are window axes (not in `collapsed_slice_dims`) and neither is in `start_index_map`,
+///   so both window coordinates start at zero;
+/// - the window of `a` is its full extent, so the window coordinate of the merged axis,
+///   `w[a] + e[a] * w[a + 1]`, is the operand coordinate it names;
+/// - the operand advances by `s[a] * e[a]` along `a + 1`, as in [`coalesce_compact_view`];
+/// - their output axes are adjacent, apart from output axes of extent one dropped below.
+///
+/// An operand axis of extent one whose slice is one and that no start index moves contributes
+/// no offset; it is dropped, and so is its output axis when it is a window axis. Indexed and
+/// collapsed axes keep their own entries, so `start_index_map`, `index_vector_dim` and the
+/// index operand are unchanged, and the batch axes of the output keep their order. The merged
+/// operand and configuration name the same elements in the same output order through fewer
+/// axes, so a rank-26 `index_select` of a compact operand reaches the by-value gather as a
+/// rank-3 one (#2708).
+///
+/// Returns `None` when nothing merges or drops, when an operand or slice extent is zero, when
+/// the configuration does not pair every window axis with an output axis (the caller's
+/// validation reports that), and when every axis would be dropped.
+pub(super) fn coalesce_gather_view(
+    extents: &[i64],
+    strides: &[i64],
+    config: &tenferro_tensor::GatherConfig,
+) -> Option<(Vec<i64>, Vec<i64>, tenferro_tensor::GatherConfig)> {
+    let rank = extents.len();
+    if strides.len() != rank
+        || config.slice_sizes.len() != rank
+        || extents.contains(&0)
+        || config.slice_sizes.contains(&0)
+    {
+        return None;
+    }
+    // Membership masks, so the merge below is linear in the rank.
+    let mut collapsed = vec![false; rank];
+    let mut indexed = vec![false; rank];
+    for (axes, mask) in [
+        (&config.collapsed_slice_dims, &mut collapsed),
+        (&config.start_index_map, &mut indexed),
+    ] {
+        for &axis in axes {
+            *mask.get_mut(axis)? = true;
+        }
+    }
+    // The output axis of each window axis: window axes pair with `offset_dims` in operand order.
+    let mut out_axis: Vec<Option<usize>> = vec![None; rank];
+    let mut windows = (0..rank).filter(|&axis| !collapsed[axis]);
+    for &out in &config.offset_dims {
+        out_axis[windows.next()?] = Some(out);
+    }
+    if windows.next().is_some() {
+        return None;
+    }
+    let dropped: Vec<bool> = (0..rank)
+        .map(|axis| extents[axis] == 1 && config.slice_sizes[axis] == 1 && !indexed[axis])
+        .collect();
+    // The output axes the merged launch no longer has: those of dropped window axes, and those
+    // of window axes merged into the run before them.
+    let out_rank = config.offset_dims.iter().max().map_or(0, |&out| out + 1);
+    let mut removed_out = vec![false; out_rank];
+    for axis in (0..rank).filter(|&axis| dropped[axis]) {
+        if let Some(out) = out_axis[axis] {
+            removed_out[out] = true;
+        }
+    }
+    // Output axes `tail` and `next` are adjacent once the dropped extent-one axes are gone.
+    let dropped_out = removed_out.clone();
+    let adjacent = |tail: usize, next: usize| {
+        next > tail && dropped_out[tail + 1..next].iter().all(|&gone| gone)
+    };
+    let mut axes: Vec<GatherAxis> = Vec::with_capacity(rank);
+    // The merged position of each original axis that heads an entry.
+    let mut position: Vec<Option<usize>> = vec![None; rank];
+    for axis in (0..rank).filter(|&axis| !dropped[axis]) {
+        let (extent, stride) = (extents[axis], strides[axis]);
+        let slice = i64::try_from(config.slice_sizes[axis]).ok()?;
+        let free = out_axis[axis].is_some() && !indexed[axis];
+        if let (true, Some(last), Some(out)) = (free, axes.last_mut(), out_axis[axis]) {
+            let continues = last.free
+                && last.slice == last.extent
+                && slice <= extent
+                && last.tail_out.is_some_and(|tail| adjacent(tail, out))
+                && last.stride.checked_mul(last.extent) == Some(stride);
+            if let (true, Some(merged_extent), Some(merged_slice)) = (
+                continues,
+                last.extent.checked_mul(extent),
+                last.slice.checked_mul(slice),
+            ) {
+                last.extent = merged_extent;
+                last.slice = merged_slice;
+                last.tail_out = Some(out);
+                removed_out[out] = true;
+                continue;
+            }
+        }
+        position[axis] = Some(axes.len());
+        axes.push(GatherAxis {
+            extent,
+            stride,
+            slice,
+            free,
+            head_out: out_axis[axis],
+            tail_out: out_axis[axis],
+        });
+    }
+    if axes.is_empty() || axes.len() == rank {
+        return None;
+    }
+    // An output axis moves down by the number of removed axes before it.
+    let shift: Vec<usize> = removed_out
+        .iter()
+        .scan(0usize, |before, &gone| {
+            let current = *before;
+            *before += usize::from(gone);
+            Some(current)
+        })
+        .collect();
+    // Every collapsed or indexed axis heads its own entry, so it has a merged position.
+    let merged = tenferro_tensor::GatherConfig {
+        offset_dims: axes
+            .iter()
+            .filter_map(|entry| entry.head_out.map(|out| out - shift[out]))
+            .collect(),
+        collapsed_slice_dims: config
+            .collapsed_slice_dims
+            .iter()
+            .filter(|&&axis| !dropped[axis])
+            .map(|&axis| position[axis])
+            .collect::<Option<_>>()?,
+        start_index_map: config
+            .start_index_map
+            .iter()
+            .map(|&axis| position[axis])
+            .collect::<Option<_>>()?,
+        index_vector_dim: config.index_vector_dim,
+        slice_sizes: axes
+            .iter()
+            .map(|entry| usize::try_from(entry.slice).ok())
+            .collect::<Option<_>>()?,
+    };
+    Some((
+        axes.iter().map(|entry| entry.extent).collect(),
+        axes.iter().map(|entry| entry.stride).collect(),
+        merged,
+    ))
+}
+
 /// The axis order in which a destination region is one compact span at its allocation's base,
 /// or `None` when no order is.
 ///
@@ -6274,7 +6496,20 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             .map(|input| self.read_region(input, op))
             .collect::<crate::Result<_>>()?;
         let kernel = kernel_dtype(dtype, op)?;
-        if rank > t4a_cuda_kernels::MAX_RANK {
+        let out_strides = catalogue_strides(&compact_strides(&out_shape, op)?, op)?;
+        // Each input is a copy into its slab of the compact output, so the axes its region and
+        // the slab advance through together are merged before the entry is chosen (#2708): the
+        // axes before the concatenated one merge with it, and the axes after it with each other.
+        // A compact input of any rank is then a strided copy of rank two at most (rank one when
+        // nothing follows the concatenated axis).
+        let views: Vec<(Vec<i64>, Vec<i64>, Vec<i64>)> = regions
+            .iter()
+            .map(|region| coalesce_strided_pair(&region.extents, &region.strides, &out_strides))
+            .collect();
+        if views
+            .iter()
+            .any(|(extents, _, _)| extents.len() > t4a_cuda_kernels::MAX_RANK)
+        {
             // ponytail: ceiling = the catalogue's by-value layout rank. The general path needs a
             // compact source per input, so each validated region is staged first.
             let mut staged = Vec::with_capacity(inputs.len());
@@ -6285,14 +6520,13 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
             return self.concatenate_wide(&refs, &out_shape, axis, dtype, kernel, op);
         }
         let output = alloc_tensor(self.runtime(), dtype, &out_shape)?;
-        let out_strides = catalogue_strides(&compact_strides(&out_shape, op)?, op)?;
         let out_len = count_i64(&out_shape, op)?;
         // Each input is copied straight from its own region into the output's slab for that
         // input: the destination is the output's compact strides over the input's extents, at the
-        // running offset along the concatenated axis.
+        // running offset along the concatenated axis, both read through the merged view.
         let mut dispatcher = self.dispatcher(&[Entry::StridedToStrided])?;
         let mut offset = 0usize;
-        for region in &regions {
+        for (region, (extents, in_strides, slab_strides)) in regions.iter().zip(&views) {
             let axis_offset = out_strides[axis]
                 .checked_mul(i64::try_from(offset).map_err(|_| {
                     crate::Error::invalid_argument(
@@ -6308,9 +6542,10 @@ impl tenferro_tensor::TensorIndexing for CudaEngine {
                         "the concatenation offset overflows",
                     )
                 })?;
-            let slab = Layout::new(&region.extents, &out_strides, axis_offset)
+            let slab = Layout::new(extents, slab_strides, axis_offset)
                 .map_err(|error| crate::Error::runtime_state_source(op, error))?;
-            let in_layout = region.layout(op)?;
+            let in_layout = Layout::new(extents, in_strides, region.offset)
+                .map_err(|error| crate::Error::runtime_state_source(op, error))?;
             let in_len = region.len(op)?;
             with_scalar!(dtype, |T| {
                 dispatcher.strided_to_strided(
@@ -7413,8 +7648,42 @@ impl tenferro_tensor::Engine for CudaEngine {
         }
         let plan = gather_plan(config, operand_rank);
         let out_shape = gather_shape(indices_shape, &plan, config)?;
-        if operand_shape.len() > t4a_cuda_kernels::MAX_RANK
-            || out_shape.len() > t4a_cuda_kernels::MAX_RANK
+        // The operand axes the gather reads as one run are merged before the entry is chosen, as
+        // the copy path does: the merged view names the same elements in the same output order,
+        // so a compact operand of any rank whose free window axes merge reaches the by-value
+        // entry with only the axes it has to decode (#2708). The output tensor keeps the
+        // configuration's own shape; only the launch sees the merged extents.
+        let merged = if out_shape.contains(&0) {
+            None
+        } else {
+            coalesce_gather_view(&region.extents, &region.strides, config)
+        };
+        let (launch_extents, launch_strides, launch_plan, launch_out_shape) = match merged {
+            Some((extents, strides, merged_config)) => {
+                let rank = u32::try_from(extents.len())
+                    .map_err(|_| crate::Error::unsupported(OP, "the rank exceeds the ABI's int"))?;
+                let merged_plan = gather_plan(&merged_config, rank);
+                let merged_out = gather_shape(indices_shape, &merged_plan, &merged_config)?;
+                // Drops remove extent-one axes and merges fold an extent into the run's head, so
+                // the output holds as many elements as before. The planner's span check alone
+                // would accept a smaller merged output and leave the rest of it unwritten.
+                if merged_out.iter().product::<usize>() != out_shape.iter().product::<usize>() {
+                    return Err(crate::Error::runtime_state(
+                        OP,
+                        "the merged gather view names a different element count",
+                    ));
+                }
+                (extents, strides, merged_plan, merged_out)
+            }
+            None => (
+                region.extents.clone(),
+                region.strides.clone(),
+                plan.clone(),
+                out_shape.clone(),
+            ),
+        };
+        if launch_extents.len() > t4a_cuda_kernels::MAX_RANK
+            || launch_out_shape.len() > t4a_cuda_kernels::MAX_RANK
             || indices_shape.len() > t4a_cuda_kernels::MAX_RANK
         {
             // ponytail: ceiling = the catalogue's by-value layout rank. A wider operand keeps
@@ -7446,11 +7715,13 @@ impl tenferro_tensor::Engine for CudaEngine {
         // The three by-value layouts and the plan are validated before the index operand is
         // resolved, the exactness check is launched or the output is allocated, so a refused
         // configuration costs one error and nothing else. The launch uses this same plan.
-        let out_extents = catalogue_extents(&out_shape, OP)?;
+        let out_extents = catalogue_extents(&launch_out_shape, OP)?;
         let out_layout = Layout::compact(&out_extents)
             .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
         let out_len = count_i64(&out_shape, OP)?;
-        let operand_layout = region.layout(OP)?;
+        let operand_layout = Layout::new(&launch_extents, &launch_strides, region.offset)
+            .map_err(|error| crate::Error::runtime_state_source(OP, error))?;
+        let plan = launch_plan;
         // The planner bounds the operand layout's reachable span by its whole allocation, which
         // is what a region view of a larger buffer needs.
         let operand_len = region.len(OP)?;

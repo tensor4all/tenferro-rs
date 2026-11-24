@@ -27,6 +27,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`tenferro-random-core`, the reference for random numbers (#2714, step 1).**
+  A new dependency-free crate with the `CounterRng` trait, the
+  `philox4x32-10` (default) and `threefry2x32-20` algorithms, key seed, split
+  and fold-in, and the per-element sample transforms (raw bits, uniform,
+  uniform range, complex uniform, Box–Muller normal and complex normal,
+  integers by 64-bit multiply) with its own `log` and `sincospi`, so samples are
+  bit-identical across backends. No random tensor operation uses it yet.
 - **Filled constants on every layer (#2642).** `zeros(dtype, shape)`,
   `ones(dtype, shape)` and `full(dtype, shape, value)` on `Tensor`,
   `TraceContext` and `EagerSession`. The traced form is a rank-0 graph constant

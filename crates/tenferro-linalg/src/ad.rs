@@ -607,46 +607,49 @@ mod tests {
     }
 
     #[test]
-    fn full_piv_lu_jvp_refuses_non_square_concrete_input() {
-        let mut builder = GraphBuilder::<StdTensorOp>::new();
-        let mut ctx = ShapeGuardContext::default();
-        let primal = input_key(1);
-        insert_meta(&mut ctx, primal.clone(), &[2, 3]);
-        let tangent = builder.add_input(TensorInputKey::User { id: 2 });
-        let outputs = [
-            input_key(10),
-            input_key(11),
-            input_key(12),
-            input_key(13),
-            input_key(14),
-        ];
+    fn full_piv_lu_jvp_differentiates_rectangular_concrete_input() {
         let op = LinalgExtensionOp::new(LinalgOp::FullPivLu);
+        for (m, n) in [(2_usize, 3_usize), (3, 2), (3, 3)] {
+            let k = m.min(n);
+            let mut builder = GraphBuilder::<StdTensorOp>::new();
+            let mut ctx = ShapeGuardContext::default();
+            let primal = input_key(1);
+            let outputs = [
+                input_key(10),
+                input_key(11),
+                input_key(12),
+                input_key(13),
+                input_key(14),
+            ];
+            insert_typed_meta(&mut ctx, primal.clone(), DType::F64, &[m, n]);
+            for (key, shape) in
+                outputs
+                    .iter()
+                    .zip([vec![m, m], vec![m, k], vec![k, n], vec![n, n], vec![]])
+            {
+                insert_typed_meta(&mut ctx, key.clone(), DType::F64, &shape);
+            }
+            let mut ctx = with_active_values(ctx, [outputs[1].clone(), outputs[2].clone()]);
+            let tangent = builder.add_input(TensorInputKey::User { id: 2 });
 
-        let error = LinalgAdRule
-            .linearize(
-                &op,
-                &mut builder,
-                &[primal],
-                &outputs,
-                &[Some(tangent)],
-                &mut ctx,
-            )
-            .unwrap_err();
+            let result = LinalgAdRule
+                .linearize(
+                    &op,
+                    &mut builder,
+                    &[primal],
+                    &outputs,
+                    &[Some(tangent)],
+                    &mut ctx,
+                )
+                .unwrap_or_else(|error| panic!("{m} x {n}: {error:?}"));
 
-        // A rectangular input is refused, not answered with five inactive outputs: a caller that
-        // reads the silence as "no derivative" would use a wrong result.
-        assert!(
-            matches!(
-                error,
-                ADRuleError::InvalidInput {
-                    rule: ADRuleKind::Jvp,
-                    ref message,
-                    ..
-                } if message.contains("square") && message.contains("2 x 3")
-            ),
-            "expected a square-only refusal, got {error:?}"
-        );
-        assert!(builder.build().operations().is_empty());
+            // Only `L` and `U` carry tangents; `P`, `Q` and the parity are locally constant.
+            assert_eq!(
+                result.iter().map(Option::is_some).collect::<Vec<_>>(),
+                vec![false, true, true, false, false],
+                "{m} x {n}"
+            );
+        }
     }
 
     #[test]
@@ -2032,6 +2035,7 @@ mod tests {
 
         let cases = [
             ("lu", LinalgOp::Lu, vec![1, 2]),
+            ("full_piv_lu", LinalgOp::FullPivLu, vec![1, 2]),
             (
                 "qr",
                 LinalgOp::Qr {
@@ -2143,6 +2147,37 @@ mod tests {
                 .unwrap_or_else(|error| {
                     panic!("{name} {rows}x{cols} symbolic JVP execution: {error}")
                 });
+                // The symbolic JVP itself, against central finite differences of the primal.
+                let step = 1.0e-6;
+                let shifted = |sign: f64| {
+                    let data: Vec<f64> = matrix
+                        .as_slice::<f64>()
+                        .unwrap()
+                        .iter()
+                        .zip(tangent.as_slice::<f64>().unwrap())
+                        .map(|(x, t)| x + sign * step * t)
+                        .collect();
+                    let input = Tensor::from_vec_col_major(vec![rows, cols], data).unwrap();
+                    run_compiled_cpu(&runtime, &primal, &[&row_anchor, &col_anchor, &input])
+                        .unwrap()
+                };
+                let (plus, minus) = (shifted(1.0), shifted(-1.0));
+                for (index, output) in tangent_outputs.iter().enumerate() {
+                    let fd = plus[index]
+                        .as_slice::<f64>()
+                        .unwrap()
+                        .iter()
+                        .zip(minus[index].as_slice::<f64>().unwrap())
+                        .map(|(p, m)| (p - m) / (2.0 * step));
+                    for (entry, (actual, expected)) in
+                        output.as_slice::<f64>().unwrap().iter().zip(fd).enumerate()
+                    {
+                        assert!(
+                            (actual - expected).abs() <= 1.0e-6,
+                            "{name} {rows}x{cols} symbolic JVP output {index}[{entry}]: {actual} vs finite difference {expected}"
+                        );
+                    }
+                }
                 let mut vjp_inputs = vec![&row_anchor, &col_anchor, &matrix];
                 vjp_inputs.extend(&cotangents);
                 let input_cotangents = run_compiled_cpu(&runtime, &vjp, &vjp_inputs)
@@ -2615,6 +2650,7 @@ mod tests {
 
         let cases = [
             (LinalgOp::Lu, vec![false, true, true, false]),
+            (LinalgOp::FullPivLu, vec![false, true, true, false, false]),
             (
                 LinalgOp::Svd {
                     derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
@@ -2675,71 +2711,6 @@ mod tests {
                 "{op:?} distinct-symbolic semantic VJP failed: {vjp:?}"
             );
         }
-    }
-
-    #[test]
-    fn semantic_full_piv_lu_rejects_unconstrained_rectangular_symbolic_shape() {
-        use tenferro_ad::semantic_extension::{SemanticAdError, SemanticAdRuleRole};
-        use tenferro_ad::semantic_transform::SemanticAdTransformError;
-        use tenferro_ad::AdContext;
-        use tenferro_ops::dim_expr::DimExpr;
-        use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-
-        let mut builder = SemanticProgramBuilder::new();
-        builder
-            .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))
-            .unwrap();
-        builder
-            .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
-            .unwrap();
-        let matrix = builder
-            .input(ProgramInputSpec::new(
-                DType::F64,
-                [
-                    DimExpr::InputDim {
-                        input_idx: 0,
-                        axis: 0,
-                    },
-                    DimExpr::InputDim {
-                        input_idx: 1,
-                        axis: 0,
-                    },
-                ],
-            ))
-            .unwrap();
-        let outputs = builder
-            .add_extension(
-                Arc::new(LinalgExtensionOp::new(LinalgOp::FullPivLu)),
-                &[matrix],
-            )
-            .unwrap();
-        let source = builder.finish(&[outputs[1], outputs[2]]).unwrap();
-        let ad = AdContext::builder()
-            .with_semantic_extension_rules(semantic_ad_rules().expect("linalg semantic AD rules"))
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let jvp = ad
-            .jvp_program(&source, &[false, false, true])
-            .expect_err("unconstrained symbolic full-pivot LU must not assume a square matrix");
-        let SemanticAdTransformError::Extension(SemanticAdError::Rule {
-            family_id,
-            role,
-            source,
-        }) = jvp
-        else {
-            panic!("expected a typed linalg rule failure, got {jvp:?}");
-        };
-        assert_eq!(family_id, LINALG_EXTENSION_FAMILY_ID);
-        assert_eq!(role, SemanticAdRuleRole::Linearize);
-        assert!(matches!(
-            source.downcast_ref::<ADRuleError>(),
-            Some(ADRuleError::InvalidInput {
-                rule: ADRuleKind::Jvp,
-                ..
-            })
-        ));
     }
 
     #[test]

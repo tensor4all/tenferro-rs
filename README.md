@@ -318,8 +318,10 @@ solves your problem.
 
 The crates `tenferro-tensor-core`, `tenferro-core-ops`,
 `tenferro-cpu-basic`, `tenferro-internal-cpu-kernels`, `tenferro-cpu-fused`,
-`tenferro-internal-ops`, and `tenferro-internal-extension-macros` are published
-building blocks for the crates above; most users never depend on them directly.
+`tenferro-internal-ops`, `tenferro-internal-extension-macros`, and
+`tenferro-random-core` (the dependency-free counter-based random number
+algorithms and sample transforms, #2714) are published building blocks for the
+crates above; most users never depend on them directly.
 The workspace also holds two adapters that are not on crates.io yet:
 `tenferro-mpi` (point-to-point MPI transport for host tensors) and
 `tenferro-hdf5` (HDF5 payloads).
@@ -497,6 +499,20 @@ work, not required.
   [design](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/rocm-backend.md)),
   Intel GPUs, and extending the first Metal slice
   ([design](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/metal-backend.md)).
+
+### Software paper: join as a co-author
+
+We plan to submit a software paper on tenferro at the end of January 2027 (the
+journal is not fixed and acceptance is not guaranteed). People who make a
+substantial contribution to tenferro-rs, its upstream crates (strided,
+tcontract, tlinalg, threadteam, colmat, ...),
+[tenferro-sci-rs](https://github.com/tensor4all/tenferro-sci-rs) or
+[tenferro-examples](https://github.com/tensor4all/tenferro-examples) can join
+the author list. The criteria and how to apply are in
+[tensor4all/tenferro-paper](https://github.com/tensor4all/tenferro-paper)
+([AUTHORS-NOTES.md](https://github.com/tensor4all/tenferro-paper/blob/main/AUTHORS-NOTES.md));
+contributors coordinate in the tenferro Matrix room
+[#tenferro-tensor4all:matrix.org](https://matrix.to/#/#tenferro-tensor4all:matrix.org).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution policy and the
 supported AI-assisted workflows, and [GOVERNANCE.md](GOVERNANCE.md) for

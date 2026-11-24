@@ -181,15 +181,18 @@ diffs, unknown paths, and compiled-code changes use full validation. Pushes to
 present and succeed with an explicit “not required” result when a lane is
 irrelevant.
 
-Maintainers can recover a same-repository PR GPU gate from its PR number:
+An admin or maintainer can run the GPU gate for a same-repository PR after
+reviewing its current head, whatever the PR author's own repository role:
 
 ```bash
-python3 scripts/ci/recover_runpod_pr.py 1379 --wait
+python3 scripts/ci/recover_runpod_pr.py 1379 --approve-head <full head SHA> --wait
 ```
 
 The command always dispatches the secret-bearing workflow from trusted
-`main`. The workflow resolves and rechecks the open PR head itself; do not run
-a PR-branch copy of that workflow with repository secrets. See
+`main`. Dispatching it is the approval to run that commit on RunPod; the
+workflow refuses any other head and rechecks it before provisioning, so a push
+after the review needs a new approval. Do not run a PR-branch copy of that
+workflow with repository secrets. See
 [Change-aware CI and trusted RunPod recovery](docs/design/change-aware-ci.md)
 for the durable design and trust boundaries.
 
