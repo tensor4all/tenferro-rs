@@ -24,6 +24,11 @@
 //! [`Threefry2x32_20`] (`"threefry2x32-20"`) both match the Random123
 //! known-answer vectors, and the Threefry split and fold-in match JAX.
 //!
+//! Each algorithm places the 64-bit block counter `c` in its own counter words,
+//! following its reference: Philox uses `[c & 0xFFFF_FFFF, c >> 32, 0, 0]` (low
+//! word first, words 2 and 3 free for key derivation), Threefry uses
+//! `[c >> 32, c & 0xFFFF_FFFF]` (high word first, as JAX does).
+//!
 //! # Samples
 //!
 //! The **word stream** of a key is the concatenation of its blocks at

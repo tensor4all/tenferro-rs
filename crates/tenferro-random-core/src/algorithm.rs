@@ -6,8 +6,8 @@ use crate::{Philox4x32_10, Threefry2x32_20};
 
 /// The largest [`CounterRng::WORDS_PER_BLOCK`] an algorithm may declare.
 ///
-/// The sample functions keep one block on the stack; an algorithm with a
-/// larger block fails to compile when it is used.
+/// The sample functions keep one block on the stack; using an algorithm with a
+/// larger block in them is a compile-time error.
 ///
 /// # Examples
 ///
