@@ -37,13 +37,13 @@ Template and policy: [`README.md`](README.md).
 ### Before publishing a ratio between two arms, check that both time the same work
 
 - **Applies to:** `benches/` that time derivatives and any number from them
-  quoted in a PR, an issue, or `tenferro-benchmark`. In `linalg_vjp_gate.rs`,
-  `run_vjp` times `clear_grads`, `backward()` and the gradient read, while the
-  forward `loss` is built once in the fixture, outside the timed closure; a
-  comparison arm must make the same split. In `lu_ad_breakdown.rs`,
-  `lu_jvp_sum_lu_outputs` times `s.jvp(..)` of the LU loss and
-  `lu_forward_unpack` times `s.lu(..)` alone; they are components of one
-  breakdown, not two implementations to divide.
+  quoted in a PR, an issue, or `tenferro-benchmark`. In `lu_ad_breakdown.rs`,
+  the `lu_jvp_sum_lu_outputs` arm times `s.jvp(..)` of the LU loss plus
+  `consume_f64` on the result, and `lu_forward_unpack` times `s.lu(..)` plus
+  `consume_many` on four outputs; both consumers enter a serial eager session
+  and `duplicate_value` each output inside the timed closure. The arms are
+  components of one breakdown with different consumption work, not two
+  implementations to divide.
 - **Check:** before quoting "X is N times slower", list what each arm does
   inside the timed closure, call by call, and confirm the lists differ only in
   the thing being compared. A rebuilt return value, a second forward, a

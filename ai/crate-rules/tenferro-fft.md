@@ -14,8 +14,11 @@ Template and policy: [`README.md`](README.md).
   it needs exactly one line in `scripts/ci/cuda_test_partition.tsv`:
   `lane<TAB>binary-id<TAB>test-name`. The binary id is `tenferro-fft` for
   unit tests in `src/` and `tenferro-fft::<file stem>` for
-  `tests/<file stem>.rs`; the lane is `host` for a test that never opens a
-  device. The same holds for the other four crates in that archive, and
+  `tests/<file stem>.rs`. The lane follows what the test needs to run, not
+  only whether it opens a device: `host` only when it needs neither a device
+  nor a CUDA runtime library, so
+  `cuda::tests::ffi::cufft_library_is_loaded_once_per_process`, which only
+  loads cuFFT, is `gpu` (the hosted toolkit install has no cuFFT). The same holds for the other four crates in that archive, and
   `tenferro-xla` tests (`--features pjrt`) go in
   `scripts/ci/pjrt_test_partition.tsv`.
 - **Check:** `scripts/ci/gpu_test_partition.py` compares the archive with the
