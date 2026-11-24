@@ -2191,6 +2191,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "tenferro-random-core"
+version = "0.13.0"
+
+[[package]]
 name = "tenferro-runtime"
 version = "0.13.0"
 dependencies = [

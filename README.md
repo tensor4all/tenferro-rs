@@ -318,8 +318,10 @@ solves your problem.
 
 The crates `tenferro-tensor-core`, `tenferro-core-ops`,
 `tenferro-cpu-basic`, `tenferro-internal-cpu-kernels`, `tenferro-cpu-fused`,
-`tenferro-internal-ops`, and `tenferro-internal-extension-macros` are published
-building blocks for the crates above; most users never depend on them directly.
+`tenferro-internal-ops`, `tenferro-internal-extension-macros`, and
+`tenferro-random-core` (the dependency-free counter-based random number
+algorithms and sample transforms, #2714) are published building blocks for the
+crates above; most users never depend on them directly.
 The workspace also holds two adapters that are not on crates.io yet:
 `tenferro-mpi` (point-to-point MPI transport for host tensors) and
 `tenferro-hdf5` (HDF5 payloads).
