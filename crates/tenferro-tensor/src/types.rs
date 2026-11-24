@@ -4173,7 +4173,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
         self.slice_view(&slices)
     }
 
-    /// Return a metadata-only dynamic-rank reshape for contiguous column-major views.
+    /// Return a metadata-only dynamic-rank reshape of a column-major view.
     ///
     /// The source does not have to be strictly compact. Every axis with an
     /// extent greater than one must have the column-major stride implied by
@@ -4182,7 +4182,8 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorView<'a, T, R,
     /// `shape` must equal the source element count. The result keeps the
     /// source offset and uses compact column-major strides. This is weaker
     /// than the strict check behind `is_col_major_contiguous` and `as_slice`,
-    /// which keep rejecting such sources.
+    /// which still reject a non-empty source whose length-one axis has a
+    /// stride other than the compact one.
     ///
     /// # Examples
     ///
@@ -5617,7 +5618,7 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
         }
     }
 
-    /// Return a mutable metadata-only dynamic-rank reshape for contiguous views.
+    /// Return a mutable metadata-only dynamic-rank reshape of a column-major view.
     ///
     /// The source does not have to be strictly compact. Every axis with an
     /// extent greater than one must have the column-major stride implied by
@@ -5626,7 +5627,8 @@ impl<'a, T: 'static, R: TensorRank, D: Representation> TypedTensorViewMut<'a, T,
     /// `shape` must equal the source element count. The result keeps the
     /// source offset and uses compact column-major strides. This is weaker
     /// than the strict check behind `is_col_major_contiguous` and `as_slice`,
-    /// which keep rejecting such sources.
+    /// which still reject a non-empty source whose length-one axis has a
+    /// stride other than the compact one.
     ///
     /// # Examples
     ///
@@ -7478,7 +7480,8 @@ impl TensorValue {
     /// `shape` must equal the source element count. The result keeps the
     /// source offset and uses compact column-major strides. This is weaker
     /// than the strict check behind `is_col_major_contiguous` and `as_slice`,
-    /// which keep rejecting such sources.
+    /// which still reject a non-empty source whose length-one axis has a
+    /// stride other than the compact one.
     ///
     /// # Errors
     ///
@@ -7534,7 +7537,8 @@ impl TensorValue {
     /// `shape` must equal the source element count. The result keeps the
     /// source offset and uses compact column-major strides. This is weaker
     /// than the strict check behind `is_col_major_contiguous` and `as_slice`,
-    /// which keep rejecting such sources.
+    /// which still reject a non-empty source whose length-one axis has a
+    /// stride other than the compact one.
     ///
     /// # Errors
     ///
