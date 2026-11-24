@@ -66,6 +66,20 @@ rules here. Both rule files are routing input for
 in either, update that script's routed or human-only section lists in the same
 change.
 
+## Crate Rules
+
+Before editing `src/`, `tests/`, or `benches/` of a crate listed here, read its
+file under [`ai/crate-rules/`](ai/crate-rules/README.md). Each entry is seeded
+from a real incident and names the code it applies to and the check that catches
+a violation.
+
+- `tenferro-linalg`: [`ai/crate-rules/tenferro-linalg.md`](ai/crate-rules/tenferro-linalg.md)
+  (scale before multiplying; benchmark arms doing the same work)
+- `tenferro-fft`: [`ai/crate-rules/tenferro-fft.md`](ai/crate-rules/tenferro-fft.md)
+  (new tests need a line in the GPU test partition)
+- `tenferro-ad`: [`ai/crate-rules/tenferro-ad.md`](ai/crate-rules/tenferro-ad.md)
+  (tests assert the changed property where it runs; per-call test counters)
+
 ## Contribution Workflow Assets
 
 Use the repository-local workflows for external-facing issues and PRs:
