@@ -5,20 +5,23 @@ Template and policy: [`README.md`](README.md).
 ### Scale before you multiply when an intermediate can leave the type's range
 
 - **Applies to:** any expression that multiplies, squares, or sums squares of
-  user-derived values before a normalization or a scaling step: vector and
-  column norms, eigenvector normalization, Givens/Householder coefficients,
-  determinant products, condition estimates, and the CPU and GPU kernels under
-  `src/cpu/linalg/` and `src/gpu/linalg/` that form them. Look for `x * x`,
-  `re * re + im * im`, `.powi(2)`, `.product()`, and any `a * b / c` whose
-  operands are not yet scaled. A range check on argument **ratios** does not
-  cover this: equal huge arguments have ratio 1 and still overflow.
+  user-derived values before a normalization or scaling step. In this crate:
+  eigenvector normalization in `src/eig_normalize.rs` (already scaled, see
+  below), and the pivot searches that compare `norm_sqr()` values in
+  `src/extension.rs` and `src/extension/gauge.rs`, where two entries above
+  about `1.3e154` (`f64`) both square to `inf` and compare equal. `det` is
+  built from `slogdet` (`src/eager_composites.rs`), the log-domain form that
+  avoids a raw diagonal product; keep it that way. `grep -rn 'norm_sqr\|re \* re + im \* im\|powi(2)'`
+  finds the next site. A range check on argument **ratios** does not cover
+  this: equal huge arguments have ratio 1 and still overflow.
 - **Check:** a test at a magnitude where the naive intermediate overflows and
   the true result is finite (`f32` around `1e30`, `f64` around `2^520`), and
   that asserts a finite value against a reference, for example the result at
   `1` rescaled by the known homogeneity degree. The in-crate pattern to copy is
   `src/eig_normalize.rs`: the column is divided by its largest component before
-  squaring (the comment at line 95), and
-  `a_huge_f32_column_does_not_square_to_infinity` (line 172) is the test.
+  squaring ("Scaling by the largest component first keeps every squared term
+  in [0, 1]"), and its test `a_huge_f32_column_does_not_square_to_infinity`
+  is the check.
   Review question: "which intermediate here is the largest, and can it exceed
   `MAX` when every input is in range?"
 - **Incident:**
@@ -38,9 +41,9 @@ Template and policy: [`README.md`](README.md).
   `run_vjp` times `clear_grads`, `backward()` and the gradient read, while the
   forward `loss` is built once in the fixture, outside the timed closure; a
   comparison arm must make the same split. In `lu_ad_breakdown.rs`,
-  `lu_jvp_sum_lu_outputs` contains a forward LU and `lu_forward_unpack` is that
-  forward alone, so they are components of one breakdown, not two
-  implementations to divide.
+  `lu_jvp_sum_lu_outputs` times `s.jvp(..)` of the LU loss and
+  `lu_forward_unpack` times `s.lu(..)` alone; they are components of one
+  breakdown, not two implementations to divide.
 - **Check:** before quoting "X is N times slower", list what each arm does
   inside the timed closure, call by call, and confirm the lists differ only in
   the thing being compared. A rebuilt return value, a second forward, a

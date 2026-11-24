@@ -28,4 +28,6 @@ optional sibling checkout fallback documented in `AGENTS.md`.
 - Do not add agent asset lockfiles or sync manifests for external templates.
 - Keep durable tenferro-specific policy in `REPOSITORY_RULES.md` and
   performance contracts in `PERFORMANCE_TIPS.md`.
+  The exception is `crate-rules/`: incident-seeded rules scoped to one crate,
+  each naming its code and its check.
 - Keep contribution policy in `CONTRIBUTING.md`; keep workflow mechanics here.

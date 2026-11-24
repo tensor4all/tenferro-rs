@@ -12,12 +12,15 @@ Template and policy: [`README.md`](README.md).
 - **Check:** two review questions, each answered from the code, not the test
   name. (1) For every case in the test, does the gate let the new path run?
   Read the gate's condition and make the test fail if the path did not run
-  (see the next entry for how to count that). (2) Is the asserted property one
-  the code has on every host and run? Bit identity holds only between two
-  computations with the same summation order; a comparison of a threaded path
-  with a sequential one, or of two thread counts, needs a tolerance, not
-  `to_bits()`. Run the test several times and with `--test-threads=1` before
-  trusting it.
+  (see the next entry for how to count that). (2) Is the asserted property
+  one the code has on every host and run? In tenferro, bitwise equality is
+  promised at a fixed thread count only, never across thread counts
+  (`docs/spec/reproducibility.md`, restated in `PERFORMANCE_TIPS.md`).
+  Comparing `to_bits()` of a threaded path with the serial path, or of two
+  thread counts, asserts a property the code does not have; use a tolerance
+  with a reported residual there, and keep `to_bits()` for two paths at one
+  thread count with the same reduction order. Run the test several times and
+  with `--test-threads=1` before trusting it.
 - **Incident:**
   [colmat-rs#244](https://github.com/tensor4all/colmat-rs/pull/244) -- a
   bit-identity test compared the team (parallel) LU with `Par::Seq`. The cell
@@ -32,9 +35,9 @@ Template and policy: [`README.md`](README.md).
 ### A counter a test asserts belongs to the call, not to the process
 
 - **Applies to:** any "did the path run" or "how many times" check in tests:
-  `static` atomics, thread-locals, and global stats. `src/eager.rs:86` defines
-  a `#[cfg(test)] static EAGER_SEMANTIC_VJP_EXECUTIONS: AtomicUsize`,
-  incremented at `src/eager.rs:4835`; nothing asserts on it today, and a new
+  `static` atomics, thread-locals, and global stats. `src/eager.rs` defines
+  a `#[cfg(test)] static EAGER_SEMANTIC_VJP_EXECUTIONS: AtomicUsize`, which the
+  semantic VJP path increments; nothing asserts on it today, and a new
   assertion must not start doing so.
 - **Check:** `cargo test` runs the tests of one binary on concurrent threads, so
   another test can move a process-global counter. Use a counter owned by the

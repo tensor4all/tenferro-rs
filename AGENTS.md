@@ -58,7 +58,9 @@ asynchronous device retirement, or numerical execution.
 
 Cross-repository rules live in `tensor4all-agent-rules`; do not vendor a copy.
 Tenferro-specific durable rules live in `REPOSITORY_RULES.md`; performance,
-layout, cache, threading, and Faer contracts live in `PERFORMANCE_TIPS.md`.
+layout, cache, threading, and Faer contracts live in `PERFORMANCE_TIPS.md`;
+incident-seeded rules scoped to one crate live in `ai/crate-rules/` (see
+`## Crate Rules`).
 This file is the entry point and orientation; do not duplicate the detailed
 performance, layout, CPU kernel, slicing, cache, threading, or GPU backend
 rules here. Both rule files are routing input for
