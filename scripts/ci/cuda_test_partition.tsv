@@ -993,6 +993,7 @@ host	tenferro-fft::cpu_reuse	explicit_reclaim_to_another_backend_does_not_also_r
 host	tenferro-fft::cpu_reuse	output_drop_recycles_while_session_remains_active
 host	tenferro-fft::cpu_reuse	parallel_lanes_match_serial_on_every_axis_with_padding_and_truncation
 host	tenferro-fft::cpu_reuse	uneven_parallel_lane_partition_matches_serial
+host	tenferro-fft::cpu_reuse	unrecognized_fft_provider_is_an_error
 gpu	tenferro-fft::cuda_fft	cache::cuda_cufft_drop_and_reallocate_after_vendor_barrier_is_safe
 gpu	tenferro-fft::cuda_fft	cache::cuda_engine_cache_clear_and_eviction_are_safe_after_launch
 gpu	tenferro-fft::cuda_fft	cache::cuda_engine_cache_limit_reduction_evicts_and_preserves_results
