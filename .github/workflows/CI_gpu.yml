@@ -1,15 +1,14 @@
 name: CI_gpu
 
-# Retired from automatic same-repo PR gating by issue #1341. RunPod now owns the
-# branch-protection-required `CI GPU gate` check for eligible maintainer PRs.
-# Keep this workflow as the PR-attached `CI GPU gate` wrapper: same-repo PRs wait
-# for the trusted RunPod check published by `runpod-gpu-test.yml`, while fork PRs
-# use the legacy `ubuntu-gpu` path because base-repo Checks API writes cannot
-# attach `CI GPU gate` to fork commits. It also remains a manual legacy fallback
-# for comparing the org larger GPU runner with RunPod while the migration
-# settles.
-# Maintainers should recover a same-repository PR through the trusted RunPod
-# workflow with `python3 scripts/ci/recover_runpod_pr.py PR_NUMBER --wait`.
+# Retired from automatic GPU execution by issue #1341. RunPod owns the GPU lane.
+# Keep this workflow as the PR-attached `CI GPU gate` wrapper: a same-repo PR
+# waits for the trusted RunPod check published by `runpod-gpu-test.yml`, and a
+# fork PR waits for a RunPod run that a maintainer approved for its head
+# (`scripts/ci/fork_gpu_gate.py`). The `ubuntu-gpu` jobs remain only as a manual
+# legacy fallback (`workflow_dispatch`); no PR starts them.
+# Maintainers approve a reviewed PR head (same-repository or fork, whatever the
+# author's role) with
+# `python3 scripts/ci/recover_runpod_pr.py PR_NUMBER --approve-head SHA --wait`.
 
 on:
   pull_request:
@@ -45,10 +44,7 @@ env:
 jobs:
   pre-gpu-gate:
     name: Wait for rustfmt and clippy
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name != github.repository)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -155,16 +151,11 @@ jobs:
 
   cuda-archive:
     name: CUDA/PJRT test archive
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name != github.repository)
+    if: github.event_name == 'workflow_dispatch'
     # NOT gated on pre-gpu-gate: this build runs on a cheap non-GPU runner, so
     # it compiles in parallel with the non-GPU CI + repository review to keep it
     # off the critical path. The expensive GPU runner is still gated -- `cuda-run`
-    # needs [pre-gpu-gate, cuda-archive]. Runs for both fork and same-repo PRs;
-    # the build result (and its cache) is reused even if a prerequisite check
-    # later fails, so the only cost is cheap-runner minutes on doomed PRs.
+    # needs [pre-gpu-gate, cuda-archive]. Manual fallback runs only.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -267,10 +258,7 @@ jobs:
   cuda-run:
     name: CUDA tests (${{ matrix.gpu_vendor }})
     needs: [pre-gpu-gate, cuda-archive]
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' &&
-        github.event.pull_request.head.repo.full_name != github.repository)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-gpu
     timeout-minutes: 45
     strategy:
@@ -605,7 +593,6 @@ jobs:
 
   cuda-gate:
     name: CI GPU gate
-    needs: [cuda-archive, pre-gpu-gate, cuda-run]
     if: >-
       always() &&
       !cancelled() &&
@@ -623,37 +610,20 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.base.sha }}
-          sparse-checkout: scripts/ci/change_policy.py
+          sparse-checkout: |
+            scripts/ci/change_policy.py
+            scripts/ci/fork_gpu_gate.py
           sparse-checkout-cone-mode: false
 
-      - name: Require fork CUDA GPU tests or same-repo RunPod gate
+      - name: Require the RunPod gate (fork PRs after maintainer approval)
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           CURRENT_RUN_MARKER: /actions/runs/${{ github.run_id }}
-          ARCHIVE_RESULT: ${{ needs.cuda-archive.result }}
-          PRE_GPU_RESULT: ${{ needs.pre-gpu-gate.result }}
-          CUDA_RESULT: ${{ needs.cuda-run.result }}
         run: |
           set -euo pipefail
-
-          if [ "${HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]; then
-            if [ "${PRE_GPU_RESULT}" != "success" ]; then
-              echo "Expected pre-gpu-gate to succeed; got pre-gpu-gate=${PRE_GPU_RESULT}"
-              exit 1
-            fi
-            if [ "${ARCHIVE_RESULT}" != "success" ]; then
-              echo "Expected cuda-archive to succeed; got cuda-archive=${ARCHIVE_RESULT}"
-              exit 1
-            fi
-            if [ "${CUDA_RESULT}" = "success" ]; then
-              exit 0
-            fi
-            echo "Expected cuda-run to succeed on ubuntu-gpu; got cuda-run=${CUDA_RESULT}"
-            exit 1
-          fi
 
           # A CI-only diff that touches only the paid lane's host-side half needs
           # no pod: the RunPod workflow publishes "not required" for it. Deciding
@@ -683,6 +653,18 @@ jobs:
           if [ "${run_gpu}" != "true" ]; then
             echo "GPU validation not required for this change (run_gpu=${run_gpu})."
             exit 0
+          fi
+
+          # A fork PR's code reaches RunPod only when a maintainer reviewed this
+          # head and dispatched the trusted RunPod workflow for it. That run
+          # publishes no check on the fork commit; its verdict job is read here
+          # instead, and re-runs this job if it lands after the wait.
+          if [ "${HEAD_REPO}" != "${GITHUB_REPOSITORY}" ]; then
+            exec python3 scripts/ci/fork_gpu_gate.py wait \
+              --repository "${GITHUB_REPOSITORY}" \
+              --pr "${PR_NUMBER}" \
+              --head-sha "${HEAD_SHA}" \
+              --wait-minutes 330
           fi
 
           # A PR labelled gpu-validated-locally takes its verdict from a

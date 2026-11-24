@@ -81,15 +81,16 @@ pub struct Lu<V, R = V> {
     pub parity: R,
 }
 
-/// Full-pivot LU decomposition `P A Q = L U`.
+/// Full-pivot LU decomposition `P A Qᵀ = L U`, equivalently `A = Pᵀ L U Q`.
 ///
-/// Field order equals the former tuple order `(P, L, U, Q, parity)`.
+/// Field order equals the former tuple order `(P, L, U, Q, parity)`. For an `m x n` input
+/// (square or rectangular) with `k = min(m, n)`, each batch item has:
 ///
-/// - `p`: row permutation MATRIX tensor (not a pivot index vector)
-/// - `l`: unit lower-triangular factor
-/// - `u`: upper-triangular factor
-/// - `q`: column permutation matrix tensor
-/// - `parity`: permutation parity
+/// - `p`: `m x m` row permutation MATRIX tensor (not a pivot index vector)
+/// - `l`: `m x k` unit lower-triangular factor
+/// - `u`: `k x n` upper-triangular factor
+/// - `q`: `n x n` column permutation matrix tensor
+/// - `parity`: permutation parity, one scalar per batch item
 ///
 /// # Examples
 ///

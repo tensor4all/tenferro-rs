@@ -13,6 +13,15 @@ workflow definition comes from the default branch (`workflow_run`,
 never eligible, so an attacker cannot smuggle content into the reuse path by
 uploading a name-colliding artifact from a PR.
 
+That premise no longer holds by construction alone. A maintainer-approved fork
+PR (`recover_runpod_pr.py PR --approve-head SHA`) builds the fork's code inside
+a `workflow_dispatch` run of the trusted `runpod-gpu-test.yml` on `main`, so
+that run is an eligible producer while executing reviewed, but untrusted,
+code. Keeping smuggled content out of the reuse path therefore rests on the
+maintainer's review of the approved head (CONTRIBUTING.md, "GPU validation of a
+fork pull request"). The content-hash key still limits reuse to byte-identical
+hashed inputs, so no direct exploit is known.
+
 The content key itself is computed by the trusted workflow from its own
 checkout, so a name match implies the build inputs are identical.
 """

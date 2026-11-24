@@ -27,6 +27,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`tenferro-random-core`, the reference for random numbers (#2714, step 1).**
+  A new dependency-free crate with the `CounterRng` trait, the
+  `philox4x32-10` (default) and `threefry2x32-20` algorithms, key seed, split
+  and fold-in, and the per-element sample transforms (raw bits, uniform,
+  uniform range, complex uniform, Box–Muller normal and complex normal,
+  integers by 64-bit multiply) with its own `log` and `sincospi`, so samples are
+  bit-identical across backends. No random tensor operation uses it yet.
 - **Filled constants on every layer (#2642).** `zeros(dtype, shape)`,
   `ones(dtype, shape)` and `full(dtype, shape, value)` on `Tensor`,
   `TraceContext` and `EagerSession`. The traced form is a rank-0 graph constant
@@ -256,6 +263,18 @@ layer, generated from a per-family registry. The operation list, options,
   transforms previously returned an unsupported-AD-rule error.
 
 ### Changed
+
+- **Extension crates take the AD and CUDA capabilities from the public crates**
+  (#2694). `tenferro-ad` declares an `autodiff` feature — the AD vocabulary its
+  `tenferro-internal-ops` dependency already enables, now also a public name an
+  extension can forward — and its `cuda` feature forwards
+  `tenferro-internal-ops/cuda`. `tenferro-einsum`, `tenferro-fft`,
+  `tenferro-linalg`, `ext/sparse` and `ext/tropical` declare
+  `autodiff = ["tenferro-ad/autodiff"]` instead of
+  `tenferro-internal-ops/autodiff`, and the CUDA families drop their inert
+  `tenferro-internal-ops/cuda` forward. What is compiled is unchanged: no
+  extension gains or loses a code gate, and each crate's declared feature list
+  and its resolved `cargo tree -e features` output are unchanged.
 
 - **`CpuEngine`'s engine-wide cache controls cover its extension cache store**
   (#2587). `runtime_cache_stats` adds the store's entries and retained bytes to

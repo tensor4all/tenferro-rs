@@ -13,7 +13,8 @@ use tenferro_cpu::with_cpu_engine;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::cuda::raw::with_cuda_engine;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, Engine, Tensor, TensorRead, TensorScalar, TensorWrite,
+    CompareDir, ContractionScalar, DType, DotGeneralConfig, Engine, ScalarBinaryOp,
+    ScalarOperandSide, Tensor, TensorRead, TensorScalar, TensorWrite,
 };
 
 use crate::extension::{EighOptions, QrOptions, SvdOptions};
@@ -1142,6 +1143,17 @@ fn empty_square_slogdet<B: LinalgBackend + ?Sized>(
     Ok((sign, logabsdet))
 }
 
+/// The host scalar `value` of a float or complex `dtype`, as [`scalar_real`] converts it.
+fn host_scalar(dtype: DType, value: f64) -> tenferro_tensor::Result<ContractionScalar> {
+    match dtype {
+        DType::F32 => Ok(ContractionScalar::F32(value as f32)),
+        DType::F64 => Ok(ContractionScalar::F64(value)),
+        DType::C32 => Ok(ContractionScalar::C32(Complex32::new(value as f32, 0.0))),
+        DType::C64 => Ok(ContractionScalar::C64(Complex64::new(value, 0.0))),
+        _ => Err(crate::error::unsupported_dtype("linalg_scalar", dtype)),
+    }
+}
+
 fn scalar_real(dtype: DType, value: f64) -> tenferro_tensor::Result<Tensor> {
     match dtype {
         DType::F32 => Tensor::from_vec_col_major(vec![], vec![value as f32]),
@@ -1190,8 +1202,8 @@ fn eye_like<B: LinalgBackend + ?Sized>(
     }
     let mut diagonal_shape = vec![shape[0]];
     diagonal_shape.extend_from_slice(&shape[2..]);
-    let scalar = resident(scalar_real(dtype, 1.0)?, backend)?;
-    let diagonal = broadcast(&scalar, &diagonal_shape, &[], backend)?;
+    // The ones are filled from a host scalar the engine may keep resident (#2701).
+    let diagonal = backend.fill_scalar(&diagonal_shape, host_scalar(dtype, 1.0)?)?;
     backend.embed_diagonal(&diagonal, 0, 1)
 }
 
@@ -1232,8 +1244,14 @@ fn pinv_from_svd<B: LinalgBackend + ?Sized>(
 ) -> tenferro_tensor::Result<Tensor> {
     let abs_s = backend.abs_read(TensorRead::from_tensor(&s))?;
     let s_max = reduce_max(&abs_s, &[0], backend)?;
-    let threshold_scalar = resident(scalar_real(abs_s.dtype(), rtol.max(0.0))?, backend)?;
-    let threshold = binary_mul(&s_max, &threshold_scalar, backend)?;
+    // `s_max * rtol` with `rtol` a host scalar, so a device engine that keeps its scalars
+    // resident does not upload it per call (#2701).
+    let threshold = backend.binary_scalar_read(
+        ScalarBinaryOp::Multiply,
+        TensorRead::from_tensor(&s_max),
+        host_scalar(abs_s.dtype(), rtol.max(0.0))?,
+        ScalarOperandSide::Right,
+    )?;
     let threshold = broadcast_batch_scalar_to_leading_axis(&threshold, s.shape(), backend)?;
     let mask = {
         let mask = backend.compare_read(
@@ -1270,8 +1288,7 @@ fn ones_like<B: LinalgBackend + ?Sized>(
     input: &Tensor,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let one = resident(scalar_real(input.dtype(), 1.0)?, backend)?;
-    broadcast(&one, input.shape(), &[], backend)
+    backend.fill_scalar(input.shape(), host_scalar(input.dtype(), 1.0)?)
 }
 
 fn binary_add<B: LinalgBackend + ?Sized>(
@@ -1489,8 +1506,7 @@ fn count_nonzero<B: LinalgBackend + ?Sized>(
     axes: &[usize],
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let zero = resident(scalar_real(abs.dtype(), 0.0)?, backend)?;
-    let zero = broadcast(&zero, abs.shape(), &[], backend)?;
+    let zero = backend.fill_scalar(abs.shape(), host_scalar(abs.dtype(), 0.0)?)?;
     // `ord = 0` counts `x != 0` (#2359). Equality with zero, then negated,
     // keeps NaN entries in the count: IEEE 754 makes `NaN > 0` false while
     // `NaN != 0` is true, so the former `Gt` mask dropped them.

@@ -9,17 +9,18 @@ use tenferro_ops::broadcast::{broadcast_error_to_validation, broadcast_shape, br
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{
     ActivationOp, CompareDir, DType, DotGeneralConfig, Engine, Error, GatherConfig, PadConfig,
-    Result, ScatterConfig, SliceConfig, Tensor, TensorRead, TensorWrite,
+    Result, ScalarBinaryOp, ScalarOperandSide, ScatterConfig, SliceConfig, Tensor, TensorRead,
+    TensorWrite,
 };
 
 use crate::composite;
-use crate::composite::session::run_session_composite;
+use crate::composite::session::{run_session_composite, SessionValue};
 use crate::typed_tensor::{broadcast_to_in_read, ReadInput};
 
 type R<'a> = TensorRead<'a>;
 
-fn input(a: R<'_>) -> ReadInput<'_> {
-    ReadInput::Borrowed(a)
+fn input(a: R<'_>) -> SessionValue<'_> {
+    SessionValue::borrowed(a)
 }
 
 fn all_axes(rank: usize, axes: Option<&[usize]>) -> std::borrow::Cow<'_, [usize]> {
@@ -233,12 +234,24 @@ pub(crate) fn cast(a: R<'_>, to: DType, e: &mut dyn Engine) -> Result<Tensor> {
 
 pub(crate) fn scale_real(a: R<'_>, factor: f64, e: &mut dyn Engine) -> Result<Tensor> {
     let scalar = crate::scale::real_scale_scalar(a.dtype(), factor)?;
-    let scalar = e.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
-    mul(a, TensorRead::from_tensor(&scalar), e)
+    scale_by_scalar(a, scalar, e)
 }
 
 pub(crate) fn scale_complex(a: R<'_>, factor: Complex64, e: &mut dyn Engine) -> Result<Tensor> {
     let scalar = crate::scale::complex_scale_scalar(a.dtype(), factor)?;
+    scale_by_scalar(a, scalar, e)
+}
+
+/// `a * scalar` for the rank-0 host `scalar` a scale factor converts to.
+///
+/// A float or complex factor goes to the engine as a host scalar
+/// ([`Engine::binary_scalar_read`]), so a device engine that keeps its scalars
+/// resident does not upload it per call (#2701). An integer or `Bool` factor is
+/// uploaded and multiplied as before.
+fn scale_by_scalar(a: R<'_>, scalar: Tensor, e: &mut dyn Engine) -> Result<Tensor> {
+    if let Some(host) = crate::scale::contraction_scalar(&scalar)? {
+        return e.binary_scalar_read(ScalarBinaryOp::Multiply, a, host, ScalarOperandSide::Right);
+    }
     let scalar = e.upload_host_tensor(TensorRead::from_tensor(&scalar))?;
     mul(a, TensorRead::from_tensor(&scalar), e)
 }
