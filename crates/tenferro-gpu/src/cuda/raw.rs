@@ -210,6 +210,7 @@ impl<'s> Session<'s> {
     /// [`crate::Error::RuntimeState`] when the allocation or the copy is refused.
     #[doc(hidden)]
     pub fn upload_bytes(&self, bytes: &[u8], op: &'static str) -> crate::Result<DeviceBytes<'s>> {
+        self.runtime.note_host_upload();
         let device = self.alloc_bytes(bytes.len(), op)?;
         let owned = bytes.to_vec();
         let source = owned.as_ptr() as usize;

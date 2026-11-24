@@ -291,36 +291,91 @@ fn full_piv_lu_solve_jvp_rejects_non_square_lhs_without_panic() {
     assert_invalid_ad_graph_build(result, "jvp", "tenferro-linalg.full_piv_lu_solve", "square");
 }
 
+/// `sum(W_L ∘ L) + sum(W_U ∘ U)` with fixed position weights, so every entry of both factors
+/// contributes with a different coefficient.
+fn weighted_full_piv_lu_loss(a: &TracedTensor, m: usize, n: usize) -> TracedTensor {
+    let k = m.min(n);
+    let weights = |rows: usize, cols: usize, offset: f64| {
+        let data = (0..rows * cols)
+            .map(|i| offset + 0.37 * i as f64 - 0.11 * (i * i) as f64)
+            .collect();
+        a.context()
+            .from_tensor_concrete_shape(f64_tensor(vec![rows, cols], data))
+            .unwrap()
+    };
+    let FullPivLu { l, u, .. } = a.full_piv_lu().unwrap();
+    let l_term = reduce_all(&(&l * &weights(m, k, 0.5)).unwrap());
+    let u_term = reduce_all(&(&u * &weights(k, n, -0.25)).unwrap());
+    (&l_term + &u_term).unwrap()
+}
+
 #[test]
-fn full_piv_lu_ad_refuses_a_rectangular_input() {
-    // The differentiation rule covers the square factorization only; a rectangular input must be
-    // refused instead of left inactive, so a caller never reads the refusal as "no derivative".
+fn full_piv_lu_ad_matches_finite_differences_on_rectangular_inputs() {
+    // Distinct entry magnitudes keep both permutations fixed under the finite-difference step.
+    let cases: [(usize, usize, Vec<f64>, Vec<f64>); 2] = [
+        (
+            4,
+            3,
+            vec![
+                1.0, 2.5, -1.25, 0.5, 3.0, -0.75, 2.0, 1.5, -2.0, 4.0, 0.25, 7.0,
+            ],
+            vec![
+                0.3, -0.1, 0.2, 0.05, -0.4, 0.1, 0.15, -0.2, 0.25, 0.1, -0.3, 0.2,
+            ],
+        ),
+        (
+            2,
+            4,
+            vec![1.0, 2.5, -3.0, 0.5, 4.0, -1.25, 0.75, 9.0],
+            vec![0.2, -0.3, 0.1, 0.4, -0.15, 0.25, -0.05, 0.3],
+        ),
+    ];
     let ad = ad_context();
-    let trace = TraceContext::new();
-    let a = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 3], vec![1.0, 0.0, 0.0, 2.0, 0.0, 1.0]))
-        .unwrap();
-    let da = trace
-        .from_tensor_concrete_shape(f64_tensor(vec![2, 3], vec![0.1, 0.0, 0.0, 0.0, 0.1, 0.0]))
-        .unwrap();
-    let FullPivLu { l, .. } = a.full_piv_lu().unwrap();
-    let loss = reduce_all(&l);
+    for (m, n, data, tangent) in cases {
+        let trace = TraceContext::new();
+        let a = trace
+            .from_tensor_concrete_shape(f64_tensor(vec![m, n], data.clone()))
+            .unwrap();
+        let da = trace
+            .from_tensor_concrete_shape(f64_tensor(vec![m, n], tangent.clone()))
+            .unwrap();
+        let loss = weighted_full_piv_lu_loss(&a, m, n);
+        let jvp = ad.jvp(&loss, &a, &da).unwrap();
+        let grad = ad.grad(&loss, &a).unwrap();
+        let results = eval_many(&[&jvp, &grad]);
 
-    let jvp = catch_unwind(AssertUnwindSafe(|| ad.jvp(&loss, &a, &da)));
-    assert_invalid_ad_graph_build(
-        jvp,
-        "jvp",
-        "tenferro-linalg.linearize_full_piv_lu",
-        "square",
-    );
-
-    let grad = catch_unwind(AssertUnwindSafe(|| ad.grad(&loss, &a)));
-    assert_invalid_ad_graph_build(
-        grad,
-        "grad",
-        "tenferro-linalg.linearize_full_piv_lu",
-        "square",
-    );
+        let expected = finite_diff_directional_scalar(
+            |xs| {
+                let input = trace
+                    .from_tensor_concrete_shape(f64_tensor(vec![m, n], xs.to_vec()))
+                    .unwrap();
+                get_f64_data(&eval(&weighted_full_piv_lu_loss(&input, m, n)))[0]
+            },
+            &data,
+            &tangent,
+            1.0e-6,
+        );
+        let name = format!("{m} x {n}");
+        assert_close_scalar(
+            &format!("{name} full_piv_lu JVP"),
+            get_f64_data(&results[0])[0],
+            expected,
+            1.0e-5,
+        );
+        // The reverse rule is the transpose of the same linear map: <grad, dA> = JVP.
+        assert_eq!(results[1].shape(), &[m, n]);
+        let grad_dot: f64 = get_f64_data(&results[1])
+            .iter()
+            .zip(&tangent)
+            .map(|(g, t)| g * t)
+            .sum();
+        assert_close_scalar(
+            &format!("{name} full_piv_lu grad"),
+            grad_dot,
+            expected,
+            1.0e-5,
+        );
+    }
 }
 
 #[test]

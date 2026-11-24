@@ -16,11 +16,10 @@ pub(crate) fn slogdet(
     if a.shape()[0] == 0 && a.shape()[1] == 0 {
         ensure_float_or_complex("slogdet", a.dtype())?;
         let batch_shape = &a.shape()[2..];
-        let sign_scalar = scalar_real(session, a, 1.0)?;
-        let sign = broadcast_scalar(session, &sign_scalar, batch_shape)?;
-        let log_scalar =
-            session.constant_from_host(scalar_real_tensor(real_values_dtype(a.dtype()), 0.0)?)?;
-        let logabsdet = broadcast_scalar(session, &log_scalar, batch_shape)?;
+        // The results are fresh values of their own: a shared composite constant must never be
+        // returned to the caller, whose gradient or ownership would then alias it.
+        let sign = session.composite_filled(a.dtype(), batch_shape, 1.0)?;
+        let logabsdet = session.composite_filled(real_values_dtype(a.dtype()), batch_shape, 0.0)?;
         return Ok((sign, logabsdet));
     }
     let (_p, _l, u, parity) = session.lu(a)?;
@@ -153,13 +152,12 @@ pub(crate) fn pinv_with_rtol(
     let (u, s, vt) = session.svd(a)?;
     let abs_s = session.abs(&s)?;
     let s_max = session.reduce_max(&abs_s, Some(&[0]))?;
-    let threshold_scalar =
-        session.constant_from_host(scalar_real_tensor(s.dtype(), rtol.max(0.0))?)?;
+    let threshold_scalar = session_scalar(session, s.dtype(), rtol.max(0.0))?;
     let threshold = session.mul(&s_max, &threshold_scalar)?;
     let threshold = broadcast_batch_scalar_to_leading_axis(session, &threshold, s.shape())?;
     let compare = session.compare(&abs_s, &threshold, CompareDir::Gt)?;
     let mask = session.convert(&compare, s.dtype())?;
-    let ones = session.ones(s.dtype(), s.shape())?;
+    let ones = session.composite_filled(s.dtype(), s.shape(), 1.0)?;
     let neg_mask = session.neg(&mask)?;
     let denominator_offset = session.add(&ones, &neg_mask)?;
     let denom = session.add(&s, &denominator_offset)?;
@@ -226,7 +224,21 @@ fn scalar_real(
     anchor: &EagerTensor,
     value: f64,
 ) -> Result<EagerTensor> {
-    session.constant_from_host(scalar_real_tensor(anchor.dtype(), value)?)
+    session_scalar(session, anchor.dtype(), value)
+}
+
+/// The rank-0 constant `value` of `dtype` on this session's engine.
+///
+/// A float or complex constant is the session's shared composite constant, uploaded once
+/// per session while gradient recording is off, so a repeated composite transfers nothing
+/// per call (#2701). Other dtypes keep their own literal conversion and are uploaded.
+fn session_scalar(session: &mut EagerSession<'_>, dtype: DType, value: f64) -> Result<EagerTensor> {
+    match dtype {
+        DType::F32 | DType::F64 | DType::C32 | DType::C64 => {
+            session.composite_constant(dtype, value)
+        }
+        _ => session.constant_from_host(scalar_real_tensor(dtype, value)?),
+    }
 }
 
 fn scalar_real_tensor(dtype: DType, value: f64) -> Result<Tensor> {
@@ -278,19 +290,8 @@ fn eye_like(
 ) -> Result<EagerTensor> {
     let mut vector_shape = vec![size];
     vector_shape.extend_from_slice(&anchor.shape()[2..]);
-    let ones = session.ones(anchor.dtype(), vector_shape)?;
+    let ones = session.composite_filled(anchor.dtype(), &vector_shape, 1.0)?;
     session.embed_diag(&ones, 0, 1)
-}
-
-fn broadcast_scalar(
-    session: &mut EagerSession<'_>,
-    input: &EagerTensor,
-    shape: &[usize],
-) -> Result<EagerTensor> {
-    if input.shape() == shape {
-        return Ok(input.clone());
-    }
-    session.broadcast_in_dim(input, shape, &[])
 }
 
 fn broadcast_batch_scalar_to_leading_axis(
@@ -443,7 +444,7 @@ fn count_nonzero(
     let zero = scalar_real(session, abs, 0.0)?;
     let is_zero = session.compare(abs, &zero, CompareDir::Eq)?;
     let is_zero = session.convert(&is_zero, abs.dtype())?;
-    let ones = session.ones(abs.dtype(), abs.shape())?;
+    let ones = session.composite_filled(abs.dtype(), abs.shape(), 1.0)?;
     let mask = session.sub(&ones, &is_zero)?;
     session.reduce_sum(&mask, Some(&signed(axes)[..]))
 }

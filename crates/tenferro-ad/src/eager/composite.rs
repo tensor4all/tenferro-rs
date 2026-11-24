@@ -4,40 +4,176 @@
 //! The formulation and edge-case policy are shared with the traced and
 //! concrete-session surfaces through `tenferro_runtime::composite`; AD follows
 //! from the recorded primitives.
+//!
+//! An explicit broadcast inside a composite stays lazy ([`EagerValue::Broadcast`]).
+//! When no gradient or semantic recording is needed and the operands live on a
+//! GPU, the elementwise primitive that consumes it reads the base through a
+//! zero-stride view, so the eager `broadcast_in_dim` (which duplicates its base)
+//! does not run per call (#2701). Otherwise the broadcast is recorded as before.
 
+use std::borrow::Cow;
+use std::sync::Arc;
+
+use tenferro_ops::broadcast::broadcast_shapes;
+use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::composite::{
     self, zero_pad_config, CompositeBinary, CompositeOps, CompositeReduce, CompositeUnary,
 };
-use tenferro_tensor::{ActivationOp, CompareDir, DType, GatherConfig, Tensor};
+use tenferro_tensor::{ActivationOp, CompareDir, DType, GatherConfig, Tensor, TensorRead};
 
 use super::{EagerSession, EagerTensor};
 use crate::{Error, Result};
+
+/// A value of the eager composite surface.
+enum EagerValue {
+    /// An eager tensor.
+    Tensor(EagerTensor),
+    /// `base` broadcast into `shape` along `dims`, not yet materialized. A recorded
+    /// consumer materializes it once and every later consumer reuses that tensor, so the
+    /// trace holds one broadcast, as when the composite materialized it eagerly.
+    Broadcast {
+        base: EagerTensor,
+        shape: Vec<usize>,
+        dims: Vec<usize>,
+        materialized: std::cell::OnceCell<EagerTensor>,
+    },
+}
+
+impl From<&EagerTensor> for EagerValue {
+    fn from(tensor: &EagerTensor) -> Self {
+        Self::Tensor(tensor.clone())
+    }
+}
+
+impl EagerValue {
+    fn base(&self) -> &EagerTensor {
+        match self {
+            Self::Tensor(tensor) | Self::Broadcast { base: tensor, .. } => tensor,
+        }
+    }
+
+    fn shape(&self) -> &[usize] {
+        match self {
+            Self::Tensor(tensor) => tensor.shape(),
+            Self::Broadcast { shape, .. } => shape,
+        }
+    }
+
+    /// The value as a read: a broadcast is a zero-stride view of its base.
+    fn read(&self) -> Result<TensorRead<'_>> {
+        match self {
+            Self::Tensor(tensor) => Ok(tensor.tensor_read()),
+            Self::Broadcast {
+                base, shape, dims, ..
+            } => base
+                .tensor_read()
+                .broadcast_in_dim_view(shape, dims)
+                .map_err(Error::TensorRuntime),
+        }
+    }
+}
 
 /// [`CompositeOps`] over a borrowed eager session.
 struct EagerComposite<'s, 'a> {
     session: &'s mut EagerSession<'a>,
 }
 
-impl CompositeOps for EagerComposite<'_, '_> {
-    type Value = EagerTensor;
-    type Error = Error;
-
-    fn dtype(&self, value: &EagerTensor) -> DType {
-        value.dtype()
+impl EagerComposite<'_, '_> {
+    /// The eager tensor of `value`, recording a pending broadcast.
+    fn tensor<'v>(&mut self, value: &'v EagerValue) -> Result<Cow<'v, EagerTensor>> {
+        match value {
+            EagerValue::Tensor(tensor) => Ok(Cow::Borrowed(tensor)),
+            EagerValue::Broadcast {
+                base,
+                shape,
+                dims,
+                materialized,
+            } => {
+                if materialized.get().is_none() {
+                    let tensor = self.session.broadcast_in_dim(base, shape, dims)?;
+                    let _ = materialized.set(tensor);
+                }
+                Ok(Cow::Borrowed(
+                    materialized
+                        .get()
+                        .expect("the broadcast was just materialized"),
+                ))
+            }
+        }
     }
 
-    fn shape(&self, value: &EagerTensor) -> Result<Vec<usize>> {
+    /// The composite's result as an eager tensor.
+    fn finish(&mut self, value: EagerValue) -> Result<EagerTensor> {
+        match value {
+            EagerValue::Tensor(tensor) => Ok(tensor),
+            broadcast => Ok(self.tensor(&broadcast)?.into_owned()),
+        }
+    }
+
+    /// `op` over `values` read through zero-stride views, when a pending broadcast is among them
+    /// and no recording needs the materialized broadcast; `None` otherwise.
+    fn untracked_on_views(
+        &mut self,
+        name: &'static str,
+        values: &[&EagerValue],
+        op: StdTensorOp,
+    ) -> Result<Option<EagerValue>> {
+        if !values
+            .iter()
+            .any(|value| matches!(value, EagerValue::Broadcast { .. }))
+        {
+            return Ok(None);
+        }
+        let bases: Vec<&EagerTensor> = values.iter().map(|value| value.base()).collect();
+        if !crate::eager_ops::broadcast_views_allowed(&bases) {
+            return Ok(None);
+        }
+        for base in &bases {
+            self.session.ensure_runtime(base)?;
+        }
+        let shape = broadcast_shapes(values.iter().map(|value| value.shape())).map_err(|err| {
+            Error::from(tenferro_tensor::Error::validation(
+                name,
+                tenferro_ops::broadcast::broadcast_error_to_validation(err),
+            ))
+        })?;
+        let reads = values
+            .iter()
+            .map(|value| crate::eager_ops::trailing_broadcast_view(value.read()?, &shape))
+            .collect::<Result<Vec<_>>>()?;
+        let out = EagerTensor::untracked_op_on_reads(
+            Arc::clone(&bases[0].ctx),
+            &op,
+            &reads,
+            &mut *self.session.engine,
+        )?;
+        Ok(Some(EagerValue::Tensor(out)))
+    }
+}
+
+impl CompositeOps for EagerComposite<'_, '_> {
+    type Value = EagerValue;
+    type Error = Error;
+
+    fn dtype(&self, value: &EagerValue) -> DType {
+        value.base().dtype()
+    }
+
+    fn shape(&self, value: &EagerValue) -> Result<Vec<usize>> {
         Ok(value.shape().to_vec())
     }
 
-    fn scalar(&mut self, dtype: DType, value: f64) -> Result<EagerTensor> {
-        self.session
-            .constant_from_host(Tensor::full(dtype, [0_usize; 0], value)?)
+    fn scalar(&mut self, dtype: DType, value: f64) -> Result<EagerValue> {
+        Ok(EagerValue::Tensor(self.session.session_constant(
+            Tensor::full(dtype, [0_usize; 0], value)?,
+        )?))
     }
 
-    fn unary(&mut self, op: CompositeUnary, value: &EagerTensor) -> Result<EagerTensor> {
+    fn unary(&mut self, op: CompositeUnary, value: &EagerValue) -> Result<EagerValue> {
+        let value = self.tensor(value)?;
+        let value = value.as_ref();
         let session = &mut *self.session;
-        match op {
+        Ok(EagerValue::Tensor(match op {
             CompositeUnary::Neg => session.neg(value),
             CompositeUnary::Exp => session.exp(value),
             CompositeUnary::Log => session.log(value),
@@ -45,49 +181,87 @@ impl CompositeOps for EagerComposite<'_, '_> {
             CompositeUnary::Tanh => session.tanh(value),
             CompositeUnary::Erf => session.erf(value),
             CompositeUnary::Rsqrt => session.rsqrt(value),
-        }
+        }?))
     }
 
     fn binary(
         &mut self,
         op: CompositeBinary,
-        lhs: &EagerTensor,
-        rhs: &EagerTensor,
-    ) -> Result<EagerTensor> {
+        lhs: &EagerValue,
+        rhs: &EagerValue,
+    ) -> Result<EagerValue> {
+        let (name, std_op) = match op {
+            CompositeBinary::Add => ("add", StdTensorOp::Add),
+            CompositeBinary::Sub => ("sub", StdTensorOp::Sub),
+            CompositeBinary::Mul => ("mul", StdTensorOp::Mul),
+            CompositeBinary::Div => ("div", StdTensorOp::Div),
+            CompositeBinary::Maximum => ("maximum", StdTensorOp::Maximum),
+        };
+        if let Some(out) = self.untracked_on_views(name, &[lhs, rhs], std_op)? {
+            return Ok(out);
+        }
+        let (lhs, rhs) = (self.tensor(lhs)?, self.tensor(rhs)?);
+        let (lhs, rhs) = (lhs.as_ref(), rhs.as_ref());
         let session = &mut *self.session;
-        match op {
+        Ok(EagerValue::Tensor(match op {
             CompositeBinary::Add => session.add(lhs, rhs),
             CompositeBinary::Sub => session.sub(lhs, rhs),
             CompositeBinary::Mul => session.mul(lhs, rhs),
             CompositeBinary::Div => session.div(lhs, rhs),
             CompositeBinary::Maximum => session.maximum(lhs, rhs),
-        }
+        }?))
     }
 
     fn compare(
         &mut self,
-        lhs: &EagerTensor,
-        rhs: &EagerTensor,
+        lhs: &EagerValue,
+        rhs: &EagerValue,
         dir: CompareDir,
-    ) -> Result<EagerTensor> {
-        self.session.compare(lhs, rhs, dir)
+    ) -> Result<EagerValue> {
+        if let Some(out) =
+            self.untracked_on_views("compare", &[lhs, rhs], StdTensorOp::Compare(dir.clone()))?
+        {
+            return Ok(out);
+        }
+        let (lhs, rhs) = (self.tensor(lhs)?, self.tensor(rhs)?);
+        Ok(EagerValue::Tensor(self.session.compare(
+            lhs.as_ref(),
+            rhs.as_ref(),
+            dir,
+        )?))
     }
 
     fn select(
         &mut self,
-        condition: &EagerTensor,
-        on_true: &EagerTensor,
-        on_false: &EagerTensor,
-    ) -> Result<EagerTensor> {
-        self.session.where_select(condition, on_true, on_false)
+        condition: &EagerValue,
+        on_true: &EagerValue,
+        on_false: &EagerValue,
+    ) -> Result<EagerValue> {
+        if let Some(out) = self.untracked_on_views(
+            "where_select",
+            &[condition, on_true, on_false],
+            StdTensorOp::Select,
+        )? {
+            return Ok(out);
+        }
+        let condition = self.tensor(condition)?;
+        let on_true = self.tensor(on_true)?;
+        let on_false = self.tensor(on_false)?;
+        Ok(EagerValue::Tensor(self.session.where_select(
+            condition.as_ref(),
+            on_true.as_ref(),
+            on_false.as_ref(),
+        )?))
     }
 
     fn reduce(
         &mut self,
         op: CompositeReduce,
-        value: &EagerTensor,
+        value: &EagerValue,
         axes: &[usize],
-    ) -> Result<EagerTensor> {
+    ) -> Result<EagerValue> {
+        let value = self.tensor(value)?;
+        let value = value.as_ref();
         // The composites hand over normalized axes; the public methods take
         // signed axes, and a normalized axis round-trips unchanged.
         let axes = axes
@@ -95,48 +269,111 @@ impl CompositeOps for EagerComposite<'_, '_> {
             .map(|&axis| crate::shape_packing::signed_axis(axis))
             .collect::<Result<Vec<_>>>()?;
         let axes = Some(axes.as_slice());
-        match op {
+        Ok(EagerValue::Tensor(match op {
             CompositeReduce::Sum => self.session.reduce_sum(value, axes),
             CompositeReduce::Max => self.session.reduce_max(value, axes),
             CompositeReduce::SumSquares => self.session.reduce_sum_squares(value, axes),
-        }
+        }?))
     }
 
     fn broadcast_in_dim(
         &mut self,
-        value: &EagerTensor,
+        value: &EagerValue,
         shape: &[usize],
         dims: &[usize],
-    ) -> Result<EagerTensor> {
-        self.session.broadcast_in_dim(value, shape, dims)
+    ) -> Result<EagerValue> {
+        let value = self.tensor(value)?;
+        Ok(EagerValue::Tensor(self.session.broadcast_in_dim(
+            value.as_ref(),
+            shape,
+            dims,
+        )?))
     }
 
-    fn reshape(&mut self, value: &EagerTensor, shape: &[usize]) -> Result<EagerTensor> {
-        self.session.reshape(value, shape.to_vec())
+    fn broadcast_in_dim_owned(
+        &mut self,
+        value: EagerValue,
+        shape: &[usize],
+        dims: &[usize],
+    ) -> Result<EagerValue> {
+        match value {
+            // Validate as the eager broadcast would, then keep it pending: the consumer reads the
+            // base through a view or records the broadcast then.
+            EagerValue::Tensor(base) => {
+                if let Some(error) = tenferro_ops::broadcast::broadcast_in_dim_extent_error(
+                    base.shape(),
+                    shape,
+                    dims,
+                ) {
+                    return Err(tenferro_tensor::Error::validation(
+                        "EagerTensor::broadcast_in_dim",
+                        tenferro_ops::broadcast::broadcast_error_to_validation(error),
+                    )
+                    .into());
+                }
+                Ok(EagerValue::Broadcast {
+                    base,
+                    shape: shape.to_vec(),
+                    dims: dims.to_vec(),
+                    materialized: std::cell::OnceCell::new(),
+                })
+            }
+            pending => self.broadcast_in_dim(&pending, shape, dims),
+        }
     }
 
-    fn concatenate(&mut self, values: &[&EagerTensor], axis: usize) -> Result<EagerTensor> {
-        self.session
-            .concatenate(values, crate::shape_packing::signed_axis(axis)?)
+    fn reshape(&mut self, value: &EagerValue, shape: &[usize]) -> Result<EagerValue> {
+        let value = self.tensor(value)?;
+        Ok(EagerValue::Tensor(
+            self.session.reshape(value.as_ref(), shape.to_vec())?,
+        ))
     }
 
-    fn pad(&mut self, value: &EagerTensor, low: &[usize], high: &[usize]) -> Result<EagerTensor> {
-        self.session.pad(value, zero_pad_config(low, high))
+    fn concatenate(&mut self, values: &[&EagerValue], axis: usize) -> Result<EagerValue> {
+        let tensors = values
+            .iter()
+            .map(|value| self.tensor(value).map(Cow::into_owned))
+            .collect::<Result<Vec<_>>>()?;
+        let refs: Vec<&EagerTensor> = tensors.iter().collect();
+        Ok(EagerValue::Tensor(self.session.concatenate(
+            &refs,
+            crate::shape_packing::signed_axis(axis)?,
+        )?))
+    }
+
+    fn pad(&mut self, value: &EagerValue, low: &[usize], high: &[usize]) -> Result<EagerValue> {
+        let value = self.tensor(value)?;
+        Ok(EagerValue::Tensor(
+            self.session
+                .pad(value.as_ref(), zero_pad_config(low, high))?,
+        ))
     }
 
     fn gather(
         &mut self,
-        operand: &EagerTensor,
-        indices: &EagerTensor,
+        operand: &EagerValue,
+        indices: &EagerValue,
         config: GatherConfig,
-    ) -> Result<EagerTensor> {
-        self.session.gather(operand, indices, config)
+    ) -> Result<EagerValue> {
+        let operand = self.tensor(operand)?;
+        let indices = self.tensor(indices)?;
+        Ok(EagerValue::Tensor(self.session.gather(
+            operand.as_ref(),
+            indices.as_ref(),
+            config,
+        )?))
     }
 }
 
 impl<'a> EagerSession<'a> {
-    fn composite(&mut self) -> EagerComposite<'_, 'a> {
-        EagerComposite { session: self }
+    /// Run one shared composite formulation over eager values and return its eager result.
+    fn run_composite(
+        &mut self,
+        f: impl FnOnce(&mut EagerComposite<'_, 'a>) -> Result<EagerValue>,
+    ) -> Result<EagerTensor> {
+        let mut ops = EagerComposite { session: self };
+        let out = f(&mut ops)?;
+        ops.finish(out)
     }
 
     /// Run a fused activation through the backend when no AD record is needed.
@@ -196,7 +433,7 @@ impl<'a> EagerSession<'a> {
         if let Some(out) = self.fused_activation(ActivationOp::Sigmoid, input)? {
             return Ok(out);
         }
-        composite::sigmoid(&mut self.composite(), input)
+        self.run_composite(|ops| composite::sigmoid(ops, &EagerValue::from(input)))
     }
 
     /// SiLU (swish) `x * sigmoid(x)`.
@@ -227,7 +464,7 @@ impl<'a> EagerSession<'a> {
         if let Some(out) = self.fused_activation(ActivationOp::Silu, input)? {
             return Ok(out);
         }
-        composite::silu(&mut self.composite(), input)
+        self.run_composite(|ops| composite::silu(ops, &EagerValue::from(input)))
     }
 
     /// Softplus `log(1 + exp(x))` in the stable form `max(x, 0) + log1p(exp(-|x|))`.
@@ -259,7 +496,7 @@ impl<'a> EagerSession<'a> {
         if let Some(out) = self.fused_activation(ActivationOp::Softplus, input)? {
             return Ok(out);
         }
-        composite::softplus(&mut self.composite(), input)
+        self.run_composite(|ops| composite::softplus(ops, &EagerValue::from(input)))
     }
 
     /// Exact GELU `x/2 * (1 + erf(x / sqrt(2)))` (PyTorch `approximate="none"`).
@@ -290,7 +527,7 @@ impl<'a> EagerSession<'a> {
         if let Some(out) = self.fused_activation(ActivationOp::Gelu, input)? {
             return Ok(out);
         }
-        composite::gelu(&mut self.composite(), input)
+        self.run_composite(|ops| composite::gelu(ops, &EagerValue::from(input)))
     }
 
     /// GELU tanh approximation (PyTorch `approximate="tanh"`).
@@ -321,7 +558,7 @@ impl<'a> EagerSession<'a> {
         if let Some(out) = self.fused_activation(ActivationOp::GeluTanh, input)? {
             return Ok(out);
         }
-        composite::gelu_tanh(&mut self.composite(), input)
+        self.run_composite(|ops| composite::gelu_tanh(ops, &EagerValue::from(input)))
     }
 
     /// Arithmetic mean over `axes` (`None` reduces every axis).
@@ -371,7 +608,7 @@ impl<'a> EagerSession<'a> {
                 axes,
             )?;
         }
-        composite::reduce_mean(&mut self.composite(), input, axes)
+        self.run_composite(|ops| composite::reduce_mean(ops, &EagerValue::from(input), axes))
     }
 
     /// Max-subtracted softmax along `axis`.
@@ -408,7 +645,7 @@ impl<'a> EagerSession<'a> {
         {
             return EagerTensor::new_untracked_result(std::sync::Arc::clone(&input.ctx), output);
         }
-        composite::softmax(&mut self.composite(), input, axis)
+        self.run_composite(|ops| composite::softmax(ops, &EagerValue::from(input), axis))
     }
 
     /// Max-subtracted log-softmax along `axis`.
@@ -439,7 +676,7 @@ impl<'a> EagerSession<'a> {
             axis,
             input.shape().len(),
         )?;
-        composite::log_softmax(&mut self.composite(), input, axis)
+        self.run_composite(|ops| composite::log_softmax(ops, &EagerValue::from(input), axis))
     }
 
     /// Softmax along `axis` over the entries where the `Bool` `mask` is true.
@@ -479,7 +716,9 @@ impl<'a> EagerSession<'a> {
             axis,
             input.shape().len(),
         )?;
-        composite::masked_softmax(&mut self.composite(), input, mask, axis)
+        self.run_composite(|ops| {
+            composite::masked_softmax(ops, &EagerValue::from(input), &EagerValue::from(mask), axis)
+        })
     }
 
     /// Log-softmax along `axis` over the entries where the `Bool` `mask` is true.
@@ -518,7 +757,14 @@ impl<'a> EagerSession<'a> {
             axis,
             input.shape().len(),
         )?;
-        composite::masked_log_softmax(&mut self.composite(), input, mask, axis)
+        self.run_composite(|ops| {
+            composite::masked_log_softmax(
+                ops,
+                &EagerValue::from(input),
+                &EagerValue::from(mask),
+                axis,
+            )
+        })
     }
 
     /// Layer normalization along `axis` with optional affine `weight` / `bias`.
@@ -560,7 +806,17 @@ impl<'a> EagerSession<'a> {
             axis,
             input.shape().len(),
         )?;
-        composite::layer_norm(&mut self.composite(), input, axis, weight, bias, eps)
+        let (weight, bias) = (weight.map(EagerValue::from), bias.map(EagerValue::from));
+        self.run_composite(|ops| {
+            composite::layer_norm(
+                ops,
+                &EagerValue::from(input),
+                axis,
+                weight.as_ref(),
+                bias.as_ref(),
+                eps,
+            )
+        })
     }
 
     /// RMS normalization along `axis` with optional affine `weight` / `bias`.
@@ -601,7 +857,17 @@ impl<'a> EagerSession<'a> {
             axis,
             input.shape().len(),
         )?;
-        composite::rms_norm(&mut self.composite(), input, axis, weight, bias, eps)
+        let (weight, bias) = (weight.map(EagerValue::from), bias.map(EagerValue::from));
+        self.run_composite(|ops| {
+            composite::rms_norm(
+                ops,
+                &EagerValue::from(input),
+                axis,
+                weight.as_ref(),
+                bias.as_ref(),
+                eps,
+            )
+        })
     }
 
     /// NumPy-style `take_along_axis` over `gather`.
@@ -643,6 +909,13 @@ impl<'a> EagerSession<'a> {
             axis,
             input.shape().len(),
         )?;
-        composite::take_along_axis(&mut self.composite(), input, indices, axis)
+        self.run_composite(|ops| {
+            composite::take_along_axis(
+                ops,
+                &EagerValue::from(input),
+                &EagerValue::from(indices),
+                axis,
+            )
+        })
     }
 }

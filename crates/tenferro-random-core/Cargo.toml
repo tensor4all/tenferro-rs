@@ -1,0 +1,22 @@
+[package]
+name = "tenferro-random-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Counter-based random number algorithms (Philox4x32-10, Threefry2x32-20) and bit-reproducible sample transforms for tenferro."
+rust-version.workspace = true
+keywords = ["random", "philox", "threefry", "counter-based", "tensor"]
+categories = ["science", "mathematics", "algorithms"]
+documentation = "https://docs.rs/tenferro-random-core"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
+
+[lib]
+name = "tenferro_random_core"

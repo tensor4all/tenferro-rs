@@ -134,7 +134,7 @@ Partial-pivot LU `a = p l u`; `p` is a permutation matrix and `parity` is the re
 
 ### full_piv_lu
 
-Complete-pivot LU `a = p l u q`; `p` and `q` are permutation matrices and `parity` is the real sign of the permutations.
+Complete-pivot LU `p a qᵀ = l u` (`a = pᵀ l u q`) of an `m x n` matrix, square or rectangular: with `k = min(m, n)`, `p` is the `m x m` and `q` the `n x n` permutation matrix, `l` the unit-lower `m x k` and `u` the upper `k x n` factor, and `parity` the real sign of the permutations.
 
 - Options: none
 - Output: `FullPivLu<V, R>`

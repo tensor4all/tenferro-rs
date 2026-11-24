@@ -144,6 +144,11 @@ pub trait LinalgBackend: Engine {
 
     /// Compute complete-pivot LU outputs `(P, L, U, Q, parity)`.
     ///
+    /// The input is a batch of `m x n` matrices, square or rectangular. With
+    /// `k = min(m, n)`, each item yields the `m x m` row permutation `P`, the
+    /// unit-lower-triangular `m x k` factor `L`, the upper-triangular `k x n`
+    /// factor `U` and the `n x n` column permutation `Q`; batch axes follow.
+    ///
     /// The reconstruction convention is `A = P^T * L * U * Q`, equivalently
     /// `P * A * Q^T = L * U`. `parity` is a scalar real tensor containing
     /// `+1` or `-1`: `F32` for `F32`/`C32` inputs and `F64` for `F64`/`C64`
@@ -151,8 +156,7 @@ pub trait LinalgBackend: Engine {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` for an invalid rank, square-shape
-    /// requirement, or dtype, and `Error::Extension` or a typed backend source
+    /// Returns `Error::Validation` for an invalid rank or dtype, and `Error::Extension` or a typed backend source
     /// when complete-pivot factorization cannot be executed.
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 

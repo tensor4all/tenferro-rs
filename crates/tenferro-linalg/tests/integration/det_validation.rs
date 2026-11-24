@@ -275,7 +275,7 @@ fn symbolic_determinant_records_square_constraint_for_every_output() {
 fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
     let trace = tenferro_runtime::TraceContext::new();
     let mut host = CpuEngine::serial();
-    const OPS: [&str; 10] = [
+    const OPS: [&str; 9] = [
         "inv",
         "eigh",
         "eigvalsh",
@@ -284,7 +284,6 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
         "cholesky",
         "solve",
         "triangular_solve",
-        "full_piv_lu",
         "full_piv_lu_solve",
     ];
     const SHAPES: [&[usize]; 3] = [&[2, 3], &[0, 3], &[2, 3, 0]];
@@ -472,27 +471,6 @@ fn square_only_ops_reject_rectangular_inputs_on_every_surface() {
                                 &TriangularSolveOptions::default().uplo(Uplo::Upper),
                             )
                             .map(|x| vec![x]),
-                    );
-                }
-                "full_piv_lu" => {
-                    assert_error(&label("owned"), a.full_piv_lu(&mut host));
-                    assert_error(
-                        &label("read"),
-                        TensorRead::from_tensor(&a).full_piv_lu(&mut host),
-                    );
-                    assert_error(&label("typed"), typed_a.full_piv_lu(&mut host));
-                    #[cfg(feature = "autodiff")]
-                    assert_error(
-                        &label("eager"),
-                        eager_runtime().with_eager_session(&mut CpuEngine::serial(), |session| {
-                            session.full_piv_lu(&eager_a)
-                        }),
-                    );
-                    assert_traced_error(
-                        &label("traced"),
-                        traced_a
-                            .full_piv_lu()
-                            .map(|r| vec![r.p, r.l, r.u, r.q, r.parity]),
                     );
                 }
                 "full_piv_lu_solve" => {
