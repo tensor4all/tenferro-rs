@@ -440,18 +440,18 @@ impl TraceContext {
             .map(|(frozen, _)| frozen)
     }
 
-    /// Freeze the forward closure with explicit declarations for named inputs.
+    /// Freeze the forward closure with the named inputs first, in the given order.
     ///
-    /// Inputs named here keep the declared dtype and extents instead of the
-    /// traced declaration.
+    /// A named input with a spec keeps the declared dtype and extents instead of
+    /// the traced declaration.
     pub(crate) fn snapshot_with_input_specs(
         &self,
         outputs: &[TraceValue],
-        specs: &[(TensorInputKey, ProgramInputSpec)],
+        specs: &[(TensorInputKey, Option<ProgramInputSpec>)],
     ) -> Result<(FrozenProgram, Vec<(TensorInputKey, TraceValue)>), ProgramFinishError> {
         let inner = self.borrow_mut_for_finish()?;
         let values = program_values(outputs);
-        let declared: Vec<(usize, ProgramInputSpec)> = specs
+        let declared: Vec<(usize, Option<ProgramInputSpec>)> = specs
             .iter()
             .filter_map(|(key, spec)| {
                 inner
@@ -490,27 +490,6 @@ impl TraceContext {
             .builder
             .snapshot_pruned_keeping_leading_inputs(&values, leading)
             .map(|(frozen, _)| frozen)
-    }
-
-    /// Freeze the forward closure and report which context inputs it kept.
-    pub(crate) fn plain_snapshot_with_inputs(
-        &self,
-        outputs: &[TraceValue],
-    ) -> Result<(FrozenProgram, Vec<(TensorInputKey, TraceValue)>), ProgramFinishError> {
-        let inner = self.borrow_mut_for_finish()?;
-        let values = program_values(outputs);
-        let (frozen, kept) = inner.builder.snapshot_pruned(&values)?;
-        let kept = kept
-            .into_iter()
-            .filter_map(|value| {
-                inner
-                    .inputs
-                    .iter()
-                    .find(|input| input.value == value)
-                    .map(|input| (input.key.clone(), TraceValue { value }))
-            })
-            .collect();
-        Ok((frozen, kept))
     }
 
     /// Freeze the AD source and report which context inputs it kept.
@@ -552,7 +531,7 @@ impl TraceContext {
         // The same pruned snapshot `GraphCompiler::compile_many` takes, so a
         // graph compiled from `finish` keeps the kept inputs' keys and order
         // (#2552 S4).
-        let (frozen, kept) = self.plain_snapshot_with_inputs(outputs)?;
+        let (frozen, kept) = self.snapshot_with_input_specs(outputs, &[])?;
         let input_keys = kept.into_iter().map(|(key, _)| key).collect();
         Ok(TracedGraph { frozen, input_keys })
     }
