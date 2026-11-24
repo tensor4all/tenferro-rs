@@ -7465,6 +7465,8 @@ impl TensorValue {
             layout,
         })
     }
+    // INVARIANT: unchanged-owner recovery is part of the consuming view
+    // contract, so this intentionally carries the large move-only error.
 
     /// Return a metadata-only dynamic-rank reshape of this value, handing the
     /// unchanged value back with the error when the reshape is rejected.
@@ -7502,8 +7504,6 @@ impl TensorValue {
     /// assert!(matches!(error, tenferro_tensor::Error::Validation { .. }));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    // INVARIANT: unchanged-owner recovery is part of the consuming view
-    // contract, so this intentionally carries the large move-only error.
     #[allow(clippy::result_large_err)]
     pub fn try_reshape_view(
         self,
