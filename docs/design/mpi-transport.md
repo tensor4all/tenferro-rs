@@ -25,6 +25,11 @@ Version 1, blocking, two ranks per call. Deliberately small:
 Distributed scheduling belongs to the caller (hataori and friends). This crate is
 transport.
 
+The planned native-handle runtime backend, which removes the MPItrampoline path and
+adds a C entry for a host-owned communicator, is designed in
+[mpi-native-abi.md](./mpi-native-abi.md) (#2735). It is not implemented; this note
+still describes the code as it is.
+
 ## Crate layout
 
 `tenferro-mpi` is a workspace member with `default = []`; exactly one of two
