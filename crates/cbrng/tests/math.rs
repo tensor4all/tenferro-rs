@@ -8,8 +8,8 @@
 
 mod common;
 
+use cbrng::{log, sincospi};
 use common::{ulps_f32, ulps_f64};
-use tenferro_random_core::{log, sincospi};
 
 /// (input, frozen output, mpmath rounded once)
 const LOG_F32: [(u32, u32, u32); 11] = [

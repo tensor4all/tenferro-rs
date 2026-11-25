@@ -53,7 +53,7 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not an
 | `tenferro-internal-cpu-kernels` | Internal ordinary dtype-dispatch CPU kernels, pool-aware one-shot read-into replay, and scalar-agnostic caller-destination entry points |
 | `tenferro-internal-ops` | Graph op and shared primitive-rule vocabulary |
 | `tenferro-internal-extension-macros` | Procedural macros for extension-op registration |
-| `tenferro-random-core` | Counter-based random number algorithms (`CounterRng`, Philox4x32-10, Threefry2x32-20), key derivation, and the bit-reproducible sample transforms with their own `log` and `sincospi`; no dependencies |
+| `cbrng` | Counter-based random number algorithms (`CounterRng`, Philox4x32-10, Threefry2x32-20), key derivation, and the bit-reproducible sample transforms with their own `log` and `sincospi`; no dependencies |
 
 The public user-facing crates are `tenferro-tensor-core`, `tenferro-tensor`,
 `tenferro-cpu`, `tenferro-gpu`, `tenferro-runtime`, `tenferro-ad`,
@@ -136,7 +136,7 @@ Internal: tenferro-core-ops
           tenferro-internal-extension-macros
           extension-op registration macros
 
-          tenferro-random-core
+          cbrng
           counter-based random number algorithms and sample transforms
 ```
 

@@ -8,11 +8,11 @@
 
 mod common;
 
-use common::{ulps_f32, ulps_f64};
-use tenferro_random_core::{
+use cbrng::{
     bits, fill_words, integer, normal, normal_complex, uniform, uniform_complex, uniform_range,
     CounterRng, Philox4x32_10, Threefry2x32_20,
 };
+use common::{ulps_f32, ulps_f64};
 
 struct Expected {
     bits: [u32; 8],

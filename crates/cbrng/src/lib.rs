@@ -54,7 +54,7 @@
 //! # Examples
 //!
 //! ```
-//! use tenferro_random_core::{normal, uniform, CounterRng, Philox4x32_10};
+//! use cbrng::{normal, uniform, CounterRng, Philox4x32_10};
 //!
 //! let key = Philox4x32_10::seed(2026);
 //! let mut keys = [[0u32; 2]; 2];

@@ -6,7 +6,7 @@
 //! The split and fold-in values are from `reference/samples.py`, which
 //! implements the layout independently.
 
-use tenferro_random_core::{bits, CounterRng, Philox4x32_10};
+use cbrng::{bits, CounterRng, Philox4x32_10};
 
 #[test]
 fn philox_raw_block_matches_random123_kat_vectors() {

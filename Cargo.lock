@@ -127,6 +127,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
+name = "cbrng"
+version = "0.13.0"
+
+[[package]]
 name = "cc"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2189,10 +2193,6 @@ dependencies = [
  "tenferro-tensor",
  "thiserror 2.0.21",
 ]
-
-[[package]]
-name = "tenferro-random-core"
-version = "0.13.0"
 
 [[package]]
 name = "tenferro-runtime"

@@ -1,8 +1,11 @@
-# Random numbers, step 1: `tenferro-random-core` (#2714)
+# Random numbers, step 1: `cbrng` (#2714)
+
+The crate was introduced as `tenferro-random-core` and renamed to `cbrng` in #2733;
+this record uses the new name.
 
 The design is tensor4all-meta `docs/design/random.md`; this records the choices
 it left open. The frozen sample layout itself is documented in the crate
-(`crates/tenferro-random-core/src/lib.rs`), which every backend follows.
+(`crates/cbrng/src/lib.rs`), which every backend follows.
 
 ## Decisions
 

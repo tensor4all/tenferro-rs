@@ -1,5 +1,5 @@
 [package]
-name = "tenferro-random-core"
+name = "cbrng"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,11 +12,11 @@ description = "Counter-based random number algorithms (Philox4x32-10, Threefry2x
 rust-version.workspace = true
 keywords = ["random", "philox", "threefry", "counter-based", "tensor"]
 categories = ["science", "mathematics", "algorithms"]
-documentation = "https://docs.rs/tenferro-random-core"
+documentation = "https://docs.rs/cbrng"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
 all-features = true
 
 [lib]
-name = "tenferro_random_core"
+name = "cbrng"

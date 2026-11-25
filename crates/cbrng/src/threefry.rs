@@ -29,7 +29,7 @@ const KS_PARITY: u32 = 0x1BD1_1BDA;
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{CounterRng, Threefry2x32_20};
+/// use cbrng::{CounterRng, Threefry2x32_20};
 ///
 /// let key = Threefry2x32_20::seed(0);
 /// let mut keys = [[0u32; 2]; 2];
@@ -48,7 +48,7 @@ impl Threefry2x32_20 {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::Threefry2x32_20;
+    /// use cbrng::Threefry2x32_20;
     ///
     /// // A Random123 known-answer vector.
     /// assert_eq!(

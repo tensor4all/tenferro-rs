@@ -30,7 +30,7 @@ mp.mp.prec = 160
 # Reads "<f32|f64> <log|sincospi> <hex bits>" lines, writes the result bits.
 DRIVER = r"""
 use std::io::{BufRead, Write};
-use tenferro_random_core::{log, sincospi};
+use cbrng::{log, sincospi};
 
 fn main() {
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
@@ -123,7 +123,7 @@ def run_driver(lines):
         (root / "src").mkdir()
         (root / "Cargo.toml").write_text(
             '[package]\nname = "sweep-driver"\nversion = "0.0.0"\nedition = "2021"\n'
-            f'[dependencies]\ntenferro-random-core = {{ path = "{crate}" }}\n[workspace]\n'
+            f'[dependencies]\ncbrng = {{ path = "{crate}" }}\n[workspace]\n'
         )
         (root / "src" / "main.rs").write_text(DRIVER)
         subprocess.run(["cargo", "build", "-q", "--release"], cwd=root, check=True)

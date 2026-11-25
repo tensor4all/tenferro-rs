@@ -454,7 +454,7 @@ Layer 1: tenferro-tensor-core - Rank/layout metadata, dtype tags,
 Internal: tenferro-core-ops  - Internal core primitive operation catalog
           tenferro-internal-ops - Graph op and primitive-rule vocabulary
           tenferro-internal-extension-macros - Extension-op registration macros
-          tenferro-random-core - Counter-based RNG algorithms and sample transforms
+          cbrng - Counter-based RNG algorithms and sample transforms
 ```
 
 Ownership: `tenferro-tensor-core` owns rank/layout, dtype and scalar metadata.
