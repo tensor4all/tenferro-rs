@@ -60,7 +60,7 @@ COMBOS=(
     "tenferro-linalg default -"
     "tenferro-linalg autodiff-cuda autodiff,cuda"
     "tenferro-fft default -"
-    "tenferro-fft autodiff-cuda autodiff,cuda"
+    "tenferro-fft autodiff-cuda-fftw autodiff,cuda,fftw"
 )
 
 out_dir=$(mktemp -d)

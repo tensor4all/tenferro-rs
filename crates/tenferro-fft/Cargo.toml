@@ -16,9 +16,10 @@ documentation = "https://docs.rs/tenferro-fft"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
-features = ["autodiff", "cuda"]
+features = ["autodiff", "cuda", "fftw"]
 
 [features]
+fftw = ["dep:libloading"]
 autodiff = ["dep:tenferro-ad", "tenferro-ad/autodiff"]
 cuda = [
     "dep:libloading",
@@ -45,6 +46,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+libloading.workspace = true
 syn = { workspace = true, features = ["full", "visit"] }
 
 [[bench]]

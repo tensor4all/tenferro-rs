@@ -120,6 +120,15 @@
 //! assert_eq!(out.as_slice::<Complex64>()?[0], Complex64::new(5.0, 0.0));
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! # Optional FFTW provider
+//!
+//! With the off-by-default `fftw` feature, load the separately installed FFTW
+//! runtime with [`Fftw::load`](https://docs.rs/tenferro-fft/latest/tenferro_fft/struct.Fftw.html)
+//! and install it on the CPU engine that will execute the FFT. FFTW is licensed
+//! under GPL-2.0-or-later, with commercial licenses available. Runtime loading
+//! does not by itself exempt a combined work from the GPL. Evaluate FFTW's
+//! license terms before distributing software that enables the FFTW provider.
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use std::any::Any;
@@ -154,6 +163,11 @@ use tenferro_tensor::{PadConfig, SliceConfig};
 mod api;
 mod backend;
 mod cache;
+#[cfg(feature = "fftw")]
+mod fftw;
+#[cfg(feature = "fftw")]
+#[cfg_attr(docsrs, doc(cfg(feature = "fftw")))]
+pub use fftw::{Fftw, FftwError, FftwPlanning};
 mod cpu;
 #[cfg(feature = "cuda")]
 mod cuda;

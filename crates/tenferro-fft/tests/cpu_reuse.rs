@@ -208,3 +208,18 @@ fn parallel_lanes_match_serial_on_every_axis_with_padding_and_truncation() {
         }
     }
 }
+
+#[test]
+fn unrecognized_fft_provider_is_an_error() {
+    let mut engine = CpuEngine::serial();
+    engine.set_fft_provider(std::sync::Arc::new(7_u32));
+    let x = Tensor::from_vec_col_major([2], vec![Complex64::new(1.0, 0.0); 2]).unwrap();
+    let session: &mut dyn tenferro_tensor::Engine = &mut engine;
+    let error = x.fft_with(&FftOptions::default(), session).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("FFT provider was not installed by `Fftw::install`"),
+        "{error}"
+    );
+}
