@@ -6,7 +6,7 @@
 //! by `reference/jax_threefry.py` (JAX 0.12.1, partitionable Threefry, the
 //! JAX default since 0.5.0).
 
-use tenferro_random_core::{bits, CounterRng, Threefry2x32_20};
+use cbrng::{bits, CounterRng, Threefry2x32_20};
 
 #[test]
 fn threefry_raw_block_matches_random123_kat_vectors() {

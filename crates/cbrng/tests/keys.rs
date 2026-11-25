@@ -1,7 +1,7 @@
 //! Seed, split and fold-in properties shared by every algorithm, and the
 //! algorithm attribute.
 
-use tenferro_random_core::{CounterRng, Philox4x32_10, RngAlgorithm, Threefry2x32_20};
+use cbrng::{CounterRng, Philox4x32_10, RngAlgorithm, Threefry2x32_20};
 
 /// The checks every algorithm passes through the same generic code: the trait
 /// is the only thing they share.

@@ -40,7 +40,7 @@ pub(crate) mod sealed {
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{uniform, Philox4x32_10, RandomFloat};
+/// use cbrng::{uniform, Philox4x32_10, RandomFloat};
 ///
 /// fn mean<T: RandomFloat + Into<f64>>(key: [u32; 2]) -> f64 {
 ///     (0..8).map(|i| uniform::<Philox4x32_10, T>(key, i).into()).sum::<f64>() / 8.0
@@ -56,7 +56,7 @@ pub trait RandomFloat: sealed::Float {}
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{integer, Threefry2x32_20, RandomInt};
+/// use cbrng::{integer, Threefry2x32_20, RandomInt};
 ///
 /// fn die<T: RandomInt + From<i32> + PartialOrd>(key: [u32; 2], i: u64) -> T {
 ///     integer::<Threefry2x32_20, T>(key, i, T::from(1), T::from(7))
@@ -166,7 +166,7 @@ fn word_pair(words: &[u32]) -> u64 {
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{bits, fill_words, CounterRng, Philox4x32_10};
+/// use cbrng::{bits, fill_words, CounterRng, Philox4x32_10};
 ///
 /// let key = Philox4x32_10::seed(5);
 /// let mut words = [0u32; 6];
@@ -210,7 +210,7 @@ fn draw_words<R: CounterRng>(key: [u32; 2], draw: u64, words: &mut [u32]) {
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{bits, CounterRng, Threefry2x32_20};
+/// use cbrng::{bits, CounterRng, Threefry2x32_20};
 ///
 /// let key = Threefry2x32_20::seed(0);
 /// let block = Threefry2x32_20::raw_block([0, 0], key);
@@ -234,7 +234,7 @@ pub fn bits<R: CounterRng>(key: [u32; 2], index: u64) -> u32 {
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{uniform, CounterRng, Philox4x32_10};
+/// use cbrng::{uniform, CounterRng, Philox4x32_10};
 ///
 /// let key = Philox4x32_10::seed(1);
 /// let u: f64 = uniform::<Philox4x32_10, f64>(key, 0);
@@ -260,7 +260,7 @@ pub fn uniform<R: CounterRng, T: RandomFloat>(key: [u32; 2], index: u64) -> T {
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{uniform_range, CounterRng, Philox4x32_10};
+/// use cbrng::{uniform_range, CounterRng, Philox4x32_10};
 ///
 /// let key = Philox4x32_10::seed(1);
 /// let x: f32 = uniform_range::<Philox4x32_10, f32>(key, 3, -2.0, 2.0);
@@ -285,7 +285,7 @@ pub fn uniform_range<R: CounterRng, T: RandomFloat>(key: [u32; 2], index: u64, l
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{uniform_complex, CounterRng, Philox4x32_10};
+/// use cbrng::{uniform_complex, CounterRng, Philox4x32_10};
 ///
 /// let key = Philox4x32_10::seed(2);
 /// let [re, im] = uniform_complex::<Philox4x32_10, f32>(key, 0);
@@ -326,7 +326,7 @@ fn box_muller_parts<R: CounterRng, T: RandomFloat>(key: [u32; 2], draw: u64) -> 
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{normal, CounterRng, Philox4x32_10};
+/// use cbrng::{normal, CounterRng, Philox4x32_10};
 ///
 /// let key = Philox4x32_10::seed(3);
 /// let z: f64 = normal::<Philox4x32_10, f64>(key, 0);
@@ -352,7 +352,7 @@ pub fn normal<R: CounterRng, T: RandomFloat>(key: [u32; 2], index: u64) -> T {
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{normal_complex, CounterRng, Threefry2x32_20};
+/// use cbrng::{normal_complex, CounterRng, Threefry2x32_20};
 ///
 /// let key = Threefry2x32_20::seed(3);
 /// let [re, im] = normal_complex::<Threefry2x32_20, f32>(key, 5);
@@ -376,7 +376,7 @@ pub fn normal_complex<R: CounterRng, T: RandomFloat>(key: [u32; 2], index: u64) 
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{integer, CounterRng, Philox4x32_10};
+/// use cbrng::{integer, CounterRng, Philox4x32_10};
 ///
 /// let key = Philox4x32_10::seed(4);
 /// let k: i32 = integer::<Philox4x32_10, i32>(key, 0, -3, 3);

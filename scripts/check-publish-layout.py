@@ -37,7 +37,7 @@ IMPLEMENTATION_CRATE_ORDER = [
     "tenferro-cpu-fused",
     "tenferro-internal-ops",
     "tenferro-internal-extension-macros",
-    "tenferro-random-core",
+    "cbrng",
 ]
 TENFERRO_CRATES = (
     USER_CRATE_ORDER + EXTENSION_CRATE_ORDER + IMPLEMENTATION_CRATE_ORDER

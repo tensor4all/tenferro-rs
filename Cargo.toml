@@ -13,7 +13,7 @@ members = [
     "crates/tenferro-ad",
     "crates/tenferro-internal-extension-macros",
     "crates/tenferro-core-ops",
-    "crates/tenferro-random-core",
+    "crates/cbrng",
     "crates/tenferro-internal-ops",
     "crates/tenferro-einsum",
     "crates/tenferro-linalg",

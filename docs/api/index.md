@@ -86,6 +86,6 @@ are not the recommended application-facing API surface.
   vocabulary, shared primitive-rule vocabulary and metadata
 - [tenferro-internal-extension-macros](./tenferro_extension_macros/index.html):
   internal extension-op registration macros
-- [tenferro-random-core](./tenferro_random_core/index.html): counter-based
+- [cbrng](./cbrng/index.html): counter-based
   random number algorithms (Philox4x32-10, Threefry2x32-20), key derivation, and
   the bit-reproducible sample transforms

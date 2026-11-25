@@ -42,7 +42,7 @@ _MEMBER_CLASSES = {
     "crates/tenferro-tensor-core": "foundation",
     "crates/tenferro-core-ops": "foundation",
     "crates/tenferro-internal-extension-macros": "foundation",
-    "crates/tenferro-random-core": "foundation",
+    "crates/cbrng": "foundation",
     "crates/tenferro-tensor": "tensor_backend",
     "crates/tenferro-internal-cpu-kernels": "tensor_backend",
     "crates/tenferro-cpu-basic": "tensor_backend",

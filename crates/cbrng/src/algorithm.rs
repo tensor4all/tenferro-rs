@@ -12,7 +12,7 @@ use crate::{Philox4x32_10, Threefry2x32_20};
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{CounterRng, Philox4x32_10, MAX_WORDS_PER_BLOCK};
+/// use cbrng::{CounterRng, Philox4x32_10, MAX_WORDS_PER_BLOCK};
 ///
 /// assert!(Philox4x32_10::WORDS_PER_BLOCK <= MAX_WORDS_PER_BLOCK);
 /// ```
@@ -36,7 +36,7 @@ pub const MAX_WORDS_PER_BLOCK: usize = 16;
 /// Code generic over the algorithm works with every built-in one:
 ///
 /// ```
-/// use tenferro_random_core::{CounterRng, Philox4x32_10, Threefry2x32_20};
+/// use cbrng::{CounterRng, Philox4x32_10, Threefry2x32_20};
 ///
 /// fn first_word<R: CounterRng>(seed: u64) -> u32 {
 ///     let mut block = [0u32; 4];
@@ -55,7 +55,7 @@ pub trait CounterRng: Copy + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::{CounterRng, Philox4x32_10};
+    /// use cbrng::{CounterRng, Philox4x32_10};
     ///
     /// assert_eq!(Philox4x32_10::NAME, "philox4x32-10");
     /// ```
@@ -67,7 +67,7 @@ pub trait CounterRng: Copy + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::{CounterRng, Threefry2x32_20};
+    /// use cbrng::{CounterRng, Threefry2x32_20};
     ///
     /// assert_eq!(Threefry2x32_20::WORDS_PER_BLOCK, 2);
     /// ```
@@ -83,7 +83,7 @@ pub trait CounterRng: Copy + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::{CounterRng, Philox4x32_10};
+    /// use cbrng::{CounterRng, Philox4x32_10};
     ///
     /// let mut out = [0u32; 4];
     /// Philox4x32_10::block([0, 0], 0, &mut out);
@@ -99,7 +99,7 @@ pub trait CounterRng: Copy + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::{CounterRng, Philox4x32_10};
+    /// use cbrng::{CounterRng, Philox4x32_10};
     ///
     /// assert_eq!(
     ///     Philox4x32_10::seed(0x0000_0001_0000_0002),
@@ -120,7 +120,7 @@ pub trait CounterRng: Copy + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::{CounterRng, Philox4x32_10};
+    /// use cbrng::{CounterRng, Philox4x32_10};
     ///
     /// let key = Philox4x32_10::seed(7);
     /// let mut keys = [[0u32; 2]; 3];
@@ -135,7 +135,7 @@ pub trait CounterRng: Copy + Send + Sync + 'static {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::{CounterRng, Philox4x32_10};
+    /// use cbrng::{CounterRng, Philox4x32_10};
     ///
     /// let key = Philox4x32_10::seed(7);
     /// let step_3 = Philox4x32_10::fold_in(key, 3);
@@ -153,7 +153,7 @@ pub trait CounterRng: Copy + Send + Sync + 'static {
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::RngAlgorithm;
+/// use cbrng::RngAlgorithm;
 ///
 /// let algorithm = RngAlgorithm::default();
 /// assert_eq!(algorithm, RngAlgorithm::Philox4x32_10);
@@ -176,7 +176,7 @@ impl RngAlgorithm {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::RngAlgorithm;
+    /// use cbrng::RngAlgorithm;
     ///
     /// assert!(RngAlgorithm::ALL.contains(&RngAlgorithm::Threefry2x32_20));
     /// ```
@@ -187,7 +187,7 @@ impl RngAlgorithm {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::RngAlgorithm;
+    /// use cbrng::RngAlgorithm;
     ///
     /// assert_eq!(RngAlgorithm::Threefry2x32_20.name(), "threefry2x32-20");
     /// ```
@@ -204,7 +204,7 @@ impl RngAlgorithm {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::RngAlgorithm;
+    /// use cbrng::RngAlgorithm;
     ///
     /// assert_eq!(
     ///     RngAlgorithm::from_name("threefry2x32-20"),
@@ -224,7 +224,7 @@ impl RngAlgorithm {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::RngAlgorithm;
+    /// use cbrng::RngAlgorithm;
     ///
     /// assert_eq!(RngAlgorithm::Philox4x32_10.words_per_block(), 4);
     /// ```

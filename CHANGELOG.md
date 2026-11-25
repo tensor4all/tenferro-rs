@@ -34,8 +34,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it was traced with. `compile`, `compile_many` and `compile_with_input_specs`
   stay; the guides now use `compile_with_inputs`.
 
-- **`tenferro-random-core`, the reference for random numbers (#2714, step 1).**
-  A new dependency-free crate with the `CounterRng` trait, the
+- **`cbrng`, the reference for random numbers (#2714, step 1).**
+  A new dependency-free crate (introduced as `tenferro-random-core` and renamed
+  to `cbrng` before release, #2733) with the `CounterRng` trait, the
   `philox4x32-10` (default) and `threefry2x32-20` algorithms, key seed, split
   and fold-in, and the per-element sample transforms (raw bits, uniform,
   uniform range, complex uniform, Box–Muller normal and complex normal,

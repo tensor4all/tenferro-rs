@@ -29,7 +29,7 @@ const FOLD_IN_DOMAIN: u32 = 2;
 /// # Examples
 ///
 /// ```
-/// use tenferro_random_core::{CounterRng, Philox4x32_10};
+/// use cbrng::{CounterRng, Philox4x32_10};
 ///
 /// let key = Philox4x32_10::seed(42);
 /// let mut block = [0u32; 4];
@@ -52,7 +52,7 @@ impl Philox4x32_10 {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_random_core::Philox4x32_10;
+    /// use cbrng::Philox4x32_10;
     ///
     /// // A Random123 known-answer vector.
     /// assert_eq!(

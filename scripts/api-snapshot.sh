@@ -40,7 +40,7 @@ COMBOS=(
     "tenferro-tensor-core default -"
     "tenferro-tensor default -"
     "tenferro-core-ops default -"
-    "tenferro-random-core default -"
+    "cbrng default -"
     "tenferro-internal-cpu-kernels default -"
     "tenferro-cpu-basic default -"
     "tenferro-cpu-fused default -"
