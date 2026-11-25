@@ -50,6 +50,15 @@ Load the provider with `Fftw::load` and select it on your CPU engine with
 `Fftw::install`. The [crate README](https://github.com/tensor4all/tenferro-rs/blob/main/crates/tenferro-fft/README.md)
 shows a complete setup, threading options, and licensing terms.
 
+Loading the FFTW provider calls `fftw_make_planner_thread_safe`, so FFTW's own
+lock serializes all FFTW planning in the process, other libraries' included;
+tenferro installs no planner hooks. This needs FFTW 3.3.6 or later with its
+threading library. Without it, tenferro still serializes its own planning, but
+other libraries must not plan with FFTW concurrently with tenferro. FFTW's
+planner thread count is process-wide: concurrent FFTW planning by other code
+with an explicit thread count, in the same process as tenferro, is
+unsupported. The `Fftw::load` documentation describes both limits.
+
 For CUDA cuFFT execution from released packages, enable the CUDA feature on
 both the FFT extension and its provider:
 

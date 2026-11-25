@@ -106,9 +106,14 @@ FFTW threads and lane jobs never nest: lanes that can occupy the engine's
 whole thread budget run as parallel jobs with single-threaded plans, and other
 transforms run as one job with the provider's threaded plans. Threaded
 planning and execution run through `Exec::external`, because FFTW's worker
-threads keep the CPU mask of the thread that starts them. The provider's
-planner hooks serialize all FFTW planning in the process, and each tenferro
-plan sets and restores FFTW's planner thread count inside that lock.
+threads keep the CPU mask of the thread that starts them. Loading calls
+`fftw_make_planner_thread_safe` (FFTW 3.3.6+), so FFTW's own lock serializes
+all FFTW planning in the process; tenferro installs no planner hooks. A
+private tenferro lock covers what FFTW's lock does not: `fftw_init_threads`,
+and setting the planner thread count together with the plan creation that
+uses it. Other code that plans concurrently with an explicit thread count is
+unsupported, because the count is process-wide and no lock spans another
+library's set-and-plan pair and tenferro's.
 
 ### CUDA/cuFFT execution
 
