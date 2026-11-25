@@ -52,12 +52,14 @@ Julia wrapper [Tensor4all.jl](https://github.com/tensor4all/Tensor4all.jl).
   on [colmat](https://github.com/tensor4all/colmat-rs), tensor4all's fork of faer)
   are developed together, so performance can be tuned across layers instead of
   stopping at a black box.
-- **A base to build on, not a copy of C++.** Rust scientific crates each
-  bring their own threading; C++ and Fortran share LAPACK and OpenMP. We build
-  one stack instead, from threads to tensors. Matching C++ speed is the
-  entry, not the goal: one caller owns the threads through every layer, and
-  any crate that adopts [threadteam-rs](https://github.com/tensor4all/threadteam-rs)
-  joins in. See
+- **One base for Rust scientific code.** Rust scientific crates each manage
+  threads in their own way, while C++ and Fortran codes share LAPACK and
+  OpenMP. We build the stack as one piece, from threads to tensors. colmat
+  already runs on par with MKL and AOCL on the hardware we have tested; what
+  vendor libraries cannot give is one owner of the threads through every
+  layer. Any crate that takes its threads from
+  [threadteam-rs](https://github.com/tensor4all/threadteam-rs) shares that
+  owner. See
   [Why pure Rust](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/why_pure_rust.md).
 - **For Julia users too.** Julia packages can call these kernels precompiled,
   which avoids long precompilation, and the same kernels can be shared across
