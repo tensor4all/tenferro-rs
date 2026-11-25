@@ -60,15 +60,20 @@ HPE MPT (not HMPT), NEC MPI, and any string that matches no prefix.
    (LD_PRELOAD tools) define `MPI_*` but not `PMPI_*`, so it identifies the real
    library. `RTLD_NOLOAD` never loads anything new; it only takes a reference to an
    object that is already mapped.
-2. Exactly one object must define it. **None** → `NoMpiInProcess`. **More than one** →
-   `AmbiguousMpi`, listing the paths. This is also what happens under MPItrampoline,
-   where the trampoline, the wrapper and the real library are all loaded.
-3. The handle is never `dlclose`d. Unloading `libmpi` while the host uses it is fatal,
+2. If any loaded object exports `MPIABI_Get_library_version`, MPIwrapper is in the
+   process: fail with `MpiTrampolineNotSupported`. This runs first because under
+   MPItrampoline the trampoline, the wrapper and the real library are all loaded, and a
+   plain count would only report the ambiguity.
+3. Exactly one object must define `PMPI_Get_library_version`. **None** →
+   `NoMpiInProcess`. **More than one** → `AmbiguousMpi`, listing the paths.
+4. The handle is never `dlclose`d. Unloading `libmpi` while the host uses it is fatal,
    and the reference costs nothing.
 
 Walking the loaded objects is what makes this work when the host loaded `libmpi` with
-`RTLD_LOCAL`: Python's `ctypes` and extension-module default, and MPI.jl through
-`Libdl`. In that case `dlsym(RTLD_DEFAULT, …)` cannot see it.
+`RTLD_LOCAL`, which is the default for Python's `ctypes` and for an extension module's
+dependencies. In that case `dlsym(RTLD_DEFAULT, …)` cannot see it. MPI.jl opens
+`libmpi` with `RTLD_GLOBAL` (MPIPreferences.jl does the same in `identify_abi`), so
+Julia would also work with `RTLD_DEFAULT`; the walk covers both.
 
 **Standalone path** (a Rust program or the scenario tests, where the program itself
 calls `mpi::initialize()`): if no loaded object defines the symbol, load
@@ -409,7 +414,7 @@ tenferro's local check.
   rsmpi-rt, so Rust callers' `Process` values cannot reach it, and the process would
   hold two MPI bindings.
 - **`dlsym(RTLD_DEFAULT)` only:** it misses a host `libmpi` that was loaded
-  `RTLD_LOCAL`, the normal case for Python and Julia.
+  `RTLD_LOCAL`, the normal case for Python.
 - **`dlopen` a fresh `libmpi` by name in the attach path:** it can load a second MPI
   next to the host's, which crashes.
 - **Family from the version string alone:** a trampoline that forwards the underlying
