@@ -132,6 +132,16 @@ impl AbortReason {
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// An MPI call returned an error code. Only reachable when the communicator's error
+    /// handler returns instead of aborting (`MPI_ERRORS_RETURN`, the default in MPI.jl and
+    /// mpi4py). `message` is `MPI_Error_string` captured at the failure site.
+    #[error("{message} (MPI error code {code})")]
+    Mpi {
+        /// The MPI error code.
+        code: i32,
+        /// The failing call and `MPI_Error_string`'s text.
+        message: String,
+    },
     /// The tensor's storage is not host-addressed memory; nothing was sent.
     ///
     /// The adapter never transfers between host and device: download the tensor

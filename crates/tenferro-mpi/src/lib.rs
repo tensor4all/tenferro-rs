@@ -126,7 +126,7 @@ mod wire;
 
 pub use backend::MpiBackend;
 #[cfg(feature = "runtime")]
-pub use backend::Rt;
+pub use backend::{Rt, RtMessage};
 #[cfg(feature = "system")]
 pub use backend::System;
 #[cfg(any(feature = "system", feature = "runtime", feature = "engine"))]
