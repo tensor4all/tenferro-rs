@@ -62,9 +62,9 @@ to `0..64`. Tests:
 `crates/tenferro-internal-ops/src/primitive_rules/tests.rs:50-58` (refusal),
 `crates/tenferro-internal-ops/src/primitive_rules/tests.rs:98-100` (`declares_input(64)`/`declares_output(64)` on an
 all-index mask; runs in the default lane), and `crates/tenferro-einsum/tests/integration/many_operand_vjp.rs:26`
-(65-operand einsum VJP reads every residual). The latter is `#![cfg(feature = "autodiff")]` (`:1`) and is compiled out of a
-default `cargo nextest run --workspace`; per the review of this PR, only the GPU workflows enable that feature, so do not count it
-as default-lane protection.
+(65-operand einsum VJP reads every residual). The latter is `#![cfg(feature = "autodiff")]` (`:1`). It runs in a workspace-wide build because the workspace member
+`docs/tutorial-code` enables `tenferro-einsum/autodiff` (`docs/tutorial-code/Cargo.toml:27`; `cargo metadata` resolves
+`tenferro-einsum` with `["autodiff"]`), but a bare `cargo test -p tenferro-einsum` compiles it out.
 
 ## Dispatch and retention
 
