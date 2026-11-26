@@ -32,6 +32,7 @@ class ChangePolicy:
     run_ci_config: bool
     run_gpu: bool
     run_macos: bool
+    run_mpi: bool
     reasons: tuple[str, ...]
 
     def as_output(self) -> dict[str, str | bool]:
@@ -45,6 +46,7 @@ class ChangePolicy:
             "run_ci_config": self.run_ci_config,
             "run_gpu": self.run_gpu,
             "run_macos": self.run_macos,
+            "run_mpi": self.run_mpi,
             "reason": "; ".join(self.reasons),
         }
 
@@ -99,6 +101,19 @@ _MACOS_CONTROL_FILES = frozenset(
         ".github/workflows/ci-pr-workspace-tests.yml",
         "scripts/ci/change_policy.py",
         "scripts/ci/run_profile.py",
+    }
+)
+# #2735: the two-rank MPI arms run whenever Rust runs, and also for a CI-only diff
+# that changes what those arms execute. Without this, a change to the MPI lane
+# itself would be "proven" by its own no-op. `scripts/run-mpi.sh` and
+# `scripts/check-mpi-features.sh` live outside `scripts/ci/`, so they are unknown
+# paths and already select the full policy.
+_MPI_CONTROL_FILES = frozenset(
+    {
+        ".github/workflows/ci-pr-workspace-tests.yml",
+        "scripts/ci/change_policy.py",
+        "scripts/ci/run_profile.py",
+        "scripts/ci/run-mpi-ranks.sh",
     }
 )
 # Paid-lane control plane, split by what a diff can actually change.
@@ -187,6 +202,10 @@ def _is_gpu_device_control_plane_path(path: str) -> bool:
 
 def _is_macos_control_plane_path(path: str) -> bool:
     return path in _MACOS_CONTROL_FILES
+
+
+def _is_mpi_control_plane_path(path: str) -> bool:
+    return path in _MPI_CONTROL_FILES
 
 
 _RUST_SUFFIX = ".rs"
@@ -332,6 +351,7 @@ def _full_policy(reason: str, *, run_gpu: bool = True) -> ChangePolicy:
         run_ci_config=True,
         run_gpu=run_gpu,
         run_macos=True,
+        run_mpi=True,
         reasons=(reason,),
     )
 
@@ -389,6 +409,7 @@ def classify_paths(
                     _is_gpu_device_control_plane_path(path) for path in ci
                 ),
                 run_macos=True,
+                run_mpi=True,
                 reasons=tuple(
                     reason
                     for reason in (
@@ -419,6 +440,7 @@ def classify_paths(
         run_ci_config=has_ci,
         run_gpu=any(_is_gpu_device_control_plane_path(path) for path in ci),
         run_macos=any(_is_macos_control_plane_path(path) for path in ci),
+        run_mpi=any(_is_mpi_control_plane_path(path) for path in ci),
         reasons=reasons,
     )
 

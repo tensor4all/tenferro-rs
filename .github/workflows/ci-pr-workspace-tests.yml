@@ -24,6 +24,7 @@ jobs:
       run_workspace: ${{ steps.policy.outputs.run_rust }}
       run_extensions: ${{ steps.policy.outputs.run_extensions }}
       run_macos: ${{ steps.policy.outputs.run_macos }}
+      run_mpi: ${{ steps.policy.outputs.run_mpi }}
       reason: ${{ steps.policy.outputs.reason }}
     steps:
       - uses: actions/checkout@v5
@@ -238,9 +239,105 @@ jobs:
           REASON: ${{ needs.changes.outputs.reason }}
         run: echo "No Rust change; only the conformance self-test ran - ${REASON}"
 
+  mpi:
+    # #2735: multi-process MPI is required, not optional. Every arm launches the
+    # tenferro-mpi scenarios as one two-rank world (`mpiexec -n 2` through
+    # scripts/run-mpi.sh); scripts/ci/run-mpi-ranks.sh fails the arm unless both
+    # ranks report success, so a launcher that starts two singletons cannot pass.
+    # The arms feed `CI gate (PR workspace tests)`, which is a required check.
+    # `run_mpi` is true whenever Rust runs and when a CI-only diff touches the
+    # lane's own files (scripts/ci/change_policy.py), so the lane cannot pass a
+    # change to itself by no-op.
+    # Hosted ubuntu runners have 4 vCPUs, so two ranks need no --oversubscribe and
+    # no self-hosted runner.
+    name: MPI two-rank (${{ matrix.arm.name }})
+    needs: changes
+    runs-on: ${{ matrix.arm.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arm:
+          # The design's two native families (docs/design/mpi-native-abi.md): the
+          # system backend against each, built and launched by the same family.
+          - name: upstream / Open MPI
+            key: upstream-openmpi
+            os: ubuntu-24.04
+            profile: mpi-upstream
+            packages: openmpi-bin libopenmpi-dev libclang-dev
+          # ubuntu-22.04, not 24.04: noble's mpich 4.2.0-5build3 links libmpich
+          # against PMIx while its hydra `mpiexec` serves only PMI, so `mpiexec -n 2`
+          # starts two singletons (a plain C MPI program prints "rank 0 of 1" twice).
+          # Jammy's mpich 4.0-3 forms a real two-rank world.
+          - name: upstream / MPICH
+            key: upstream-mpich
+            os: ubuntu-22.04
+            profile: mpi-upstream
+            packages: mpich libmpich-dev libclang-dev
+          # The current runtime backend loads MPI through MPIwrapper (MPI_RT_LIB),
+          # built below from a pinned release against the runner's Open MPI. The
+          # native-handle rewrite deletes MPIwrapper; this arm then drops the build
+          # step and keeps the profile.
+          - name: rt / Open MPI + MPIwrapper
+            key: rt-openmpi
+            os: ubuntu-24.04
+            profile: mpi-runtime
+            packages: openmpi-bin libopenmpi-dev cmake gfortran
+    env:
+      MPIWRAPPER_TAG: v2.11.0
+      MPIWRAPPER_COMMIT: 1e991827041406f6d30e134187bcdbabb56f483d
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true'
+        with:
+          components: clippy
+      - name: Install MPI
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true'
+        env:
+          PACKAGES: ${{ matrix.arm.packages }}
+        run: |
+          sudo apt-get update
+          # shellcheck disable=SC2086 # PACKAGES is a space-separated list
+          sudo apt-get install -y --no-install-recommends ${PACKAGES}
+          mpiexec --version | head -n 2
+      - name: Build MPIwrapper
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true' && matrix.arm.profile == 'mpi-runtime'
+        run: |
+          git -c advice.detachedHead=false clone --depth 1 --branch "${MPIWRAPPER_TAG}" \
+            https://github.com/eschnett/MPIwrapper "${RUNNER_TEMP}/MPIwrapper"
+          test "$(git -C "${RUNNER_TEMP}/MPIwrapper" rev-parse HEAD)" = "${MPIWRAPPER_COMMIT}"
+          cmake -S "${RUNNER_TEMP}/MPIwrapper" -B "${RUNNER_TEMP}/MPIwrapper/build" \
+            -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/mpiwrapper"
+          cmake --build "${RUNNER_TEMP}/MPIwrapper/build" -j "$(nproc)"
+          cmake --install "${RUNNER_TEMP}/MPIwrapper/build"
+          echo "MPI_RT_LIB=${RUNNER_TEMP}/mpiwrapper/lib/libmpiwrapper.so" >> "${GITHUB_ENV}"
+      # One cache per arm: rsmpi-sys's bindgen output and link line are specific to
+      # the MPI family installed, and a build script does not rerun when only the
+      # installed family changes. Sharing a key across families would link the
+      # MPICH arm's binary against Open MPI bindings.
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true'
+        with:
+          prefix-key: v1-mpi-${{ matrix.arm.key }}
+      - name: Run the two-rank MPI profile
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true'
+        env:
+          PROFILE: ${{ matrix.arm.profile }}
+        run: python3 scripts/ci/run_profile.py "${PROFILE}"
+      - name: Report MPI disposition
+        if: always()
+        env:
+          CHANGE_RESULT: ${{ needs.changes.result }}
+          RUN_MPI: ${{ needs.changes.outputs.run_mpi }}
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: |
+          if [ "${CHANGE_RESULT}" != success ]; then echo "Change classification failed"; exit 1; fi
+          if [ "${RUN_MPI}" != true ]; then echo "MPI tests not required - ${REASON}"; fi
+
   ci-gate:
     name: CI gate (PR workspace tests)
-    needs: [changes, ci-fork, ci-maintainer, extensions, api-surface]
+    needs: [changes, ci-fork, ci-maintainer, extensions, api-surface, mpi]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -251,6 +348,7 @@ jobs:
           MAINTAINER_RESULT: ${{ needs.ci-maintainer.result }}
           EXT_RESULT: ${{ needs.extensions.result }}
           API_RESULT: ${{ needs.api-surface.result }}
+          MPI_RESULT: ${{ needs.mpi.result }}
           RUN_WORKSPACE: ${{ needs.changes.outputs.run_workspace }}
           RUN_EXTENSIONS: ${{ needs.changes.outputs.run_extensions }}
         run: |
@@ -264,6 +362,10 @@ jobs:
           fi
           if [ "${API_RESULT}" != success ]; then
             echo "Expected the public API surface and registry conformance to pass; got ${API_RESULT}"
+            exit 1
+          fi
+          if [ "${MPI_RESULT}" != success ]; then
+            echo "Expected every two-rank MPI arm to pass or no-op; got ${MPI_RESULT}"
             exit 1
           fi
           if [ "${FORK_RESULT}" != success ] && [ "${MAINTAINER_RESULT}" != success ]; then
