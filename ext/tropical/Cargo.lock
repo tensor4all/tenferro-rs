@@ -200,11 +200,11 @@ checksum = "450efd17194c59515cc81b1eb553d98c59e407c095a918c84aefbd71bec1eecc"
 [[package]]
 name = "cpueinsum"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7a49bd4fd32207f2da1a85e0b0eb7a26ddf087ae14d17b302d6a7e603af1627"
+source = "git+https://github.com/tensor4all/cpueinsum-rs.git?rev=9f11997#9f11997c0c651820fecdd99f061f9a588b707c2e"
 dependencies = [
  "num-complex",
  "strided-view",
+ "t4a-desc",
  "tcontract",
  "tcontract-exec",
  "thiserror 1.0.69",
@@ -1247,8 +1247,12 @@ dependencies = [
 [[package]]
 name = "t4a-cost"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23ab959ae1e239250950f298b1b3634f799f37d64ea9956111b7d78e3d5146f0"
+source = "git+https://github.com/tensor4all/tcontract-rs.git?rev=ca44b476aaa7f017f59afb2807fa1fe0d4939a27#ca44b476aaa7f017f59afb2807fa1fe0d4939a27"
+
+[[package]]
+name = "t4a-desc"
+version = "0.1.0"
+source = "git+https://github.com/tensor4all/tcontract-rs.git?rev=ca44b476aaa7f017f59afb2807fa1fe0d4939a27#ca44b476aaa7f017f59afb2807fa1fe0d4939a27"
 
 [[package]]
 name = "t4a-gemm"
@@ -1388,8 +1392,7 @@ dependencies = [
 [[package]]
 name = "tcontract"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d6fd3e201d39a4a8ff2b8abec8e919435ba5417e55639e19634f20f03f5b8a9"
+source = "git+https://github.com/tensor4all/tcontract-rs.git?rev=ca44b476aaa7f017f59afb2807fa1fe0d4939a27#ca44b476aaa7f017f59afb2807fa1fe0d4939a27"
 dependencies = [
  "colmat",
  "num-complex",
@@ -1407,8 +1410,7 @@ dependencies = [
 [[package]]
 name = "tcontract-exec"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05706e60e4e26b055438bd69fd200974339339230512111b810e04e7eed8a50d"
+source = "git+https://github.com/tensor4all/tcontract-rs.git?rev=ca44b476aaa7f017f59afb2807fa1fe0d4939a27#ca44b476aaa7f017f59afb2807fa1fe0d4939a27"
 dependencies = [
  "colmat",
  "t4a-cost",
@@ -1419,8 +1421,7 @@ dependencies = [
 [[package]]
 name = "tcontract-kernel"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bc965f60442d295dad23199f770640babcac61b792a4c351b81b3d4bb09c3e6"
+source = "git+https://github.com/tensor4all/tcontract-rs.git?rev=ca44b476aaa7f017f59afb2807fa1fe0d4939a27#ca44b476aaa7f017f59afb2807fa1fe0d4939a27"
 dependencies = [
  "num-complex",
 ]

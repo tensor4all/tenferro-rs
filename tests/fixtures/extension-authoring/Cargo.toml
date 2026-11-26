@@ -10,3 +10,10 @@ publish = false
 tenferro-runtime = { path = "../../../crates/tenferro-runtime", default-features = false }
 tenferro-tensor = { path = "../../../crates/tenferro-tensor", default-features = false }
 tenferro-cpu = { path = "../../../crates/tenferro-cpu", default-features = false }
+
+# tensor4all/cpueinsum-rs#92 (`BinaryPlan::retained_bytes`) and the tcontract rev its
+# workspace uses, as in the root manifest (#2742). Drop with the root patch.
+[patch.crates-io]
+cpueinsum = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "9f11997" }
+tcontract = { git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }
+tcontract-exec = { git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }
