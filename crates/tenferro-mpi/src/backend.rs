@@ -35,6 +35,11 @@ pub trait MpiBackend {
     fn is_self(peer: Self::Peer<'_>) -> bool;
 
     /// Blocking send of `buffer` as bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Mpi`] when the MPI call returns an error code (only under
+    /// `MPI_ERRORS_RETURN`).
     fn send_bytes(&self, to: Self::Peer<'_>, tag: Tag, buffer: &[u8]) -> Result<()>;
 
     /// Blocking probe: consume the next message from `from` on `tag` and report its
@@ -42,9 +47,17 @@ pub trait MpiBackend {
     ///
     /// Probing before receiving is what keeps a non-conforming frame a typed error
     /// instead of a fatal MPI truncation.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Mpi`] when `MPI_Mprobe` or `MPI_Get_count` returns an error code.
     fn probe(&self, from: Self::Peer<'_>, tag: Tag) -> Result<(Self::Probed, i64)>;
 
     /// Receive a probed message, returning the byte count it carried.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::Mpi`] when `MPI_Mrecv` or `MPI_Get_count` returns an error code.
     fn receive_probed(&self, probed: Self::Probed, buffer: &mut [u8]) -> Result<i64>;
 }
 

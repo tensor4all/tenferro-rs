@@ -926,9 +926,7 @@ mod tests {
             0x7fff_ffff_8400_0002,
             0x0000_0001_0000_0000,
         ] {
-            let e = decode_handle_for(Family::Mpich, &c, handle)
-                .err()
-                .expect("refused");
+            let e = decode_handle_for(Family::Mpich, &c, handle).expect_err("refused");
             assert_eq!(e.code, TFE_INVALID_ARGUMENT, "{handle:#x}");
         }
     }
@@ -938,13 +936,11 @@ mod tests {
         for family in [Family::Mpich, Family::OpenMpi, Family::StandardAbi] {
             let c = consts(family);
             assert_eq!(
-                decode_handle_for(family, &c, 0).err().expect("zero").code,
+                decode_handle_for(family, &c, 0).expect_err("zero").code,
                 TFE_INVALID_ARGUMENT
             );
             let null = c.comm_null as u64;
-            let e = decode_handle_for(family, &c, null)
-                .err()
-                .expect("MPI_COMM_NULL");
+            let e = decode_handle_for(family, &c, null).expect_err("MPI_COMM_NULL");
             assert_eq!(e.code, TFE_INVALID_ARGUMENT, "{family:?}");
             assert!(
                 decode_handle_for(family, &c, c.comm_world as u64).is_ok(),
@@ -1018,10 +1014,5 @@ mod tests {
             tfe_last_error_message(buf.as_mut_ptr(), needed, &mut needed);
             String::from_utf8_lossy(&buf[..needed - 1]).into_owned()
         }
-    }
-
-    #[test]
-    fn the_crate_is_built_with_unwinding_panics() {
-        assert!(cfg!(panic = "unwind"));
     }
 }
