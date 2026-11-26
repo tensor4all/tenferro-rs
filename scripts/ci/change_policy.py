@@ -103,6 +103,31 @@ _MACOS_CONTROL_FILES = frozenset(
         "scripts/ci/run_profile.py",
     }
 )
+# The `macOS workspace tests` job is a required check, so it always reports; this decides
+# whether it runs on a macOS runner or is an explicit `ubuntu-24.04` no-op. macOS runners are
+# the organization's most expensive Actions SKU (about $1,480 list price across tensor4all in
+# November 2026, 57% of Actions cost; five concurrent macOS jobs for the whole organization),
+# and this job alone was 62% of the per-PR macOS minutes because every code change selected it.
+# It now runs for what the `macos` profile exercises (`scripts/ci/run_profile.py`): the
+# `tenferro-gpu` (Metal), `tenferro-fft` and `tenferro-linalg` (Accelerate) crates and the
+# framework-link check. Everything else is covered by the Linux lanes, which run the same Rust on
+# the same faer CPU stack; `tenferro-gpu/src/cuda/` is behind the `cuda` feature, which the macOS
+# profile never builds. Root `Cargo.toml`/`Cargo.lock` churn (new crates, version bumps) is not
+# selected: a dependency change that breaks macOS is caught by the push-to-main run, which, like
+# every fail-closed path (an empty diff, an unresolvable merge base), still runs it.
+_MACOS_SENSITIVE_PREFIXES = (
+    "crates/tenferro-gpu/",
+    "crates/tenferro-fft/",
+    "crates/tenferro-linalg/",
+    ".cargo/",
+)
+_MACOS_INSENSITIVE_PREFIXES = ("crates/tenferro-gpu/src/cuda/",)
+_MACOS_SENSITIVE_FILES = frozenset(
+    {
+        "rust-toolchain.toml",
+        "scripts/check-macos-no-framework-link.sh",
+    }
+)
 # #2735: the two-rank MPI arms run whenever Rust runs, and also for a CI-only diff
 # that changes what those arms execute. Without this, a change to the MPI lane
 # itself would be "proven" by its own no-op. `scripts/run-mpi.sh` and
@@ -202,6 +227,14 @@ def _is_gpu_device_control_plane_path(path: str) -> bool:
 
 def _is_macos_control_plane_path(path: str) -> bool:
     return path in _MACOS_CONTROL_FILES
+
+
+def _is_macos_sensitive_path(path: str) -> bool:
+    if path.startswith(_MACOS_INSENSITIVE_PREFIXES):
+        return False
+    return path in _MACOS_SENSITIVE_FILES or path.startswith(
+        _MACOS_SENSITIVE_PREFIXES
+    )
 
 
 def _is_mpi_control_plane_path(path: str) -> bool:
@@ -342,7 +375,9 @@ def _docs_only_rust_paths(
     return _parse_docs_only_diff(result.stdout, candidates)
 
 
-def _full_policy(reason: str, *, run_gpu: bool = True) -> ChangePolicy:
+def _full_policy(
+    reason: str, *, run_gpu: bool = True, run_macos: bool = True
+) -> ChangePolicy:
     return ChangePolicy(
         change_class=ChangeClass.CODE,
         run_rust=True,
@@ -350,7 +385,7 @@ def _full_policy(reason: str, *, run_gpu: bool = True) -> ChangePolicy:
         run_docs=True,
         run_ci_config=True,
         run_gpu=run_gpu,
-        run_macos=True,
+        run_macos=run_macos,
         run_mpi=True,
         reasons=(reason,),
     )
@@ -408,7 +443,7 @@ def classify_paths(
                 run_gpu=any(
                     _is_gpu_device_control_plane_path(path) for path in ci
                 ),
-                run_macos=True,
+                run_macos=any(_is_macos_control_plane_path(path) for path in ci),
                 run_mpi=True,
                 reasons=tuple(
                     reason
@@ -421,7 +456,11 @@ def classify_paths(
                     if reason
                 ),
             )
-        return _full_policy("code or unknown paths: " + ", ".join(unknown))
+        return _full_policy(
+            "code or unknown paths: " + ", ".join(unknown),
+            run_macos=any(_is_macos_sensitive_path(path) for path in unknown)
+            or any(_is_macos_control_plane_path(path) for path in ci),
+        )
 
     reasons = tuple(
         reason

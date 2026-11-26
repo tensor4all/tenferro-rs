@@ -95,6 +95,18 @@ CPU/macOS/coverage/docs validation, while `pre-runpod-gate` waits only for
 successful `rustfmt` and `clippy` before provisioning a paid pod. The other
 checks remain independent merge blockers.
 
+Which diffs select the macOS runner is decided by `run_macos` in `scripts/ci/change_policy.py`, and it is
+deliberately narrow. macOS runners are the organization's most expensive Actions SKU (November 2026: about $1,480
+list price across tensor4all, 57% of Actions cost; five concurrent macOS jobs for the whole organization), and this
+job was 62% of the per-PR macOS minutes because every code change selected it (15 of the last 20 pull requests). It
+now runs for a change to what the `macos` profile exercises: `tenferro-gpu` outside `src/cuda/` (the `cuda` feature is
+never built on macOS), `tenferro-fft`, `tenferro-linalg`, `.cargo/`, `rust-toolchain.toml` and the framework-link
+check, plus the control plane below (8 of the same 20 pull requests). Everything else is covered by the Linux lanes
+and takes the no-op. Root `Cargo.toml` and `Cargo.lock` churn does not select it; a dependency change that breaks
+macOS is caught by the push-to-`main` run, which still runs macOS, as does every fail-closed path (an empty diff, an
+unresolvable merge base). The job and its `macOS workspace tests` name are unchanged, so the required check always
+reports.
+
 The change policy also runs this gate when its workflow, shared profile, or
 classifier changes, so CI-only edits can validate the native lane. Other
 CI-only and docs-only changes run an explicit successful no-op on

@@ -235,7 +235,48 @@ class ChangePolicyTests(unittest.TestCase):
                 self.assertTrue(policy.run_rust)
                 self.assertTrue(policy.run_extensions)
                 self.assertTrue(policy.run_gpu)
+        # An empty diff cannot be scoped, so it keeps macOS (fail closed); an unknown
+        # path alone is not macOS-sensitive.
+        self.assertTrue(classify_paths([]).run_macos)
+        self.assertFalse(classify_paths(["new-top-level-policy.toml"]).run_macos)
+
+    def test_macos_runs_only_for_what_the_macos_profile_exercises(self) -> None:
+        """The required check always reports; the runner is chosen by this flag.
+
+        macOS runners are the most expensive Actions SKU, and every code change used to
+        select one (15 of the last 20 pull requests).
+        """
+        for path in (
+            "crates/tenferro-gpu/src/metal.rs",
+            "crates/tenferro-fft/src/lib.rs",
+            "crates/tenferro-linalg/src/lib.rs",
+            "crates/tenferro-fft/Cargo.toml",
+            "scripts/check-macos-no-framework-link.sh",
+        ):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertTrue(policy.run_rust)
                 self.assertTrue(policy.run_macos)
+        for path in (
+            "crates/tenferro-einsum/src/lib.rs",
+            "crates/tenferro-mpi/src/lib.rs",
+            "crates/tenferro-cpu/src/lib.rs",
+            "crates/tenferro-gpu/src/cuda/engine.rs",  # `cuda` feature: never built on macOS
+            "Cargo.lock",
+            "Cargo.toml",
+            "scripts/run-mpi.sh",
+        ):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertTrue(policy.run_rust)
+                self.assertTrue(policy.run_gpu)
+                self.assertFalse(policy.run_macos)
+        # One sensitive path anywhere in the diff selects it.
+        self.assertTrue(
+            classify_paths(
+                ["crates/tenferro-einsum/src/lib.rs", "crates/tenferro-fft/src/lib.rs"]
+            ).run_macos
+        )
 
     def test_push_to_main_forces_comprehensive_lanes(self) -> None:
         policy = classify_paths(["README.md"], event="push")
@@ -432,7 +473,8 @@ class RustCommentPolicyTests(unittest.TestCase):
         # Doc comments still hold doctests, so every hosted lane keeps running.
         self.assertTrue(policy.run_rust)
         self.assertTrue(policy.run_docs)
-        self.assertTrue(policy.run_macos)
+        # ...but a comment edit outside the crates the macOS profile tests needs no macOS run.
+        self.assertFalse(policy.run_macos)
         self.assertIn("docs-only Rust comments", "; ".join(policy.reasons))
         self.assertIn(self.LIB, "; ".join(policy.reasons))
 
