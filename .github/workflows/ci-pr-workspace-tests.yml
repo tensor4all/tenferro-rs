@@ -248,11 +248,11 @@ jobs:
     # `run_mpi` is true whenever Rust runs and when a CI-only diff touches the
     # lane's own files (scripts/ci/change_policy.py), so the lane cannot pass a
     # change to itself by no-op.
-    # Hosted ubuntu-24.04 has 4 vCPUs, so two ranks need no --oversubscribe and no
-    # self-hosted runner.
+    # Hosted ubuntu runners have 4 vCPUs, so two ranks need no --oversubscribe and
+    # no self-hosted runner.
     name: MPI two-rank (${{ matrix.arm.name }})
     needs: changes
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.arm.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -261,10 +261,16 @@ jobs:
           # system backend against each, built and launched by the same family.
           - name: upstream / Open MPI
             key: upstream-openmpi
+            os: ubuntu-24.04
             profile: mpi-upstream
             packages: openmpi-bin libopenmpi-dev libclang-dev
+          # ubuntu-22.04, not 24.04: noble's mpich 4.2.0-5build3 links libmpich
+          # against PMIx while its hydra `mpiexec` serves only PMI, so `mpiexec -n 2`
+          # starts two singletons (a plain C MPI program prints "rank 0 of 1" twice).
+          # Jammy's mpich 4.0-3 forms a real two-rank world.
           - name: upstream / MPICH
             key: upstream-mpich
+            os: ubuntu-22.04
             profile: mpi-upstream
             packages: mpich libmpich-dev libclang-dev
           # The current runtime backend loads MPI through MPIwrapper (MPI_RT_LIB),
@@ -273,6 +279,7 @@ jobs:
           # step and keeps the profile.
           - name: rt / Open MPI + MPIwrapper
             key: rt-openmpi
+            os: ubuntu-24.04
             profile: mpi-runtime
             packages: openmpi-bin libopenmpi-dev cmake gfortran
     env:

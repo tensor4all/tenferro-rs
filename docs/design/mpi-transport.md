@@ -52,7 +52,7 @@ so the root `cargo clippy`/`cargo test` lanes build it without MPI headers, libc
 or an MPI launcher. The `mpi` job of the `CI PR workspace tests` workflow, which feeds
 the required `CI gate (PR workspace tests)`, installs the MPI toolchain and runs the
 scenarios as a real two-rank world in three arms: `system` against Open MPI, `system`
-against MPICH, and `runtime` against Open MPI through an MPIwrapper built from a
+against MPICH (on ubuntu-22.04, whose MPICH package forms a two-rank world), and `runtime` against Open MPI through an MPIwrapper built from a
 pinned release. `scripts/ci/run-mpi-ranks.sh` fails an arm unless both ranks report
 success. The crate no longer carries its own `Cargo.lock`; the root lock and
 `cargo metadata` cover it.
