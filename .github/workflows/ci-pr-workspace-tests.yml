@@ -261,27 +261,30 @@ jobs:
           # system backend against each, built and launched by the same family.
           - name: upstream / Open MPI
             key: upstream-openmpi
+            family: openmpi
             os: ubuntu-24.04
             profile: mpi-upstream
-            packages: openmpi-bin libopenmpi-dev libclang-dev
+            packages: openmpi-bin libopenmpi-dev libclang-dev pkg-config
           # ubuntu-22.04, not 24.04: noble's mpich 4.2.0-5build3 links libmpich
           # against PMIx while its hydra `mpiexec` serves only PMI, so `mpiexec -n 2`
           # starts two singletons (a plain C MPI program prints "rank 0 of 1" twice).
           # Jammy's mpich 4.0-3 forms a real two-rank world.
           - name: upstream / MPICH
             key: upstream-mpich
+            family: mpich
             os: ubuntu-22.04
             profile: mpi-upstream
-            packages: mpich libmpich-dev libclang-dev
+            packages: mpich libmpich-dev libclang-dev pkg-config
           # The current runtime backend loads MPI through MPIwrapper (MPI_RT_LIB),
           # built below from a pinned release against the runner's Open MPI. The
           # native-handle rewrite deletes MPIwrapper; this arm then drops the build
           # step and keeps the profile.
           - name: rt / Open MPI + MPIwrapper
             key: rt-openmpi
+            family: openmpi
             os: ubuntu-24.04
             profile: mpi-runtime
-            packages: openmpi-bin libopenmpi-dev cmake gfortran
+            packages: openmpi-bin libopenmpi-dev cmake gfortran pkg-config
     env:
       MPIWRAPPER_TAG: v2.11.0
       MPIWRAPPER_COMMIT: 1e991827041406f6d30e134187bcdbabb56f483d
@@ -300,7 +303,34 @@ jobs:
           sudo apt-get update
           # shellcheck disable=SC2086 # PACKAGES is a space-separated list
           sudo apt-get install -y --no-install-recommends ${PACKAGES}
-          mpiexec --version | head -n 2
+      # Installing a family only adds alternative candidates; a runner image that
+      # already carries the other family would keep it selected and the arm would
+      # test that family twice. Select the arm's family explicitly and fail unless
+      # the launcher, the compiler wrapper and `pkg-config mpi` all agree. This runs
+      # before the Rust cache, whose key is per arm.
+      - name: Select and verify the MPI family
+        if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true'
+        env:
+          FAMILY: ${{ matrix.arm.family }}
+        run: |
+          case "${FAMILY}" in
+            mpich) launcher='HYDRA'; library='mpich' ;;
+            openmpi) launcher='Open MPI|OpenRTE'; library='openmpi' ;;
+            *) echo "unknown MPI family ${FAMILY}" >&2; exit 2 ;;
+          esac
+          # Debian registers the compiler wrappers (`mpi`), the launcher (`mpirun`) and the
+          # headers plus `mpi.pc` (`mpi-<triplet>`) as three separate alternative groups.
+          for group in mpi mpirun "mpi-$(gcc -dumpmachine)"; do
+            choice=$(update-alternatives --list "${group}" | grep -m 1 "${library}") ||
+              { echo "no ${FAMILY} candidate for the ${group} alternative" >&2; exit 1; }
+            sudo update-alternatives --set "${group}" "${choice}"
+          done
+          mpiexec --version | head -n 3
+          mpicc -show
+          pkg-config --cflags --libs mpi
+          mpiexec --version | grep -Eq "${launcher}" || { echo "mpiexec is not ${FAMILY}" >&2; exit 1; }
+          mpicc -show | grep -q "${library}" || { echo "mpicc does not build against ${FAMILY}" >&2; exit 1; }
+          pkg-config --cflags --libs mpi | grep -q "${library}" || { echo "pkg-config mpi is not ${FAMILY}" >&2; exit 1; }
       - name: Build MPIwrapper
         if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true' && matrix.arm.profile == 'mpi-runtime'
         run: |
