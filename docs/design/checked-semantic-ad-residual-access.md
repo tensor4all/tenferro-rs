@@ -60,7 +60,11 @@ consult it (`:208-223`). An explicit single index
 Rules that declare "all" therefore have no operand limit; rules that declare individual indices are limited
 to `0..64`. Tests:
 `crates/tenferro-internal-ops/src/primitive_rules/tests.rs:50-58` (refusal),
-`crates/tenferro-einsum/tests/integration/many_operand_vjp.rs:26` (65-operand einsum VJP reads every residual).
+`crates/tenferro-internal-ops/src/primitive_rules/tests.rs:98-100` (`declares_input(64)`/`declares_output(64)` on an
+all-index mask; runs in the default lane), and `crates/tenferro-einsum/tests/integration/many_operand_vjp.rs:26`
+(65-operand einsum VJP reads every residual). The latter is `#![cfg(feature = "autodiff")]` (`:1`) and is compiled out of a
+default `cargo nextest run --workspace`; per the review of this PR, only the GPU workflows enable that feature, so do not count it
+as default-lane protection.
 
 ## Dispatch and retention
 
@@ -87,13 +91,15 @@ Found in the tree (checked 2026-11-27):
 - Declared access, metadata access, counts, and the bounds error: `crates/tenferro-ad/src/semantic_extension/tests.rs:104`
   (bounds error asserted at `:147`, undeclared at `:160`).
 - No raw primal value slice on transpose/direct requests: `crates/tenferro-ad/tests/integration/semantic_extension.rs:254`.
-- Wilson-like multi-input fixtures: `crates/tenferro-ad/tests/integration/multi_input_traced.rs:20-21`.
+- Wilson-like multi-input fixtures in `crates/tenferro-ad/tests/integration/multi_input_traced.rs`: inactive inputs
+  (`request.active_inputs()[index]`, `:194`) and non-unit cotangent seeds (`2.0` at `:223`, `11.0` at `:288`).
 - `ResidualSpec` arity: see "`ResidualSpec` arity" above.
 
 - Bounds errors precede mask errors: the rule in `crates/tenferro-ad/tests/integration/semantic_extension.rs:194-237`
   declares `ResidualSpec::none()` and reads input 1 of a length-1 request, which is both out of bounds and
-  undeclared, and requires `PrimalIndexOutOfBounds`; the dispatch test at `:559` runs it. Swapping the two checks in
-  `checked_primal_value` (`semantic_extension.rs:1188-1215`) would fail it.
+  undeclared, and requires `PrimalIndexOutOfBounds`; the dispatch test at `:518` (which registers `IdentityRule`) runs it.
+  Swapping the two checks in `checked_primal_value` (`semantic_extension.rs:1188-1215`) would fail `:518`.
+  The test at `:559` reads index 0 only and is decided by the mask, so it does **not** guard the order.
 - Retention follows the mask, partially: `crates/tenferro-ad/src/eager/tests/residuals.rs:154`
   (`intermediate_inputs_are_retained_without_retaining_all_outputs`) asserts retained counts. It is not an
   "equals the declared mask positions" test, because `collect()` dedupes by semantic identity
@@ -108,9 +114,9 @@ declared mask positions. Treat these as unverified until a test is cited here.
 - No derivative-math or activity-analysis change.
 - No automatic mask widening.
 - No retain-all compatibility path or deprecated raw accessor.
-- No panic/debug-assert enforcement.
+- No panic/debug-assert enforcement of undeclared value access: it is a typed `SemanticAdError`. (The `assert!` that refuses an explicit `ResidualSpec` index `>= 64` is a separate, construction-time guard, see above.)
 - No restriction on `SemanticLinearizeRequest` primal access.
 
 ## Verification
 
-Run focused semantic extension/transform tests in debug and release-equivalent profiles, all standard and nested extension tests, `tenferro-ad` doctests/clippy, retention/coverage checks, and combined PR gates.
+Run the focused semantic extension tests in `tenferro-ad` (`cargo nextest run -p tenferro-ad --features autodiff`), the `ResidualSpec` tests in `tenferro-internal-ops`, `tenferro-ad` doctests and clippy, and the repository PR gates. No release-profile lane exists in `scripts/ci/run_profile.py`; the original "release-equivalent" requirement is unmet.
