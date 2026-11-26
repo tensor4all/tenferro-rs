@@ -164,7 +164,3 @@ cpueinsum = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "9f1
 # source or `Exec` becomes two types.
 tcontract = { git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }
 tcontract-exec = { git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }
-# rsmpi-rt 0.9.0 (tensor4all/rsmpi-rt#8: `mpi-native-sys-backend`, MPItrampoline backend removed,
-# tenferro-rs#2735) is not on crates.io yet. Drop this line when it is released;
-# `tenferro-mpi` already requires `0.9.0`.
-rsmpi-rt = { git = "https://github.com/tensor4all/rsmpi-rt.git", rev = "3a91dabadc29b43bcedd5ff8d31e68f9f5315011" }

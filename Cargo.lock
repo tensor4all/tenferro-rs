@@ -81,7 +81,8 @@ dependencies = [
 [[package]]
 name = "build-probe-mpi"
 version = "0.1.6"
-source = "git+https://github.com/tensor4all/rsmpi-rt.git?rev=3a91dabadc29b43bcedd5ff8d31e68f9f5315011#3a91dabadc29b43bcedd5ff8d31e68f9f5315011"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abee715b93fb80cbca8602265e0c2acd40b60df81fab1f3fd29a734babd697e7"
 dependencies = [
  "pkg-config",
  "shell-words",
@@ -875,7 +876,8 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 [[package]]
 name = "mpi-native-sys"
 version = "0.1.0"
-source = "git+https://github.com/tensor4all/rsmpi-rt.git?rev=3a91dabadc29b43bcedd5ff8d31e68f9f5315011#3a91dabadc29b43bcedd5ff8d31e68f9f5315011"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48dd3f6e85b88d2c6ebfe2a4faa7841adc81367d2fafa80d5de580f9e30ae67b"
 dependencies = [
  "libc",
 ]
@@ -1341,7 +1343,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rsmpi-rt"
 version = "0.9.0"
-source = "git+https://github.com/tensor4all/rsmpi-rt.git?rev=3a91dabadc29b43bcedd5ff8d31e68f9f5315011#3a91dabadc29b43bcedd5ff8d31e68f9f5315011"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a0015e290e0fcfe6b7161ab0af8c05852a889b3935754c631662df205fe20e3"
 dependencies = [
  "build-probe-mpi",
  "conv",
@@ -1355,7 +1358,8 @@ dependencies = [
 [[package]]
 name = "rsmpi-sys"
 version = "0.2.4"
-source = "git+https://github.com/tensor4all/rsmpi-rt.git?rev=3a91dabadc29b43bcedd5ff8d31e68f9f5315011#3a91dabadc29b43bcedd5ff8d31e68f9f5315011"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbb9f6b806a117bd01aabff312df19e4d6c271debf051a0eef54013338c6594f"
 dependencies = [
  "bindgen",
  "build-probe-mpi",
