@@ -856,6 +856,12 @@ impl CpuEngine {
 
     /// Drop every retained buffer and contraction scratch.
     ///
+    /// This does not release the engine's cached plans, which own tcontract's
+    /// scatter tables (hundreds of MiB per plan on a large free group). Those are
+    /// counted in [`CpuEngine::runtime_cache_stats`], bounded by
+    /// [`CpuPlanCache::set_contraction_limit_bytes`](crate::CpuPlanCache::set_contraction_limit_bytes),
+    /// and released by `plan_cache().clear()`.
+    ///
     /// # Examples
     ///
     /// ```

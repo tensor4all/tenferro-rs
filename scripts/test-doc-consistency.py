@@ -467,6 +467,11 @@ def test_removed_tensor_module_paths_do_not_compile() -> None:
                 tenferro-einsum = {{ path = "{ROOT / 'crates/tenferro-einsum'}", features = ["autodiff"] }}
                 tenferro-linalg = {{ path = "{ROOT / 'crates/tenferro-linalg'}", features = ["autodiff"] }}
                 tenferro-fft = {{ path = "{ROOT / 'crates/tenferro-fft'}", features = ["autodiff"] }}
+
+                [patch.crates-io]
+                cpueinsum = {{ git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "9f11997" }}
+                tcontract = {{ git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }}
+                tcontract-exec = {{ git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }}
                 """
             ).strip()
             + "\n",

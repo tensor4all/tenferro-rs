@@ -435,14 +435,47 @@ struct CachedBinary {
     key: Key,
     config: DotGeneralConfig,
     plan: Arc<dyn Any + Send + Sync>,
+    /// `BinaryPlan::retained_bytes` of `plan`, read once when it was stored: the
+    /// plan header plus the heap behind it, scatter tables included.
+    plan_bytes: usize,
+    /// `BinaryCache::tick` at the last hit or store; the least value is the LRU plan.
+    last_used: u64,
 }
-#[derive(Default)]
+
+/// Default byte bound on the lower plans a contraction cache retains: 1 GiB.
+///
+/// The plan bytes are `tcontract` scatter tables, one `i64` per index of each
+/// role group. A plan is a few KiB for an ordinary GEMM and hundreds of MiB when an
+/// operand has a large free group (384 MiB for a two-qubit gate on a 26-qubit
+/// state), so 1 GiB keeps every ordinary workload whole and holds two of those.
+pub(crate) const DEFAULT_BINARY_CACHE_LIMIT_BYTES: usize = 1 << 30;
+
 pub(crate) struct BinaryCache {
     slots: Vec<Option<CachedBinary>>,
+    /// Sum of `plan_bytes` over the occupied slots.
+    plan_bytes: usize,
+    /// Bound on `plan_bytes`; see [`DEFAULT_BINARY_CACHE_LIMIT_BYTES`].
+    limit_bytes: usize,
+    /// Advances on every hit and store; orders the slots by recency.
+    tick: u64,
     hits: u64,
     misses: u64,
     evictions: u64,
     clears: u64,
+}
+impl Default for BinaryCache {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            plan_bytes: 0,
+            limit_bytes: DEFAULT_BINARY_CACHE_LIMIT_BYTES,
+            tick: 0,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
+        }
+    }
 }
 impl fmt::Debug for BinaryCache {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -455,6 +488,7 @@ impl BinaryCache {
     pub(crate) fn clear(&mut self) {
         self.slots.clear();
         self.slots.shrink_to_fit();
+        self.plan_bytes = 0;
         self.clears = self.clears.saturating_add(1);
     }
     pub(crate) fn stats(&self) -> tenferro_tensor::CacheStats {
@@ -468,11 +502,8 @@ impl BinaryCache {
         };
         for entry in self.slots.iter().flatten() {
             stats.entries += 1;
-            // Known owned descriptor payload and opaque lower plan headers.
-            // Lower-private metadata heaps need a lower-library footprint report.
-            stats.retained_bytes = stats
-                .retained_bytes
-                .saturating_add(std::mem::size_of_val(entry.plan.as_ref()));
+            // The lower plan's own report: header, metadata heaps and scatter tables.
+            stats.retained_bytes = stats.retained_bytes.saturating_add(entry.plan_bytes);
             for layout in [&entry.key.lhs, &entry.key.rhs, &entry.key.out] {
                 if layout.dims.is_heap() {
                     stats.retained_bytes = stats
@@ -510,6 +541,40 @@ impl BinaryCache {
         );
         self.slots.truncate(capacity);
         self.slots.shrink_to(capacity);
+        self.plan_bytes = self.slots.iter().flatten().map(|e| e.plan_bytes).sum();
+    }
+
+    pub(crate) fn limit_bytes(&self) -> usize {
+        self.limit_bytes
+    }
+
+    /// Bound the lower plan bytes retained, evicting least recently used plans
+    /// until they fit.
+    pub(crate) fn set_limit_bytes(&mut self, limit_bytes: usize) {
+        self.limit_bytes = limit_bytes;
+        self.evict_to_limit(None);
+    }
+
+    /// Drop least recently used plans until `plan_bytes` fits the limit, never
+    /// the plan in `keep`.
+    fn evict_to_limit(&mut self, keep: Option<usize>) {
+        while self.plan_bytes > self.limit_bytes {
+            let Some(victim) = self
+                .slots
+                .iter()
+                .enumerate()
+                .filter(|(slot, _)| Some(*slot) != keep)
+                .filter_map(|(slot, entry)| entry.as_ref().map(|e| (slot, e.last_used)))
+                .min_by_key(|&(_, last_used)| last_used)
+                .map(|(slot, _)| slot)
+            else {
+                return;
+            };
+            if let Some(entry) = self.slots[victim].take() {
+                self.plan_bytes = self.plan_bytes.saturating_sub(entry.plan_bytes);
+                self.evictions = self.evictions.saturating_add(1);
+            }
+        }
     }
     /// The plan for `key`, cached in `slot` when the slot is within `capacity`.
     ///
@@ -571,9 +636,21 @@ impl BinaryCache {
             .is_some_and(|entry| entry.key == key && entry.config == *config);
         if matches {
             self.hits = self.hits.saturating_add(1);
+            self.tick = self.tick.wrapping_add(1);
+            if let Some(entry) = self.slots[slot].as_mut() {
+                entry.last_used = self.tick;
+            }
         } else {
             self.misses = self.misses.saturating_add(1);
             let plan = prepare()?;
+            let plan_bytes = plan.retained_bytes();
+            if plan_bytes > self.limit_bytes {
+                // Alone over the bound: hand it out for this call and keep nothing.
+                // The slot's previous plan stays; it still fits.
+                return Ok(Arc::new(plan));
+            }
+            self.tick = self.tick.wrapping_add(1);
+            let last_used = self.tick;
             if self.slots.len() <= slot {
                 self.slots
                     .try_reserve(slot + 1 - self.slots.len())
@@ -587,6 +664,9 @@ impl BinaryCache {
                 // type; both fall back to a fresh `Arc`, and the old one stays
                 // valid for its holder.
                 Some(entry) => {
+                    self.plan_bytes = self.plan_bytes.saturating_sub(entry.plan_bytes);
+                    entry.plan_bytes = plan_bytes;
+                    entry.last_used = last_used;
                     match Arc::get_mut(&mut entry.plan)
                         .and_then(|plan| plan.downcast_mut::<BinaryPlan<T>>())
                     {
@@ -601,9 +681,13 @@ impl BinaryCache {
                         key,
                         config: config.clone(),
                         plan: Arc::new(plan),
+                        plan_bytes,
+                        last_used,
                     });
                 }
             }
+            self.plan_bytes = self.plan_bytes.saturating_add(plan_bytes);
+            self.evict_to_limit(Some(slot));
         }
         let plan = self.slots[slot]
             .as_ref()

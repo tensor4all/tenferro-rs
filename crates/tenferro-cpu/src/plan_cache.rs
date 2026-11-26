@@ -195,6 +195,53 @@ impl CpuPlanCache {
         self.lock().gemm.set_capacity(max_plans);
     }
 
+    /// The byte bound on the contraction plans' retained memory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let plans = tenferro_cpu::CpuPlanCache::new();
+    /// assert_eq!(plans.contraction_limit_bytes(), 1 << 30);
+    /// ```
+    pub fn contraction_limit_bytes(&self) -> usize {
+        self.lock().gemm.limit_bytes()
+    }
+
+    /// Bound the bytes the cached contraction plans retain; zero retains none.
+    ///
+    /// A cached plan owns tcontract's scatter tables, one `i64` per index of
+    /// each role group of the packed strategy. They scale with the operands'
+    /// free extents, not with the rank: an ordinary GEMM plan is a few KiB, a
+    /// two-qubit gate on a 26-qubit complex64 state holds 384 MiB. The bytes
+    /// counted are [`CpuPlanCache::stats`]'s `retained_bytes` for this family
+    /// ([`CpuPlanCache::contraction_stats`]), and the default is 1 GiB.
+    ///
+    /// When storing a plan takes the total over the bound, the least recently
+    /// used plans (a hit or a store counts as use) are evicted until it fits,
+    /// and each eviction is counted in `evictions`. A plan that alone exceeds
+    /// the bound is used for its call and not kept, so the next call rebuilds
+    /// its tables. Recency is the order because a repeated workload re-reads
+    /// what it used last; a loop over more plans than fit rebuilds every one of
+    /// them, so raise the bound to the loop's working set. An evicted plan's
+    /// memory is freed when its last holder drops it, which is immediately
+    /// unless a contraction is still running on it. Plans that stay under the
+    /// bound behave as before.
+    ///
+    /// Neither [`CpuEngine::reset_buffer_pool`](crate::CpuEngine::reset_buffer_pool)
+    /// nor dropping an engine that shares this cache releases cached plans;
+    /// [`CpuPlanCache::clear`] does.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let plans = tenferro_cpu::CpuPlanCache::new();
+    /// plans.set_contraction_limit_bytes(1 << 20);
+    /// assert_eq!(plans.contraction_limit_bytes(), 1 << 20);
+    /// ```
+    pub fn set_contraction_limit_bytes(&self, max_retained_bytes: usize) {
+        self.lock().gemm.set_limit_bytes(max_retained_bytes);
+    }
+
     /// Bounds of the indexed-traversal family.
     ///
     /// # Examples

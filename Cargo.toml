@@ -153,3 +153,13 @@ incremental = true
 inherits = "test"
 incremental = false
 strip = "symbols"
+
+# tensor4all/cpueinsum-rs#92: `BinaryPlan::retained_bytes`, which the plan cache
+# charges against its byte bound (#2742). Drop this patch when cpueinsum releases it.
+[patch.crates-io]
+cpueinsum = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "9f11997" }
+# cpueinsum's git workspace takes tcontract and tcontract-exec from this rev (its
+# `tcontract-capi` is not published), so the registry copies must resolve to the same
+# source or `Exec` becomes two types.
+tcontract = { git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }
+tcontract-exec = { git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }

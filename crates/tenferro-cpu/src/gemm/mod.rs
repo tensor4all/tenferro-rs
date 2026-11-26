@@ -53,6 +53,19 @@ impl GemmAnalysisCache {
         self.binary.set_capacity(max_slots);
         self.max_slots = max_slots;
     }
+
+    /// The byte bound on the lower plan memory the cache retains.
+    #[doc(hidden)]
+    pub fn limit_bytes(&self) -> usize {
+        self.binary.limit_bytes()
+    }
+
+    /// Bound the lower plan memory retained, evicting least recently used plans
+    /// until they fit.
+    #[doc(hidden)]
+    pub fn set_limit_bytes(&mut self, limit_bytes: usize) {
+        self.binary.set_limit_bytes(limit_bytes);
+    }
 }
 
 impl Default for GemmAnalysisCache {
