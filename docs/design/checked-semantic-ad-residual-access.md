@@ -35,11 +35,11 @@ The two checked request structs cease to be `Copy`; their accessors borrow `&sel
 
 ## Implementation record
 
-Every row was read against the code, not carried over from the design.
+Every row was read against the code at `e608e7ec`, not carried over from the design.
 
 | Claim | Where |
 | --- | --- |
-| `PrimalValueKind::{Input, Output}` is public and `#[non_exhaustive]` | `crates/tenferro-ad/src/semantic_extension.rs:78-84` |
+| `PrimalValueKind::{Input, Output}` is public and `#[non_exhaustive]` | `crates/tenferro-ad/src/semantic_extension.rs:77-84` |
 | `PrimalIndexOutOfBounds { family_id, kind, index, len }` and `UndeclaredResidualValue { family_id, kind, index }` | `crates/tenferro-ad/src/semantic_extension.rs:120-140` |
 | Transpose request: `primal_{input,output}_value`, `_meta`, `_count` on `&self` | `crates/tenferro-ad/src/semantic_extension.rs:307,334,360,388,412,428` |
 | Direct primal-VJP request: the same six accessors | `crates/tenferro-ad/src/semantic_extension.rs:556,583,609,637,661,677` |
@@ -53,9 +53,10 @@ Every row was read against the code, not carried over from the design.
 ### `ResidualSpec` arity
 
 `ResidualSpec` keeps one bit per index for `0..64` plus one flag per side that declares every index `>= 64`
-(`crates/tenferro-internal-ops/src/primitive_rules/mod.rs:102-113`). `all_inputs()`/`all_outputs()` set the
-flag (`:198-205`), and `declares_input`/`declares_output` consult it (`:208-222`). An explicit single index
-`>= 64` cannot be stored, so it is refused with an `assert!` in every build (`index_bit`, `:119-125`).
+(`crates/tenferro-internal-ops/src/primitive_rules/mod.rs:101-111`). `all_inputs()`/`all_outputs()` (`:198-205`) delegate to
+`with_all_inputs`/`with_all_outputs`, which set the flag (`:180-191`), and `declares_input`/`declares_output`
+consult it (`:208-223`). An explicit single index
+`>= 64` cannot be stored, so it is refused with an `assert!` in every build (`index_bit`, `:118-124`).
 Rules that declare "all" therefore have no operand limit; rules that declare individual indices are limited
 to `0..64`. Tests:
 `crates/tenferro-internal-ops/src/primitive_rules/tests.rs:50-58` (refusal),
@@ -89,10 +90,18 @@ Found in the tree (checked 2026-11-27):
 - Wilson-like multi-input fixtures: `crates/tenferro-ad/tests/integration/multi_input_traced.rs:20-21`.
 - `ResidualSpec` arity: see "`ResidualSpec` arity" above.
 
-Originally listed but **not** located by name in this audit: a test that bounds errors precede mask errors
-(the order is implemented in `checked_primal_value`, but no test was found asserting the precedence), a
-release-profile-specific run, and a retention test asserting saved residual bindings equal the declared mask
-positions. Treat these as unverified until a test is cited here.
+- Bounds errors precede mask errors: the rule in `crates/tenferro-ad/tests/integration/semantic_extension.rs:194-237`
+  declares `ResidualSpec::none()` and reads input 1 of a length-1 request, which is both out of bounds and
+  undeclared, and requires `PrimalIndexOutOfBounds`; the dispatch test at `:559` runs it. Swapping the two checks in
+  `checked_primal_value` (`semantic_extension.rs:1188-1215`) would fail it.
+- Retention follows the mask, partially: `crates/tenferro-ad/src/eager/tests/residuals.rs:154`
+  (`intermediate_inputs_are_retained_without_retaining_all_outputs`) asserts retained counts. It is not an
+  "equals the declared mask positions" test, because `collect()` dedupes by semantic identity
+  (`crates/tenferro-ad/src/eager/residuals.rs:45-56`).
+
+Originally listed but **not** found: a release-profile-specific test run (no `--release` or `--all-features`
+lane exists in `scripts/ci/run_profile.py`) and a test asserting saved residual bindings are exactly the
+declared mask positions. Treat these as unverified until a test is cited here.
 
 ## Non-goals
 
