@@ -23,7 +23,7 @@ include = [
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]
 # docs.rs otherwise builds `default = []` and would show only the protocol shell.
-# The runtime backend is the MPIABI loader, so building it needs no MPI headers.
+# The runtime backend resolves MPI at run time, so building it needs no MPI headers.
 features = ["runtime"]
 
 # A workspace member. Neither backend is a default feature: `default = []` keeps
@@ -35,19 +35,20 @@ default = []
 # rsmpi-rt's bindgen backend: crates.io rsmpi-sys 0.2.4 (aliased as `mpi-sys` inside
 # rsmpi-rt; library `mpi_sys`) and therefore system MPI headers and libclang.
 system = ["dep:mpi", "mpi/mpi-sys-backend"]
-# rsmpi-rt's MPIABI runtime-loading backend: crates.io mpi-rt-sys 0.1.0, no headers.
-runtime = ["dep:mpi", "mpi/mpi-rt-sys-backend"]
+# rsmpi-rt's native-handle backend: `mpi-native-sys`, which resolves the host's MPI
+# library at run time and passes that library's own handles. No headers, no wrapper.
+runtime = ["dep:mpi", "mpi/mpi-native-sys-backend"]
 # Protocol only, no MPI binding.
 engine = []
 
 [dependencies]
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.13.0", default-features = false }
 thiserror = "2"
-# The published rsmpi-rt 0.8.2 package kept its library target as `mpi`, so the
+# The rsmpi-rt package keeps its library target as `mpi`, so the
 # dependency is aliased back to `mpi` and the adapter's `use mpi::...` paths and
 # public re-export keep working. `default-features = false` is required: the default
 # is the system-MPI backend, which neither feature may select implicitly.
-mpi = { package = "rsmpi-rt", version = "0.8.2", default-features = false, optional = true }
+mpi = { package = "rsmpi-rt", version = "0.9.0", default-features = false, optional = true }
 
 [[test]]
 name = "mpi_p2p"

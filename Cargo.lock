@@ -81,8 +81,6 @@ dependencies = [
 [[package]]
 name = "build-probe-mpi"
 version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abee715b93fb80cbca8602265e0c2acd40b60df81fab1f3fd29a734babd697e7"
 dependencies = [
  "pkg-config",
  "shell-words",
@@ -874,12 +872,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
-name = "mpi-rt-sys"
+name = "mpi-native-sys"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "967a92cabd0253ac2e199561f317bfa004c58f16c16477aa3a48ebcbaef38d97"
 dependencies = [
- "libloading 0.8.9",
+ "libc",
 ]
 
 [[package]]
@@ -1342,13 +1338,11 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rsmpi-rt"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0df5d8162f1b2c99e8b1d782753cca3c3bc024056c66ef490c470ca1ed55bd82"
+version = "0.9.0"
 dependencies = [
  "build-probe-mpi",
  "conv",
- "mpi-rt-sys",
+ "mpi-native-sys",
  "once_cell",
  "rsmpi-sys",
  "smallvec",
@@ -1358,8 +1352,6 @@ dependencies = [
 [[package]]
 name = "rsmpi-sys"
 version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbb9f6b806a117bd01aabff312df19e4d6c271debf051a0eef54013338c6594f"
 dependencies = [
  "bindgen",
  "build-probe-mpi",
