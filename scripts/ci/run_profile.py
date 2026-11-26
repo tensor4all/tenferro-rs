@@ -78,7 +78,9 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     # libclang, while `runtime` links rsmpi-rt and needs MPIwrapper at run time
     # through MPI_RT_LIB. The scenarios are `harness = false` and need a real
     # launcher, so scripts/run-mpi.sh supplies `mpiexec -n 2`; a bare `cargo test`
-    # covers only the single-process checks.
+    # covers only the single-process checks. #2735: scripts/ci/run-mpi-ranks.sh
+    # wraps it and fails unless both ranks report success, because a scenario that
+    # sees a world of one skips with exit 0.
     "mpi-upstream": (
         f"cargo clippy -p tenferro-mpi --features system --all-targets -- {_CLIPPY_FLAGS}",
         # `cargo test` runs the unit tests, the scenario target (which skips on one
@@ -86,7 +88,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "cargo test -p tenferro-mpi --features system -j 4",
         "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-mpi --features system -j 4 --no-deps",
         "scripts/check-mpi-features.sh tenferro-mpi",
-        "scripts/run-mpi.sh upstream",
+        "scripts/ci/run-mpi-ranks.sh upstream",
     ),
     "mpi-runtime": (
         # The crate-level and entry-point doctests call `mpi::initialize`, so this lane
@@ -99,7 +101,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "cargo test -p tenferro-mpi --features runtime -j 4",
         "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-mpi --features runtime -j 4 --no-deps",
         "scripts/check-mpi-features.sh tenferro-mpi --runtime-only",
-        "scripts/run-mpi.sh rt",
+        "scripts/ci/run-mpi-ranks.sh rt",
     ),
     "extensions": (
         f"cargo test --manifest-path ext/tropical/Cargo.toml {_CARGO_TEST_PROFILE} "
