@@ -15,6 +15,8 @@
 
 #![allow(non_camel_case_types)]
 #![deny(missing_docs)]
+// Empty without the `runtime` feature, so the root workspace lanes build no MPI binding.
+#![cfg(feature = "runtime")]
 
 #[cfg(panic = "abort")]
 compile_error!(

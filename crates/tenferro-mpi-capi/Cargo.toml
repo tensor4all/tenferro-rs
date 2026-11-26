@@ -13,15 +13,20 @@ readme = "README.md"
 # `rlib` lets the tests call the entries directly; `cdylib` is what a host loads.
 crate-type = ["cdylib", "rlib"]
 
+# `default = []` keeps this crate empty in the root workspace lanes: depending on tenferro-mpi
+# with `runtime` unconditionally would turn that feature (and rsmpi-rt) on for every
+# `cargo test --workspace` through feature unification. Build the C library with
+# `cargo build -p tenferro-mpi-capi --features runtime --release`.
 [features]
 default = []
+runtime = ["dep:tenferro-mpi", "dep:tenferro-tensor"]
 # Exports `tfe_mpi_test_hit_stub`, which forces a panic stub so the scenarios can show that
 # a panic is caught at the C boundary and poisons the communicator object (D10).
-test-hooks = []
+test-hooks = ["runtime"]
 
 [dependencies]
-tenferro-mpi = { path = "../tenferro-mpi", version = "0.1.0", features = ["runtime"] }
-tenferro-tensor = { path = "../tenferro-tensor", version = "0.13.0", default-features = false }
+tenferro-mpi = { path = "../tenferro-mpi", version = "0.1.0", features = ["runtime"], optional = true }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.13.0", default-features = false, optional = true }
 
 [[test]]
 name = "capi_two_rank"

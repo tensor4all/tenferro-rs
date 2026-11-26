@@ -100,7 +100,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "cargo test -p tenferro-mpi --features runtime -j 4",
         "cargo test -p tenferro-mpi-capi --features test-hooks -j 4",
         "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-mpi --features runtime -j 4 --no-deps",
-        "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-mpi-capi -j 4 --no-deps",
+        "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-mpi-capi --features runtime -j 4 --no-deps",
         "scripts/check-mpi-features.sh tenferro-mpi --runtime-only",
         "scripts/ci/run-mpi-ranks.sh rt",
         "scripts/ci/run-mpi-ranks.sh capi",

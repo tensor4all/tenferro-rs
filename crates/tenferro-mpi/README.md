@@ -31,7 +31,7 @@ tenferro-mpi = { version = "0.1", features = ["runtime"] }
 
 `runtime` enables rsmpi-rt's `mpi-native-sys-backend`. It resolves MPI at run time in the
 library the process already loaded (MPI.jl, mpi4py) or, for a Rust program that calls
-`mpi::initialize()` itself, finds one by soname (`libmpi.so.12`, then `libmpi.so.40`, ...);
+`mpi::initialize()` itself, finds one by soname (`libmpi.so.12`, `libmpich.so.12` for Debian/Ubuntu MPICH, `libmpi.so.40`, ...);
 `MPI_NATIVE_LIB=/path/to/libmpi.so.N` overrides that search. No headers, no libclang, no wrapper
 library to build. Calls go to that library with its own handles, so the MPICH ABI (MPICH, Intel MPI,
 MVAPICH, Cray MPICH), the Open MPI ABI (Open MPI, Fujitsu MPI, IBM Spectrum MPI) and the MPI 5.0

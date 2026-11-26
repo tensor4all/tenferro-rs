@@ -10,6 +10,8 @@ finalizes MPI, never duplicates or frees a communicator, and never changes the c
 error handler. Give tenferro a communicator of its own (`MPI.Comm_dup`, `comm.Dup()`) so a
 host message cannot collide with a tenferro tag.
 
+Build it with `cargo build -p tenferro-mpi-capi --features runtime --release`; without `runtime` the crate is empty, so `cargo test --workspace` pulls in no MPI binding.
+
 The contract is `docs/design/mpi-native-abi.md` and `docs/design/mpi-transport.md`.
 
 | Function | Purpose |

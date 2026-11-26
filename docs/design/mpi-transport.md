@@ -101,7 +101,7 @@ The contract of what shipped; `mpi-native-abi.md` keeps the decisions and the au
   success is cached.
 - **Library.** With a host that already initialized MPI, the loaded library is found by
   walking the loaded objects and no second one is loaded. A standalone Rust program loads
-  `MPI_NATIVE_LIB`, else `libmpi.so.12`, `libmpi.so.40`, `libmpi_cray.so.12`, `libmpi_abi.so.1`.
+  `MPI_NATIVE_LIB`, else `libmpi.so.12`, `libmpich.so.12`, `libmpi.so.40`, `libmpi_cray.so.12`, `libmpi_abi.so.1`.
 - **`Rt`.** Calls the MPI functions directly and checks every return code: a failing call under
   `MPI_ERRORS_RETURN` is `Error::Mpi { code, message }` (`MpiBackend`'s methods return `Result`).
 - **C entry** (`tenferro-mpi-capi`). The host passes its raw communicator handle as `uint64_t`;

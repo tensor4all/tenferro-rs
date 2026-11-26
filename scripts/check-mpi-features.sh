@@ -118,8 +118,15 @@ if grep -qE '^(rsmpi-sys|mpi-sys) v' <<<"$runtime_tree"; then
 fi
 
 # The C entry crate: the native backend only, and never an aborting panic profile.
+# Without its `runtime` feature the crate is empty: the root workspace lanes must build no MPI
+# binding through it (feature unification would otherwise switch `runtime` on everywhere).
 cargo check -j "$jobs" -p tenferro-mpi-capi
-capi_tree=$(cargo tree -p tenferro-mpi-capi -e normal --prefix none)
+if cargo tree -p tenferro-mpi-capi -e normal --prefix none | grep -qE '^(rsmpi-rt|rsmpi-sys|mpi-native-sys|mpi-rt-sys|tenferro-mpi) v'; then
+    echo "check-mpi-features: tenferro-mpi-capi pulls an MPI package without its runtime feature" >&2
+    exit 1
+fi
+cargo check -j "$jobs" -p tenferro-mpi-capi --features runtime
+capi_tree=$(cargo tree -p tenferro-mpi-capi --features runtime -e normal --prefix none)
 found=$(grep -cE '^mpi-native-sys v' <<<"$capi_tree" || true)
 [[ "$found" == 1 ]] || {
     echo "check-mpi-features: expected one mpi-native-sys in the tenferro-mpi-capi graph, found $found" >&2

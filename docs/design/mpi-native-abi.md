@@ -856,6 +856,8 @@ pins the order uses exactly that shape.
 
 ### Settled where the design was silent
 
+- **Debian and Ubuntu name their MPICH `libmpich.so.12`**, so the standalone soname list gained it (found by the hosted `rt / MPICH` arm: the apt package installs no `libmpi.so.12`).
+- **`tenferro-mpi-capi` is empty without its `runtime` feature.** A plain dependency on `tenferro-mpi` with `runtime` would switch that feature, and rsmpi-rt, on for every `cargo test --workspace` through feature unification; the root lanes must pay nothing for MPI.
 - **Standard-ABI thread levels are not 0..3.** `MPI_THREAD_FUNNELED/SERIALIZED/MULTIPLE` are
   `1024/2048/4096` there. All thread constants go through the per-family table, never literals.
 - **Open MPI's `MPI_TAG_UB` is `INT_MAX`.** A tag above it does not exist, so the local tag check
