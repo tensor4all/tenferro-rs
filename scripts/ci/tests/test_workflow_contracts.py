@@ -36,11 +36,30 @@ def job_block(text: str, job: str) -> str:
 
 
 class WorkflowContractTests(unittest.TestCase):
+    # The one documented jammy exception (#2735): noble's mpich 4.2 links
+    # libmpich against PMIx while its hydra `mpiexec` serves only PMI, so a
+    # two-rank launch starts two singletons. Jammy's mpich 4.0 forms a real
+    # world, so the MPICH arm of the `mpi` job stays on 22.04.
+    JAMMY_MPI_ARM = "ci-pr-workspace-tests.yml"
+
     def test_linux_workflows_and_cuda_sources_use_ubuntu24(self) -> None:
         for workflow in (ROOT / ".github/workflows").glob("*.yml"):
             with self.subTest(workflow=workflow.name):
                 text = workflow.read_text()
-                self.assertNotIn("ubuntu-22.04", text)
+                in_mpi = (
+                    job_block(text, "mpi").count("ubuntu-22.04")
+                    if workflow.name == self.JAMMY_MPI_ARM
+                    else 0
+                )
+                self.assertEqual(
+                    text.count("ubuntu-22.04"),
+                    in_mpi,
+                    f"{workflow.name}: ubuntu-22.04 is allowed only in the "
+                    "MPICH arm of the mpi job",
+                )
+                if workflow.name == self.JAMMY_MPI_ARM:
+                    # The arm's `os:` line and the comment that records why.
+                    self.assertEqual(in_mpi, 2)
                 self.assertNotIn("ubuntu-latest", text)
                 self.assertNotIn("ubuntu22", text)
         for name in ("install_cuda_runtime_tree.sh", "install_cuda_toolkit_hosted.sh",
