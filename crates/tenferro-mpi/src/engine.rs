@@ -468,9 +468,7 @@ fn reject_malformed_frame<B: MpiBackend>(
     }
     // Not a successful-call path, so a scratch buffer is fine here.
     let mut scratch = vec![0u8; length as usize];
-    let received = backend
-        .receive_probed(probed, &mut scratch)
-        .unwrap_or(0);
+    let received = backend.receive_probed(probed, &mut scratch).unwrap_or(0);
     let frame = &scratch[..received.clamp(0, length) as usize];
     match frame_kind(frame) {
         FrameKind::Header => reject_ack(backend, from, tag, reject_reason(&error)),

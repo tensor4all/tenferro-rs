@@ -70,7 +70,10 @@ struct CErr {
 }
 
 fn err(code: tfe_status_t, message: impl Into<String>) -> CErr {
-    CErr { code, message: message.into() }
+    CErr {
+        code,
+        message: message.into(),
+    }
 }
 
 thread_local! {
@@ -149,7 +152,10 @@ fn mpi_ok(code: c_int, call: &str) -> Result<(), CErr> {
     } else {
         Err(err(
             TFE_MPI_ERROR,
-            format!("{call} failed: {} (MPI error code {code})", mpi_error_text(code)),
+            format!(
+                "{call} failed: {} (MPI error code {code})",
+                mpi_error_text(code)
+            ),
         ))
     }
 }
@@ -247,7 +253,10 @@ impl tfe_mpi_comm {
         }
         let mut finalized: c_int = 0;
         // SAFETY: MPI_Finalized is callable at any time.
-        mpi_ok(unsafe { ffi::MPI_Finalized(&mut finalized) }, "MPI_Finalized")?;
+        mpi_ok(
+            unsafe { ffi::MPI_Finalized(&mut finalized) },
+            "MPI_Finalized",
+        )?;
         if finalized != 0 {
             return Err(err(
                 TFE_MPI_FINALIZED,
@@ -257,7 +266,10 @@ impl tfe_mpi_comm {
         if self.funneled_only {
             let mut main: c_int = 0;
             // SAFETY: MPI is initialized and not finalized.
-            mpi_ok(unsafe { ffi::MPI_Is_thread_main(&mut main) }, "MPI_Is_thread_main")?;
+            mpi_ok(
+                unsafe { ffi::MPI_Is_thread_main(&mut main) },
+                "MPI_Is_thread_main",
+            )?;
             if main == 0 {
                 return Err(err(
                     TFE_MPI_THREAD,
@@ -307,7 +319,10 @@ fn decode_handle(lib: &ffi::loader::Loaded, handle: u64) -> Result<usize, CErr> 
             (handle as u32) as usize
         }
         Family::OpenMpi | Family::StandardAbi => usize::try_from(handle).map_err(|_| {
-            err(TFE_INVALID_ARGUMENT, format!("handle {handle:#x} does not fit a pointer"))
+            err(
+                TFE_INVALID_ARGUMENT,
+                format!("handle {handle:#x} does not fit a pointer"),
+            )
         })?,
     };
     if !lib.consts.comm_handle_is_plausible(raw) {
@@ -341,19 +356,31 @@ unsafe fn attach(handle: u64) -> Result<Box<tfe_mpi_comm>, CErr> {
     // First MPI call on the handle: a dead or garbage handle reaches the host's error
     // handler here (D4). There is no identity check, by design.
     let mut inter: c_int = 0;
-    mpi_ok(ffi::MPI_Comm_test_inter(raw, &mut inter), "MPI_Comm_test_inter")?;
+    mpi_ok(
+        ffi::MPI_Comm_test_inter(raw, &mut inter),
+        "MPI_Comm_test_inter",
+    )?;
     if inter != 0 {
-        return Err(err(TFE_INVALID_ARGUMENT, "an inter-communicator cannot be attached"));
+        return Err(err(
+            TFE_INVALID_ARGUMENT,
+            "an inter-communicator cannot be attached",
+        ));
     }
     let (mut rank, mut size): (c_int, c_int) = (0, 0);
     mpi_ok(ffi::MPI_Comm_rank(raw, &mut rank), "MPI_Comm_rank")?;
     mpi_ok(ffi::MPI_Comm_size(raw, &mut size), "MPI_Comm_size")?;
 
     let mut handler = lib.consts.errors_return;
-    mpi_ok(ffi::MPI_Comm_get_errhandler(raw, &mut handler), "MPI_Comm_get_errhandler")?;
+    mpi_ok(
+        ffi::MPI_Comm_get_errhandler(raw, &mut handler),
+        "MPI_Comm_get_errhandler",
+    )?;
     let fatal_errors = handler == lib.consts.errors_are_fatal;
     // The standard requires freeing the reference `MPI_Comm_get_errhandler` returned.
-    mpi_ok(ffi::MPI_Errhandler_free(&mut handler), "MPI_Errhandler_free")?;
+    mpi_ok(
+        ffi::MPI_Errhandler_free(&mut handler),
+        "MPI_Errhandler_free",
+    )?;
 
     let mut tag_ub_ptr: *mut c_void = std::ptr::null_mut();
     let mut flag: c_int = 0;
@@ -454,7 +481,10 @@ unsafe fn with_comm(
         Ok(result) => finish(status, result),
         Err(payload) => {
             c.poisoned.store(true, Ordering::SeqCst);
-            finish(status, Err(err(TFE_INTERNAL_ERROR, panic_message(&*payload))))
+            finish(
+                status,
+                Err(err(TFE_INTERNAL_ERROR, panic_message(&*payload))),
+            )
         }
     }
 }
@@ -525,7 +555,11 @@ fn from_bytes<T: Copy>(bytes: &[u8]) -> Vec<T> {
     // SAFETY: `T` is a plain scalar (checked at the call sites: no padding, any bit pattern
     // valid except `bool`, which the caller validates first); the destination has room for `n`.
     unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.as_mut_ptr().cast::<u8>(), n * std::mem::size_of::<T>());
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            out.as_mut_ptr().cast::<u8>(),
+            n * std::mem::size_of::<T>(),
+        );
         out.set_len(n);
     }
     out
@@ -533,7 +567,9 @@ fn from_bytes<T: Copy>(bytes: &[u8]) -> Vec<T> {
 
 fn to_bytes<T: Copy>(values: &[T]) -> &[u8] {
     // SAFETY: reading the bytes of a slice of plain scalars.
-    unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values)) }
+    unsafe {
+        std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values))
+    }
 }
 
 macro_rules! send_typed {
@@ -568,18 +604,31 @@ pub unsafe extern "C" fn tfe_mpi_send(
     with_comm(comm, status, |c| {
         check_peer(c, dest, tag)?;
         if dest == c.rank {
-            return Err(err(TFE_INVALID_ARGUMENT, "a send to the calling rank would block forever"));
+            return Err(err(
+                TFE_INVALID_ARGUMENT,
+                "a send to the calling rank would block forever",
+            ));
         }
         let Some(width) = element_bytes(dtype) else {
-            return Err(err(TFE_INVALID_ARGUMENT, format!("unknown dtype code {dtype}")));
+            return Err(err(
+                TFE_INVALID_ARGUMENT,
+                format!("unknown dtype code {dtype}"),
+            ));
         };
         if rank > MAX_WIRE_RANK {
-            return Err(err(TFE_INVALID_ARGUMENT, format!("rank {rank} exceeds {MAX_WIRE_RANK}")));
+            return Err(err(
+                TFE_INVALID_ARGUMENT,
+                format!("rank {rank} exceeds {MAX_WIRE_RANK}"),
+            ));
         }
         if (shape.is_null() && rank > 0) || (data.is_null() && nbytes > 0) {
             return Err(err(TFE_INVALID_ARGUMENT, "`shape` or `data` is null"));
         }
-        let dims: Vec<usize> = if rank == 0 { Vec::new() } else { std::slice::from_raw_parts(shape, rank).to_vec() };
+        let dims: Vec<usize> = if rank == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(shape, rank).to_vec()
+        };
         let elements = dims
             .iter()
             .try_fold(1usize, |acc, &d| acc.checked_mul(d))
@@ -587,20 +636,32 @@ pub unsafe extern "C" fn tfe_mpi_send(
         if elements.checked_mul(width) != Some(nbytes) {
             return Err(err(
                 TFE_SHAPE_MISMATCH,
-                format!("shape {dims:?} of {width}-byte elements needs {} bytes, got {nbytes}", elements.saturating_mul(width)),
+                format!(
+                    "shape {dims:?} of {width}-byte elements needs {} bytes, got {nbytes}",
+                    elements.saturating_mul(width)
+                ),
             ));
         }
-        let bytes: &[u8] = if nbytes == 0 { &[] } else { std::slice::from_raw_parts(data.cast::<u8>(), nbytes) };
+        let bytes: &[u8] = if nbytes == 0 {
+            &[]
+        } else {
+            std::slice::from_raw_parts(data.cast::<u8>(), nbytes)
+        };
         match dtype {
             1 => {
                 if let Some(bad) = bytes.iter().find(|&&b| b > 1) {
-                    return Err(err(TFE_INVALID_ARGUMENT, format!("a bool element holds {bad}, not 0 or 1")));
+                    return Err(err(
+                        TFE_INVALID_ARGUMENT,
+                        format!("a bool element holds {bad}, not 0 or 1"),
+                    ));
                 }
                 // `bool` has the size and valid bit patterns 0 and 1 of the validated bytes.
                 let values: Vec<bool> = bytes.iter().map(|&b| b == 1).collect();
-                let tensor = TypedTensor::<bool, DynRank, Host>::from_host_vec_col_major(dims, values)
-                    .map_err(|e| err(TFE_INVALID_ARGUMENT, e.to_string()))?;
-                tenferro_mpi::send(c.comm.process_at_rank(dest), tag, &tensor).map_err(transport_error)
+                let tensor =
+                    TypedTensor::<bool, DynRank, Host>::from_host_vec_col_major(dims, values)
+                        .map_err(|e| err(TFE_INVALID_ARGUMENT, e.to_string()))?;
+                tenferro_mpi::send(c.comm.process_at_rank(dest), tag, &tensor)
+                    .map_err(transport_error)
             }
             2 => send_typed!(c, dest, tag, i32, dims, bytes),
             3 => send_typed!(c, dest, tag, i64, dims, bytes),
@@ -650,9 +711,16 @@ pub unsafe extern "C" fn tfe_mpi_recv(
     with_comm(comm, status, |c| {
         check_peer(c, source, tag)?;
         if source == c.rank {
-            return Err(err(TFE_INVALID_ARGUMENT, "a receive from the calling rank would block forever"));
+            return Err(err(
+                TFE_INVALID_ARGUMENT,
+                "a receive from the calling rank would block forever",
+            ));
         }
-        if dtype.is_null() || rank.is_null() || nbytes.is_null() || (shape_out.is_null() && shape_cap > 0) {
+        if dtype.is_null()
+            || rank.is_null()
+            || nbytes.is_null()
+            || (shape_out.is_null() && shape_cap > 0)
+        {
             return Err(err(TFE_INVALID_ARGUMENT, "an output pointer is null"));
         }
         let mut pending = c.pending.lock().unwrap_or_else(|e| e.into_inner());
@@ -664,8 +732,12 @@ pub unsafe extern "C" fn tfe_mpi_recv(
         }
         let tensor: Tensor =
             tenferro_mpi::recv(c.comm.process_at_rank(source), tag).map_err(transport_error)?;
-        let code = dtype_code(tensor.dtype())
-            .ok_or_else(|| err(TFE_INTERNAL_ERROR, "the transport delivered an unknown dtype"))?;
+        let code = dtype_code(tensor.dtype()).ok_or_else(|| {
+            err(
+                TFE_INTERNAL_ERROR,
+                "the transport delivered an unknown dtype",
+            )
+        })?;
         let dims = tensor.shape().to_vec();
         let width = element_bytes(code).unwrap_or(0);
         *dtype = code;
@@ -680,7 +752,10 @@ pub unsafe extern "C" fn tfe_mpi_recv(
         if too_small {
             return Err(err(
                 TFE_BUFFER_TOO_SMALL,
-                format!("shape buffer of {shape_cap} is too small for rank {}", dims.len()),
+                format!(
+                    "shape buffer of {shape_cap} is too small for rank {}",
+                    dims.len()
+                ),
             ));
         }
         Ok(())
@@ -728,12 +803,20 @@ pub unsafe extern "C" fn tfe_mpi_recv_take(
             DType::F64 => take_typed!(tensor, f64, &mut bytes),
             DType::C32 => take_typed!(tensor, Complex32, &mut bytes),
             DType::C64 => take_typed!(tensor, Complex64, &mut bytes),
-            other => return Err(err(TFE_INTERNAL_ERROR, format!("unsupported held dtype {other:?}"))),
+            other => {
+                return Err(err(
+                    TFE_INTERNAL_ERROR,
+                    format!("unsupported held dtype {other:?}"),
+                ))
+            }
         }
         if bytes.len() > cap {
             return Err(err(
                 TFE_BUFFER_TOO_SMALL,
-                format!("buffer of {cap} bytes is too small; {} are needed", bytes.len()),
+                format!(
+                    "buffer of {cap} bytes is too small; {} are needed",
+                    bytes.len()
+                ),
             ));
         }
         if data.is_null() && !bytes.is_empty() {
@@ -790,8 +873,8 @@ pub unsafe extern "C" fn tfe_mpi_test_hit_stub(
     status: *mut tfe_status_t,
 ) -> tfe_status_t {
     with_comm(comm, status, |_| {
-        // MPI_Abort is outside the carried surface, so this is a panic stub.
-        ffi::MPI_Abort(0, 1);
+        // MPI_Buffer_detach is outside the carried surface, so this is a panic stub.
+        ffi::MPI_Buffer_detach(std::ptr::null_mut(), std::ptr::null_mut());
         Ok(())
     })
 }

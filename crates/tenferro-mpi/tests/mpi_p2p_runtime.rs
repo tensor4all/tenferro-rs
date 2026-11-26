@@ -46,6 +46,10 @@ fn main() {
         std::process::exit(1);
     }
     // A tenferro path that reached a panic stub would fail a user's session; fail here.
-    assert_eq!(ffi::stub_hits(), 0, "the scenarios reached an unsupported MPI call");
+    assert_eq!(
+        ffi::stub_hits(),
+        0,
+        "the scenarios reached an unsupported MPI call"
+    );
     println!("rank {rank}: all scenarios passed");
 }

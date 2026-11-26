@@ -48,15 +48,16 @@
 //! nor libclang.
 //!
 //! Exactly one backend feature is selected when a caller wants transport. Both
-//! build the published [`rsmpi-rt`](https://crates.io/crates/rsmpi-rt) 0.8.2
-//! package, whose library target is still `mpi`:
+//! build [`rsmpi-rt`](https://crates.io/crates/rsmpi-rt) 0.9.0, whose library
+//! target is still `mpi`:
 //!
 //! - `system` enables rsmpi-rt's bindgen `mpi-sys-backend` (crates.io
 //!   [`rsmpi-sys`](https://crates.io/crates/rsmpi-sys) 0.2.4) and therefore needs
 //!   system MPI headers and libclang at build time.
-//! - `runtime` enables its MPIABI `mpi-rt-sys-backend` (crates.io
-//!   [`mpi-rt-sys`](https://crates.io/crates/mpi-rt-sys) 0.1.0), which loads MPI at
-//!   run time and needs no headers or libclang.
+//! - `runtime` enables its `mpi-native-sys-backend`, which uses the native handles of the
+//!   MPI library the host already loaded (or one found by soname) and needs no headers,
+//!   no libclang and no wrapper library. [`Rt`] checks every MPI return code and
+//!   reports a failing call as [`Error::Mpi`].
 //!
 //! The two backends are mutually exclusive; rsmpi-rt itself rejects enabling both
 //! backend features at once. `engine` compiles the protocol with no binding at all.
@@ -125,10 +126,10 @@ mod error;
 mod wire;
 
 pub use backend::MpiBackend;
-#[cfg(feature = "runtime")]
-pub use backend::{Rt, RtMessage};
 #[cfg(feature = "system")]
 pub use backend::System;
+#[cfg(feature = "runtime")]
+pub use backend::{Rt, RtMessage};
 #[cfg(any(feature = "system", feature = "runtime", feature = "engine"))]
 pub use engine::Transport;
 pub use error::{AbortReason, Error, RejectReason, Result};

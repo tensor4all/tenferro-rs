@@ -18,7 +18,7 @@ feature.
 
 | Path | Package | Default | Opt-in feature | Publish |
 | --- | --- | --- | --- | --- |
-| `crates/tenferro-mpi` | `tenferro-mpi` | `[]` | `system` (rsmpi-rt `mpi-sys-backend` → `rsmpi-sys 0.2.4`, needs MPI headers and libclang) or `runtime` (rsmpi-rt `mpi-rt-sys-backend` → `mpi-rt-sys 0.1.0`, loads MPI at run time) | `true` |
+| `crates/tenferro-mpi` | `tenferro-mpi` | `[]` | `system` (rsmpi-rt `mpi-sys-backend` → `rsmpi-sys 0.2.4`, needs MPI headers and libclang) or `runtime` (rsmpi-rt `mpi-native-sys-backend` → `mpi-native-sys 0.1.0`, uses the host's MPI library at run time) | `true` |
 | `crates/tenferro-hdf5` | `tenferro-hdf5` | `[]` | `hdf5` (git `hdf5-rt`, needs a runtime `libhdf5` for tests) | `false` |
 
 Both MPI backends build the published `rsmpi-rt 0.8.2` package (library target
@@ -36,7 +36,7 @@ The dedicated lanes are explicit:
 
 ```bash
 cargo test -p tenferro-mpi --features system        # host with MPI + libclang
-cargo test -p tenferro-mpi --features runtime       # requires MPIwrapper (MPI_RT_LIB); doctests initialize MPI
+cargo test -p tenferro-mpi --features runtime       # finds an MPI library by soname; doctests initialize MPI
 cargo test -p tenferro-hdf5 --features hdf5         # host with runtime libhdf5
 scripts/check-mpi-features.sh tenferro-mpi
 scripts/run-mpi.sh upstream                         # mpiexec -n 2 scenarios
@@ -68,8 +68,8 @@ manifest and not a workspace member.
 
 ## Follow-up: publication
 
-`rsmpi-rt 0.8.2`, `rsmpi-sys 0.2.4` and `mpi-rt-sys 0.1.0` are on crates.io, so the
-MPI adapter no longer has a git dependency and the temporary `tenferro-mpi-rt` crate
+`rsmpi-sys 0.2.4` is on crates.io; `rsmpi-rt 0.9.0` (with `mpi-native-sys 0.1.0`) is taken from
+git until it is released (tensor4all/rsmpi-rt#8). Once it is, the MPI adapter has no git dependency and the temporary `tenferro-mpi-rt` crate
 has been removed. Remaining work is publication, not restructuring:
 
 1. review `cargo publish --dry-run -p tenferro-mpi` and publish `tenferro-mpi`

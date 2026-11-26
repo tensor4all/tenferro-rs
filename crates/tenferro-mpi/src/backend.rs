@@ -204,9 +204,8 @@ mod runtime {
             check(rc, "MPI_Mprobe")?;
             let mut count: c_int = 0;
             // SAFETY: the status was filled by the successful probe.
-            let rc = unsafe {
-                ffi::MPI_Get_count(status.as_ptr(), ffi::RSMPI_UINT8_T_fn(), &mut count)
-            };
+            let rc =
+                unsafe { ffi::MPI_Get_count(status.as_ptr(), ffi::RSMPI_UINT8_T_fn(), &mut count) };
             check(rc, "MPI_Get_count")?;
             Ok((RtMessage(message), i64::from(count)))
         }
@@ -229,9 +228,8 @@ mod runtime {
             check(rc, "MPI_Mrecv")?;
             let mut count: c_int = 0;
             // SAFETY: the status was filled by the successful receive.
-            let rc = unsafe {
-                ffi::MPI_Get_count(status.as_ptr(), ffi::RSMPI_UINT8_T_fn(), &mut count)
-            };
+            let rc =
+                unsafe { ffi::MPI_Get_count(status.as_ptr(), ffi::RSMPI_UINT8_T_fn(), &mut count) };
             check(rc, "MPI_Get_count")?;
             Ok(i64::from(count))
         }

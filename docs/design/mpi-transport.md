@@ -40,8 +40,8 @@ identity.
 
 | Feature | crates.io dependency | Build requirement |
 | ------- | -------------------- | ----------------- |
-| `system` | `rsmpi-rt 0.8.2` with `mpi-sys-backend` → `rsmpi-sys 0.2.4` (library `mpi_sys`) | system MPI headers, a C compiler and libclang |
-| `runtime` | `rsmpi-rt 0.8.2` with `mpi-rt-sys-backend` → `mpi-rt-sys 0.1.0` | no headers or libclang; `MPI_RT_LIB` and MPIwrapper at run time |
+| `system` | `rsmpi-rt 0.9.0` with `mpi-sys-backend` → `rsmpi-sys 0.2.4` (library `mpi_sys`) | system MPI headers, a C compiler and libclang |
+| `runtime` | `rsmpi-rt 0.9.0` with `mpi-native-sys-backend` → `mpi-native-sys 0.1.0` | no headers, libclang or wrapper; the host's MPI library (MPICH ABI, Open MPI ABI or MPI 5.0 standard ABI) at run time, found in the process or by soname, `MPI_NATIVE_LIB` overrides |
 
 `system` and `runtime` are mutually exclusive; rsmpi-rt itself rejects enabling both
 backend features at once. `engine` compiles the protocol, error type and `Transport`
@@ -51,9 +51,10 @@ The crate is a **workspace member**. Its default features select no system libra
 so the root `cargo clippy`/`cargo test` lanes build it without MPI headers, libclang
 or an MPI launcher. The `mpi` job of the `CI PR workspace tests` workflow, which feeds
 the required `CI gate (PR workspace tests)`, installs the MPI toolchain and runs the
-scenarios as a real two-rank world in three arms: `system` against Open MPI, `system`
-against MPICH (on ubuntu-22.04, whose MPICH package forms a two-rank world), and `runtime` against Open MPI through an MPIwrapper built from a
-pinned release. `scripts/ci/run-mpi-ranks.sh` fails an arm unless both ranks report
+scenarios as a real two-rank world in four arms: `system` and `runtime` against Open MPI, and
+`system` and `runtime` against MPICH (on ubuntu-22.04, whose MPICH package forms a two-rank world).
+The `runtime` arms also run the C entry scenarios of `tenferro-mpi-capi`. Nothing is built: the
+runtime backend loads the runner's MPI. `scripts/ci/run-mpi-ranks.sh` fails an arm unless both ranks report
 success. The crate no longer carries its own `Cargo.lock`; the root lock and
 `cargo metadata` cover it.
 
@@ -65,12 +66,15 @@ same published `rsmpi-rt` package, and the adapter re-exports it as
 `tenferro_mpi::mpi`; a caller must take its communicator and process handles from
 that re-export.
 
-`rsmpi-sys` declares `links = "mpi"`, while `mpi-rt-sys` (the MPIABI loader)
-declares no link identity. Enabling both backend features would put both sys crates
+`rsmpi-sys` declares `links = "mpi"`, while `mpi-native-sys` (the native-handle loader)
+declares no `links` key. Enabling both backend features would put both sys crates
 in one graph, which rsmpi-rt rejects before the adapter is compiled.
-`scripts/check-mpi-features.sh` asserts the outcome: one `rsmpi-rt 0.8.2` and one
-`rsmpi-sys 0.2.4` in the `system` graph, one `rsmpi-rt` and one `mpi-rt-sys 0.1.0`
-in the `runtime` graph, and no MPI package at all in the default and `engine` graphs.
+`scripts/check-mpi-features.sh` asserts the outcome: one `rsmpi-rt 0.9.0` and one
+`rsmpi-sys 0.2.4` in the `system` graph, one `rsmpi-rt` and one `mpi-native-sys 0.1.0`
+in the `runtime` graph, no MPI package at all in the default and `engine` graphs, and
+`mpi-rt-sys` in no graph: the MPItrampoline backend is deleted. A source scan
+(`tests/no_mpi_lifecycle.rs`) fails if the wrapper's environment variable, library name or
+symbol prefix reappears under `crates/` or `scripts/`.
 
 ### Co-installation with hataori-rs
 
@@ -78,9 +82,36 @@ in the `runtime` graph, and no MPI package at all in the default and `engine` gr
 `links = "mpi"`. hataori-rs still resolves crates.io `mpi 0.8.1` and its
 `mpi-sys`, which declares the same link identity, so Cargo cannot place both in one
 graph. A process that needs both must move hataori to `rsmpi-rt`; `runtime` is the
-co-installable backend because `mpi-rt-sys` declares no link identity and loads MPI
+co-installable backend because `mpi-native-sys` declares no `links` key and loads MPI
 at run time. This is a dependency-identity constraint, not a feature of the
 transport itself.
+
+## Native handles and the C entry (#2735)
+
+The contract of what shipped; `mpi-native-abi.md` keeps the decisions and the audit record.
+
+- **Families.** MPICH ABI, Open MPI ABI and the MPI 5.0 standard ABI v1; everything else is
+  rejected by name (`UnsupportedMpi`), with the library path and version string. MPItrampoline
+  and MPIwrapper are not supported (`MpiTrampolineNotSupported`).
+- **Detection order.** (1) an object exporting the wrapper's marker symbol → reject; (2)
+  `MPI_Abi_get_version` *returning* `abi_major >= 1` → standard ABI, before any native witness
+  (an ABI library has no `ompi_mpi_comm_world`, and `libmpi_abi.so.1` exports
+  `MPIR_Err_return_comm`); (3) exactly one object exporting `PMPI_Get_library_version`,
+  classified by its version string; (4) the family's symbol witness in that object. Only a
+  success is cached.
+- **Library.** With a host that already initialized MPI, the loaded library is found by
+  walking the loaded objects and no second one is loaded. A standalone Rust program loads
+  `MPI_NATIVE_LIB`, else `libmpi.so.12`, `libmpi.so.40`, `libmpi_cray.so.12`, `libmpi_abi.so.1`.
+- **`Rt`.** Calls the MPI functions directly and checks every return code: a failing call under
+  `MPI_ERRORS_RETURN` is `Error::Mpi { code, message }` (`MpiBackend`'s methods return `Result`).
+- **C entry** (`tenferro-mpi-capi`). The host passes its raw communicator handle as `uint64_t`;
+  there is no identity check. `tfe_mpi_library_info`, `tfe_mpi_comm_attach`/`_detach`/`_info`,
+  `tfe_mpi_send`, `tfe_mpi_recv` + `tfe_mpi_recv_take`, `tfe_last_error_message`. Every entry
+  checks `MPI_Finalized`, runs in `catch_unwind` (a panic poisons the object), validates rank
+  and tag against `MPI_TAG_UB` before MPI sees them, and under `FUNNELED`/`SINGLE` allows the main
+  thread only. The crate refuses to compile with `panic = "abort"`.
+- **Never called by tenferro:** `MPI_Init*`, `MPI_Finalize`, `MPI_Abort`, communicator constructors
+  and `MPI_Comm_free`, `MPI_Comm_set_errhandler`, attribute writes, wildcard receives.
 
 ## Wire format v1
 
@@ -200,7 +231,8 @@ Locally refused before any message: negative tag (`InvalidTag`), blocking self-s
   allocates its result buffer, and a `bool` payload allocates a byte scratch on either
   side because a byte that is not 0 or 1 must never be written into a `bool`
   destination.
-- The runtime backend needs MPIwrapper: build it once (`cmake` against the system
-  MPI), set `MPI_RT_LIB`, and run `scripts/run-mpi.sh rt`. It has no hosted CI lane
-  because that toolchain (CMake plus a Fortran compiler) is more than the adapter's
-  own build; the local evidence is recorded in the work log.
+- The runtime backend needs no build step: `scripts/run-mpi.sh rt` finds the host's MPI library by
+  soname (`MPI_NATIVE_LIB` overrides). `MPIEXEC=<family's launcher>` runs the same scenarios once per
+  family. The hosted lane runs Open MPI and MPICH; Intel MPI and the standard ABI
+  (`libmpi_abi.so.1`) are local evidence in the work log. `scripts/run-mpi.sh capi` runs the
+  C-entry scenarios on the same backend.

@@ -275,19 +275,20 @@ jobs:
             os: ubuntu-22.04
             profile: mpi-upstream
             packages: mpich libmpich-dev libclang-dev pkg-config
-          # The current runtime backend loads MPI through MPIwrapper (MPI_RT_LIB),
-          # built below from a pinned release against the runner's Open MPI. The
-          # native-handle rewrite deletes MPIwrapper; this arm then drops the build
-          # step and keeps the profile.
-          - name: rt / Open MPI + MPIwrapper
+          # The native-handle runtime backend (#2735) finds the runner's MPI by soname:
+          # nothing to build, one arm per family. `rt` also runs the C entry scenarios.
+          - name: rt / Open MPI
             key: rt-openmpi
             family: openmpi
             os: ubuntu-24.04
             profile: mpi-runtime
-            packages: openmpi-bin libopenmpi-dev cmake gfortran pkg-config
-    env:
-      MPIWRAPPER_TAG: v2.11.0
-      MPIWRAPPER_COMMIT: 1e991827041406f6d30e134187bcdbabb56f483d
+            packages: openmpi-bin libopenmpi-dev pkg-config
+          - name: rt / MPICH
+            key: rt-mpich
+            family: mpich
+            os: ubuntu-22.04
+            profile: mpi-runtime
+            packages: mpich libmpich-dev pkg-config
     steps:
       - uses: actions/checkout@v5
         if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true'
@@ -331,17 +332,6 @@ jobs:
           mpiexec --version | grep -Eq "${launcher}" || { echo "mpiexec is not ${FAMILY}" >&2; exit 1; }
           mpicc -show | grep -q "${library}" || { echo "mpicc does not build against ${FAMILY}" >&2; exit 1; }
           pkg-config --cflags --libs mpi | grep -q "${library}" || { echo "pkg-config mpi is not ${FAMILY}" >&2; exit 1; }
-      - name: Build MPIwrapper
-        if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true' && matrix.arm.profile == 'mpi-runtime'
-        run: |
-          git -c advice.detachedHead=false clone --depth 1 --branch "${MPIWRAPPER_TAG}" \
-            https://github.com/eschnett/MPIwrapper "${RUNNER_TEMP}/MPIwrapper"
-          test "$(git -C "${RUNNER_TEMP}/MPIwrapper" rev-parse HEAD)" = "${MPIWRAPPER_COMMIT}"
-          cmake -S "${RUNNER_TEMP}/MPIwrapper" -B "${RUNNER_TEMP}/MPIwrapper/build" \
-            -DCMAKE_INSTALL_PREFIX="${RUNNER_TEMP}/mpiwrapper"
-          cmake --build "${RUNNER_TEMP}/MPIwrapper/build" -j "$(nproc)"
-          cmake --install "${RUNNER_TEMP}/MPIwrapper/build"
-          echo "MPI_RT_LIB=${RUNNER_TEMP}/mpiwrapper/lib/libmpiwrapper.so" >> "${GITHUB_ENV}"
       # One cache per arm: rsmpi-sys's bindgen output and link line are specific to
       # the MPI family installed, and a build script does not rerun when only the
       # installed family changes. Sharing a key across families would link the
