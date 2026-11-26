@@ -56,7 +56,7 @@
 //!   system MPI headers and libclang at build time.
 //! - `runtime` enables its `mpi-native-sys-backend`, which uses the native handles of the
 //!   MPI library the host already loaded (or one found by soname) and needs no headers,
-//!   no libclang and no wrapper library. [`Rt`] checks every MPI return code and
+//!   no libclang and no wrapper library. `Rt` checks every MPI return code and
 //!   reports a failing call as [`Error::Mpi`].
 //!
 //! The two backends are mutually exclusive; rsmpi-rt itself rejects enabling both
