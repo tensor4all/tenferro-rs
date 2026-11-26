@@ -270,6 +270,20 @@ complete bundle is handed to the cache. The cache itself destroys the plan it is
 asked to insert when it cannot retire the oldest entry, because such a plan was
 never stored and nothing has run against it.
 
+The cache holds 32 plans and evicts the oldest. An evicted plan may still be read
+by a launch queued on the stream, so it is not destroyed at once. Instead
+`cutensor.rs` records a CUDA event on the runtime's stream and queues the plan
+behind it. Every launch of a plan goes on that one stream, so the event completes
+after the plan's last use. The next insertion destroys the plans whose event
+`cuEventQuery` reports complete. At most 32 plans wait this way. Past that bound
+the host polls the oldest event, while the work queued after it keeps running.
+Only when no event can be created or recorded does an eviction drain the stream,
+as it did before tenferro-rs #2706. That drain was a `cuStreamSynchronize`,
+which stalled the host, and it was also where the allocation pool returned idle
+memory above its release threshold. The next large allocation then mapped that
+memory again. A workload with more distinct shapes than the cache holds paid
+both costs on every miss.
+
 Catalogue planners receive validated dtype/layout/operation metadata and
 produce the launch geometry. `cuda/dispatch.rs` calls the catalogue's `plan_*`
 functions, then marshals runtime arguments in the entry's ABI order.

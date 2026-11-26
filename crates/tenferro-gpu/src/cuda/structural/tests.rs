@@ -2422,6 +2422,124 @@ fn a_refused_vendor_plan_keeps_the_reused_destination_copy() {
     );
 }
 
+/// Evicting a cuTENSOR plan does not drain the stream (#2706).
+///
+/// Forty shapes cycle through a cache of 32 plans, so on the second pass every call misses and
+/// evicts. The evicted plan waits for an event recorded after its last launch instead of a
+/// `cuStreamSynchronize`, which also let the allocation pool hand back idle memory. The second
+/// pass therefore adds no stream wait, every result is right, the queue of waiting plans stays
+/// bounded, and a plan waiting there is destroyed once the stream has passed it.
+#[test]
+#[ignore = "requires CUDA"]
+fn evicting_a_cutensor_plan_does_not_drain_the_stream() {
+    use super::super::cutensor::{Contraction, Cutensor, Operand};
+    use t4a_cuda_kernels::DType;
+
+    let Some(engine) = engine() else { return };
+    let runtime = engine.runtime().clone();
+    let bytes = |values: &[f64]| -> Vec<u8> {
+        values
+            .iter()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect()
+    };
+    let (n, k) = (3usize, 2usize);
+    let shapes: Vec<usize> = (2..42).collect();
+    let b = runtime
+        .upload_bytes(&bytes(&vec![2.0f64; k * n]))
+        .expect("b");
+    let mut operands = Vec::new();
+    for &m in &shapes {
+        let a = runtime
+            .upload_bytes(&bytes(&vec![1.0f64; m * k]))
+            .expect("a");
+        let d = runtime
+            .upload_bytes(&bytes(&vec![0.0f64; m * n]))
+            .expect("d");
+        operands.push((m, a, d));
+    }
+    let mut cutensor = Cutensor::new(&runtime).expect("cuTENSOR");
+    let contract = |cutensor: &mut Cutensor, m: usize, a, d| {
+        let m = m as i64;
+        cutensor
+            .contract(&Contraction {
+                dtype: DType::F64,
+                a: Operand {
+                    buffer: a,
+                    modes: &[0, 2],
+                    extents: &[m, k as i64],
+                    strides: &[1, m],
+                },
+                b: Operand {
+                    buffer: &b,
+                    modes: &[2, 1],
+                    extents: &[k as i64, n as i64],
+                    strides: &[1, k as i64],
+                },
+                c: None,
+                d: Operand {
+                    buffer: d,
+                    modes: &[0, 1],
+                    extents: &[m, n as i64],
+                    strides: &[1, m],
+                },
+                alpha: (1.0, 0.0),
+                beta: (0.0, 0.0),
+                conj_a: false,
+                conj_b: false,
+            })
+            .expect("contract");
+        assert!(cutensor.cached_plans() <= 32, "the cache stays bounded");
+        assert!(
+            cutensor.retiring_plans() <= 32,
+            "the plans waiting for their event stay bounded"
+        );
+    };
+    let contract_all = |cutensor: &mut Cutensor| {
+        for (m, a, d) in &operands {
+            contract(cutensor, *m, a, d);
+        }
+    };
+    // The first pass grows the shared workspace to its largest size, which drains once per
+    // growth; the second pass needs no growth and evicts on every call.
+    contract_all(&mut cutensor);
+    let (waits, cold) = (runtime.stream_waits(), cutensor.cold_plans());
+    contract_all(&mut cutensor);
+    assert_eq!(
+        cutensor.cold_plans() - cold,
+        shapes.len() as u64,
+        "every call of the second pass missed and evicted"
+    );
+    assert_eq!(
+        runtime.stream_waits(),
+        waits,
+        "an eviction waits for its own event, not for the stream"
+    );
+
+    for (m, _, d) in &operands {
+        let observed: Vec<f64> = runtime
+            .download_bytes(d)
+            .expect("download")
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|word| f64::from_ne_bytes(*word))
+            .collect();
+        assert_eq!(observed, vec![4.0; m * n], "C = A B for m = {m}");
+    }
+
+    // The downloads waited for the stream, so every waiting plan is past its event: the next
+    // insertion destroys them all and queues only the plan it evicts itself.
+    assert!(cutensor.retiring_plans() > 0, "evicted plans were queued");
+    let (m, a, d) = &operands[0];
+    contract(&mut cutensor, *m, a, d);
+    assert_eq!(
+        cutensor.retiring_plans(),
+        1,
+        "the completed retirements were destroyed"
+    );
+}
+
 // --- Merged views for gather and concatenate (#2708) ---
 
 /// The data a view of `extents` / `strides` at `offset` reaches: `0, 1, 2, ...` up to its

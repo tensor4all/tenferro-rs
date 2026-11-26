@@ -409,6 +409,13 @@ impl Coefficient {
 
 /// How many plans (and the device workspaces contractions planned with them) one handle retains.
 const MAX_CACHED_PLANS: usize = 32;
+/// How many evicted plans may wait at once for the stream to pass their last use.
+///
+/// An evicted plan holds only host-side cuTENSOR handles (the workspace is shared and stays), so
+/// this bounds host memory, not device memory. It is reached only when the host runs this many
+/// evictions ahead of the device; the oldest is then waited for on its own event, which leaves
+/// the work queued after it running (tenferro-rs #2706).
+const MAX_RETIRING_PLANS: usize = MAX_CACHED_PLANS;
 /// Largest descriptor rank a contraction operand may have. cuTENSOR takes the rank as a
 /// `u32` and the mode labels as `i32`, so `i32::MAX` is the tighter of the two; the bound
 /// also keeps the `i32` label counter in `dot_modes` from overflowing.
@@ -424,6 +431,16 @@ struct CachedPlan {
     workspace_bytes: u64,
 }
 
+/// An evicted plan kept until the stream has passed every launch that could use it.
+///
+/// Every launch of a plan goes on the runtime's one stream, and a plan is only launched while it
+/// is cached, so an event recorded on that stream when the plan is evicted completes after its
+/// last use. That event is the completion proof; a stream drain proves the same thing, but stalls
+/// the host until all later work too has finished and lets the allocation pool trim (#2706).
+struct RetiringPlan {
+    plan: CachedPlan,
+    event: cudarc::driver::sys::CUevent,
+}
 /// Why a permutation request did not run.
 #[doc(hidden)]
 #[derive(Debug)]
@@ -628,6 +645,9 @@ pub struct Cutensor {
     plans: HashMap<Vec<i64>, CachedPlan>,
     /// Insertion order of the cached plans, so the oldest plan retires when the cache is full.
     order: std::collections::VecDeque<Vec<i64>>,
+    /// Evicted plans in eviction order, each waiting for its event (at most
+    /// `MAX_RETIRING_PLANS`).
+    retiring: std::collections::VecDeque<RetiringPlan>,
     /// One workspace for every plan of this handle, grown to the largest requirement seen.
     /// A workspace per plan would keep a device allocation alive for each shape.
     workspace: Option<DeviceBuffer>,
@@ -671,6 +691,7 @@ impl Cutensor {
             runtime: runtime.clone(),
             plans: HashMap::new(),
             order: std::collections::VecDeque::new(),
+            retiring: std::collections::VecDeque::new(),
             workspace: None,
             workspace_bytes: 0,
             cold_plans: 0,
@@ -693,6 +714,12 @@ impl Cutensor {
     /// Number of cached plans.
     pub fn cached_plans(&self) -> usize {
         self.plans.len()
+    }
+
+    /// Evicted plans still waiting for the stream to pass their last use.
+    #[cfg(test)]
+    pub(crate) fn retiring_plans(&self) -> usize {
+        self.retiring.len()
     }
 
     /// Execute one contraction, planning it only if its signature is new.
@@ -903,6 +930,8 @@ impl Cutensor {
     /// Takes ownership of `plan`: every error path destroys it, because a plan the cache never
     /// holds would otherwise leave its descriptors, operation, preference and plan behind.
     fn insert_plan(&mut self, signature: Vec<i64>, plan: CachedPlan) -> Result<(), GpuError> {
+        // Plans evicted earlier whose last use the stream has passed are destroyed now.
+        self.reap_retired();
         // A varying shape would otherwise retain one plan (and, for a contraction, one device
         // workspace) per shape for the lifetime of the engine; the oldest retires instead.
         if self.order.len() >= MAX_CACHED_PLANS {
@@ -910,19 +939,23 @@ impl Cutensor {
                 if let Some(evicted) = self.plans.remove(&oldest) {
                     // The plan's handles are native resources: an evicted plan has to be
                     // destroyed, or a varying-shape workload leaks one bundle per shape.
-                    // Nothing queued may still use it, so the stream is drained first. A drain
-                    // that fails leaves the evicted plan untouched, since destroying it under a
+                    // Nothing queued may still use it, so it waits for an event recorded after
+                    // its last launch instead of draining the stream (#2706). Only when no
+                    // event can be recorded is the stream drained, as before; a drain that
+                    // fails leaves the evicted plan untouched, since destroying it under a
                     // running stream is worse than keeping it: put it back and drop the plan
                     // this call was asked to insert, which nothing has run against.
-                    if let Err(error) = self.runtime.synchronize() {
-                        self.plans.insert(oldest.clone(), evicted);
-                        self.order.push_front(oldest);
-                        self.destroy_plan(plan);
-                        return Err(GpuError::Unavailable {
-                            detail: error.to_string(),
-                        });
+                    if let Err(evicted) = self.retire_after_queued_work(evicted) {
+                        if let Err(error) = self.runtime.synchronize() {
+                            self.plans.insert(oldest.clone(), evicted);
+                            self.order.push_front(oldest);
+                            self.destroy_plan(plan);
+                            return Err(GpuError::Unavailable {
+                                detail: error.to_string(),
+                            });
+                        }
+                        self.destroy_plan(evicted);
                     }
-                    self.destroy_plan(evicted);
                 }
             }
         }
@@ -930,6 +963,120 @@ impl Cutensor {
         self.order.push_back(signature);
         self.cold_plans += 1;
         Ok(())
+    }
+
+    /// Queue `evicted` behind an event recorded on the stream now, after its last launch.
+    ///
+    /// Returns the plan back when no event could be created or recorded, so the caller can fall
+    /// back to a stream drain. When `MAX_RETIRING_PLANS` plans are already waiting, the oldest is
+    /// waited for first; a failure there also hands the plan back.
+    fn retire_after_queued_work(&mut self, evicted: CachedPlan) -> Result<(), CachedPlan> {
+        use cudarc::driver::sys;
+        if self.retiring.len() >= MAX_RETIRING_PLANS && !self.wait_oldest_retiring() {
+            return Err(evicted);
+        }
+        let mut event: sys::CUevent = std::ptr::null_mut();
+        // SAFETY: the scope activates this runtime's context and hands out its own stream; the
+        // event is created here and owned by the queue entry (or destroyed below), and recording
+        // it neither reads nor writes an operand.
+        let recorded = unsafe {
+            self.runtime.with_raw_locked(Vec::new(), |raw| {
+                if sys::cuEventCreate(
+                    &mut event,
+                    sys::CUevent_flags::CU_EVENT_DISABLE_TIMING as u32,
+                ) != sys::CUresult::CUDA_SUCCESS
+                {
+                    event = std::ptr::null_mut();
+                    return false;
+                }
+                let stream = raw.stream() as usize as sys::CUstream;
+                if sys::cuEventRecord(event, stream) != sys::CUresult::CUDA_SUCCESS {
+                    let _ = sys::cuEventDestroy_v2(event);
+                    event = std::ptr::null_mut();
+                    return false;
+                }
+                true
+            })
+        };
+        if !matches!(recorded, Ok(true)) {
+            if !event.is_null() {
+                self.destroy_event(event);
+            }
+            return Err(evicted);
+        }
+        self.retiring.push_back(RetiringPlan {
+            plan: evicted,
+            event,
+        });
+        Ok(())
+    }
+
+    /// Destroy the evicted plans whose event has completed, oldest first.
+    ///
+    /// The events sit on one stream in eviction order, so the first one still pending ends the
+    /// scan. A query that reports a failure also ends it: the plan stays queued, and the failure
+    /// surfaces at the stream's next observation rather than here.
+    fn reap_retired(&mut self) {
+        while let Some(front) = self.retiring.front() {
+            if self.query_event(front.event) != Some(true) {
+                break;
+            }
+            let retired = self.retiring.pop_front().expect("front checked above");
+            self.destroy_event(retired.event);
+            self.destroy_plan(retired.plan);
+        }
+    }
+
+    /// Wait for the oldest evicted plan's event, then destroy it. Work queued after the event
+    /// keeps running; only the host waits. Returns `false`, keeping the plan, if the event
+    /// reports a failure.
+    fn wait_oldest_retiring(&mut self) -> bool {
+        let Some(front) = self.retiring.front() else {
+            return true;
+        };
+        let event = front.event;
+        // Polled rather than `cuEventSynchronize`d: a synchronising call is where the allocation
+        // pool hands idle memory above its release threshold back to the driver (#2706).
+        loop {
+            match self.query_event(event) {
+                Some(true) => break,
+                Some(false) => std::thread::yield_now(),
+                None => return false,
+            }
+        }
+        let retired = self.retiring.pop_front().expect("front checked above");
+        self.destroy_event(retired.event);
+        self.destroy_plan(retired.plan);
+        true
+    }
+
+    /// `Some(true)` once `event` has completed, `Some(false)` while it is pending, and `None`
+    /// when the query fails.
+    fn query_event(&self, event: cudarc::driver::sys::CUevent) -> Option<bool> {
+        use cudarc::driver::sys;
+        // SAFETY: the event belongs to this runtime's context, which the scope activates; a query
+        // touches no operand.
+        let status = unsafe {
+            self.runtime
+                .with_raw_locked(Vec::new(), |_raw| sys::cuEventQuery(event))
+                .ok()?
+        };
+        match status {
+            sys::CUresult::CUDA_SUCCESS => Some(true),
+            sys::CUresult::CUDA_ERROR_NOT_READY => Some(false),
+            _ => None,
+        }
+    }
+
+    /// Destroy an event this handle created.
+    fn destroy_event(&self, event: cudarc::driver::sys::CUevent) {
+        // SAFETY: the event was created in this runtime's context and is destroyed once; the
+        // driver defers the release of an event that is still pending.
+        unsafe {
+            let _ = self.runtime.with_raw_locked(Vec::new(), |_raw| {
+                let _ = cudarc::driver::sys::cuEventDestroy_v2(event);
+            });
+        }
     }
 
     fn build_permutation_plan(
@@ -1296,9 +1443,14 @@ impl Drop for Cutensor {
     fn drop(&mut self) {
         let handle = self.handle;
         let plans: Vec<CachedPlan> = self.plans.drain().map(|(_, plan)| plan).collect();
+        let retiring: Vec<RetiringPlan> = self.retiring.drain(..).collect();
         self.runtime.synchronize_best_effort();
         for cached in plans {
             self.destroy_plan(cached);
+        }
+        for retired in retiring {
+            self.destroy_event(retired.event);
+            self.destroy_plan(retired.plan);
         }
         // SAFETY: the runtime was synchronised first, so nothing still reads the workspace or the
         // handle; the scope activates the context they belong to.
