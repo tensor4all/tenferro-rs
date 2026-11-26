@@ -2,7 +2,11 @@
 
 ## Status
 
-Accepted design for issue #1711. Implementation requires an independent design-review verdict before code changes.
+Implemented (issue #1711). Verified against `origin/main` at `e608e7ec` on 2026-11-27; the
+"Implementation record" section below cites the code for each claim. One part of the original design was
+wrong in the code, not in this document: `ResidualSpec::declares_input` answered `false` for every index
+`>= 64`, so an `all_inputs()` rule (einsum with 65 operands) hit `UndeclaredResidualValue`. That is fixed by
+#2585 (see "`ResidualSpec` arity").
 
 ## Goal
 
@@ -29,6 +33,39 @@ Remove the unrestricted `primal_inputs()` and `primal_outputs()` slice accessors
 
 The two checked request structs cease to be `Copy`; their accessors borrow `&self`, allowing repeated access while preserving request ownership. Existing non-primal accessors (`op`, cotangents, activity, residuals, mask, provenance) also borrow `&self`.
 
+## Implementation record
+
+Every row was read against the code at `e608e7ec`, not carried over from the design.
+
+| Claim | Where |
+| --- | --- |
+| `PrimalValueKind::{Input, Output}` is public and `#[non_exhaustive]` | `crates/tenferro-ad/src/semantic_extension.rs:77-84` |
+| `PrimalIndexOutOfBounds { family_id, kind, index, len }` and `UndeclaredResidualValue { family_id, kind, index }` | `crates/tenferro-ad/src/semantic_extension.rs:120-140` |
+| Transpose request: `primal_{input,output}_value`, `_meta`, `_count` on `&self` | `crates/tenferro-ad/src/semantic_extension.rs:307,334,360,388,412,428` |
+| Direct primal-VJP request: the same six accessors | `crates/tenferro-ad/src/semantic_extension.rs:556,583,609,637,661,677` |
+| Bounds are checked before the mask; the mask is `declares_input`/`declares_output` | `checked_primal_value`, `crates/tenferro-ad/src/semantic_extension.rs:1188-1215` |
+| Metadata access checks bounds only | `checked_primal_metadata`, `crates/tenferro-ad/src/semantic_extension.rs:1217-1231` |
+| Both requests own boxed metadata snapshots taken before rule dispatch | `crates/tenferro-ad/src/semantic_extension.rs:265-266,515-516,1071-1072,1126-1127` |
+| The two checked request structs are not `Copy` (no derive) | `crates/tenferro-ad/src/semantic_extension.rs:261,511` |
+| `SemanticLinearizeRequest` keeps raw `primal_inputs()`/`primal_outputs()` and stays `Copy` | `crates/tenferro-ad/src/semantic_extension.rs:187-210` |
+| No raw primal slice accessor on the transpose/direct request types | source-contract test, `crates/tenferro-ad/tests/integration/semantic_extension.rs:254-276` |
+
+### `ResidualSpec` arity
+
+`ResidualSpec` keeps one bit per index for `0..64` plus one flag per side that declares every index `>= 64`
+(`crates/tenferro-internal-ops/src/primitive_rules/mod.rs:101-111`). `all_inputs()`/`all_outputs()` (`:198-205`) delegate to
+`with_all_inputs`/`with_all_outputs`, which set the flag (`:180-191`), and `declares_input`/`declares_output`
+consult it (`:208-223`). An explicit single index
+`>= 64` cannot be stored, so it is refused with an `assert!` in every build (`index_bit`, `:118-124`).
+Rules that declare "all" therefore have no operand limit; rules that declare individual indices are limited
+to `0..64`. Tests:
+`crates/tenferro-internal-ops/src/primitive_rules/tests.rs:50-58` (refusal),
+`crates/tenferro-internal-ops/src/primitive_rules/tests.rs:98-100` (`declares_input(64)`/`declares_output(64)` on an
+all-index mask; runs in the default lane), and `crates/tenferro-einsum/tests/integration/many_operand_vjp.rs:26`
+(65-operand einsum VJP reads every residual). The latter is `#![cfg(feature = "autodiff")]` (`:1`). It runs in a workspace-wide build because the workspace member
+`docs/tutorial-code` enables `tenferro-einsum/autodiff` (`docs/tutorial-code/Cargo.toml:27`; `cargo metadata` resolves
+`tenferro-einsum` with `["autodiff"]`), but a bare `cargo test -p tenferro-einsum` compiles it out.
+
 ## Dispatch and retention
 
 Before dispatch, `SemanticExtensionRuleSet` snapshots metadata for all primal inputs/outputs using the validated destination builder. The rule's `ResidualSpec` remains the only tensor-retention authority. Checked access does not widen the mask, retain all primal values, or synthesize missing residuals.
@@ -47,21 +84,39 @@ No rule may call a checked value accessor for an undeclared index, including ina
 
 ## Tests
 
-- Fake transpose and direct primal-VJP rules attempt an undeclared input and output value access; both return exact typed errors in ordinary and release-equivalent builds.
-- Metadata access to the same undeclared positions succeeds and exposes dtype/shape without a `ProgramValue`.
-- Bounds errors are typed and precede mask errors.
-- Declared all-input Wilson-like rules, inactive inputs, and non-unit cotangent seeds retain numerical behavior.
-- Source-contract checks ensure transpose/direct request types expose no raw primal value slice accessor.
-- Retention tests confirm saved residual bindings include only declared mask positions.
+Found in the tree (checked 2026-11-27):
+
+- Typed errors for an undeclared input and output access, through both transpose and direct primal-VJP dispatch:
+  `crates/tenferro-ad/tests/integration/semantic_extension.rs:518` (identity assertions) and `:559` (undeclared access).
+- Declared access, metadata access, counts, and the bounds error: `crates/tenferro-ad/src/semantic_extension/tests.rs:104`
+  (bounds error asserted at `:147`, undeclared at `:160`).
+- No raw primal value slice on transpose/direct requests: `crates/tenferro-ad/tests/integration/semantic_extension.rs:254`.
+- Wilson-like multi-input fixtures in `crates/tenferro-ad/tests/integration/multi_input_traced.rs`: inactive inputs
+  (`request.active_inputs()[index]`, `:194`) and non-unit cotangent seeds (`2.0` at `:223`, `11.0` at `:288`).
+- `ResidualSpec` arity: see "`ResidualSpec` arity" above.
+
+- Bounds errors precede mask errors: the rule in `crates/tenferro-ad/tests/integration/semantic_extension.rs:194-237`
+  declares `ResidualSpec::none()` and reads input 1 of a length-1 request, which is both out of bounds and
+  undeclared, and requires `PrimalIndexOutOfBounds`; the dispatch test at `:518` (which registers `IdentityRule`) runs it.
+  Swapping the two checks in `checked_primal_value` (`semantic_extension.rs:1188-1215`) would fail `:518`.
+  The test at `:559` reads index 0 only and is decided by the mask, so it does **not** guard the order.
+- Retention follows the mask, partially: `crates/tenferro-ad/src/eager/tests/residuals.rs:154`
+  (`intermediate_inputs_are_retained_without_retaining_all_outputs`) asserts retained counts. It is not an
+  "equals the declared mask positions" test, because `collect()` dedupes by semantic identity
+  (`crates/tenferro-ad/src/eager/residuals.rs:45-56`).
+
+Originally listed but **not** found: a release-profile-specific test run (no `--release` or `--all-features`
+lane exists in `scripts/ci/run_profile.py`) and a test asserting saved residual bindings are exactly the
+declared mask positions. Treat these as unverified until a test is cited here.
 
 ## Non-goals
 
 - No derivative-math or activity-analysis change.
 - No automatic mask widening.
 - No retain-all compatibility path or deprecated raw accessor.
-- No panic/debug-assert enforcement.
+- No panic/debug-assert enforcement of undeclared value access: it is a typed `SemanticAdError`. (The `assert!` that refuses an explicit `ResidualSpec` index `>= 64` is a separate, construction-time guard, see above.)
 - No restriction on `SemanticLinearizeRequest` primal access.
 
 ## Verification
 
-Run focused semantic extension/transform tests in debug and release-equivalent profiles, all standard and nested extension tests, `tenferro-ad` doctests/clippy, retention/coverage checks, and combined PR gates.
+Run the focused semantic extension tests in `tenferro-ad` (`cargo nextest run -p tenferro-ad --features autodiff`), the `ResidualSpec` tests in `tenferro-internal-ops`, `tenferro-ad` doctests and clippy, and the repository PR gates. No release-profile lane exists in `scripts/ci/run_profile.py`; the original "release-equivalent" requirement is unmet.
