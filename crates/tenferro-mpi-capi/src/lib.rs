@@ -303,8 +303,16 @@ fn thread_level_name(lib: &ffi::loader::Loaded, provided: c_int) -> (&'static st
 /// all zero or all one (mpi4py's `comm.handle` sign-extends a negative `int`). For pointer
 /// families the value is the address.
 fn decode_handle(lib: &ffi::loader::Loaded, handle: u64) -> Result<usize, CErr> {
+    decode_handle_for(lib.family, &lib.consts, handle)
+}
+
+fn decode_handle_for(
+    family: ffi::detect::Family,
+    consts: &ffi::consts::Consts,
+    handle: u64,
+) -> Result<usize, CErr> {
     use ffi::detect::Family;
-    let raw = match lib.family {
+    let raw = match family {
         Family::Mpich => {
             let upper = (handle >> 32) as u32;
             if upper != 0 && upper != u32::MAX {
@@ -325,7 +333,7 @@ fn decode_handle(lib: &ffi::loader::Loaded, handle: u64) -> Result<usize, CErr> 
             )
         })?,
     };
-    if !lib.consts.comm_handle_is_plausible(raw) {
+    if !consts.comm_handle_is_plausible(raw) {
         return Err(err(
             TFE_INVALID_ARGUMENT,
             format!("communicator handle {handle:#x} is null or MPI_COMM_NULL"),
@@ -877,4 +885,143 @@ pub unsafe extern "C" fn tfe_mpi_test_hit_stub(
         ffi::MPI_Buffer_detach(std::ptr::null_mut(), std::ptr::null_mut());
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ffi::consts::Consts;
+    use ffi::detect::Family;
+
+    fn consts(family: Family) -> Consts {
+        // Open MPI constants are addresses; any distinct non-zero values do for an encoding test.
+        let mut next = 0x1000usize;
+        Consts::for_family(family, |_| {
+            next += 0x10;
+            next
+        })
+    }
+
+    #[test]
+    fn mpich_user_communicator_zero_and_sign_extended_are_the_same_handle() {
+        let c = consts(Family::Mpich);
+        // 0x84000002 is a user communicator; mpi4py's `comm.handle` sign-extends it.
+        let zero_extended = 0x8400_0002u64;
+        let sign_extended = 0xffff_ffff_8400_0002u64;
+        assert_eq!(
+            decode_handle_for(Family::Mpich, &c, zero_extended).ok(),
+            Some(0x8400_0002)
+        );
+        assert_eq!(
+            decode_handle_for(Family::Mpich, &c, sign_extended).ok(),
+            Some(0x8400_0002)
+        );
+    }
+
+    #[test]
+    fn mpich_mixed_upper_bits_are_refused() {
+        let c = consts(Family::Mpich);
+        for handle in [
+            0x1_8400_0002u64,
+            0x7fff_ffff_8400_0002,
+            0x0000_0001_0000_0000,
+        ] {
+            let e = decode_handle_for(Family::Mpich, &c, handle)
+                .err()
+                .expect("refused");
+            assert_eq!(e.code, TFE_INVALID_ARGUMENT, "{handle:#x}");
+        }
+    }
+
+    #[test]
+    fn zero_and_each_familys_comm_null_are_refused_before_any_mpi_call() {
+        for family in [Family::Mpich, Family::OpenMpi, Family::StandardAbi] {
+            let c = consts(family);
+            assert_eq!(
+                decode_handle_for(family, &c, 0).err().expect("zero").code,
+                TFE_INVALID_ARGUMENT
+            );
+            let null = c.comm_null as u64;
+            let e = decode_handle_for(family, &c, null)
+                .err()
+                .expect("MPI_COMM_NULL");
+            assert_eq!(e.code, TFE_INVALID_ARGUMENT, "{family:?}");
+            assert!(
+                decode_handle_for(family, &c, c.comm_world as u64).is_ok(),
+                "{family:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pointer_family_takes_the_value_as_the_address() {
+        let c = consts(Family::OpenMpi);
+        assert_eq!(
+            decode_handle_for(Family::OpenMpi, &c, 0xdead_beef).ok(),
+            Some(0xdead_beef)
+        );
+        let a = consts(Family::StandardAbi);
+        assert_eq!(
+            decode_handle_for(Family::StandardAbi, &a, 0x101).ok(),
+            Some(0x101)
+        );
+    }
+
+    #[test]
+    fn entries_reject_null_pointers_without_panicking() {
+        let mut status = 0;
+        // SAFETY: null arguments are exactly what is under test.
+        unsafe {
+            assert_eq!(
+                tfe_mpi_comm_attach(1, std::ptr::null_mut(), &mut status),
+                TFE_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                tfe_mpi_comm_info(
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut status
+                ),
+                TFE_INVALID_ARGUMENT
+            );
+            assert_eq!(
+                tfe_mpi_comm_detach(std::ptr::null_mut(), &mut status),
+                TFE_SUCCESS
+            );
+            assert_eq!(
+                tfe_last_error_message(std::ptr::null_mut(), 0, std::ptr::null_mut()),
+                TFE_INVALID_ARGUMENT
+            );
+        }
+    }
+
+    #[test]
+    fn a_panic_inside_an_entry_is_caught_and_reported() {
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let mut status = 0;
+        let code = guarded(&mut status, || panic!("boom"));
+        std::panic::set_hook(hook);
+        assert_eq!(code, TFE_INTERNAL_ERROR);
+        assert_eq!(status, TFE_INTERNAL_ERROR);
+        assert!(last_message().contains("boom"));
+    }
+
+    fn last_message() -> String {
+        let mut needed = 0usize;
+        // SAFETY: a size query, then a buffer of that size.
+        unsafe {
+            tfe_last_error_message(std::ptr::null_mut(), 0, &mut needed);
+            let mut buf = vec![0u8; needed];
+            tfe_last_error_message(buf.as_mut_ptr(), needed, &mut needed);
+            String::from_utf8_lossy(&buf[..needed - 1]).into_owned()
+        }
+    }
+
+    #[test]
+    fn the_crate_is_built_with_unwinding_panics() {
+        assert!(cfg!(panic = "unwind"));
+    }
 }

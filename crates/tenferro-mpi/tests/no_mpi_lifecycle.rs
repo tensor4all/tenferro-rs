@@ -36,6 +36,21 @@ const FORBIDDEN: &[&str] = &[
     "MPI_ANY_SOURCE",
 ];
 
+/// Whether `code` names `forbidden` as a whole identifier: `MPI_Finalized` (allowed, and called on
+/// every C entry) must not trip the `MPI_Finalize` entry, nor `MPI_Initialized` the `MPI_Init` one.
+fn names(code: &str, forbidden: &str) -> bool {
+    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    code.match_indices(forbidden).any(|(at, _)| {
+        let before = code[..at].chars().next_back();
+        let after = code[at + forbidden.len()..].chars().next();
+        // `forbidden` may itself end in punctuation (`world()`); only word-like ends need a boundary.
+        let starts_word = forbidden.chars().next().is_some_and(is_ident);
+        let ends_word = forbidden.chars().next_back().is_some_and(is_ident);
+        !(starts_word && before.is_some_and(is_ident))
+            && !(ends_word && after.is_some_and(is_ident))
+    })
+}
+
 fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -73,7 +88,7 @@ fn the_adapter_never_initializes_or_owns_mpi() {
             }
             for forbidden in FORBIDDEN {
                 assert!(
-                    !code.contains(forbidden),
+                    !names(code, forbidden),
                     "{}:{}: the transport adapter must not call `{forbidden}`",
                     file.display(),
                     number + 1
