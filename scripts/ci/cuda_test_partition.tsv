@@ -1126,6 +1126,7 @@ gpu	tenferro-gpu	cuda::structural::tests::a_wide_reversal_is_written_into_a_reus
 gpu	tenferro-gpu	cuda::structural::tests::a_wide_cyclic_rotation_stays_on_the_tiled_transpose
 gpu	tenferro-gpu	cuda::structural::tests::a_refused_vendor_plan_leaks_no_native_handle
 gpu	tenferro-gpu	cuda::structural::tests::a_refused_vendor_plan_keeps_the_reused_destination_copy
+gpu	tenferro-gpu	cuda::structural::tests::evicting_a_cutensor_plan_does_not_drain_the_stream
 host	tenferro-gpu	cuda::structural::tests::vendor_permutation_routing_takes_only_a_wide_supported_view
 host	tenferro-gpu	cuda::device::tests::discovery_reports_an_unloadable_driver_as_a_typed_error
 host	tenferro-gpu	cuda::runtime::tests::the_budget_grows_with_the_device_and_stays_bounded
