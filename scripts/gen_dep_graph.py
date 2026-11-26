@@ -66,6 +66,7 @@ _MEMBER_CLASSES = {
     # Optional workspace adapters: they add a transport or storage family to the
     # documented surface, with no default system dependency.
     "crates/tenferro-mpi": "extension",
+    "crates/tenferro-mpi-capi": "extension",
     "crates/tenferro-hdf5": "extension",
     "docs/tutorial-code": "tutorial",
 }
