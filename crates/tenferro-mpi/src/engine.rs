@@ -367,16 +367,16 @@ fn consume<B: MpiBackend>(backend: &B, probed: B::Probed, length: i64) {
 }
 
 /// Receive a probed message only to read its frame kind, then discard it.
-fn consume_kind<B: MpiBackend>(backend: &B, probed: B::Probed, length: i64) -> u8 {
+fn consume_kind<B: MpiBackend>(backend: &B, probed: B::Probed, length: i64) -> Result<u8> {
     let len = usize::try_from(length).unwrap_or(0);
     if (HEADER_PROLOGUE..=MAX_HEADER_LEN).contains(&len) {
         let mut buffer = [0u8; MAX_HEADER_LEN];
-        let _ = backend.receive_probed(probed, &mut buffer[..len]);
-        return buffer[6];
+        backend.receive_probed(probed, &mut buffer[..len])?;
+        return Ok(buffer[6]);
     }
     let mut scratch = vec![0u8; len];
-    let _ = backend.receive_probed(probed, &mut scratch);
-    scratch.get(6).copied().unwrap_or(0)
+    backend.receive_probed(probed, &mut scratch)?;
+    Ok(scratch.get(6).copied().unwrap_or(0))
 }
 
 fn receive_ack<B: MpiBackend>(backend: &B, from: B::Peer<'_>, tag: Tag) -> Result<u8> {
@@ -386,7 +386,7 @@ fn receive_ack<B: MpiBackend>(backend: &B, from: B::Peer<'_>, tag: Tag) -> Resul
         // be consumed: two ranks that send to each other on one tag see the other's
         // header here instead of hanging.
         return Err(Error::UnexpectedFrame {
-            kind: consume_kind(backend, probed, length),
+            kind: consume_kind(backend, probed, length)?,
         });
     }
     let mut buffer = [0u8; ACK_LEN];

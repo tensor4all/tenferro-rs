@@ -451,6 +451,14 @@ fn main() {
             TFE_BUFFER_TOO_SMALL,
         );
         assert_eq!((rk, nbytes), (3, 32));
+        let mut full = [0usize; 3];
+        let mut rk2 = 0usize;
+        check(
+            "shape of the held tensor",
+            unsafe { tfe_mpi_recv_shape(comm, full.as_mut_ptr(), 3, &mut rk2, &mut status) },
+            TFE_SUCCESS,
+        );
+        assert_eq!((rk2, full), (3, [1, 2, 2]));
         let mut small = [0u8; 8];
         check(
             "take into a small buffer",

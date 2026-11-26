@@ -167,4 +167,4 @@ tcontract-exec = { git = "https://github.com/tensor4all/tcontract-rs.git", rev =
 # rsmpi-rt 0.9.0 (tensor4all/rsmpi-rt#8: `mpi-native-sys-backend`, MPItrampoline backend removed,
 # tenferro-rs#2735) is not on crates.io yet. Drop this line when it is released;
 # `tenferro-mpi` already requires `0.9.0`.
-rsmpi-rt = { git = "https://github.com/tensor4all/rsmpi-rt.git", rev = "33a150262c929f415096476161ecfd32c28552b4" }
+rsmpi-rt = { git = "https://github.com/tensor4all/rsmpi-rt.git", rev = "93a2a39729a488991b50d03f8a02d919d571aff9" }

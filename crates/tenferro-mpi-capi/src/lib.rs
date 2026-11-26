@@ -359,6 +359,22 @@ unsafe fn attach(handle: u64) -> Result<Box<tfe_mpi_comm>, CErr> {
         return Err(err(TFE_MPI_FINALIZED, "the host finalized MPI"));
     }
 
+    // The thread level comes before any call on the communicator: under FUNNELED/SINGLE a
+    // non-main thread must not make even the attach queries.
+    let mut provided: c_int = 0;
+    mpi_ok(ffi::MPI_Query_thread(&mut provided), "MPI_Query_thread")?;
+    let (thread_level, funneled_only) = thread_level_name(lib, provided);
+    if funneled_only {
+        let mut main: c_int = 0;
+        mpi_ok(ffi::MPI_Is_thread_main(&mut main), "MPI_Is_thread_main")?;
+        if main == 0 {
+            return Err(err(
+                TFE_MPI_THREAD,
+                format!("the MPI thread level is {thread_level}: attach from the main thread"),
+            ));
+        }
+    }
+
     let raw = decode_handle(lib, handle)?;
 
     // First MPI call on the handle: a dead or garbage handle reaches the host's error
@@ -407,10 +423,6 @@ unsafe fn attach(handle: u64) -> Result<Box<tfe_mpi_comm>, CErr> {
     } else {
         32767
     };
-
-    let mut provided: c_int = 0;
-    mpi_ok(ffi::MPI_Query_thread(&mut provided), "MPI_Query_thread")?;
-    let (thread_level, funneled_only) = thread_level_name(lib, provided);
 
     // Held in ManuallyDrop: rsmpi-rt's user communicator would `MPI_Comm_free` on drop.
     let comm = SimpleCommunicator::from_raw(raw);
@@ -698,7 +710,7 @@ fn dtype_code(dtype: DType) -> Option<u8> {
 /// Receive one tensor from `source` on `tag` into a buffer **held by the communicator object**,
 /// and report its dtype code, rank, shape and byte count. Nothing is lost if `shape_cap` is
 /// too small: the object keeps the tensor, `*rank` and `*nbytes` are set, and the call returns
-/// `TFE_BUFFER_TOO_SMALL`; copy it out with [`tfe_mpi_recv_take`]. At most one received tensor
+/// `TFE_BUFFER_TOO_SMALL`; read the full shape with [`tfe_mpi_recv_shape`] and copy the data out with [`tfe_mpi_recv_take`]. At most one received tensor
 /// is held at a time.
 ///
 /// # Safety
@@ -765,6 +777,47 @@ pub unsafe extern "C" fn tfe_mpi_recv(
                     dims.len()
                 ),
             ));
+        }
+        Ok(())
+    })
+}
+
+/// The shape of the tensor held by the last [`tfe_mpi_recv`], for a caller whose shape buffer was
+/// too small there. Receives nothing. `*rank` is always set; `TFE_BUFFER_TOO_SMALL` if
+/// `shape_cap` is still too small.
+///
+/// # Safety
+///
+/// `rank` is writable and `shape_out` is valid for `shape_cap` elements.
+#[no_mangle]
+pub unsafe extern "C" fn tfe_mpi_recv_shape(
+    comm: *const tfe_mpi_comm,
+    shape_out: *mut usize,
+    shape_cap: usize,
+    rank: *mut usize,
+    status: *mut tfe_status_t,
+) -> tfe_status_t {
+    with_comm(comm, status, |c| {
+        if rank.is_null() || (shape_out.is_null() && shape_cap > 0) {
+            return Err(err(TFE_INVALID_ARGUMENT, "an output pointer is null"));
+        }
+        let pending = c.pending.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(tensor) = pending.as_ref() else {
+            return Err(err(TFE_INVALID_ARGUMENT, "no received tensor is held"));
+        };
+        let dims = tensor.shape();
+        *rank = dims.len();
+        if dims.len() > shape_cap {
+            return Err(err(
+                TFE_BUFFER_TOO_SMALL,
+                format!(
+                    "shape buffer of {shape_cap} is too small for rank {}",
+                    dims.len()
+                ),
+            ));
+        }
+        if !dims.is_empty() {
+            std::ptr::copy_nonoverlapping(dims.as_ptr(), shape_out, dims.len());
         }
         Ok(())
     })

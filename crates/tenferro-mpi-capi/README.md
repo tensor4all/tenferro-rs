@@ -18,7 +18,7 @@ The contract is `docs/design/mpi-native-abi.md` and `docs/design/mpi-transport.m
 | `tfe_mpi_comm_attach` / `tfe_mpi_comm_detach` | borrow / release a communicator (process-local, no message) |
 | `tfe_mpi_comm_info` | rank, size, thread level, whether the error handler is fatal |
 | `tfe_mpi_send` | send a compact column-major host buffer with a dtype code and shape |
-| `tfe_mpi_recv`, `tfe_mpi_recv_take` | receive into an object-held buffer, then copy it out (loss-free) |
+| `tfe_mpi_recv`, `tfe_mpi_recv_shape`, `tfe_mpi_recv_take` | receive into an object-held buffer, read its shape, then copy it out (loss-free) |
 | `tfe_last_error_message` | thread-local message of the last failure |
 
 Every entry runs inside `catch_unwind`; the library must be built with `panic = "unwind"`
