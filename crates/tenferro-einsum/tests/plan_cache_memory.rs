@@ -108,7 +108,11 @@ impl Rig {
             })
             .collect();
         let subs = EinsumSubscripts::new(&[&self.labels[..], &[1000, 1001, p, q][..]], &out);
-        drop([&self.state, &self.gate].einsum(&subs, &mut self.engine).unwrap());
+        drop(
+            [&self.state, &self.gate]
+                .einsum(&subs, &mut self.engine)
+                .unwrap(),
+        );
     }
 
     fn retained(&self) -> usize {
@@ -127,7 +131,9 @@ fn within(reported: usize, measured: usize, what: &str) {
 
 #[test]
 fn retained_bytes_tracks_the_allocator_per_plan_and_after_clear() {
-    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut rig = Rig::new();
     let base = held();
     let mut last_retained = rig.retained();
@@ -151,12 +157,18 @@ fn retained_bytes_tracks_the_allocator_per_plan_and_after_clear() {
     rig.engine.plan_cache().clear();
     assert_eq!(rig.retained(), 0);
     within(reported, before_clear - held(), "freed by clear()");
-    assert!(held() - base < SLACK, "held {} B above the base", held() - base);
+    assert!(
+        held() - base < SLACK,
+        "held {} B above the base",
+        held() - base
+    );
 }
 
 #[test]
 fn reset_buffer_pool_keeps_plans_and_the_report_says_so() {
-    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut rig = Rig::new();
     rig.apply(PAIRS[0]);
     let retained = rig.retained();
@@ -172,7 +184,9 @@ fn reset_buffer_pool_keeps_plans_and_the_report_says_so() {
 
 #[test]
 fn the_byte_bound_evicts_least_recently_used_and_releases_their_tables() {
-    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut rig = Rig::new();
     let base = held();
     rig.apply(PAIRS[0]);
@@ -187,12 +201,19 @@ fn the_byte_bound_evicts_least_recently_used_and_releases_their_tables() {
     let two = held() - base;
     rig.apply(PAIRS[2]);
     let stats = rig.engine.plan_cache().stats();
-    assert_eq!(stats.evictions, 1, "the third plan overflows the bound once");
+    assert_eq!(
+        stats.evictions, 1,
+        "the third plan overflows the bound once"
+    );
     assert_eq!(stats.entries, 2);
     assert!(stats.retained_bytes <= limit);
     // The evicted plan's tables are gone from the heap, not only from the count.
     within(stats.retained_bytes, held() - base, "after eviction");
-    assert!(held() - base < two + one / 4, "heap grew by a plan: {two} -> {}", held() - base);
+    assert!(
+        held() - base < two + one / 4,
+        "heap grew by a plan: {two} -> {}",
+        held() - base
+    );
 
     // Recency, not insertion order, chose the victim: PAIRS[0] is still cached
     // (a hit), PAIRS[1] is not (a miss).
@@ -204,15 +225,23 @@ fn the_byte_bound_evicts_least_recently_used_and_releases_their_tables() {
     assert_eq!(rig.engine.plan_cache().stats().misses, misses + 1);
 
     // Lowering the bound evicts down to it at once.
-    rig.engine.plan_cache().set_contraction_limit_bytes(one * 3 / 2);
+    rig.engine
+        .plan_cache()
+        .set_contraction_limit_bytes(one * 3 / 2);
     let stats = rig.engine.plan_cache().stats();
     assert_eq!(stats.entries, 1);
-    within(stats.retained_bytes, held() - base, "after lowering the bound");
+    within(
+        stats.retained_bytes,
+        held() - base,
+        "after lowering the bound",
+    );
 }
 
 #[test]
 fn a_plan_over_the_bound_is_used_and_not_kept() {
-    let _serial = SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut rig = Rig::new();
     rig.engine.plan_cache().set_contraction_limit_bytes(1 << 20);
     let base = held();
@@ -221,7 +250,11 @@ fn a_plan_over_the_bound_is_used_and_not_kept() {
     assert_eq!((stats.entries, stats.evictions), (0, 0));
     // The plan's tables (24 MiB) are freed with the call; what stays is lazily
     // built engine state, a few KiB.
-    assert!(held() - base < SLACK, "held {} B above the base", held() - base);
+    assert!(
+        held() - base < SLACK,
+        "held {} B above the base",
+        held() - base
+    );
     // Every call rebuilds: a miss each time.
     rig.apply(PAIRS[0]);
     assert_eq!(rig.engine.plan_cache().stats().hits, 0);

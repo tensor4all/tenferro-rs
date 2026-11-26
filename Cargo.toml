@@ -154,7 +154,7 @@ inherits = "test"
 incremental = false
 strip = "symbols"
 
-# tensor4all/cpueinsum-rs#PENDING: `BinaryPlan::retained_bytes`, which the plan cache
+# tensor4all/cpueinsum-rs#92: `BinaryPlan::retained_bytes`, which the plan cache
 # charges against its byte bound (#2742). Drop this patch when cpueinsum releases it.
 [patch.crates-io]
 cpueinsum = { git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "9f11997" }
