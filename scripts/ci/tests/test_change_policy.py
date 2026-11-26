@@ -119,6 +119,30 @@ class ChangePolicyTests(unittest.TestCase):
                 self.assertFalse(policy.run_gpu)
                 self.assertFalse(policy.run_macos)
 
+    def test_mpi_control_plane_requires_mpi(self) -> None:
+        """#2735: a change to the two-rank MPI lane runs that lane, not its no-op."""
+        for path in (
+            ".github/workflows/ci-pr-workspace-tests.yml",
+            "scripts/ci/change_policy.py",
+            "scripts/ci/run_profile.py",
+            "scripts/ci/run-mpi-ranks.sh",
+        ):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertIs(policy.change_class, ChangeClass.CI_ONLY)
+                self.assertFalse(policy.run_rust)
+                self.assertTrue(policy.run_mpi)
+
+    def test_mpi_runs_with_rust_and_not_for_unrelated_changes(self) -> None:
+        for path in ("scripts/run-mpi.sh", "crates/tenferro-mpi/src/lib.rs"):
+            with self.subTest(path=path):
+                policy = classify_paths([path])
+                self.assertTrue(policy.run_rust)
+                self.assertTrue(policy.run_mpi)
+        for path in ("README.md", ".github/workflows/docs.yml"):
+            with self.subTest(path=path):
+                self.assertFalse(classify_paths([path]).run_mpi)
+
     def test_unrelated_ci_change_does_not_require_macos(self) -> None:
         policy = classify_paths([".github/workflows/docs.yml"])
         self.assertFalse(policy.run_macos)
@@ -248,6 +272,7 @@ class ChangePolicyTests(unittest.TestCase):
             self.assertEqual(values["run_docs"], "true")
             self.assertEqual(values["run_rust"], "false")
             self.assertEqual(values["run_macos"], "false")
+            self.assertEqual(values["run_mpi"], "false")
             self.assertIn("README.md", values["reason"])
 
     def test_cli_classifies_deleted_documentation_as_docs_only(self) -> None:
