@@ -722,6 +722,21 @@ pub(crate) struct ConcreteEinsumInputSpec {
     shape: Vec<usize>,
 }
 
+impl ConcreteEinsumInputSpec {
+    pub(crate) fn new(dtype: DType, shape: Vec<usize>) -> Self {
+        Self { dtype, shape }
+    }
+}
+
+/// Resolve `notation` against operand shapes (no tensor needed).
+#[cfg(feature = "autodiff")]
+pub(crate) fn resolve_shapes_notation(
+    notation: &EinsumNotation,
+    shapes: &[&[usize]],
+) -> Result<Subscripts> {
+    resolve_einsum_notation(notation, shapes)
+}
+
 fn resolve_shapes(notation: &EinsumNotation, shapes: Vec<&[usize]>) -> Result<Subscripts> {
     resolve_einsum_notation(notation, &shapes)
 }

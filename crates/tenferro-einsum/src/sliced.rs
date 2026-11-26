@@ -31,11 +31,12 @@ use std::ops::Range;
 use omeco::{EinCode as OmecoEinCode, NestedEinsum as OmecoNested, TreeSASlicer};
 use tenferro_tensor::{
     CacheStats, Conj, ContractionScalar, DType, Dest, DestMode, Engine, Repr, StridedSliceSpec,
-    Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensorView,
+    Tensor, TensorRead, TensorView, TensorWrite, TypedTensorView,
 };
 
 use crate::api::concrete::{check_mask, conjugate, resolve, substituted, tensor_err};
 use crate::api::{ConjMask, EinsumInputs, EinsumOptions, EinsumSpec};
+use crate::chunked::{run_chunks, ChunkSource};
 use crate::concrete::read_input_specs;
 use crate::{ConcreteEinsumPlan, ContractionTree, EinsumOptimize, Error, Subscripts};
 
@@ -569,17 +570,23 @@ impl SlicedEinsumPlan {
         self.check_inputs(&reads)?;
         let conj = conjugate(&reads, &self.conj, exec)?;
         let reads = substituted(&reads, &conj);
-        let mut assignment = vec![0; self.extents.len()];
-        let first = slice_reads(&reads, &self.fixes, &assignment).map_err(tensor_err)?;
+        let first =
+            slice_reads(&reads, &self.fixes, &vec![0; self.extents.len()]).map_err(tensor_err)?;
         let mut out: Tensor = self.inner.run_reads(&first[..], exec).map_err(tensor_err)?;
         let add = tenferro_tensor::DotGeneralAccumulation::add_to(self.dtype)?;
-        for id in 1..self.slice_count() {
-            decode(id, &self.extents, &mut assignment);
-            let views = slice_reads(&reads, &self.fixes, &assignment).map_err(tensor_err)?;
-            self.inner
-                .run_reads_into_accum(&views[..], exec, add, TensorWrite::from_tensor(&mut out))
-                .map_err(tensor_err)?;
-        }
+        let source = Slices {
+            plan: self,
+            reads: &reads,
+        };
+        run_chunks(
+            &source,
+            1..self.slice_count(),
+            exec,
+            &mut TensorWrite::from_tensor(&mut out),
+            add,
+            add,
+        )
+        .map_err(tensor_err)?;
         <I::Repr as Repr>::wrap_value(out)
     }
 
@@ -701,15 +708,11 @@ impl SlicedEinsumPlan {
             beta: ContractionScalar::one(self.dtype)?,
             ..first
         };
-        let mut assignment = vec![0; self.extents.len()];
-        for (position, id) in slices.enumerate() {
-            decode(id, &self.extents, &mut assignment);
-            let views = slice_reads(&reads, &self.fixes, &assignment).map_err(tensor_err)?;
-            let accumulation = if position == 0 { first } else { rest };
-            self.inner
-                .run_reads_into_accum(&views[..], exec, accumulation, reborrow(&mut out)?)
-                .map_err(tensor_err)?;
-        }
+        let source = Slices {
+            plan: self,
+            reads: &reads,
+        };
+        run_chunks(&source, slices, exec, &mut out, first, rest).map_err(tensor_err)?;
         Ok(())
     }
 
@@ -985,6 +988,36 @@ fn decode(mut id: usize, extents: &[usize], assignment: &mut [usize]) {
     }
 }
 
+/// The slices of a plan as chunks of the shared chunk loop: chunk `id` reads
+/// metadata-only views of the operands with the sliced axes fixed to slice
+/// `id`'s assignment, and accumulates into the whole destination.
+struct Slices<'p, 'a> {
+    plan: &'p SlicedEinsumPlan,
+    reads: &'p [TensorRead<'a>],
+}
+
+impl ChunkSource for Slices<'_, '_> {
+    type Held = Vec<usize>;
+
+    fn hold(&self, id: usize, _exec: &mut dyn Engine) -> Res<Vec<usize>> {
+        let mut assignment = vec![0; self.plan.extents.len()];
+        decode(id, &self.plan.extents, &mut assignment);
+        Ok(assignment)
+    }
+
+    fn reads<'s>(&'s self, assignment: &'s Vec<usize>) -> Res<Vec<TensorRead<'s>>> {
+        slice_reads(self.reads, &self.plan.fixes, assignment).map_err(tensor_err)
+    }
+
+    fn plan(&self, _id: usize) -> &ConcreteEinsumPlan {
+        &self.plan.inner
+    }
+
+    fn window(&self, _id: usize) -> Option<(usize, Range<usize>)> {
+        None
+    }
+}
+
 /// Each operand as one slice reads it: untouched without a sliced label, and
 /// otherwise a metadata-only view with each sliced axis narrowed to the
 /// slice's value (extent 1).
@@ -1061,25 +1094,6 @@ fn fix_axes<'a, T: 'static>(
         })
         .collect();
     Ok(view.slice_view(&specs)?)
-}
-
-/// A shorter-lived write target to the same destination.
-fn reborrow<'b>(out: &'b mut TensorWrite<'_>) -> Res<TensorWrite<'b>> {
-    Ok(match out {
-        TensorWrite::Tensor(tensor) => TensorWrite::Tensor(tensor),
-        TensorWrite::View(view) => {
-            let all = vec![StridedSliceSpec::all(); view.shape().len()];
-            TensorWrite::View(match view {
-                TensorViewMut::F32(v) => TensorViewMut::F32(v.slice_view(&all)?),
-                TensorViewMut::F64(v) => TensorViewMut::F64(v.slice_view(&all)?),
-                TensorViewMut::I32(v) => TensorViewMut::I32(v.slice_view(&all)?),
-                TensorViewMut::I64(v) => TensorViewMut::I64(v.slice_view(&all)?),
-                TensorViewMut::Bool(v) => TensorViewMut::Bool(v.slice_view(&all)?),
-                TensorViewMut::C32(v) => TensorViewMut::C32(v.slice_view(&all)?),
-                TensorViewMut::C64(v) => TensorViewMut::C64(v.slice_view(&all)?),
-            })
-        }
-    })
 }
 
 #[cfg(test)]

@@ -364,6 +364,64 @@ and accumulate. Decisions future work should keep:
 - **Not in v0:** traced and eager (AD) slicing, CUDA-specific plan-key checks,
   output-label slicing.
 
+## Sampled Planning And Execution (#2675)
+
+`SampledEinsumPlan` evaluates `Y[rest..., s] = T[rest..., c_s]` for a list of
+output configurations without forming `T` (sparse-state contraction, F. Pan,
+K. Chen, P. Zhang, PRL 129, 090502). It is a port of Feng Pan's prototype
+[Fanerst/sampled-einsum](https://github.com/Fanerst/sampled-einsum) at
+`c482b79a` (itself a port of artensor's `contraction_scheme_sparse`); see
+`docs/PROVENANCE_AND_CITATION_POLICY.md`. Decisions future work should keep:
+
+- **Gradient semantics.** Eager differentiation through the plan is the
+  gradient of a function of the sampled outputs `Y` only: right for VMC
+  (`ψ(σ)`, `∂ψ(σ)/∂θ`), not the gradient of a function of the full `T`,
+  because the unsampled entries are never computed and their derivative
+  cannot appear. This is in the rustdoc of the plan and of `einsum_at`.
+- **Where the planner lives: mapped, not adopted.** The prototype's
+  `Network {inputs, output, sizes}` is tenferro's `Subscripts` plus the size
+  dictionary of the resolved tree, so text specs, notation and integer
+  subscripts all work and errors are tenferro's typed errors. `Samples`
+  (labels by label id, column-major `[n, k]` values, duplicates allowed) and
+  the step kinds keep the prototype's names. `PlanOptions` became
+  `SampleOptions` with the prototype's two knobs and defaults
+  (`max_chunk_elements = 2^26`, `outer_select_ratio = 2.0`) plus the
+  `EinsumOptions` that choose the order. The prototype's `Instr` program is kept
+  crate-private: it is what lets the executors measure exactly the quantity
+  the plan predicts.
+- **The plan is primary, `einsum_at` is derived.** `prepare` plans along the
+  order of `EinsumOptions::optimize`; an explicit `Path`/`Nested`/`Tree`/
+  `False` order is followed exactly (the resolved tree's SSA pairs are the
+  prototype's path convention), which is what makes the report a statement
+  about the run. `einsum_at`/`einsum_at_with` (registry op, concrete and eager)
+  are prepare-then-execute with `Auto` by default. A plan depends on sample
+  values, so tenferro never caches it by shape; a caller holds it.
+- **The chunk loop is shared with slicing.** A gathered-pairs step runs
+  through `crate::chunked::run_chunks`, the loop `SlicedEinsumPlan` now uses:
+  per chunk a source hands out operand reads (sliced: narrowed views;
+  sampled: gathered rows) and a destination window (sliced: the whole output,
+  accumulated; sampled: the chunk's range of the preallocated step result,
+  overwritten). One prepared `ConcreteEinsumPlan` serves every full chunk and
+  one the shorter last chunk. Host windows are rebased to offset 0 like the
+  sliced operand views, so the engine's binary plan cache sees one layout per
+  chunk size. The prototype concatenates the chunk pieces instead; writing
+  windows removes the concatenation on the concrete layer (the issue's
+  "preallocated `T_v`, no concatenation").
+- **Two peaks.** The eager tape has no in-place window write, so the eager
+  executor keeps the prototype's pieces-and-concatenate program. The report
+  gives `peak_elements` (concrete) and `eager_peak_elements`; both count logical
+  elements of live executor temporaries (the prototype's definition) and both
+  are measured equal in the tests. Excluded: operands, backend scratch (a CPU
+  contraction that cannot write into a strided window computes the chunk and
+  copies it), and what the tape retains for the backward pass.
+- **Not in v0:** the traced spelling (`|P_v|` depends on the sample values, so
+  it needs execution-time planning; it is to follow the #2552 one-call grammar
+  and lower through the #2707 sub-program machinery), the gather-free v1
+  (`GemmJob` groups on CPU, pointer-array batched GEMM on CUDA), repeated
+  labels within one operand and broadcast labels (typed errors), a
+  sparsity-aware order search, and composition with slicing of contracted
+  labels.
+
 ## GPU Interaction
 
 Einsum itself remains backend-agnostic at the graph level. GPU execution happens

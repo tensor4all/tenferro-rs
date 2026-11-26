@@ -1,6 +1,6 @@
 //! The einsum operation registry: one `api_ops!` invocation, the single
 //! source of the public einsum grammar (`einsum`, `einsum_with`,
-//! `einsum_into`, `tensordot`).
+//! `einsum_into`, `einsum_at`, `tensordot`).
 //!
 //! The macro generates the traits, the forwarding impls, the rustdoc and the
 //! metadata constants; the bodies are the hand-written functions of
@@ -151,6 +151,44 @@ assert_eq!(c.value()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
 assert_eq!(d.value()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
 # Ok::<(), tenferro_ad::Error>(())"#;
     }
+    op einsum_at {
+        summary: "Sampled einsum (#2675): the contraction evaluated only at the given output configurations, `Y[rest..., s] = T[rest..., c_s]`, without forming `T`; one-shot prepare-and-execute of `SampledEinsumPlan`.";
+        operands: (inputs: S, spec: &(impl crate::EinsumSpec + ?Sized), samples: &crate::Samples);
+        options: crate::SampleOptions;
+        output: V;
+        dtypes: "Every input has the same dtype (any numeric dtype the backend supports); the result has it too.";
+        layers: [concrete, eager];
+        into: [];
+        layout: "The result is `[rest..., n]`: the non-sampled output labels in output order, then one axis over the samples in the given order (duplicates allowed). Each tree node keeps one row per distinct partial configuration; row pairs are gathered with `index_select` and contracted in chunks of at most `max_chunk_elements`, each chunk written into a window of the step result on the concrete layer. Inputs stay on their device. Eager gradients are those of a function of the sampled outputs only, not of the full contraction.";
+        errors: [Validation, Unsupported, RuntimeState];
+        omissions: ["traced: the plan depends on the sample values; deferred to execution-time planning (#2552 grammar, #2707 sub-programs)", "`_into`: the result is a new value", "repeated labels within one operand and broadcast labels are rejected in v0", "the gather-free v1 of #2675"];
+        example concrete: r#"use tenferro_cpu::CpuEngine;
+use tenferro_einsum::{EinsumOps, Samples};
+use tenferro_tensor::Tensor;
+
+let mut engine = CpuEngine::serial();
+let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?;
+let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?;
+// (a b)[i, k] at (i, k) = (1, 0) and (0, 1).
+let samples = Samples::new([u32::from(b'i'), u32::from(b'k')], 2, vec![1, 0, 0, 1]);
+let y = [&a, &b].einsum_at("ij,jk->ik", &samples, &mut engine)?;
+assert_eq!(y.as_slice::<f64>()?, &[2.0, 3.0]);
+# Ok::<(), tenferro_tensor::Error>(())"#;
+        example eager: r#"use tenferro_ad::EagerRuntime;
+use tenferro_cpu::CpuEngine;
+use tenferro_einsum::{EagerEinsumOps, Samples};
+use tenferro_tensor::Tensor;
+
+let runtime = EagerRuntime::new()?;
+let samples = Samples::new([u32::from(b'i'), u32::from(b'k')], 2, vec![1, 0, 0, 1]);
+let y = runtime.with_eager_session(&mut CpuEngine::serial(), |s| {
+    let a = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0])?)?;
+    let b = s.constant_from(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 1.0])?)?;
+    s.einsum_at(&[&a, &b], "ij,jk->ik", &samples)
+})?;
+assert_eq!(y.value()?.as_slice::<f64>()?, &[2.0, 3.0]);
+# Ok::<(), tenferro_ad::Error>(())"#;
+    }
     op tensordot {
         summary: "Contract `a` with `b` over the given axis pairs (or the last/first `n` axes); free axes of `a` come first.";
         operands: (a, b, axes: crate::TensorDotAxes<'_>);
@@ -199,6 +237,23 @@ assert_eq!(c.value()?.as_slice::<f64>()?, &[3.0; 8]);
     }
 
     exceptions {
+        E15 {
+            symbols: [
+                "tenferro_einsum::SampledEinsumPlan::report",
+                "tenferro_einsum::SampledEinsumPlan::output_shape",
+                "tenferro_einsum::SampledEinsumPlan::execute_with_stats",
+                "tenferro_einsum::SampledEinsumPlan::execute_eager",
+                "tenferro_einsum::SampledEinsumPlan::execute_eager_with_stats",
+                "tenferro_einsum::SampledEinsumPlan::cpu_cache_stats"
+            ];
+            scope: "the sampled einsum plan (#2675): its pre-execution report (per-node |P_v|, flops, peaks), measured execution, eager execution on a session and cache inspection";
+            category: "plan owner | inherent method";
+            owner_module: "tenferro_einsum::sampled";
+            reason: "the primary sampled-einsum entry plans along an explicit or resolved contraction path, and its report is only meaningful for that plan; the plan depends on sample values, so it is held by the caller to rerun the same samples on new operand values (each optimisation step) on the concrete layer or on an eager session; `einsum_at` is the one-shot derived spelling";
+            verification: "the doctests of every method, `tests/integration/sampled_einsum.rs` (random networks against dense, measured peak equals planned peak, warm rerun prepares no plans) and `tests/integration/sampled_einsum_ad.rs` (gradients against the dense route on the same eager tape)";
+            exit_condition: "kept while sampling is a separate plan; revisit when the traced spelling lands";
+            status: retained;
+        }
         E14 {
             symbols: [
                 "tenferro_einsum::SlicedEinsumPlan::report",

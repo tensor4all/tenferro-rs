@@ -16,6 +16,10 @@ mod prepared_plan_replay;
 mod public_surface_contract;
 #[path = "integration/runtime_buffer_pool.rs"]
 mod runtime_buffer_pool;
+#[path = "integration/sampled_einsum.rs"]
+mod sampled_einsum;
+#[path = "integration/sampled_einsum_ad.rs"]
+mod sampled_einsum_ad;
 #[path = "integration/session_plan.rs"]
 mod session_plan;
 #[path = "integration/shape_constraints.rs"]

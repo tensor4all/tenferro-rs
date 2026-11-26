@@ -125,6 +125,22 @@ fn forwarding(op: &str, layer: &str, complex: bool) -> R<(Vec<u64>, Vec<u64>)> {
             bits(&[&a, &b, &c].einsum("ij,jk,kl->il", &mut e)?)?,
             bits(&[&a, &b, &c].einsum_with("ij,jk,kl->il", &EinsumOptions::default(), &mut e)?)?,
         )),
+        ("einsum_at", "concrete") => {
+            let samples = crate::Samples::new(
+                [u32::from(b'i'), u32::from(b'l')],
+                3,
+                vec![1, 0, 1, 0, 1, 0],
+            );
+            Ok((
+                bits(&[&a, &b, &c].einsum_at("ij,jk,kl->il", &samples, &mut e)?)?,
+                bits(&[&a, &b, &c].einsum_at_with(
+                    "ij,jk,kl->il",
+                    &samples,
+                    &crate::SampleOptions::default(),
+                    &mut e,
+                )?)?,
+            ))
+        }
         ("tensordot", "concrete_tensordot") => Ok((
             bits(&a.tensordot(&b, TensorDotAxes::Count(1), &mut e)?)?,
             bits(&a.tensordot(&b, TensorDotAxes::Count(1), &mut e)?)?,
@@ -163,6 +179,21 @@ fn forwarding(op: &str, layer: &str, complex: bool) -> R<(Vec<u64>, Vec<u64>)> {
                         s.einsum(&[&xa, &xb, &xc], "ij,jk,kl->il")?,
                         s.einsum_with(&[&xa, &xb, &xc], "ij,jk,kl->il", &EinsumOptions::default())?,
                     ))
+                } else if op == "einsum_at" {
+                    let samples = crate::Samples::new(
+                        [u32::from(b'i'), u32::from(b'l')],
+                        3,
+                        vec![1, 0, 1, 0, 1, 0],
+                    );
+                    Ok((
+                        s.einsum_at(&[&xa, &xb, &xc], "ij,jk,kl->il", &samples)?,
+                        s.einsum_at_with(
+                            &[&xa, &xb, &xc],
+                            "ij,jk,kl->il",
+                            &samples,
+                            &crate::SampleOptions::default(),
+                        )?,
+                    ))
                 } else {
                     Ok((
                         s.tensordot(&xa, &xb, TensorDotAxes::Count(1))?,
@@ -200,7 +231,7 @@ fn every_registry_op_and_layer_forwards_plain_to_with_default_bit_for_bit() -> R
             }
         }
     }
-    let expected = if cfg!(feature = "autodiff") { 12 } else { 8 };
+    let expected = if cfg!(feature = "autodiff") { 16 } else { 10 };
     assert_eq!(checked, expected);
     Ok(())
 }
@@ -669,15 +700,21 @@ fn options_exist_exactly_for_the_operations_that_declare_them() {
         .map(|op| op.name)
         .collect();
     with_options.sort_unstable();
-    assert_eq!(with_options, ["einsum"]);
+    assert_eq!(with_options, ["einsum", "einsum_at"]);
 
     // Every declared options type is non-empty: a derived `Debug` prints
     // `Name { field: .. }` for a struct with fields and only `Name` for an
     // empty one.
-    let defaults: &[(&str, String)] = &[(
-        "EinsumOptions",
-        format!("{:?}", crate::EinsumOptions::default()),
-    )];
+    let defaults: &[(&str, String)] = &[
+        (
+            "EinsumOptions",
+            format!("{:?}", crate::EinsumOptions::default()),
+        ),
+        (
+            "SampleOptions",
+            format!("{:?}", crate::SampleOptions::default()),
+        ),
+    ];
     for op in API_OPS.iter().filter(|op| op.options != "none") {
         let name = op.options.rsplit("::").next().unwrap_or(op.options);
         let (_, shown) = defaults
