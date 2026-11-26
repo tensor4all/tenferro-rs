@@ -371,6 +371,11 @@ def run_case(root: pathlib.Path, target_dir: pathlib.Path, case: GuideCase) -> N
                 [workspace]
 
                 {absolutize_repo_paths(block, root)}
+
+                [patch.crates-io]
+                cpueinsum = {{ git = "https://github.com/tensor4all/cpueinsum-rs.git", rev = "9f11997" }}
+                tcontract = {{ git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }}
+                tcontract-exec = {{ git = "https://github.com/tensor4all/tcontract-rs.git", rev = "ca44b476aaa7f017f59afb2807fa1fe0d4939a27" }}
                 """
             ).lstrip(),
             encoding="utf-8",
