@@ -79,3 +79,7 @@ path = "tests/integration.rs"
 [[test]]
 name = "prelude"
 path = "tests/prelude.rs"
+
+[[test]]
+name = "sliced_memory"
+path = "tests/sliced_memory.rs"

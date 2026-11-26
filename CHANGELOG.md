@@ -27,6 +27,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Sliced einsum: `SlicedEinsumPlan` with a memory target (#2676).** Opt-in
+  plan in `tenferro-einsum`: `SliceOptions` takes a target (log2 elements of
+  the largest intermediate of one slice) and/or labels to slice. Planning runs
+  omeco's slicer when the tree misses the target, keeps an explicit order, and
+  fails with the new `Error::MemoryTargetUnmet` before execution when the
+  target cannot be met. `execute`, `execute_into` and `execute_range_into` run
+  one prepared tree per slice into an accumulator; `report()` gives the sliced
+  labels, slice count, per-slice largest and peak intermediate, and flops
+  against the unsliced tree. Existing einsum calls are unchanged. CPU/concrete
+  only in this step; only contracted labels are sliced.
+
 - **`GraphCompiler::compile_with_inputs(outputs, inputs)` (#2642).** One entry
   point for any number of outputs and a fixed input order: the listed
   placeholders come first, in the given order, then the remaining live inputs in

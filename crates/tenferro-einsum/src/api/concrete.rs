@@ -44,7 +44,7 @@ pub(crate) fn resolve(spec: Spec<'_>, reads: &[TensorRead<'_>]) -> crate::Result
 }
 
 /// Conjugated copies of the operands `mask` selects; `None` for the others.
-fn conjugate(
+pub(crate) fn conjugate(
     reads: &[TensorRead<'_>],
     mask: &ConjMask,
     exec: &mut dyn Engine,
@@ -63,7 +63,7 @@ fn conjugate(
         .collect()
 }
 
-fn check_mask(mask: &ConjMask, inputs: usize) -> Res<()> {
+pub(crate) fn check_mask(mask: &ConjMask, inputs: usize) -> Res<()> {
     if mask.len() > inputs {
         return Err(tensor_err(Error::invalid_argument(
             OP,
@@ -78,7 +78,10 @@ fn check_mask(mask: &ConjMask, inputs: usize) -> Res<()> {
 }
 
 /// `reads` with the conjugated copies substituted.
-fn substituted<'a>(reads: &[TensorRead<'a>], conj: &'a [Option<Tensor>]) -> Vec<TensorRead<'a>> {
+pub(crate) fn substituted<'a>(
+    reads: &[TensorRead<'a>],
+    conj: &'a [Option<Tensor>],
+) -> Vec<TensorRead<'a>> {
     reads
         .iter()
         .zip(conj)

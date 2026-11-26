@@ -311,6 +311,59 @@ multi-step einsums may still allocate intermediates; their `*_into` contract is
 that the final result is copied into the preallocated destination after output
 validation.
 
+## Sliced Planning And Execution (#2676)
+
+`SlicedEinsumPlan` contracts a network under a memory target by slicing:
+fix a few contracted labels, run one contraction tree per assignment of them,
+and accumulate. Decisions future work should keep:
+
+- **A separate, opt-in plan object.** The slice count and per-slice cost must
+  be readable before anything runs and an unmet target must fail at planning,
+  which an `EinsumOptions` field alone cannot carry. `einsum`, `einsum_with`,
+  `einsum_into` and `ConcreteEinsumPlan` never slice; an existing call keeps
+  its behaviour.
+- **The target is log2 elements** of the largest intermediate of one slice
+  (step results, including the per-slice result; operands are caller-owned and
+  not counted). Elements, not bytes: the bound is a property of the tree,
+  independent of dtype, and it is omeco's `sc_target`, so the slicer optimizes
+  exactly what is checked. A byte budget converts as `log2(bytes / size_of)`.
+- **Planning.** The order comes from `EinsumOptions::optimize`. If a target is
+  set and the tree misses it, omeco's `slice_code` runs with
+  `TreeSASlicer::fast().with_sc_target(target)`. For `Auto` the slicer may
+  re-anneal the tree; an explicit `Tree`/`Nested`/`Path`/`False` order is kept
+  (the slicer runs with `niters = 0` and only its labels are used). Explicit
+  `SliceOptions::labels` are always sliced; with a target they are fixed at
+  extent 1 before the slicer adds more. The resulting per-slice tree is checked
+  against the target with the true extents; a miss is
+  `Error::MemoryTargetUnmet` (kind `Validation(InvalidArgument)`), raised
+  before execution. A target below the output's size fails immediately.
+- **Only contracted labels are sliced (v0).** omeco 0.2.6 cannot exclude labels
+  from slicing. When its slicer picks an output label, planning retries it on
+  the network without output labels and a target lowered by `log2` of the
+  output's size; since a tensor carries at most every output label, the true
+  bound then holds. Output-label slicing (disjoint output blocks) and an omeco
+  label-exclusion option are follow-ups.
+- **One tree, prepared once.** A slice is the original subscripts with each
+  sliced label at extent 1. Each slice takes metadata-only views of the
+  operands that carry a sliced label (the axis kept, narrowed to one index);
+  host views with non-negative strides are rebased so every slice has offset 0.
+  One `ConcreteEinsumPlan` runs every slice: its CPU numerical plan (keyed on
+  dims and strides) is prepared once, and the engine's binary-contraction plan
+  cache (keyed on the offset too) sees one layout.
+- **Accumulation.** Slices run in ascending id order (first sliced label
+  fastest) into the destination: the first with the caller's `Dest` mode, the
+  rest with `beta = 1`. The sum over sliced labels is outermost, so results
+  equal the unsliced contraction up to summation order; they are bit-identical
+  only where order does not matter. Ascending ranges into one destination are
+  bit-identical to the whole loop. `execute_range_into` is the partitioning
+  hook; disjoint ranges into separate accumulators sum to the full result.
+- **Determinism.** Explicit labels, or a target the tree already meets, give
+  the same plan every time. Labels chosen by omeco 0.2.6's slicer may differ
+  between plannings because it breaks ties in `HashMap` order; each choice is
+  checked against the target.
+- **Not in v0:** traced and eager (AD) slicing, CUDA-specific plan-key checks,
+  output-label slicing.
+
 ## GPU Interaction
 
 Einsum itself remains backend-agnostic at the graph level. GPU execution happens

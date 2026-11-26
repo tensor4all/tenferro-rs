@@ -199,6 +199,22 @@ assert_eq!(c.value()?.as_slice::<f64>()?, &[3.0; 8]);
     }
 
     exceptions {
+        E14 {
+            symbols: [
+                "tenferro_einsum::SlicedEinsumPlan::report",
+                "tenferro_einsum::SlicedEinsumPlan::slice_count",
+                "tenferro_einsum::SlicedEinsumPlan::execute_range_into",
+                "tenferro_einsum::SlicedEinsumPlan::cpu_cache_stats",
+                "tenferro_einsum::SlicedEinsumPlan::cpu_arena_elements"
+            ];
+            scope: "the sliced einsum plan (#2676): its pre-execution report, the slice-range partitioning hook and its cache and arena inspection";
+            category: "plan owner | inherent method";
+            owner_module: "tenferro_einsum::sliced";
+            reason: "a sliced plan is a planning artifact whose slice count and per-slice cost must be readable before execution, and whose slices a caller partitions by id; `prepare`, `execute` and `execute_into` follow the concrete plan grammar (inputs, exec, dest), and `execute_range_into` adds only the slice range before `exec`";
+            verification: "the doctests of every method, `tests/integration/sliced_einsum.rs` (ranges, Dest modes, cache reuse) and `tests/sliced_memory.rs` (arena and heap high-water against the plan)";
+            exit_condition: "kept while slicing is a separate opt-in plan; revisit if traced or eager slicing lands";
+            status: retained;
+        }
         E07 {
             symbols: [
                 "tenferro_einsum::TraceContextEinsumExt::einsum",
