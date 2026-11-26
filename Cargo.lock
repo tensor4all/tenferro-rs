@@ -81,6 +81,7 @@ dependencies = [
 [[package]]
 name = "build-probe-mpi"
 version = "0.1.6"
+source = "git+https://github.com/tensor4all/rsmpi-rt.git?rev=33a150262c929f415096476161ecfd32c28552b4#33a150262c929f415096476161ecfd32c28552b4"
 dependencies = [
  "pkg-config",
  "shell-words",
@@ -874,6 +875,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 [[package]]
 name = "mpi-native-sys"
 version = "0.1.0"
+source = "git+https://github.com/tensor4all/rsmpi-rt.git?rev=33a150262c929f415096476161ecfd32c28552b4#33a150262c929f415096476161ecfd32c28552b4"
 dependencies = [
  "libc",
 ]
@@ -1339,6 +1341,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rsmpi-rt"
 version = "0.9.0"
+source = "git+https://github.com/tensor4all/rsmpi-rt.git?rev=33a150262c929f415096476161ecfd32c28552b4#33a150262c929f415096476161ecfd32c28552b4"
 dependencies = [
  "build-probe-mpi",
  "conv",
@@ -1352,6 +1355,7 @@ dependencies = [
 [[package]]
 name = "rsmpi-sys"
 version = "0.2.4"
+source = "git+https://github.com/tensor4all/rsmpi-rt.git?rev=33a150262c929f415096476161ecfd32c28552b4#33a150262c929f415096476161ecfd32c28552b4"
 dependencies = [
  "bindgen",
  "build-probe-mpi",
@@ -2185,6 +2189,14 @@ dependencies = [
  "rsmpi-rt",
  "tenferro-tensor",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "tenferro-mpi-capi"
+version = "0.1.0"
+dependencies = [
+ "tenferro-mpi",
+ "tenferro-tensor",
 ]
 
 [[package]]

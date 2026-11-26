@@ -1,0 +1,29 @@
+[package]
+name = "tenferro-mpi-capi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.96"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "C entry points that attach tenferro's MPI transport to a communicator a host (MPI.jl, mpi4py) already owns."
+repository = "https://github.com/tensor4all/tenferro-rs"
+readme = "README.md"
+
+[lib]
+# `rlib` lets the tests call the entries directly; `cdylib` is what a host loads.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Exports `tfe_mpi_test_hit_stub`, which forces a panic stub so the scenarios can show that
+# a panic is caught at the C boundary and poisons the communicator object (D10).
+test-hooks = []
+
+[dependencies]
+tenferro-mpi = { path = "../tenferro-mpi", version = "0.1.0", features = ["runtime"] }
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.13.0", default-features = false }
+
+[[test]]
+name = "capi_two_rank"
+harness = false
+required-features = ["test-hooks"]
