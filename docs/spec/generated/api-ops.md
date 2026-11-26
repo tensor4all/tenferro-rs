@@ -1255,6 +1255,7 @@ Zero-pad a signed axis to the size of a reference tensor.
 | Op | concrete | concrete_tensordot | traced | traced_tensordot | eager | Suffixes |
 |---|---|---|---|---|---|---|
 | `einsum` | EinsumOps | — | TracedEinsumOps | — | EagerEinsumOps | `einsum`, `einsum_with`, `einsum_into` (overwrite, accumulate, scaled) |
+| `einsum_at` | EinsumOps | — | — | — | EagerEinsumOps | `einsum_at`, `einsum_at_with` |
 | `tensordot` | — | TensordotOps | — | TracedTensordotOps | EagerEinsumOps | `tensordot` |
 
 ### einsum
@@ -1270,6 +1271,21 @@ Einstein summation over N inputs: contract, trace, transpose, reduce and broadca
   - `_into` is concrete only: traced and eager results are new values
   - lanes (`CpuEngine::with_lanes`): einsum is unsupported in a lane
   - `Scaled` needs `alpha` and `beta` of the input dtype
+
+### einsum_at
+
+Sampled einsum (#2675): the contraction evaluated only at the given output configurations, `Y[rest..., s] = T[rest..., c_s]`, without forming `T`; one-shot prepare-and-execute of `SampledEinsumPlan`.
+
+- Options: `crate::SampleOptions`
+- Output: `V`
+- Dtypes: Every input has the same dtype (any numeric dtype the backend supports); the result has it too.
+- Layout: The result is `[rest..., n]`: the non-sampled output labels in output order, then one axis over the samples in the given order (duplicates allowed). Each tree node keeps one row per distinct partial configuration; row pairs are gathered with `index_select` and contracted in chunks of at most `max_chunk_elements`, each chunk written into a window of the step result on the concrete layer. Inputs stay on their device. Eager gradients are those of a function of the sampled outputs only, not of the full contraction.
+- Errors: `Validation`, `Unsupported`, `RuntimeState`
+- Omissions:
+  - traced: the plan depends on the sample values; deferred to execution-time planning (#2552 grammar, #2707 sub-programs)
+  - `_into`: the result is a new value
+  - repeated labels within one operand and broadcast labels are rejected in v0
+  - the gather-free v1 of #2675
 
 ### tensordot
 
@@ -1287,6 +1303,7 @@ Contract `a` with `b` over the given axis pairs (or the last/first `n` axes); fr
 
 | ID | Status | Symbols | Scope | Category | Owner | Reason | Verification | Exit condition |
 |---|---|---|---|---|---|---|---|---|
+| E15 | retained | `tenferro_einsum::SampledEinsumPlan::report`<br>`tenferro_einsum::SampledEinsumPlan::output_shape`<br>`tenferro_einsum::SampledEinsumPlan::execute_with_stats`<br>`tenferro_einsum::SampledEinsumPlan::execute_eager`<br>`tenferro_einsum::SampledEinsumPlan::execute_eager_with_stats`<br>`tenferro_einsum::SampledEinsumPlan::cpu_cache_stats` | the sampled einsum plan (#2675): its pre-execution report (per-node \|P_v\|, flops, peaks), measured execution, eager execution on a session and cache inspection | plan owner \| inherent method | `tenferro_einsum::sampled` | the primary sampled-einsum entry plans along an explicit or resolved contraction path, and its report is only meaningful for that plan; the plan depends on sample values, so it is held by the caller to rerun the same samples on new operand values (each optimisation step) on the concrete layer or on an eager session; `einsum_at` is the one-shot derived spelling | the doctests of every method, `tests/integration/sampled_einsum.rs` (random networks against dense, measured peak equals planned peak, warm rerun prepares no plans) and `tests/integration/sampled_einsum_ad.rs` (gradients against the dense route on the same eager tape) | kept while sampling is a separate plan; revisit when the traced spelling lands |
 | E14 | retained | `tenferro_einsum::SlicedEinsumPlan::report`<br>`tenferro_einsum::SlicedEinsumPlan::slice_count`<br>`tenferro_einsum::SlicedEinsumPlan::execute_range_into`<br>`tenferro_einsum::SlicedEinsumPlan::cpu_cache_stats`<br>`tenferro_einsum::SlicedEinsumPlan::cpu_arena_elements` | the sliced einsum plan (#2676): its pre-execution report, the slice-range partitioning hook and its cache and arena inspection | plan owner \| inherent method | `tenferro_einsum::sliced` | a sliced plan is a planning artifact whose slice count and per-slice cost must be readable before execution, and whose slices a caller partitions by id; `prepare`, `execute` and `execute_into` follow the concrete plan grammar (inputs, exec, dest), and `execute_range_into` adds only the slice range before `exec` | the doctests of every method, `tests/integration/sliced_einsum.rs` (ranges, Dest modes, cache reuse) and `tests/sliced_memory.rs` (arena and heap high-water against the plan) | kept while slicing is a separate opt-in plan; revisit if traced or eager slicing lands |
 | E07 | retired | `tenferro_einsum::TraceContextEinsumExt::einsum`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_notation`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_subscripts`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_with`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_notation_with`<br>`tenferro_einsum::TraceContextEinsumExt::einsum_subscripts_with` | einsum entries that took and returned TraceValue on a `&mut TraceContext` | legacy \| trait | `tenferro_einsum::traced` | retired: replaced by TracedEinsumOps for TraceContext (`trace.einsum(&[&t1, &t2], spec)`), which takes and returns TracedTensor (#2552 decision 4) | retired: a temporary old-vs-new test recorded the same values before removal (#2552 S4) | met: the trait was removed in #2552 S4 |
 

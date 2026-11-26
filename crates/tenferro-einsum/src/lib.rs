@@ -85,6 +85,7 @@ mod binary_dot;
 mod broadcast;
 mod builder;
 mod cache;
+mod chunked;
 mod concrete;
 mod cpu_concrete;
 mod eager;
@@ -97,6 +98,7 @@ pub mod lowering;
 mod optimize;
 mod planning;
 pub mod prelude;
+mod sampled;
 mod sliced;
 mod subscripts;
 mod syntax;
@@ -121,6 +123,10 @@ pub use extension::extension_module;
 pub use extension::semantic_ad_rules;
 pub use optimize::EinsumOptimize;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
+pub use sampled::{
+    SampleOptions, SampledEinsumPlan, SampledEinsumReport, SampledExecStats, SampledStepKind,
+    SampledStepReport, Samples,
+};
 pub use sliced::{SliceOptions, SlicedEinsumPlan, SlicedEinsumReport};
 pub use subscripts::{
     parse_einsum_notation, parse_einsum_subscripts, EinsumAxis, EinsumNotation, EinsumSubscripts,

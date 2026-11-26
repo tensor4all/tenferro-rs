@@ -174,6 +174,18 @@ fn einsum_into_plain(
     }
 }
 
+/// One-shot sampled einsum (#2675): prepare a [`crate::SampledEinsumPlan`]
+/// with `options` and execute it.
+pub(crate) fn einsum_at<I: EinsumInputs + ?Sized>(
+    inputs: &I,
+    spec: &(impl EinsumSpec + ?Sized),
+    samples: &crate::Samples,
+    options: &crate::SampleOptions,
+    exec: &mut dyn Engine,
+) -> Res<Val<I>> {
+    crate::SampledEinsumPlan::prepare(inputs, spec, samples, options)?.execute(inputs, exec)
+}
+
 pub(crate) fn einsum_into<I: EinsumInputs + ?Sized>(
     inputs: &I,
     spec: &(impl EinsumSpec + ?Sized),

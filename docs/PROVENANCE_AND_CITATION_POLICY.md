@@ -65,6 +65,8 @@ relationship; the role is stated only on the first row.
 | `tenferro-gpu` | | [cudarc](https://github.com/coreylowman/cudarc) | Backend (CUDA driver/runtime/NVRTC bindings; cuBLAS and cuTENSOR) |
 | `tenferro-einsum` | Subscripts, contraction planning, einsum APIs | [omeco](https://crates.io/crates/omeco) | Backend (contraction-order optimization) |
 | `tenferro-einsum` | | [JAX](https://github.com/jax-ml/jax) / XLA | Inspired (`dot_general` primitive; JAX-compatible contraction-path format) |
+| `tenferro-einsum` | | [Fanerst/sampled-einsum](https://github.com/Fanerst/sampled-einsum) at `c482b79a` (Feng Pan; MIT OR Apache-2.0) | Derived (license): the sampled einsum (#2675) planner `src/sampled/plan.rs` and executor `src/sampled/exec.rs` port `src/plan.rs` and `src/exec.rs`; the tests `tests/integration/sampled_einsum{,_ad}.rs` port `tests/dense_reference.rs`, `tests/common/mod.rs` and `tests/ad.rs` |
+| `tenferro-einsum` | | [artensor](https://github.com/Fanerst/artensor) at `58a93ae7` (Feng Pan; Apache-2.0) | Port (via sampled-einsum): `contraction_scheme_sparse` in `artensor/contraction.py`, the sparse-state step kinds and the per-node distinct-configuration bookkeeping |
 | `tenferro-linalg` | Linear algebra APIs and AD rules | [faer](https://github.com/sarah-quinones/faer-rs) | Backend (dense CPU linear algebra) |
 | `tenferro-linalg` | | [JAX](https://github.com/jax-ml/jax) | Inspired (AD-rule conventions, e.g. complex SVD gauge correction; SVD driver selection) |
 | `tenferro-linalg` | | [PyTorch](https://github.com/pytorch/pytorch) | Compatible (manual autograd formulas as comparison baselines; validated against torch-generated oracles) |
@@ -91,3 +93,4 @@ are welcome.
 | --- | --- | --- |
 | Linearize-then-transpose reverse-mode AD | `tenferro-ad`, `tenferro-internal-ops` | A. Radul, A. Paszke, R. Frostig, M. J. Johnson, D. Maclaurin, "You Only Linearize Once: Tangents Transpose to Gradients", [POPL 2023](https://doi.org/10.1145/3571236), [arXiv:2204.10923](https://arxiv.org/abs/2204.10923) |
 | `dot_general` batched contraction primitive | `tenferro-einsum` | [StableHLO specification](https://openxla.org/stablehlo/spec) (XLA lineage) |
+| Sparse-state contraction (sampled einsum: one row per distinct partial configuration per tree node) | `tenferro-einsum` (`SampledEinsumPlan`) | F. Pan, K. Chen, P. Zhang, "Solving the Sampling Problem of the Sycamore Quantum Circuits", [PRL 129, 090502 (2022)](https://doi.org/10.1103/PhysRevLett.129.090502); the big-batch special case: F. Pan, P. Zhang, "Simulation of Quantum Circuits Using the Big-Batch Tensor Network Method", [PRL 128, 030501 (2022)](https://doi.org/10.1103/PhysRevLett.128.030501) |

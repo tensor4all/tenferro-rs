@@ -27,6 +27,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Sampled einsum: `SampledEinsumPlan` and `einsum_at` (#2675).** A
+  contraction evaluated only at a list of output configurations,
+  `Y[rest..., s] = T[rest..., c_s]`, without forming `T`: each tree node keeps
+  one row per distinct partial configuration (sparse-state contraction, ported
+  from Feng Pan's prototype Fanerst/sampled-einsum). `Samples` names the
+  sampled output labels and their values (duplicates allowed); `SampleOptions`
+  carries the contraction order (`EinsumOptions`), the chunk cap and the
+  full-product threshold. The plan follows the given order exactly and its
+  `report()` gives every node's `|P_v|`, per-step kind and flops, and the
+  planned peak of live temporaries, which execution measures equal. Concrete
+  (any engine) and eager (`execute_eager`, `EagerEinsumOps::einsum_at`), whose
+  gradients are those of a function of the sampled outputs, not of the full
+  contraction. Gathered-pair steps run through the chunk loop of the sliced
+  einsum, now shared (`crate::chunked`). Traced and the gather-free v1 are
+  not in this step.
 - **Sliced einsum: `SlicedEinsumPlan` with a memory target (#2676).** Opt-in
   plan in `tenferro-einsum`: `SliceOptions` takes a target (log2 elements of
   the largest intermediate of one slice) and/or labels to slice. Planning runs
