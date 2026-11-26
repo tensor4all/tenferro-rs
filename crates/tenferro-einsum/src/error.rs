@@ -102,6 +102,23 @@ pub enum Error {
         source: PlanningError,
     },
 
+    /// A sliced einsum plan cannot meet its memory target
+    /// ([`SliceOptions::target_log2_elements`](crate::SliceOptions)). Raised
+    /// while planning, before any element is read or written.
+    #[error(
+        "sliced einsum misses its memory target: largest intermediate of one slice would hold 2^{reached_log2_elements:.3} elements, target 2^{target_log2_elements} ({reason})"
+    )]
+    MemoryTargetUnmet {
+        /// The target: log2 of the most elements one intermediate may hold.
+        target_log2_elements: f64,
+        /// log2 of the largest intermediate of one slice that planning reached.
+        reached_log2_elements: f64,
+        /// The labels sliced when planning stopped.
+        sliced_labels: Vec<u32>,
+        /// Why the target was missed.
+        reason: String,
+    },
+
     /// A numerical contraction or backend accumulation failed to converge.
     #[error("einsum numerical failure: {message}")]
     Numerical {
@@ -316,6 +333,9 @@ impl Error {
                 }
                 PlanningError::RuntimeState { .. } => ErrorKind::RuntimeState,
             },
+            Self::MemoryTargetUnmet { .. } => {
+                ErrorKind::Validation(ValidationKind::InvalidArgument)
+            }
             Self::Numerical { .. } => ErrorKind::NumericalFailure,
             Self::Tensor(error) => error.kind(),
             Self::Runtime(error) => error.kind(),

@@ -211,7 +211,7 @@ pub(crate) fn plan_specs_equal(lhs: &EinsumPlanSpec, rhs: &EinsumPlanSpec) -> bo
     }
 }
 
-fn tree_pairs(tree: &ContractionTree) -> Vec<(usize, usize)> {
+pub(crate) fn tree_pairs(tree: &ContractionTree) -> Vec<(usize, usize)> {
     (0..tree.step_count())
         .filter_map(|step| tree.step_pair(step))
         .collect()

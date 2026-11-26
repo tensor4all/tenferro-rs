@@ -389,6 +389,12 @@ impl ConcreteEinsumPlan {
         Self::prepare_subscripts_internal(read_input_specs(inputs.as_ref()), &subscripts)
     }
 
+    /// Elements of the CPU intermediate arena of the cached numerical plan
+    /// (`None` before an N-ary CPU execution).
+    pub(crate) fn cpu_arena_elements(&self) -> Option<usize> {
+        self.cpu_plan.arena_elements()
+    }
+
     /// Number of binary contraction steps in the prepared tree (diagnostics).
     pub(crate) fn step_count(&self) -> usize {
         self.tree.step_count()

@@ -26,6 +26,9 @@
 //!   The spec is text, [`EinsumNotation`] or [`EinsumSubscripts`]; options
 //!   ([`EinsumOptions`]) select the contraction order and per-operand
 //!   conjugation. [`ConcreteEinsumPlan`] plans once and executes repeatedly.
+//! - **Sliced einsum (#2676)**: [`SlicedEinsumPlan`] plans under a memory
+//!   target ([`SliceOptions`]), using omeco's slicer, and runs one prepared
+//!   tree per slice into an accumulator; an unmet target fails at planning.
 //! - **Extension runtime**: traced einsum lowers to a registered tenferro
 //!   extension runtime, keeping core op definitions small.
 //!
@@ -94,6 +97,7 @@ pub mod lowering;
 mod optimize;
 mod planning;
 pub mod prelude;
+mod sliced;
 mod subscripts;
 mod syntax;
 mod tensordot;
@@ -117,6 +121,7 @@ pub use extension::extension_module;
 pub use extension::semantic_ad_rules;
 pub use optimize::EinsumOptimize;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
+pub use sliced::{SliceOptions, SlicedEinsumPlan, SlicedEinsumReport};
 pub use subscripts::{
     parse_einsum_notation, parse_einsum_subscripts, EinsumAxis, EinsumNotation, EinsumSubscripts,
 };

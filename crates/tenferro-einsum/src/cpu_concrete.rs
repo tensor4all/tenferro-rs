@@ -46,10 +46,18 @@ impl Cache {
         }
         Ok(stats)
     }
+    /// Elements of the intermediate arena of the cached numerical plan: every
+    /// intermediate of one execution lives in it (`EinsumPlan::scratch_len`).
+    /// `None` before the first N-ary execution through this cache.
+    pub(crate) fn arena_elements(&self) -> Option<usize> {
+        let state = self.0.lock().ok()?;
+        state.entry.as_ref().map(|entry| entry.arena_elements)
+    }
 }
 struct Entry {
     layouts: Vec<(Vec<usize>, Vec<isize>)>,
     plan: Arc<dyn Any + Send + Sync>,
+    arena_elements: usize,
 }
 impl std::fmt::Debug for Cache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -240,7 +248,9 @@ fn run_into<T: Scalar>(
             state.events.hits = state.events.hits.saturating_add(1);
         } else {
             state.events.misses = state.events.misses.saturating_add(1);
-            let plan = Arc::new(prepare()?);
+            let plan = prepare()?;
+            let arena_elements = plan.scratch_len();
+            let plan = Arc::new(plan);
             if state.entry.is_some() {
                 state.events.evictions = state.events.evictions.saturating_add(1);
             }
@@ -251,6 +261,7 @@ fn run_into<T: Scalar>(
                     .chain(std::iter::once((shape.to_vec(), strides.to_vec())))
                     .collect(),
                 plan,
+                arena_elements,
             });
         }
         Arc::clone(&state.entry.as_ref().expect("prepared cache entry").plan)
