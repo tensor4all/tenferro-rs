@@ -113,6 +113,19 @@ selected: `strided-fused 0.6.0` propagates NaN through the same
 route matches the per-instruction route bit for bit. `Remainder` and `Erf`
 remain declined, because they have no `strided_fused` instruction.
 
+Two more region boundaries are deliberate in the current plan, not oversights
+(#2757). First, a region carries one dtype: an `ElementwiseFusionPlan` has a
+single `dtype`, and `Compare`, `Select` and `Convert` are not fusion ops, so
+they stay per-instruction and end the region around them. A mask such as
+`where(cast(x) > 0, x, y)`, or a chain that mixes real and complex values, runs
+op by op. The plan does not grow a per-value dtype lattice to cover these.
+Second, an input joins a region only as an identity or a broadcast view
+(`ElementwiseFusionInputView::Identity` / `BroadcastInDim`); a permuted view,
+such as a folded `transpose` in `a - aᴴ`, keeps the per-instruction path. That
+is not a semantic boundary but a cost one: the strided traversal is slow for
+the small blocks a permuted operand produces (#2752, strided-rs#526), and the
+boundary is revisited once that lands.
+
 The measurement (2026-10-17, `AMD EPYC 7713P`, 1T and 4T) is recorded in
 [`docs/worklogs/perf-cpu-fusion-declined-2140.md`](../worklogs/perf-cpu-fusion-declined-2140.md),
 section "Re-enabled on `strided-fused 0.5.2` (#2161)". The decision rule actually
