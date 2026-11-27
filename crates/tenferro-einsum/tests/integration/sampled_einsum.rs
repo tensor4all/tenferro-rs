@@ -19,7 +19,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuEngine;
 use tenferro_einsum::{
     ContractionTree, EinsumOps, EinsumOptimize, EinsumOptions, EinsumSubscripts, SampleOptions,
-    SampledEinsumPlan, SampledStepKind, Samples, Subscripts,
+    SampledEinsumPlan, SampledEinsumReport, SampledStepKind, Samples, Subscripts,
 };
 use tenferro_tensor::{DType, ErrorKind, Tensor, ValidationKind};
 
@@ -314,6 +314,94 @@ fn kind_name(kind: &SampledStepKind) -> String {
 
 /// Run one case of `dtype` under every planner setting against the dense
 /// reference; assert measured peak == planned peak; count the step kinds.
+/// The number of distinct rows of `samples` restricted to `labels`: `|P_v|`
+/// for a node whose sampled labels are `labels`. Labels that are not sampled
+/// are ignored; with no sampled label left, every sample is the same empty
+/// assignment, so the count is 1 (0 if there are no samples).
+///
+/// **Deliberately independent of the planner.** It reads only the public
+/// `[n, k]` table `Samples::{labels, n, values}` and shares no code with
+/// `SampledEinsumPlan`, so a planner that miscounts cannot also miscount
+/// here. Cost: O(n·k) time and O(n) memory (one hash set of row keys). It
+/// is test instrumentation, so it lives in this test crate and adds nothing
+/// to the public API.
+pub(crate) fn distinct_rows(samples: &Samples, labels: &[u32]) -> usize {
+    let columns: Vec<usize> = samples
+        .labels
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| labels.contains(l))
+        .map(|(j, _)| j)
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for s in 0..samples.n {
+        seen.insert(
+            columns
+                .iter()
+                .map(|&j| samples.values[s + samples.n * j])
+                .collect::<Vec<_>>(),
+        );
+    }
+    seen.len()
+}
+
+/// Compare every `|P_v|` the planner reports with `distinct_rows`, node by
+/// node (leaves, then each step's two children and result), and return the
+/// disagreements. Neither side is derived from the other.
+///
+/// With `n == 0` the planner plans one dummy sample and selects none of it,
+/// so its rows are not the count of distinct samples; that case is skipped
+/// here (it is still executed and compared with the dense result).
+pub(crate) fn row_disagreements(case: &Case, report: &SampledEinsumReport) -> Vec<String> {
+    let samples = &case.samples;
+    if samples.n == 0 {
+        return Vec::new();
+    }
+    let n_inputs = case.net.inputs.len();
+    // Sampled labels below each node: a leaf's own, a step's the union of its children's.
+    let mut below: Vec<Vec<u32>> = case
+        .net
+        .inputs
+        .iter()
+        .map(|ls| {
+            ls.iter()
+                .copied()
+                .filter(|l| samples.labels.contains(l))
+                .collect()
+        })
+        .collect();
+    let mut bad = Vec::new();
+    for (i, labels) in below.iter().enumerate() {
+        let want = distinct_rows(samples, labels);
+        if report.leaf_rows[i] != want {
+            bad.push(format!(
+                "leaf {i}: planner {} vs distinct_rows {want}",
+                report.leaf_rows[i]
+            ));
+        }
+    }
+    for (k, &(a, b)) in case.path.iter().enumerate() {
+        let mut union = below[a].clone();
+        union.extend(below[b].iter().copied().filter(|l| !below[a].contains(l)));
+        let step = &report.steps[k];
+        for (what, got, labels) in [
+            ("left child", step.rows_left, &below[a]),
+            ("right child", step.rows_right, &below[b]),
+            ("result", step.rows, &union),
+        ] {
+            let want = distinct_rows(samples, labels);
+            if got != want {
+                bad.push(format!(
+                    "step {k} {what} (node {}): planner {got} vs distinct_rows {want}",
+                    n_inputs + k
+                ));
+            }
+        }
+        below.push(union);
+    }
+    bad
+}
+
 fn check<T: Close + tenferro_tensor::TensorScalar>(
     case: &Case,
     dtype: DType,
@@ -335,6 +423,11 @@ fn check<T: Close + tenferro_tensor::TensorScalar>(
             plan.report().pairs,
             case.path,
             "{name}: the plan follows the given path"
+        );
+        let bad = row_disagreements(case, plan.report());
+        assert!(
+            bad.is_empty(),
+            "{name}: |P_v| planner vs distinct_rows: {bad:?}\n{case:?}"
         );
         let (y, stats) = plan.execute_with_stats(&refs, &mut engine).unwrap();
         assert_eq!(y.shape(), shape.as_slice(), "{name}: {case:?}");
@@ -753,4 +846,83 @@ fn a_zero_extent_is_rejected() {
     )
     .expect_err("extent 0");
     assert!(invalid_argument(&error), "{error}");
+}
+
+/// The reviewer's mutation, as a test: the planner's `|P_v|` is off by one
+/// and the comparison against `distinct_rows` must say so, for every node
+/// (leaves, each child, each result). A check that cannot fail on a wrong
+/// count is not testing the count. Nothing in the planner is changed; the
+/// report is cloned and perturbed.
+#[test]
+fn a_planner_count_off_by_one_is_caught_by_distinct_rows() {
+    let net = Network {
+        inputs: vec![vec![0, 1], vec![1, 2], vec![2, 3]],
+        output: vec![0, 3],
+        sizes: sizes(&[(0, 3), (1, 2), (2, 2), (3, 4)]),
+    };
+    // (i, l) pairs: (0,3) twice and (2,1), so |P| = 2 at the root, 2 and 2 at the leaves of i and l.
+    let samples = Samples::new([0, 3], 3, vec![0, 2, 0, 3, 1, 3]);
+    let case = Case {
+        net,
+        path: vec![(0, 1), (3, 2)],
+        samples,
+    };
+    let mut rng = Lcg(21);
+    let tensors = operands(&mut rng, &case.net, DType::F64);
+    let refs: Vec<&Tensor> = tensors.iter().collect();
+    let options = case.net.along(&case.path, SampleOptions::default());
+    let plan =
+        SampledEinsumPlan::prepare(&refs, &case.net.subscripts(), &case.samples, &options).unwrap();
+    let report = plan.report().clone();
+    assert!(
+        row_disagreements(&case, &report).is_empty(),
+        "the unperturbed planner agrees with distinct_rows"
+    );
+    assert!(
+        distinct_rows(&case.samples, &[0, 3]) >= 2,
+        "the case has duplicates and distinct rows"
+    );
+
+    let mut mutants = 0;
+    for i in 0..report.leaf_rows.len() {
+        let mut m = report.clone();
+        m.leaf_rows[i] += 1;
+        assert!(
+            !row_disagreements(&case, &m).is_empty(),
+            "leaf {i} +1 went unnoticed"
+        );
+        mutants += 1;
+    }
+    for k in 0..report.steps.len() {
+        for field in 0..3 {
+            let mut m = report.clone();
+            match field {
+                0 => m.steps[k].rows_left += 1,
+                1 => m.steps[k].rows_right += 1,
+                _ => m.steps[k].rows += 1,
+            }
+            assert!(
+                !row_disagreements(&case, &m).is_empty(),
+                "step {k} field {field} +1 went unnoticed"
+            );
+            mutants += 1;
+        }
+    }
+    assert_eq!(mutants, 3 + 2 * 3);
+}
+
+#[test]
+fn distinct_rows_reads_the_table() {
+    // Column-major [4, 2]: rows (0,1), (0,1), (2,1), (0,0).
+    let samples = Samples::new([7, 9], 4, vec![0, 0, 2, 0, 1, 1, 1, 0]);
+    assert_eq!(distinct_rows(&samples, &[7, 9]), 3);
+    assert_eq!(distinct_rows(&samples, &[7]), 2);
+    assert_eq!(distinct_rows(&samples, &[9]), 2);
+    assert_eq!(distinct_rows(&samples, &[]), 1);
+    assert_eq!(
+        distinct_rows(&samples, &[5]),
+        1,
+        "an unsampled label is ignored"
+    );
+    assert_eq!(distinct_rows(&Samples::new([7], 0, vec![]), &[7]), 0);
 }

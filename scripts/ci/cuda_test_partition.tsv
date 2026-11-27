@@ -868,8 +868,10 @@ host	tenferro-einsum::integration	public_surface_contract::einsum_eager_prototyp
 host	tenferro-einsum::integration	public_surface_contract::einsum_vjp_broadcast_uses_semantic_shape_metadata
 host	tenferro-einsum::integration	public_surface_contract::gpu_dependency_is_owned_by_opt_in_backend_features
 host	tenferro-einsum::integration	runtime_buffer_pool::cpu_backend_nary_einsum_leaves_no_host_pool_growth
+host	tenferro-einsum::integration	sampled_einsum::a_planner_count_off_by_one_is_caught_by_distinct_rows
 host	tenferro-einsum::integration	sampled_einsum::a_warm_rerun_prepares_no_new_plans
 host	tenferro-einsum::integration	sampled_einsum::a_zero_extent_is_rejected
+host	tenferro-einsum::integration	sampled_einsum::distinct_rows_reads_the_table
 host	tenferro-einsum::integration	sampled_einsum::einsum_at_is_prepare_then_execute
 host	tenferro-einsum::integration	sampled_einsum::invalid_inputs_are_rejected
 host	tenferro-einsum::integration	sampled_einsum::one_sample_and_no_samples
