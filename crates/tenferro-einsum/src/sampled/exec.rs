@@ -294,7 +294,10 @@ pub(crate) fn execute_concrete(
                 out,
             } => {
                 let read = slot(operands, &temps, *input)?;
-                (*out, index_select(exec, &read, *axis, positions, &gathered)?)
+                (
+                    *out,
+                    index_select(exec, &read, *axis, positions, &gathered)?,
+                )
             }
             Instr::Reshape { input, shape, out } => {
                 let read = slot(operands, &temps, *input)?;
