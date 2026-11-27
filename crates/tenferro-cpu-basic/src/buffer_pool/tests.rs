@@ -147,6 +147,39 @@ fn acquire_updates_retained_capacity_stats() {
 }
 
 #[test]
+fn one_element_buffers_are_not_retained() {
+    let mut pool = BufferPool::new();
+    <f64 as PoolScalar>::pool_release(&mut pool, vec![1.0]);
+    <num_complex::Complex64 as PoolScalar>::pool_release(
+        &mut pool,
+        vec![num_complex::Complex64::new(0.0, 0.0)],
+    );
+
+    assert!(pool.is_empty());
+    assert_eq!(pool.retained_capacity_bytes(), 0);
+
+    // The next larger capacity still reuses, so the rule is the scalar
+    // scratch size rather than "drop everything".
+    <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(2));
+    assert_eq!(pool.stats().buffers, 1);
+    assert_eq!(pool.retained_capacity_bytes(), 2 * size_of::<f64>());
+}
+
+#[test]
+fn repeated_scalar_releases_do_not_grow_the_pool() {
+    // Regression shape of tensor4all/tenferro-rs#2759: a prepared program
+    // uploads one inline scalar constant per run, and that upload used to
+    // stay in a capacity-1 bin no checkout ever asked for.
+    let mut pool = BufferPool::new();
+    for _ in 0..1000 {
+        <f64 as PoolScalar>::pool_release(&mut pool, vec![0.5]);
+    }
+
+    assert_eq!(pool.stats().buffers, 0);
+    assert_eq!(pool.retained_capacity_bytes(), 0);
+}
+
+#[test]
 fn stats_counts_typed_capacity_bytes() {
     let mut pool = BufferPool::new();
     <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(3));
@@ -498,7 +531,9 @@ fn a_capacity_history_is_swept_by_the_walk_that_crosses_it() {
     let mut pool = BufferPool::with_max_retained_capacity_bytes(usize::MAX);
     // One retained buffer per distinct capacity, as a varying-shape run leaves them
     // behind.
-    let capacities: Vec<usize> = (1..=200).collect();
+    // Capacity 1 is scalar scratch and is never retained, so the history
+    // starts at 2.
+    let capacities: Vec<usize> = (2..=201).collect();
     for &cap in &capacities {
         let buf = pool.acquire_with_capacity::<f64>(cap);
         <f64 as PoolScalar>::pool_release(&mut pool, buf);
