@@ -632,6 +632,14 @@ fn the_full_product_needs_no_gather_and_a_tiny_cap_forces_chunks() {
     );
     let (y, stats) = plan.execute_with_stats(&[&a, &b], &mut engine).unwrap();
     assert_eq!(stats.chunks, 3);
+    // v0 gathers both children's row for each of the 3 pairs. This is the
+    // counter v1's "the gather is gone" test asserts to be zero for the steps
+    // it lowers; here it pins that v0 does gather on a pairs workload.
+    assert!(
+        stats.gathered_rows >= 2 * 3,
+        "v0 gathers 2 rows per pair, got {}",
+        stats.gathered_rows
+    );
     let d = dense.as_slice::<f64>().unwrap();
     let got = y.as_slice::<f64>().unwrap();
     for (s, want) in [d[2 + 3], d[0], d[1]].iter().enumerate() {
