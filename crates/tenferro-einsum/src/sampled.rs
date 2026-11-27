@@ -67,6 +67,8 @@ use crate::concrete::ConcreteEinsumInputSpec;
 use crate::{ConcreteEinsumPlan, EinsumOptimize, Error, Subscripts};
 
 mod exec;
+#[allow(dead_code)] // wired into the pair step in the next commit
+mod jobs;
 mod plan;
 
 #[cfg(feature = "autodiff")]
