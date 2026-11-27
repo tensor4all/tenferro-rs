@@ -114,3 +114,49 @@ Limits known now: that repository and data are **not on this machine**, and this
 needs the large evo host; if it cannot be run there the PR says so and reports what *was*
 measured (plan-only step/fallback counts, a reduced circuit), not an extrapolation.
 A negative result (planning dominates, or most steps fall back) will be reported as such.
+
+## 5. Two things settled by the maintainer before the implementation (2026-11-27)
+
+### 5.1 Chunk output offsets — the contract, not a convention
+
+`GroupedPlan::execute_uninit` requires that the jobs **cover `out` exactly once without gaps** and it checks this *before
+the first write*, returning `GroupedError::FreshCoverage` for gaps or trailing output **[read: `crates/cpueinsum/src/grouped.rs`,
+the `execute_uninit` doc block]**. It fills `0..len` of the slice it is given; there is no notion of a hole.
+
+So when a pair step's job list is split across chunks, the output offsets are **chunk-relative** and the input offsets are
+**not**:
+
+- `lhs_offset` / `rhs_offset` stay in the operand slots' own coordinates (`lr[p]·blk_l + …`) — nothing was copied, so the
+  slot is the buffer;
+- `out_offset` must **subtract the chunk head**: `p·blk_o + b·m·n − chunk_first_p·blk_o`, and the slice handed to
+  `execute_uninit` is `out[chunk_first_p·blk_o .. chunk_last_p·blk_o + blk_o]`.
+
+Getting this wrong is not a silent wrong answer — `FreshCoverage` refuses the call before writing — but it refuses for a
+reason that reads like a bug in the job list, so the offset rule belongs in a comment at the point the jobs are built.
+
+**The test that catches it, chosen so that it cannot pass by luck.** Take a step with **three pairs**, split them **2 + 1** so
+the second chunk is both "not the first" and "one element", run with **`batch = 2`**, and compare against **v0** and against a
+dense reference. That exercises, in one case: a second chunk whose head is non-zero (so a missing subtraction shows up as
+`FreshCoverage` rather than as a wrong number), a remainder chunk of length one (the classic off-by-one), and a batch axis
+(the `b·m·n` term). A single-chunk test cannot fail on any of the three. cpueinsum's own `grouped.rs` verification code is the
+model for how to build the job list and the reference in the same file **[read]**.
+
+### 5.2 "Gather zero" and "memory bounded" are different claims
+
+They were being used as if one implied the other, and they do not:
+
+- **`GroupedPlan` holds metadata per job**, so a single GEMM shape does **not** mean a single plan object. Building every
+  chunk's plan up front and keeping them would satisfy "gather zero" while defeating the memory bound entirely — the bound
+  that the whole `run_chunks` design exists for. **One plan per step, built at plan time, with the job list for that step;
+  chunks are ranges of jobs, never ranges of plans** **[derived; the interface question stays `[open until written]`]**.
+- **On CUDA the pointer arrays are real memory and must be counted separately from the tensors**: three arrays of one
+  pointer per job (`A`, `B`, `C`), so **24 B/job host** — and **24 B/job device** if the device-side arrays are resident at the
+  same time. At the `n30m14` job counts that is small next to the tensors, but it is not zero, and it is per-*job*, so it grows
+  with the thing v1 is trying to make cheap.
+- **The benchmark table therefore gets a line for plan/pointer metadata distinct from tensor bytes.** "Peak memory" as one
+  number cannot show which of the two is growing.
+
+**And the gather-zero assertion is scoped to the steps v1 actually converted.** A total count over the network includes the
+leaf steps and every step that fell back to the v0 gathered path (§ above), so a counter over the whole run can never be zero
+and asserting on it would be either impossible or a lie. The assertion is: **for a step that v1 converted, the gathered-rows
+counter for that step is zero** — and the report says how many steps were converted and which fell back.
