@@ -176,10 +176,17 @@ Pull-request CI classifies a diff conservatively as code, docs-only, or
 CI-only. Docs-only changes run documentation validation. CI-only changes run
 CI helper tests and actionlint; changes to the RunPod control plane also keep
 the GPU gate. Mixed docs and CI changes run both lightweight suites. Empty
-diffs, unknown paths, and compiled-code changes use full validation. Pushes to
-`main` always run the comprehensive non-GPU matrix. Required check names remain
-present and succeed with an explicit “not required” result when a lane is
-irrelevant.
+diffs, unknown paths, and compiled-code changes use full validation. The
+comprehensive non-GPU matrix, macOS included, runs nightly on `main` (and on
+`workflow_dispatch`), not on every push to `main`: the PR head already passed
+the required checks, and the nightly run also saves the rust-cache entries that
+pull requests restore. A pull request does not run on a macOS runner by
+default. The required `macOS workspace tests` check still reports, as an
+explicit “not required” no-op; add the `run-macos` label to a PR that touches
+Metal, Accelerate or FFT code (or the macOS lane itself) to run it before
+merging, otherwise a macOS-only regression is found by the nightly run. Required
+check names remain present and succeed with an explicit “not required” result
+when a lane is irrelevant.
 
 An admin or maintainer can run the GPU gate for a same-repository PR after
 reviewing its current head, whatever the PR author's own repository role:

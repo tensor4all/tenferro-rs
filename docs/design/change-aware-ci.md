@@ -35,9 +35,10 @@ Unknown paths always fall back to code. `docs/tutorial-code/` is executable
 workspace code, not a docs-only exception. Shared tensor, runtime, AD, CPU,
 and extension dependencies can affect GPU behavior, so source changes retain
 the conservative full policy rather than a GPU-directory allowlist.
-Pushes to `main` force the
-comprehensive Linux and macOS matrix; they do not add a second paid RunPod GPU
-run after the pull-request gate.
+`CI` and `CI PR workspace tests` do not run on a push to `main`: the pull-request
+head already passed them. A nightly `schedule` run (and `workflow_dispatch`) on
+`main` takes the full policy, macOS included, without a paid RunPod GPU run, and
+is the run that saves the `rust-cache` entries pull requests restore.
 
 The changed paths come from the fork point, never from the two trees. `--base`
 carries the base branch tip (`github.event.pull_request.base.sha`), so
@@ -79,8 +80,10 @@ not replace Linux doctest validation or the external extension fixture.
 
 ## macOS support gate
 
-`macOS workspace tests` is a required Apple Silicon execution gate for code
-changes and `main` pushes. It runs the `macos` profile on `macos-15` against the
+`macOS workspace tests` is a required check, but a pull request runs it on a macOS
+runner only when it carries the `run-macos` label and the classifier selects it;
+otherwise it is an `ubuntu-24.04` no-op. The Apple Silicon execution gate proper is
+the nightly run on `main`. When it runs, it is an Apple Silicon execution gate. It runs the `macos` profile on `macos-15` against the
 same faer CPU stack Linux uses, so the lane is a second-architecture and
 second-libc check rather than a second BLAS. It runs the `tenferro-gpu`,
 `tenferro-fft`, and `tenferro-linalg` test suites; the linalg suite covers the
@@ -103,8 +106,8 @@ now runs for a change to what the `macos` profile exercises: `tenferro-gpu` outs
 never built on macOS), `tenferro-fft`, `tenferro-linalg`, `.cargo/`, `rust-toolchain.toml` and the framework-link
 check, plus the control plane below (8 of the same 20 pull requests). Everything else is covered by the Linux lanes
 and takes the no-op. Root `Cargo.toml` and `Cargo.lock` churn does not select it; a dependency change that breaks
-macOS is caught by the push-to-`main` run, which still runs macOS, as does every fail-closed path (an empty diff, an
-unresolvable merge base). The job and its `macOS workspace tests` name are unchanged, so the required check always
+macOS is caught by the nightly run on `main`, as is any macOS-only regression from a PR that was not labelled
+`run-macos` (a pull request no longer schedules a macOS runner without the label; tensor4all-rs#1432 did the same). The job and its `macOS workspace tests` name are unchanged, so the required check always
 reports.
 
 The change policy also runs this gate when its workflow, shared profile, or
