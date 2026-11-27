@@ -21,6 +21,7 @@ members = [
     # Optional adapters. Their default features select no system library, so the
     # root lanes can build them; the MPI/HDF5 backends are opt-in features.
     "crates/tenferro-mpi",
+    "crates/tenferro-mpi-capi",
     "crates/tenferro-hdf5",
     "docs/tutorial-code",
     "ext/experiments/bf16-proof",

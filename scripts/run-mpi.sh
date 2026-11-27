@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Run the two-rank transport scenarios against one backend.
 #
-#   scripts/run-mpi.sh [upstream|rt]
+#   scripts/run-mpi.sh [upstream|rt|capi]
 #
 # `upstream` is `tenferro-mpi --features system` (rsmpi-rt's bindgen backend, needs
 # system MPI headers). `rt` is `tenferro-mpi --features runtime` (rsmpi-rt's
-# MPIABI backend, needs `MPI_RT_LIB` and MPIwrapper at run time).
+# native-handle backend: it finds the MPI library in the process or by soname, and
+# `MPI_NATIVE_LIB` overrides the search; no headers, no wrapper). `capi` runs the same
+# runtime backend through the C entry points of `tenferro-mpi-capi`.
 #
 # The scenarios need a real MPI launcher; a plain `cargo test` runs the
 # single-process checks only.
@@ -28,15 +30,12 @@ upstream)
     ;;
 rt)
     cargo_args=(-p tenferro-mpi --features runtime --test mpi_p2p_runtime)
-    if [[ -z "${MPI_RT_LIB:-}" ]]; then
-        echo "MPI_RT_LIB must point at a loaded MPI ABI wrapper library for the rt backend" >&2
-        echo "build MPIwrapper against the system MPI and point MPI_RT_LIB at it" >&2
-        echo "(see crates/tenferro-mpi/README.md)" >&2
-        exit 2
-    fi
+    ;;
+capi)
+    cargo_args=(-p tenferro-mpi-capi --features test-hooks --test capi_two_rank)
     ;;
 *)
-    echo "usage: $0 [upstream|rt]" >&2
+    echo "usage: $0 [upstream|rt|capi]" >&2
     exit 2
     ;;
 esac

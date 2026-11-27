@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the two-rank scenarios and require every rank to report success.
 #
-#   scripts/ci/run-mpi-ranks.sh [upstream|rt]
+#   scripts/ci/run-mpi-ranks.sh [upstream|rt|capi]
 #
 # Wraps scripts/run-mpi.sh without changing it. The scenario binaries print
 # "needs two ranks, skipping" and exit 0 when they see a world of one, so a launcher

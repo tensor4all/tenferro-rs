@@ -556,10 +556,16 @@ fn raw_header(
 }
 
 fn read_ack<B: MpiBackend>(context: &Context<'_, B>, tag: i32) -> u8 {
-    let (probed, length) = context.backend.probe(context.other, tag);
+    let (probed, length) = context
+        .backend
+        .probe(context.other, tag)
+        .expect("ack probe");
     assert_eq!(length, 8, "ack length");
     let mut buffer = [0u8; 8];
-    context.backend.receive_probed(probed, &mut buffer);
+    context
+        .backend
+        .receive_probed(probed, &mut buffer)
+        .expect("ack receive");
     buffer[7]
 }
 
@@ -570,7 +576,7 @@ fn raw_frames<B: MpiBackend>(context: &Context<'_, B>) -> Result<(), Error> {
     if context.sends() {
         context
             .backend
-            .send_bytes(context.other, 171, b"XXXX-not-a-header");
+            .send_bytes(context.other, 171, b"XXXX-not-a-header")?;
         // The receiver answers nothing, so synchronize on the next scenario's leg to
         // keep this frame from racing the following one.
         let sync: TypedTensor<f64, DynRank, Host> =
@@ -589,7 +595,7 @@ fn raw_frames<B: MpiBackend>(context: &Context<'_, B>) -> Result<(), Error> {
     if context.sends() {
         context
             .backend
-            .send_bytes(context.other, 173, &raw_header(99, 5, byte_order, 1, &[1]));
+            .send_bytes(context.other, 173, &raw_header(99, 5, byte_order, 1, &[1]))?;
         assert_eq!(read_ack(context, 173), 4, "UnsupportedVersion ack");
     } else {
         match engine::recv::<_, Tensor>(context.backend, context.other, 173) {
@@ -603,7 +609,7 @@ fn raw_frames<B: MpiBackend>(context: &Context<'_, B>) -> Result<(), Error> {
         let foreign = if byte_order == 1 { 2 } else { 1 };
         context
             .backend
-            .send_bytes(context.other, 174, &raw_header(1, 5, foreign, 1, &[1]));
+            .send_bytes(context.other, 174, &raw_header(1, 5, foreign, 1, &[1]))?;
         assert_eq!(read_ack(context, 174), 8, "ByteOrderMismatch ack");
     } else {
         match engine::recv::<_, Tensor>(context.backend, context.other, 174) {
@@ -619,7 +625,7 @@ fn raw_frames<B: MpiBackend>(context: &Context<'_, B>) -> Result<(), Error> {
             context.other,
             175,
             &raw_header(1, 5, byte_order, too_many, &[too_many]),
-        );
+        )?;
         assert_eq!(read_ack(context, 175), 6, "TooManyElements ack");
     } else {
         match engine::recv::<_, Tensor>(context.backend, context.other, 175) {
@@ -633,9 +639,9 @@ fn raw_frames<B: MpiBackend>(context: &Context<'_, B>) -> Result<(), Error> {
     if context.sends() {
         context
             .backend
-            .send_bytes(context.other, 177, &raw_header(1, 1, byte_order, 2, &[2]));
+            .send_bytes(context.other, 177, &raw_header(1, 1, byte_order, 2, &[2]))?;
         assert_eq!(read_ack(context, 177), 0, "a bool header is accepted");
-        context.backend.send_bytes(context.other, 177, &[2, 0]);
+        context.backend.send_bytes(context.other, 177, &[2, 0])?;
     } else {
         let mut out =
             TypedTensor::<bool, DynRank, Host>::from_host_vec_col_major(vec![2], vec![true, true])?;
@@ -650,7 +656,7 @@ fn raw_frames<B: MpiBackend>(context: &Context<'_, B>) -> Result<(), Error> {
     if context.sends() {
         context
             .backend
-            .send_bytes(context.other, 176, &raw_header(1, 5, byte_order, 5, &[2]));
+            .send_bytes(context.other, 176, &raw_header(1, 5, byte_order, 5, &[2]))?;
         assert_eq!(read_ack(context, 176), 5, "MalformedHeader ack");
     } else {
         match engine::recv::<_, Tensor>(context.backend, context.other, 176) {

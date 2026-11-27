@@ -332,7 +332,7 @@ fn send_frames<B: MpiBackend>(
     );
     let mut buffer = [0u8; MAX_HEADER_LEN];
     let len = header.encode(&mut buffer);
-    backend.send_bytes(to, tag, &buffer[..len]);
+    backend.send_bytes(to, tag, &buffer[..len])?;
 
     let verdict = receive_ack(backend, to, tag)?;
     if verdict != STATUS_OK {
@@ -341,7 +341,7 @@ fn send_frames<B: MpiBackend>(
         });
     }
     if prepared.payload_bytes > 0 {
-        backend.send_bytes(to, tag, payload);
+        backend.send_bytes(to, tag, payload)?;
     }
     Ok(())
 }
@@ -350,7 +350,8 @@ fn send_abort<B: MpiBackend>(backend: &B, to: B::Peer<'_>, tag: Tag, error: &Err
     let header = Header::abort(error.abort_reason().code());
     let mut buffer = [0u8; MAX_HEADER_LEN];
     let len = header.encode(&mut buffer);
-    backend.send_bytes(to, tag, &buffer[..len]);
+    // Best effort: the caller is already returning the error that made it abort.
+    let _ = backend.send_bytes(to, tag, &buffer[..len]);
 }
 
 fn abort_and_error<B: MpiBackend>(backend: &B, to: B::Peer<'_>, tag: Tag, error: Error) -> Error {
@@ -366,30 +367,30 @@ fn consume<B: MpiBackend>(backend: &B, probed: B::Probed, length: i64) {
 }
 
 /// Receive a probed message only to read its frame kind, then discard it.
-fn consume_kind<B: MpiBackend>(backend: &B, probed: B::Probed, length: i64) -> u8 {
+fn consume_kind<B: MpiBackend>(backend: &B, probed: B::Probed, length: i64) -> Result<u8> {
     let len = usize::try_from(length).unwrap_or(0);
     if (HEADER_PROLOGUE..=MAX_HEADER_LEN).contains(&len) {
         let mut buffer = [0u8; MAX_HEADER_LEN];
-        let _ = backend.receive_probed(probed, &mut buffer[..len]);
-        return buffer[6];
+        backend.receive_probed(probed, &mut buffer[..len])?;
+        return Ok(buffer[6]);
     }
     let mut scratch = vec![0u8; len];
-    let _ = backend.receive_probed(probed, &mut scratch);
-    scratch.get(6).copied().unwrap_or(0)
+    backend.receive_probed(probed, &mut scratch)?;
+    Ok(scratch.get(6).copied().unwrap_or(0))
 }
 
 fn receive_ack<B: MpiBackend>(backend: &B, from: B::Peer<'_>, tag: Tag) -> Result<u8> {
-    let (probed, length) = backend.probe(from, tag);
+    let (probed, length) = backend.probe(from, tag)?;
     if length != ACK_LEN as i64 {
         // An ack is exactly eight bytes. Anything else is another frame and must still
         // be consumed: two ranks that send to each other on one tag see the other's
         // header here instead of hanging.
         return Err(Error::UnexpectedFrame {
-            kind: consume_kind(backend, probed, length),
+            kind: consume_kind(backend, probed, length)?,
         });
     }
     let mut buffer = [0u8; ACK_LEN];
-    let received = backend.receive_probed(probed, &mut buffer);
+    let received = backend.receive_probed(probed, &mut buffer)?;
     if received != ACK_LEN as i64 {
         return Err(Error::MalformedHeader {
             reason: "ack frame was truncated",
@@ -432,13 +433,14 @@ fn reject_reason(error: &Error) -> RejectReason {
     }
 }
 
-fn send_ack<B: MpiBackend>(backend: &B, to: B::Peer<'_>, tag: Tag, verdict: u8) {
+fn send_ack<B: MpiBackend>(backend: &B, to: B::Peer<'_>, tag: Tag, verdict: u8) -> Result<()> {
     let ack = Ack::new(verdict);
-    backend.send_bytes(to, tag, &ack.encode());
+    backend.send_bytes(to, tag, &ack.encode())
 }
 
+/// Best effort: a reject is sent on a path that already returns the error being rejected.
 fn reject_ack<B: MpiBackend>(backend: &B, to: B::Peer<'_>, tag: Tag, reason: RejectReason) {
-    send_ack(backend, to, tag, reason.code());
+    let _ = send_ack(backend, to, tag, reason.code());
 }
 
 /// Receive the header frame and settle its verdict with the sender.
@@ -466,7 +468,7 @@ fn reject_malformed_frame<B: MpiBackend>(
     }
     // Not a successful-call path, so a scratch buffer is fine here.
     let mut scratch = vec![0u8; length as usize];
-    let received = backend.receive_probed(probed, &mut scratch);
+    let received = backend.receive_probed(probed, &mut scratch).unwrap_or(0);
     let frame = &scratch[..received.clamp(0, length) as usize];
     match frame_kind(frame) {
         FrameKind::Header => reject_ack(backend, from, tag, reject_reason(&error)),
@@ -505,7 +507,7 @@ fn negotiate<B: MpiBackend, F>(
 where
     F: FnOnce(&Header, DType) -> Result<()>,
 {
-    let (probed, length) = backend.probe(from, tag);
+    let (probed, length) = backend.probe(from, tag)?;
     if length < HEADER_PROLOGUE as i64
         || length > MAX_HEADER_LEN as i64
         || (length - HEADER_PROLOGUE as i64) % SHAPE_STRIDE as i64 != 0
@@ -513,7 +515,7 @@ where
         return Err(reject_malformed_frame(backend, from, tag, probed, length));
     }
     let mut buffer = [0u8; MAX_HEADER_LEN];
-    let received = backend.receive_probed(probed, &mut buffer[..length as usize]);
+    let received = backend.receive_probed(probed, &mut buffer[..length as usize])?;
     if received != length {
         return Err(Error::MalformedHeader {
             reason: "header receive was truncated",
@@ -582,7 +584,7 @@ where
         reject_ack(backend, from, tag, reject_reason(&error));
         return Err(error);
     }
-    send_ack(backend, from, tag, STATUS_OK);
+    send_ack(backend, from, tag, STATUS_OK)?;
     Ok(header)
 }
 
@@ -625,7 +627,7 @@ fn receive_frame<B: MpiBackend>(
     expected_bytes: i64,
     buffer: &mut [u8],
 ) -> Result<()> {
-    let (probed, length) = backend.probe(from, tag);
+    let (probed, length) = backend.probe(from, tag)?;
     if length != expected_bytes {
         if length > expected_bytes {
             consume(backend, probed, length);
@@ -637,7 +639,7 @@ fn receive_frame<B: MpiBackend>(
             received: length,
         });
     }
-    let received = backend.receive_probed(probed, buffer);
+    let received = backend.receive_probed(probed, buffer)?;
     if received != expected_bytes {
         return Err(Error::PayloadCountMismatch {
             expected: expected_bytes,

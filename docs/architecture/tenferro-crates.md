@@ -48,6 +48,7 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not an
 | `tenferro-linalg` | Linear algebra traced APIs, eager helpers, extension runtime, and optional linalg AD rules |
 | `tenferro-fft` | FFT extension runtime and public concrete/traced FFT APIs |
 | `tenferro-mpi` | Optional blocking point-to-point MPI transport adapter; `default = []`, with mutually exclusive `system` and `runtime` backends |
+| `tenferro-mpi-capi` | C entry points (cdylib) that attach `tenferro-mpi`'s transport to a communicator a host (MPI.jl, mpi4py) already owns, through native MPI handles; unpublished |
 | `tenferro-hdf5` | Optional HDF5 payload adapter behind the `hdf5` feature; unpublished until `hdf5-rt` is on crates.io |
 | `tenferro-core-ops` | Internal core primitive operation catalog used by graph, runtime, and backend dispatch |
 | `tenferro-internal-cpu-kernels` | Internal ordinary dtype-dispatch CPU kernels, pool-aware one-shot read-into replay, and scalar-agnostic caller-destination entry points |

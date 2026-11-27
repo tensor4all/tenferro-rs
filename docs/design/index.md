@@ -40,7 +40,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [cubecl-fork-exit-1945.md](./cubecl-fork-exit-1945.md) | What the pinned cubecl fork carries for #1945, why the checked-launch write-authority hole stays upstream, and the priced own-backend contingency |
 | [xla-backend.md](./xla-backend.md) | Experimental StableHLO lowering and PJRT plugin-loading peer executor over static `CompiledGraph` values |
 | [mpi-transport.md](./mpi-transport.md) | `tenferro-mpi` point-to-point transport contract: wire format v1, failure protocol, backend features |
-| [mpi-native-abi.md](./mpi-native-abi.md) | Design (#2735, not implemented): native MPI handles from MPI.jl/mpi4py through a C entry, standard-ABI/MPICH/Open MPI detection, and removal of the MPItrampoline path |
+| [mpi-native-abi.md](./mpi-native-abi.md) | Design and decision record (#2735, implemented; the contract is in mpi-transport.md): native MPI handles from MPI.jl/mpi4py through a C entry, standard-ABI/MPICH/Open MPI detection, and removal of the MPItrampoline path |
 | [inplace-indexing.md](./inplace-indexing.md) | Partial in-place updates design |
 | [linalg.md](./linalg.md) | Linalg public/composite layer |
 | [linalg-prims.md](./linalg-prims.md) | Backend-facing factorization and solve contracts |

@@ -42,6 +42,9 @@ build contains no MPI or HDF5 edge.
 
 - [tenferro-mpi](./tenferro_mpi/index.html): blocking point-to-point MPI
   transport for host tensors, with `system` and `runtime` backends
+- [tenferro-mpi-capi](./tenferro_mpi_capi/index.html): C entry points that attach the
+  transport to a communicator an MPI.jl or mpi4py host already owns (unpublished; empty
+  without its `runtime` feature)
 - [tenferro-hdf5](./tenferro_hdf5/index.html): HDF5 payload adapter behind the
   `hdf5` feature (unpublished until `hdf5-rt` is on crates.io)
 

@@ -75,8 +75,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     # #2612: the MPI transport adapter. Both backends are features of the workspace
     # member `tenferro-mpi`; its default features select neither, so the root
     # workspace lanes never pay for MPI. `system` needs system MPI headers and
-    # libclang, while `runtime` links rsmpi-rt and needs MPIwrapper at run time
-    # through MPI_RT_LIB. The scenarios are `harness = false` and need a real
+    # libclang, while `runtime` links rsmpi-rt's native-handle backend and finds the
+    # host MPI at run time (#2735: no wrapper library). The scenarios are `harness = false` and need a real
     # launcher, so scripts/run-mpi.sh supplies `mpiexec -n 2`; a bare `cargo test`
     # covers only the single-process checks. #2735: scripts/ci/run-mpi-ranks.sh
     # wraps it and fails unless both ranks report success, because a scenario that
@@ -91,17 +91,19 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "scripts/ci/run-mpi-ranks.sh upstream",
     ),
     "mpi-runtime": (
-        # The crate-level and entry-point doctests call `mpi::initialize`, so this lane
-        # has the same MPIwrapper precondition as `scripts/run-mpi.sh rt`; without it
-        # the doctests fail rather than skip.
-        "test -n \"${MPI_RT_LIB:-}\" || { echo 'MPI_RT_LIB is required for the MPI runtime lane; build MPIwrapper first (see crates/tenferro-mpi/README.md)' >&2; exit 2; }",
+        # The crate-level and entry-point doctests call `mpi::initialize`, which loads the
+        # runner's MPI by soname; the scenarios find it the same way.
         f"cargo clippy -p tenferro-mpi --features runtime --all-targets -- {_CLIPPY_FLAGS}",
+        f"cargo clippy -p tenferro-mpi-capi --features test-hooks --all-targets -- {_CLIPPY_FLAGS}",
         # The whole target set: the doctests exercise the runtime feature's own `mpi`
         # identity, and `mpi_p2p_runtime` runs the two-rank scenarios.
         "cargo test -p tenferro-mpi --features runtime -j 4",
+        "cargo test -p tenferro-mpi-capi --features test-hooks -j 4",
         "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-mpi --features runtime -j 4 --no-deps",
+        "RUSTDOCFLAGS='-D warnings' cargo doc -p tenferro-mpi-capi --features runtime -j 4 --no-deps",
         "scripts/check-mpi-features.sh tenferro-mpi --runtime-only",
         "scripts/ci/run-mpi-ranks.sh rt",
+        "scripts/ci/run-mpi-ranks.sh capi",
     ),
     "extensions": (
         f"cargo test --manifest-path ext/tropical/Cargo.toml {_CARGO_TEST_PROFILE} "

@@ -1,9 +1,9 @@
 # MPI native handles: one runtime backend, MPItrampoline removed
 
-Design for #2735. **Not implemented.** Nothing in this note describes current behaviour;
-[mpi-transport.md](./mpi-transport.md) is the contract of what exists. When this design
-ships, its contract parts (feature table, C entry points, families, error text) move
-into `mpi-transport.md` and this note stays as the decision record. It is a sibling
+Design for #2735. **Implemented** (tenferro-rs#2735 and tensor4all/rsmpi-rt#8); the contract
+parts (feature table, C entry points, families, error text) now live in
+[mpi-transport.md](./mpi-transport.md), and this note stays as the decision record. Where
+the implementation settled something this note left open, the notes below say so. It is a sibling
 document rather than an amendment for that reason: the transport note must keep matching
 the code, and a design that has not been built would make it describe behaviour the code
 does not have.
@@ -829,3 +829,55 @@ Nothing here was run under `mpiexec`, because this PR is design only.
 | `ERRORS_ARE_FATAL` aborting the host | Reported at attach; predictable errors are validated locally first; tenferro does not change the handler (§3 "Error handler"). |
 | A stray tag is a permanent hang | Stated as such; mitigated by the host passing a dup it owns, as both demos do (§3 "Tags"). |
 | The standard ABI is absent from §7 | It is a v1 family now, and has its own §7 row with the real cost. |
+
+## Implementation notes (#2735)
+
+What the implementation checked, and what it settled where this note was silent.
+
+### A5 and A10: verified
+
+Run on 2026-11-26 with `MPI_Abi_get_version` called through `ctypes` (the call needs no MPI header):
+
+| Library | `MPI_Initialized` | Before `MPI_Init` | After `MPI_Init` | After `MPI_Finalize` |
+|---|---|---|---|---|
+| `libmpi_abi.so.1` (MPIABI_jll 1.0.1, MPICH 5.0.2 `--enable-mpi-abi`) | 0 | rc 0, **(1, 0)** | rc 0, (1, 0) | rc 0, (1, 0) |
+| MPICH_jll 5.0.2 `libmpi.so.12` | 0 | rc 0, **(-1, -1)** | rc 0, (-1, -1) | rc 0, (-1, -1) |
+| Intel MPI 2021.19 `libmpi.so.12` | 0 | rc 0, **(-1, -1)** | rc 0, (-1, -1) | rc 0, (-1, -1) |
+| Open MPI 4.1.6 `libmpi.so.40` | | symbol not exported | | |
+
+So A5 holds for every build that was available (native builds return `-1`, the standard-ABI
+build returns `1`), and A10 holds: the call works before init and after finalize. Open MPI 5.x and
+`mpi_abi_wrapper` were not available to run. The loader does not rely on A10 for correctness: it
+treats a non-zero return code as "not a standard ABI".
+
+`libmpi_abi.so.1` also exports `MPIR_Err_return_comm` and `PMPI_Get_library_version`. Without the
+detection order of D3 it would be classified as a native MPICH-ABI library, so the unit test that
+pins the order uses exactly that shape.
+
+### Settled where the design was silent
+
+- **Debian and Ubuntu name their MPICH `libmpich.so.12`**, so the standalone soname list gained it (found by the hosted `rt / MPICH` arm: the apt package installs no `libmpi.so.12`).
+- **`tenferro-mpi-capi` is empty without its `runtime` feature.** A plain dependency on `tenferro-mpi` with `runtime` would switch that feature, and rsmpi-rt, on for every `cargo test --workspace` through feature unification; the root lanes must pay nothing for MPI.
+- **Standard-ABI thread levels are not 0..3.** `MPI_THREAD_FUNNELED/SERIALIZED/MULTIPLE` are
+  `1024/2048/4096` there. All thread constants go through the per-family table, never literals.
+- **Open MPI's `MPI_TAG_UB` is `INT_MAX`.** A tag above it does not exist, so the local tag check
+  uses the attribute's value and the scenario only tests it where it is smaller.
+- **`dlsym` on a handle also searches the handle's dependencies.** A library that merely links
+  `libmpi_abi` would look like a second MPI, so a symbol counts only if its address lies in one of
+  the object's own `PT_LOAD` segments.
+- **The carried set** is the §3 "may" list plus `MPI_Comm_get_parent`, `MPI_Comm_compare`, and for a
+  standalone Rust host `MPI_Comm_dup`, `MPI_Comm_free`, `MPI_Barrier` and `MPI_Recv`. tenferro's own
+  sources call none of the last four (the scan enforces it). Stubs: 779 generated names.
+- **T1 / Q5.** `MpiBackend` methods return `Result` (the break is accepted). rsmpi-rt's high-level
+  `send_with_tag` and `matched_probe_with_tag` ignore return codes, so `Rt` calls `ffi::MPI_*`
+  directly.
+- **Receive over the C boundary is two calls**, `tfe_mpi_recv` (into a buffer the object holds) and
+  `tfe_mpi_recv_take`, so a too-small buffer loses no message.
+- **Status codes** beyond `capi-error-handling.md`: `-10` library, `-11` not initialized, `-12`
+  finalized, `-13` MPI call failed, `-14` protocol, `-15` thread, `-16` no library yet.
+- **Q2, Q3, Q4:** as decided in this note (no vtable entry, runtime panic stubs, resolve through the
+  identified object). **Q6:** Linux only for now; `mpi-native-sys` uses `dl_iterate_phdr`, and macOS
+  would need the `_dyld_*` walk. **Q7:** the Julia binding is a later chain node.
+- **rsmpi-rt dependency.** `rsmpi-rt 0.9.0` is not on crates.io yet; the workspace takes it from
+  tensor4all/rsmpi-rt#8 by git rev under `[patch.crates-io]`, like the other pre-release
+  dependencies. The PR is not mergeable until that is released and the patch line removed.
