@@ -5,8 +5,12 @@ name: CI PR workspace tests
 on:
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
+  # No `push` trigger: the PR head already passed these jobs. The nightly run on
+  # main is the full (macOS included) validation and the run that saves the
+  # rust-cache entries pull requests restore (tensor4all/tensor4all-meta#149).
+  schedule:
+    - cron: "23 18 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,14 +37,25 @@ jobs:
       - name: Classify change
         id: policy
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          # schedule and workflow_dispatch take the full policy that `push` used.
+          EVENT_NAME: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push' }}
+          GITHUB_EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: >-
-          python3 scripts/ci/change_policy.py
-          --event "${EVENT_NAME}"
-          --base "${BASE_SHA}"
-          --head "${HEAD_SHA}"
+          MACOS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'run-macos') }}
+        run: |
+          python3 scripts/ci/change_policy.py \
+            --event "${EVENT_NAME}" \
+            --base "${BASE_SHA}" \
+            --head "${HEAD_SHA}"
+          # macOS runners are the most expensive SKU: a pull request does not
+          # schedule one unless it carries the `run-macos` label. The required
+          # `macOS workspace tests` check still reports (an ubuntu no-op), and
+          # the nightly run validates macOS on main. GITHUB_OUTPUT keeps the
+          # last value written for a key.
+          if [ "${GITHUB_EVENT}" = pull_request ] && [ "${MACOS_LABEL}" != true ]; then
+            echo "run_macos=false" >> "${GITHUB_OUTPUT}"
+          fi
       - name: Select backend profile
         id: select
         env:
@@ -68,6 +83,7 @@ jobs:
         if: needs.changes.outputs.run_workspace == 'true'
         with:
           prefix-key: v1-rust-ubuntu24
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@nextest
         if: needs.changes.outputs.run_workspace == 'true'
       - name: Run workspace faer profile
@@ -82,7 +98,7 @@ jobs:
   ci-maintainer:
     name: CI (same-repo / heavy / ${{ matrix.cfg.backend }})
     needs: changes
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -110,6 +126,7 @@ jobs:
           # No `key:` here: rust-cache ignores `key` when `shared-key` is set, and its
           # default `add-rust-environment-hash-key` already hashes the workspace
           # Cargo.lock, so a dependency-source switch produces a different key.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Verify restored dependency artifacts
         if: matrix.cfg.profile != '' && steps.rust_cache.outputs.cache-hit == 'true'
         run: |
@@ -185,6 +202,7 @@ jobs:
           workspaces: |
             ext/tropical
             ext/sparse
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run extension profile
         if: needs.changes.outputs.run_extensions == 'true'
         run: python3 scripts/ci/run_profile.py extensions
@@ -227,6 +245,7 @@ jobs:
         if: needs.changes.outputs.run_workspace == 'true'
         with:
           prefix-key: v1-rust-ubuntu24-api-surface
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The workspace lanes run under nextest, which skips trybuild contracts;
       # plain cargo test runs them: the session spellings compile and the
       # removed engine-taking receivers and copy aliases stay compile errors.
@@ -340,6 +359,7 @@ jobs:
         if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true'
         with:
           prefix-key: v1-mpi-${{ matrix.arm.key }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run the two-rank MPI profile
         if: needs.changes.result == 'success' && needs.changes.outputs.run_mpi == 'true'
         env:
@@ -408,6 +428,7 @@ jobs:
         if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
         with:
           shared-key: macos-v1
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@nextest
         if: needs.changes.result == 'success' && needs.changes.outputs.run_macos == 'true'
       - name: Run macOS and Apple-specific tests

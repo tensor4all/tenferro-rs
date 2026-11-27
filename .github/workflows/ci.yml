@@ -1,8 +1,13 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  # No `push` trigger: the PR head already passed these jobs, so a main push
+  # would only repeat them (tensor4all/tensor4all-meta#149). A nightly run on
+  # main keeps drift visible and is the run that saves the rust-cache entries
+  # pull requests restore (`save-if` is main-only).
+  schedule:
+    - cron: "47 18 * * *"
+  workflow_dispatch:
   pull_request:
 
 concurrency:
@@ -32,7 +37,7 @@ jobs:
       - name: Classify change
         id: policy
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          EVENT_NAME: ${{ github.event_name == 'pull_request' && 'pull_request' || 'push' }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: >-
@@ -65,6 +70,8 @@ jobs:
       - name: No rayon type in the public API of tenferro-cpu
         run: scripts/check-no-public-rayon.sh
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Placement ledger (live tasks within budget, no pool entry for small work, global pool unstarted)
         run: cargo test -p tenferro-cpu -p tenferro-linalg -p tenferro-einsum --features ledger --no-fail-fast
 
@@ -111,6 +118,7 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           prefix-key: v1-rust-ubuntu24
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Test public Result error documentation audit
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: python3 scripts/test-check-public-error-docs.py
@@ -122,10 +130,14 @@ jobs:
           PUSH_BASE_SHA: ${{ github.event.before }}
         run: |
           python3 scripts/check-public-error-docs.py
+          # A scheduled or dispatched run has no diff base (no `before` SHA); the
+          # full audit above is the whole check there.
           if [ "${EVENT_NAME}" = pull_request ]; then
             base_sha="${PR_BASE_SHA}"
-          else
+          elif [ "${EVENT_NAME}" = push ]; then
             base_sha="${PUSH_BASE_SHA}"
+          else
+            exit 0
           fi
           python3 scripts/check-public-error-docs.py --changed-from "${base_sha}"
       - name: Run workspace clippy
@@ -158,6 +170,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust-ubuntu24-fftw
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check FFTW dependencies are opt-in
         run: |
           set -o pipefail
@@ -190,6 +203,7 @@ jobs:
           prefix-key: v1-hdf5-ubuntu24
           # tenferro-hdf5 is a member of the root workspace, not a standalone one.
           workspaces: .
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install libhdf5 and h5py
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: |
@@ -259,6 +273,7 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           prefix-key: v1-rust-ubuntu24
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@v2
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
@@ -299,6 +314,7 @@ jobs:
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
         with:
           prefix-key: v1-rust-ubuntu24
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Quarto
         if: needs.policy.result == 'success' && needs.policy.outputs.run_docs == 'true'
         uses: quarto-dev/quarto-actions/setup@v2
@@ -358,6 +374,10 @@ jobs:
             BASE_SHA="${PR_BASE_SHA}"
           elif [ "${EVENT_NAME}" = push ]; then
             BASE_SHA="${PUSH_BASE_SHA}"
+          elif [ "${EVENT_NAME}" = schedule ] || [ "${EVENT_NAME}" = workflow_dispatch ]; then
+            # Nightly cache-warm / on-demand run: no diff base; the fixed
+            # promotion base below is what the check validates against.
+            BASE_SHA=""
           else
             echo "Unsupported CI event: ${EVENT_NAME}" >&2
             exit 1

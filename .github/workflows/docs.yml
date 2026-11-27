@@ -3,6 +3,18 @@ name: Deploy Documentation
 on:
   push:
     branches: [main]
+    # The site is rustdoc + docs/ + scripts/build_docs_site.sh. A push that only
+    # touches CI or GPU-pod plumbing cannot change it (tensor4all-meta#149).
+    paths-ignore:
+      - ".github/workflows/ci*.yml"
+      - ".github/workflows/CI_gpu.yml"
+      - ".github/workflows/runpod-*.yml"
+      - ".github/workflows/review_bot.yml"
+      - ".github/workflows/pr-verification.yml"
+      - ".github/workflows/local-gpu-gate.yml"
+      - ".github/workflows/creusot-proof.yml"
+      - ".github/workflows/oracle-replay-nightly.yml"
+      - "scripts/ci/**"
   workflow_dispatch:
 
 permissions:
