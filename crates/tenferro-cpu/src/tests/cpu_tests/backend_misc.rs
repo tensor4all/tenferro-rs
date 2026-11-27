@@ -1612,11 +1612,19 @@ fn test_reclaim_buffer_covers_all_dtypes() {
     );
     crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(f32_t)).unwrap();
     let c32_t = Tensor::from_typed::<tenferro_tensor::Complex32>(
-        TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(1.0, 0.0)]).unwrap(),
+        TypedTensor::from_vec_col_major(
+            vec![2],
+            vec![Complex32::new(1.0, 0.0), Complex32::new(2.0, 0.0)],
+        )
+        .unwrap(),
     );
     crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(c32_t)).unwrap();
     let c64_t = Tensor::from_typed::<tenferro_tensor::Complex64>(
-        TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 0.0)]).unwrap(),
+        TypedTensor::from_vec_col_major(
+            vec![2],
+            vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+        )
+        .unwrap(),
     );
     crate::test_support::on_engine(&mut backend, |__s| __s.reclaim_buffer(c64_t)).unwrap();
     assert!(backend.buffer_pool_len() >= 3);
@@ -1716,26 +1724,37 @@ fn test_exec_session_read_reductions_and_reclaim_cover_typed_paths() {
             &[3.0]
         );
 
+        // Two elements each: a one-element buffer is scalar scratch and is
+        // deliberately not retained (#2759), so it would not exercise the
+        // typed reclaim paths this covers.
         exec.reclaim_buffer(Tensor::from_typed::<f32>(
-            TypedTensor::from_vec_col_major(vec![1], vec![0.0_f32]).unwrap(),
+            TypedTensor::from_vec_col_major(vec![2], vec![0.0_f32, 1.0]).unwrap(),
         ));
         exec.reclaim_buffer(Tensor::from_typed::<f64>(
-            TypedTensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap(),
+            TypedTensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap(),
         ));
         exec.reclaim_buffer(Tensor::from_typed::<i32>(
-            TypedTensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
+            TypedTensor::from_vec_col_major(vec![2], vec![0_i32, 1]).unwrap(),
         ));
         exec.reclaim_buffer(Tensor::from_typed::<i64>(
-            TypedTensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
+            TypedTensor::from_vec_col_major(vec![2], vec![0_i64, 1]).unwrap(),
         ));
         exec.reclaim_buffer(Tensor::from_typed::<bool>(
-            TypedTensor::from_vec_col_major(vec![1], vec![false]).unwrap(),
+            TypedTensor::from_vec_col_major(vec![2], vec![false, true]).unwrap(),
         ));
         exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex32>(
-            TypedTensor::from_vec_col_major(vec![1], vec![Complex32::new(0.0, 0.0)]).unwrap(),
+            TypedTensor::from_vec_col_major(
+                vec![2],
+                vec![Complex32::new(0.0, 0.0), Complex32::new(1.0, 0.0)],
+            )
+            .unwrap(),
         ));
         exec.reclaim_buffer(Tensor::from_typed::<tenferro_tensor::Complex64>(
-            TypedTensor::from_vec_col_major(vec![1], vec![Complex64::new(0.0, 0.0)]).unwrap(),
+            TypedTensor::from_vec_col_major(
+                vec![2],
+                vec![Complex64::new(0.0, 0.0), Complex64::new(1.0, 0.0)],
+            )
+            .unwrap(),
         ));
     })
     .unwrap();

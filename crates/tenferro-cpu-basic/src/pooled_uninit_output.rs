@@ -229,11 +229,12 @@ impl<T: PoolScalar> PooledUninitOutput<T> {
     /// ```
     /// use tenferro_cpu_basic::{buffer_pool::BufferPool, PooledUninitOutput};
     /// let mut pool = BufferPool::new();
-    /// let mut output = PooledUninitOutput::<f64>::new(&pool, vec![1])?;
+    /// let mut output = PooledUninitOutput::<f64>::new(&pool, vec![2])?;
     /// output.as_uninit_slice_mut()[0].write(2.0);
-    /// // SAFETY: the only element has been initialized.
+    /// output.as_uninit_slice_mut()[1].write(3.0);
+    /// // SAFETY: every element has been initialized.
     /// let tensor = unsafe { output.assume_init_recycled() }?;
-    /// assert_eq!(tensor.as_slice()?, &[2.0]);
+    /// assert_eq!(tensor.as_slice()?, &[2.0, 3.0]);
     /// drop(tensor);
     /// assert_eq!(pool.len(), 1);
     /// # Ok::<(), tenferro_tensor::Error>(())

@@ -69,6 +69,16 @@ pub struct BufferPoolStats {
 /// when they fully overwrite the output. Use [`PoolScalar::pool_acquire_zeroed`]
 /// when the caller may read the buffer before writing every element.
 ///
+/// A one-element buffer is not retained. Its payload is smaller than the pool
+/// entry that would hold it (a `Vec` header plus a slot in the bin), so
+/// retaining it costs more than it saves, and the producers that allocate one
+/// on every run do not check one out: an inline scalar `Constant` is uploaded
+/// through the CPU engine as a fresh one-element `Vec`, then reaches the pool
+/// on release. Because nothing ever asks the pool for that
+/// capacity, each prepared run would add another retained buffer
+/// (tensor4all/tenferro-rs#2759). Dropping one-element buffers keeps live
+/// memory flat across repeated runs; larger buffers still reuse as before.
+///
 /// # Examples
 ///
 /// ```rust
@@ -374,7 +384,12 @@ macro_rules! impl_pool_scalar {
                 let mut state = lock_pool(self);
                 let pool = &mut *state;
                 let cap = buf.capacity();
-                if cap > 0 {
+                // One-element buffers are per-call scratch, not a reusable
+                // working set: the pool entry costs more than the element it
+                // would hold, and no checkout path ever asks for it in a
+                // program whose constants are scalars (#2759). See the
+                // `BufferPool` docs.
+                if cap > 1 {
                     pool.retained_capacity_bytes = pool
                         .retained_capacity_bytes
                         .saturating_add(cap.saturating_mul(size_of::<$ty>()));
