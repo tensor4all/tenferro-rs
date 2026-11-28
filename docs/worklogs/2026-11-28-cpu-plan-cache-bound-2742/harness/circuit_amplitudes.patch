@@ -1,0 +1,58 @@
+--- src/examples/circuit_amplitudes.rs	2026-11-28 19:27:06.888021606 +0900
++++ build/examples/circuit_amplitudes.rs	2026-11-28 19:27:29.343769747 +0900
+@@ -21,6 +21,29 @@
+ 
+ type Result<T> = sampled_einsum::Result<T>;
+ 
++use std::alloc::{GlobalAlloc, Layout, System};
++use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
++struct Counting;
++static CUR: AtomicUsize = AtomicUsize::new(0);
++static HIGH: AtomicUsize = AtomicUsize::new(0);
++unsafe impl GlobalAlloc for Counting {
++    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
++        let p = System.alloc(l);
++        if !p.is_null() { let c = CUR.fetch_add(l.size(), Relaxed) + l.size(); HIGH.fetch_max(c, Relaxed); }
++        p
++    }
++    unsafe fn dealloc(&self, p: *mut u8, l: Layout) { System.dealloc(p, l); CUR.fetch_sub(l.size(), Relaxed); }
++    unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
++        let q = System.realloc(p, l, n);
++        if !q.is_null() { if n >= l.size() { let c = CUR.fetch_add(n - l.size(), Relaxed) + (n - l.size()); HIGH.fetch_max(c, Relaxed); } else { CUR.fetch_sub(l.size() - n, Relaxed); } }
++        q
++    }
++}
++#[global_allocator]
++static GLOBAL: Counting = Counting;
++fn gib(b: usize) -> f64 { b as f64 / (1u64 << 30) as f64 }
++
++
+ #[derive(Deserialize)]
+ struct Export {
+     inputs: Vec<Vec<u32>>,
+@@ -138,17 +161,25 @@
+     } else {
+         CpuEngine::serial()
+     };
++    if let Ok(v) = std::env::var("T2742_LIMIT_BYTES") { engine.plan_cache().set_contraction_limit_bytes(v.parse().unwrap()); }
++    if let Ok(v) = std::env::var("T2742_CAPACITY") { engine.plan_cache().set_contraction_capacity(v.parse().unwrap()); }
+     let values = operands
+         .iter()
+         .map(|t| Ok(TensorValue::from_tensor(t.duplicate()?)))
+         .collect::<Result<Vec<_>>>()?;
+     let refs: Vec<&TensorValue> = values.iter().collect();
++    let base = CUR.load(Relaxed);
+     for k in 1..=repeats {
++        HIGH.store(CUR.load(Relaxed), Relaxed);
+         let t0 = Instant::now();
+         let mut ops = ConcreteOps::new(&mut engine);
+         let (y, stats) = p.execute(&mut ops, &refs)?;
+         let y = ops.to_tensor(y)?;
+         let seconds = t0.elapsed().as_secs_f64();
++        let st = engine.plan_cache().contraction_stats();
++        println!("T2742 run {k} seconds {seconds:.3} highwater_over_base_gib {:.3} held_over_base_gib {:.3} entries {} retained_gib {:.4} evictions {} hits {} misses {} limit {} cap {}",
++            gib(HIGH.load(Relaxed).saturating_sub(base)), gib(CUR.load(Relaxed).saturating_sub(base)), st.entries, gib(st.retained_bytes), st.evictions, st.hits, st.misses,
++            engine.plan_cache().contraction_limit_bytes(), engine.plan_cache().contraction_capacity());
+         let amps = amplitudes(&y, ctx.dtype == "c64")?;
+         let run = Run {
+             amps,

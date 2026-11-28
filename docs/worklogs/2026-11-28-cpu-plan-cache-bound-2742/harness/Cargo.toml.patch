@@ -1,0 +1,24 @@
+--- src/Cargo.toml	2026-11-28 19:27:06.886021539 +0900
++++ build/Cargo.toml.base	2026-11-28 21:55:43.209627909 +0900
+@@ -11,12 +11,12 @@
+ # tenferro-rs is pinned to the commit tensor4all/tenferro-rs#2675 links to. Cargo.lock started
+ # from tenferro-rs's own lock file, so strided, tcontract and threadteam match tenferro's build.
+ [dependencies]
+-tenferro-tensor = { git = "https://github.com/tensor4all/tenferro-rs", rev = "80ee07269e1db81bc5cc4730eaaee0b606f73308" }
+-tenferro-runtime = { git = "https://github.com/tensor4all/tenferro-rs", rev = "80ee07269e1db81bc5cc4730eaaee0b606f73308" }
+-tenferro-cpu = { git = "https://github.com/tensor4all/tenferro-rs", rev = "80ee07269e1db81bc5cc4730eaaee0b606f73308" }
+-tenferro-ad = { git = "https://github.com/tensor4all/tenferro-rs", rev = "80ee07269e1db81bc5cc4730eaaee0b606f73308" }
+-tenferro-einsum = { git = "https://github.com/tensor4all/tenferro-rs", rev = "80ee07269e1db81bc5cc4730eaaee0b606f73308", features = ["autodiff"] }
+-tenferro-gpu = { git = "https://github.com/tensor4all/tenferro-rs", rev = "80ee07269e1db81bc5cc4730eaaee0b606f73308", optional = true }
++tenferro-tensor = { path = "<tenferro-rs checkout at 61e0a1083>/crates/tenferro-tensor" }
++tenferro-runtime = { path = "<tenferro-rs checkout at 61e0a1083>/crates/tenferro-runtime" }
++tenferro-cpu = { path = "<tenferro-rs checkout at 61e0a1083>/crates/tenferro-cpu" }
++tenferro-ad = { path = "<tenferro-rs checkout at 61e0a1083>/crates/tenferro-ad" }
++tenferro-einsum = { path = "<tenferro-rs checkout at 61e0a1083>/crates/tenferro-einsum", features = ["autodiff"] }
++tenferro-gpu = { path = "<tenferro-rs checkout at 61e0a1083>/crates/tenferro-gpu", optional = true }
+ num-complex = "0.4"
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1"
+# p222 rows only: appended to the build's Cargo.toml
+# [patch.crates-io]
+# tcontract / tcontract-kernel / tcontract-exec = { git = "https://github.com/tensor4all/tcontract-rs", rev = "41dcd12f" }

@@ -1,0 +1,84 @@
+== p222 n30m14 1G round 1 load 13.70 15.00 15.57
+[n30 1G r1] T2742 run 1 seconds 62.989 highwater_over_base_gib 24.502 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 337 misses 108 limit 1073741824 cap 1024
+[n30 1G r1] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 1G r1] T2742 run 2 seconds 63.846 highwater_over_base_gib 24.598 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 772 misses 118 limit 1073741824 cap 1024
+[n30 1G r1] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 1G r1] 	Maximum resident set size (kbytes): 25324820
+[n8 1G r1] T2742 positions 8 round 1 seconds 1.861 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 0 misses 8
+[n8 1G r1] T2742 positions 8 round 2 seconds 1.773 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 8 misses 8
+[n8 1G r1] T2742 after_reset_gib 0.001 after_clear_gib 0.000
+[n8 1G r1] 	Maximum resident set size (kbytes): 1615460
+[n122 1G r1] T2742 positions 122 round 1 seconds 30.266 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 0 misses 122
+[n122 1G r1] T2742 positions 122 round 2 seconds 28.112 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 100 misses 144
+[n122 1G r1] T2742 after_reset_gib 0.518 after_clear_gib 0.516
+[n122 1G r1] 	Maximum resident set size (kbytes): 1649656
+== p222 n30m14 24G round 1 load 17.51 16.62 16.13
+[n30 24G r1] T2742 run 1 seconds 63.372 highwater_over_base_gib 24.502 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 337 misses 108 limit 25769803776 cap 1024
+[n30 24G r1] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 24G r1] T2742 run 2 seconds 62.348 highwater_over_base_gib 24.598 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 772 misses 118 limit 25769803776 cap 1024
+[n30 24G r1] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 24G r1] 	Maximum resident set size (kbytes): 25325288
+[n8 24G r1] T2742 positions 8 round 1 seconds 1.790 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 0 misses 8
+[n8 24G r1] T2742 positions 8 round 2 seconds 1.750 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 8 misses 8
+[n8 24G r1] T2742 after_reset_gib 0.001 after_clear_gib 0.000
+[n8 24G r1] 	Maximum resident set size (kbytes): 1615988
+[n122 24G r1] T2742 positions 122 round 1 seconds 29.679 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 0 misses 122
+[n122 24G r1] T2742 positions 122 round 2 seconds 27.882 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 100 misses 144
+[n122 24G r1] T2742 after_reset_gib 0.518 after_clear_gib 0.516
+[n122 24G r1] 	Maximum resident set size (kbytes): 1648984
+== p222 n30m14 1G round 2 load 18.84 18.02 16.79
+[n30 1G r2] T2742 run 1 seconds 63.869 highwater_over_base_gib 24.502 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 337 misses 108 limit 1073741824 cap 1024
+[n30 1G r2] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 1G r2] T2742 run 2 seconds 63.850 highwater_over_base_gib 24.598 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 772 misses 118 limit 1073741824 cap 1024
+[n30 1G r2] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 1G r2] 	Maximum resident set size (kbytes): 25324748
+[n8 1G r2] T2742 positions 8 round 1 seconds 1.949 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 0 misses 8
+[n8 1G r2] T2742 positions 8 round 2 seconds 1.854 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 8 misses 8
+[n8 1G r2] T2742 after_reset_gib 0.001 after_clear_gib 0.000
+[n8 1G r2] 	Maximum resident set size (kbytes): 1615968
+[n122 1G r2] T2742 positions 122 round 1 seconds 30.147 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 0 misses 122
+[n122 1G r2] T2742 positions 122 round 2 seconds 28.077 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 100 misses 144
+[n122 1G r2] T2742 after_reset_gib 0.518 after_clear_gib 0.516
+[n122 1G r2] 	Maximum resident set size (kbytes): 1649168
+== p222 n30m14 24G round 2 load 19.68 18.38 17.12
+[n30 24G r2] T2742 run 1 seconds 67.925 highwater_over_base_gib 24.502 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 337 misses 108 limit 25769803776 cap 1024
+[n30 24G r2] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 24G r2] T2742 run 2 seconds 65.934 highwater_over_base_gib 24.598 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 772 misses 118 limit 25769803776 cap 1024
+[n30 24G r2] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 24G r2] 	Maximum resident set size (kbytes): 25325164
+[n8 24G r2] T2742 positions 8 round 1 seconds 1.890 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 0 misses 8
+[n8 24G r2] T2742 positions 8 round 2 seconds 1.839 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 8 misses 8
+[n8 24G r2] T2742 after_reset_gib 0.001 after_clear_gib 0.000
+[n8 24G r2] 	Maximum resident set size (kbytes): 1615944
+[n122 24G r2] T2742 positions 122 round 1 seconds 30.231 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 0 misses 122
+[n122 24G r2] T2742 positions 122 round 2 seconds 28.942 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 100 misses 144
+[n122 24G r2] T2742 after_reset_gib 0.518 after_clear_gib 0.516
+[n122 24G r2] 	Maximum resident set size (kbytes): 1650200
+== p222 n30m14 1G round 3 load 19.07 18.38 17.37
+[n30 1G r3] T2742 run 1 seconds 66.240 highwater_over_base_gib 24.502 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 337 misses 108 limit 1073741824 cap 1024
+[n30 1G r3] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 1G r3] T2742 run 2 seconds 66.151 highwater_over_base_gib 24.598 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 772 misses 118 limit 1073741824 cap 1024
+[n30 1G r3] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 1G r3] 	Maximum resident set size (kbytes): 25325700
+[n8 1G r3] T2742 positions 8 round 1 seconds 1.956 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 0 misses 8
+[n8 1G r3] T2742 positions 8 round 2 seconds 1.911 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 8 misses 8
+[n8 1G r3] T2742 after_reset_gib 0.001 after_clear_gib 0.000
+[n8 1G r3] 	Maximum resident set size (kbytes): 1615524
+[n122 1G r3] T2742 positions 122 round 1 seconds 32.007 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 0 misses 122
+[n122 1G r3] T2742 positions 122 round 2 seconds 30.213 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 100 misses 144
+[n122 1G r3] T2742 after_reset_gib 0.518 after_clear_gib 0.516
+[n122 1G r3] 	Maximum resident set size (kbytes): 1648528
+== p222 n30m14 24G round 3 load 19.17 18.65 17.67
+[n30 24G r3] T2742 run 1 seconds 66.594 highwater_over_base_gib 24.502 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 337 misses 108 limit 25769803776 cap 1024
+[n30 24G r3] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 24G r3] T2742 run 2 seconds 65.428 highwater_over_base_gib 24.598 held_over_base_gib 0.610 entries 102 retained_gib 0.0017 evictions 0 hits 772 misses 118 limit 25769803776 cap 1024
+[n30 24G r3] vs reference amplitudes: fidelity 0.999999999778, max |diff| / max |ref| = 1.28e-5
+[n30 24G r3] 	Maximum resident set size (kbytes): 25325760
+[n8 24G r3] T2742 positions 8 round 1 seconds 1.952 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 0 misses 8
+[n8 24G r3] T2742 positions 8 round 2 seconds 1.894 highwater_over_base_gib 1.032 held_over_base_gib 0.032 entries 8 retained_gib 0.0006 evictions 0 hits 8 misses 8
+[n8 24G r3] T2742 after_reset_gib 0.001 after_clear_gib 0.000
+[n8 24G r3] 	Maximum resident set size (kbytes): 1615980
+[n122 24G r3] T2742 positions 122 round 1 seconds 31.364 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 0 misses 122
+[n122 24G r3] T2742 positions 122 round 2 seconds 29.702 highwater_over_base_gib 1.549 held_over_base_gib 0.549 entries 111 retained_gib 0.0023 evictions 0 hits 100 misses 144
+[n122 24G r3] T2742 after_reset_gib 0.518 after_clear_gib 0.516
+[n122 24G r3] 	Maximum resident set size (kbytes): 1648540
