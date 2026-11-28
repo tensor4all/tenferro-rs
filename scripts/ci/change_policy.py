@@ -75,6 +75,7 @@ _CI_FILES = frozenset(
         ".github/dependabot.yml",
         "scripts/check-pr-fast.sh",
         "scripts/check-contraction-kernels.py",
+        "scripts/check-isa-rules.py",
         "scripts/check-public-boundary-inventory.py",
         "scripts/test-public-boundary-inventory.py",
         # The review waiver is executed by `.github/workflows/review_bot.yml`, so
