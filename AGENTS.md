@@ -12,6 +12,25 @@ contract. If a loop genuinely cannot be expressed through the abstraction, put
 `// contraction-kernel-ok: <reason>` immediately above that loop and explain the
 exception in the PR description.
 
+## Non-Negotiable: A Kernel Must Not Change With The Build Machine's ISA
+
+SIMD selection happens at runtime (`pulp::Arch::new().dispatch`,
+`is_x86_feature_detected!`), never at build time. `#[target_feature]` is additive,
+so a crate-level `-C target-cpu=<part>` or `-C target-feature` lets an "AVX2"
+kernel contain AVX-512: in `t4a-private-gemm-x86#26` an `avx2,fma`-annotated
+function compiled to `zmm` under `znver5`, so one binary meant different numerics
+and a crash on other parts. Therefore: no `cfg!`/`cfg(target_feature …)` in
+`crates/**/*.rs` (a `#![no_std]` file needs an explicit, reasoned entry in
+`scripts/check-isa-rules.py`), no `-C target-cpu`/`-C target-feature` in committed
+build configuration, and no `target-cpu`/`target-feature` in `RUSTFLAGS` or
+`CARGO_ENCODED_RUSTFLAGS` for any build or measurement (use
+`env -u RUSTFLAGS -u CARGO_ENCODED_RUSTFLAGS`, as `colmat-rs`'s
+`scripts/run_acceptance.sh` does). `python3 scripts/check-isa-rules.py` enforces
+this in CI. Same rule, other implementations: `strided-rs`
+`scripts/check-runtime-simd-dispatch.py`, `colmat-rs#321`. A per-symbol `zmm`
+disassembly gate belongs next to the kernels, not here, since every SIMD symbol
+lives in a dependency.
+
 Before acting, read the latest shared tensor4all agent rules online, starting
 from `https://github.com/tensor4all/tensor4all-agent-rules/blob/main/rules/index.md`.
 If internet access is unavailable or the remote cannot be resolved, use the

@@ -110,6 +110,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         if: matrix.cfg.profile != ''
+      - name: Refuse build-time ISA flags (AGENTS.md ISA rule)
+        if: matrix.cfg.profile != ''
+        run: python3 scripts/check-isa-rules.py
       - uses: dtolnay/rust-toolchain@stable
         if: matrix.cfg.profile != ''
       - uses: Swatinem/rust-cache@v2
