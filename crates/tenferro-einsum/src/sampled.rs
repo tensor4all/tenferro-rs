@@ -67,6 +67,8 @@ use crate::concrete::ConcreteEinsumInputSpec;
 use crate::{ConcreteEinsumPlan, EinsumOptimize, Error, Subscripts};
 
 mod exec;
+#[allow(dead_code)] // wired into the pair step in the next commit
+mod jobs;
 mod plan;
 
 #[cfg(feature = "autodiff")]
@@ -830,6 +832,10 @@ pub struct SampledExecStats {
     pub peak_elements: usize,
     /// Chunks of gathered-pairs steps that ran.
     pub chunks: usize,
+    /// Rows passed through `index_select` (leaf restrictions, one-sided steps and
+    /// gathered pairs), counted where the gather is called. Zero means the run
+    /// gathered nothing.
+    pub gathered_rows: usize,
 }
 
 impl From<ExecStats> for SampledExecStats {
@@ -837,6 +843,7 @@ impl From<ExecStats> for SampledExecStats {
         Self {
             peak_elements: stats.peak_elements,
             chunks: stats.chunks,
+            gathered_rows: stats.gathered_rows,
         }
     }
 }

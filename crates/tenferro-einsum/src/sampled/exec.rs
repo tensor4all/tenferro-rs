@@ -12,6 +12,8 @@
 //! (`crate::chunked`), writing each chunk into a window of the preallocated
 //! step result instead of concatenating pieces.
 
+use std::cell::Cell;
+
 use tenferro_tensor::{
     ContractionScalar, DotGeneralAccumulation, Engine, GatherConfig, MemoryKind, Tensor,
     TensorRead, TensorView, TensorViewMut, TensorWrite,
@@ -26,6 +28,9 @@ use crate::{ConcreteEinsumPlan, Error, Result};
 pub(crate) struct ExecStats {
     pub(crate) peak_elements: usize,
     pub(crate) chunks: usize,
+    /// Rows passed through `index_select`, counted at the call (leaf
+    /// restrictions, one-sided steps and gathered pairs alike).
+    pub(crate) gathered_rows: usize,
 }
 
 fn numel(shape: &[usize]) -> usize {
@@ -71,7 +76,9 @@ fn index_select(
     read: &TensorRead<'_>,
     axis: usize,
     positions: &[usize],
+    gathered: &Cell<usize>,
 ) -> Result<Tensor> {
+    gathered.set(gathered.get() + positions.len());
     let mut out_shape = read.shape().to_vec();
     out_shape[axis] = positions.len();
     let [prefix, _, suffix] = around(read.shape(), axis);
@@ -126,6 +133,7 @@ struct PairChunks<'p, 'a> {
     plans: &'p [ConcreteEinsumPlan],
     left: TensorRead<'a>,
     right: TensorRead<'a>,
+    gathered: &'p Cell<usize>,
 }
 
 impl ChunkSource for PairChunks<'_, '_> {
@@ -139,6 +147,7 @@ impl ChunkSource for PairChunks<'_, '_> {
             &self.left,
             self.step.axis_left,
             &self.step.left_rows[range.clone()],
+            self.gathered,
         )
         .map_err(err)?;
         let b = index_select(
@@ -146,6 +155,7 @@ impl ChunkSource for PairChunks<'_, '_> {
             &self.right,
             self.step.axis_right,
             &self.step.right_rows[range],
+            self.gathered,
         )
         .map_err(err)?;
         Ok((a, b))
@@ -257,6 +267,7 @@ pub(crate) fn execute_concrete(
     let mut temps: Vec<Option<Tensor>> = (0..program.n_slots).map(|_| None).collect();
     let mut live = 0usize;
     let mut stats = ExecStats::default();
+    let gathered = Cell::new(0usize);
     for instr in &program.instrs {
         let (out, value) = match instr {
             Instr::Free { slot } => {
@@ -283,7 +294,10 @@ pub(crate) fn execute_concrete(
                 out,
             } => {
                 let read = slot(operands, &temps, *input)?;
-                (*out, index_select(exec, &read, *axis, positions)?)
+                (
+                    *out,
+                    index_select(exec, &read, *axis, positions, &gathered)?,
+                )
             }
             Instr::Reshape { input, shape, out } => {
                 let read = slot(operands, &temps, *input)?;
@@ -301,6 +315,7 @@ pub(crate) fn execute_concrete(
                         plans,
                         left: slot(operands, &temps, step.left)?,
                         right: slot(operands, &temps, step.right)?,
+                        gathered: &gathered,
                     };
                     let overwrite = DotGeneralAccumulation::overwrite(dtype)?;
                     let mut out = TensorWrite::from_view(view_mut(&mut result)?);
@@ -323,6 +338,7 @@ pub(crate) fn execute_concrete(
         stats.peak_elements = stats.peak_elements.max(live);
         temps[out] = Some(value);
     }
+    stats.gathered_rows = gathered.get();
     let result = temps[program.result]
         .take()
         .ok_or_else(|| Error::planning("the plan produced no result"))?;
@@ -392,6 +408,7 @@ pub(crate) fn execute_eager(
                 out,
             } => {
                 let t = get!(*input);
+                stats.gathered_rows += positions.len();
                 (*out, session.index_select(t, *axis as isize, positions)?)
             }
             Instr::Reshape { input, shape, out } => {
@@ -407,6 +424,7 @@ pub(crate) fn execute_eager(
                 let mut pieces = Vec::with_capacity(step.chunks());
                 for id in 0..step.chunks() {
                     let range = step.range(id);
+                    stats.gathered_rows += 2 * range.len();
                     let a = session.index_select(
                         get!(step.left),
                         step.axis_left as isize,
