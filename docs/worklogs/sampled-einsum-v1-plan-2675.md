@@ -34,9 +34,12 @@ satisfiable from `[M,N,B,P]` iff the producer's labels, in order, are already gr
 step falls back to the v0 gathered path** (per step, not per network) and the report records
 which steps fell back and why. Not "refuse": a network where one step in 50 cannot be contiguous
 should still run with 49 gather-free steps. Inserting a permuting einsum on the operand (one
-copy of the slot, not a gather per chunk) is the alternative; **[open]** whether to add it
-depends on how many `n30m14` steps fail the check — v1 measures that count first (plan-only, no
-execution) and reports it before choosing.
+copy of the slot, not a gather per chunk) is the alternative. ~~**[open]** whether to add it
+depends on how many `n30m14` steps fail the check~~ **[derived, review 2026-11-28 — see §6.1]**:
+always permute, never fall back for layout. Every child row is referenced by at least one pair, so
+`rows_pairs ≥ max(rows_l, rows_r)` and one permuting copy of an operand slot moves no more bytes
+than v0's gather of that operand. The `n30m14` failing-edge count is still worth reporting, but it
+now prices a copy rather than deciding a design, and it moves to the condition-4 measurement.
 
 ## 2. What the CPU path hands to `GroupedPlan`
 
@@ -57,7 +60,11 @@ execution) and reports it before choosing.
   returns nothing (no gathered copies). If `GroupedPlan` needs the whole job list at once (it
   sorts and checks overlap), the chunk becomes a range of jobs; the interface change, if any,
   is made in `crate::chunked` and justified in the PR, with `sliced_einsum` / `sliced_memory`
-  unchanged **[open until written]**.
+  unchanged ~~**[open until written]**~~ **[read, review 2026-11-28 — see §6.2]**: `ChunkSource::plan`
+  returns `&ConcreteEinsumPlan` and `run_chunks` calls `run_reads_into_accum` on it
+  (`crates/tenferro-einsum/src/chunked.rs`), and cpueinsum 0.13.1 `GroupedPlan` has no API that
+  executes a sub-range of its jobs. A v1 step therefore does not go through `run_chunks`: it is one
+  `GroupedPlan` executed whole, and `crate::chunked` stays unchanged.
 - **Plan reuse:** `GroupedPlan` is built once per step at plan time, not per run.
 
 ## 3. What the CUDA path passes to `cublasGemmBatchedEx`
@@ -83,11 +90,13 @@ execution) and reports it before choosing.
 ## 4. What remains from v0
 
 v0 is unchanged and stays the default; v1 is an additional step lowering chosen at plan time.
-Still using the gather (to be **confirmed by the gather counter v1 adds first**, not asserted
-here **[open]**):
+Still using the gather ~~(to be confirmed by the gather counter v1 adds first, not asserted
+here **[open]**)~~ **[read, review 2026-11-28 — the four gather sites: `index_select` in `plan.rs` (leaf loop, `OuterSelect` arm, root sample-order select) and `PairChunks::hold` in `exec.rs`]**:
 - the leaf `IndexSelect` that restricts a leaf by the samples (once per leaf, not per chunk; leaves
   are small);
-- one-sided / full-product-then-select steps;
+- the `OuterSelect` step (full product, then `index_select` of the kept rows). **Correction:**
+  `OneSided` is a plain `Instr::Einsum` and `FullProduct` a `Reshape`; neither gathers;
+- the final sample-order `index_select` of the root (skipped only when it is the identity);
 - any pair step that fails the §1 contiguity check (the fallback);
 - **the eager (autodiff) route** — v1 is concrete-only, because the eager layer differentiates
   through `index_select`'s existing scatter-add rule and v1 adds no new AD rule.
@@ -148,7 +157,9 @@ They were being used as if one implied the other, and they do not:
 - **`GroupedPlan` holds metadata per job**, so a single GEMM shape does **not** mean a single plan object. Building every
   chunk's plan up front and keeping them would satisfy "gather zero" while defeating the memory bound entirely — the bound
   that the whole `run_chunks` design exists for. **One plan per step, built at plan time, with the job list for that step;
-  chunks are ranges of jobs, never ranges of plans** **[derived; the interface question stays `[open until written]`]**.
+  chunks are ranges of jobs, never ranges of plans** **[derived]** — ~~the interface question stays
+`[open until written]`~~ **superseded, review 2026-11-28 (§6.2)**: cpueinsum 0.13.1 cannot run a range of
+a plan's jobs, so "ranges of jobs under one plan" is not expressible. One plan per step, executed whole.
 - **On CUDA the pointer arrays are real memory and must be counted separately from the tensors**: three arrays of one
   pointer per job (`A`, `B`, `C`), so **24 B/job host** — and **24 B/job device** if the device-side arrays are resident at the
   same time. At the `n30m14` job counts that is small next to the tensors, but it is not zero, and it is per-*job*, so it grows
@@ -160,3 +171,62 @@ They were being used as if one implied the other, and they do not:
 leaf steps and every step that fell back to the v0 gathered path (§ above), so a counter over the whole run can never be zero
 and asserting on it would be either impossible or a lie. The assertion is: **for a step that v1 converted, the gathered-rows
 counter for that step is zero** — and the report says how many steps were converted and which fell back.
+
+## 6. Review before implementation (2026-11-28, #2756)
+
+Marker audit: before this review the plan had **3 distinct `[open]` claims** (§1 permute-or-fall-back,
+§2/§5.2 the chunk interface, §4 what v0 still owns; `grep -c '\[open\]'` printed 3 because it
+counts the legend line and misses `[open until written]`). After it: **0 open design claims**; one
+**[open: measurement]** remains, and it is condition 4 itself (§6.5).
+
+### 6.1 Contiguity: what is required, and what the tree gives today
+
+- **Required (CPU, no transpose flags):** for every job, the operand matrix is compact column-major.
+  So the *matrix roles lead*: left `[M…, K…, rest]`, right `[K…, N…, rest]`, out `[M…, N…, rest]`,
+  where `rest` is the pair axis `P` and the kept-shared labels `B`, **in any order** (a job's offset
+  is `lr[p]·stride_P + Σ b_i·stride_Bi`). "Configuration axis last" is sufficient, not necessary.
+  `P` slowest in the output is needed only for chunk windows, which v1 does not have (§6.2).
+- **Also required, missing from §1:** the `K` labels in the **same order** in both operands (GEMM
+  flattens `K`), and **no label summed on one side only** (a label on one child that does not
+  survive the step — `survive` false, on one side). The `M/N/K/B` taxonomy has no slot for it; such
+  a step needs a pre-reduction or falls back.
+- **What the tree gives today [read, `plan.rs`]:** `P` last only for multi-label leaves (permute +
+  reshape), `FullProduct` and `OuterSelect` outputs (`dense + [c]`). Not for single-label leaves
+  (axis stays where the caller put it), not for `OneSided` outputs (`canonical_out` puts `c` in the
+  free group), not for `Pairs` outputs (`p` sits in the batch group in left order). But `Pairs`
+  outputs are already matrix-leading `[M, N, B∪{P}]`, which is what §6.1's weaker rule asks.
+- **Who can be given the consumer's order for free:** every producer except a `Pairs` step
+  (leaf: one permute per leaf, as the multi-label path already does; `Einsum`/`Reshape` outputs: the
+  planner picks the label order). The only constrained edge is `Pairs → Pairs`, plus the
+  `K`-order agreement when both operands are `Pairs` outputs. Fix by one permuting copy (§1).
+
+### 6.2 CPU: what `GroupedPlan` receives
+
+Correction verified: `cpueinsum::GroupedGemmJob { lhs_offset, rhs_offset, out_offset, rows,
+contracted, cols }` and `GroupedPlan` (cpueinsum 0.13.1, `src/grouped.rs`); jobs are "compact
+column-major", `Op` is only `Identity | Conjugate` (tcontract 0.13.0) — no transpose. The jobs:
+one per `(p, b)` as §2, lhs/rhs = the two slots' host buffers, out = the step result, `beta = 0`
+through `execute_uninit`. **No chunking**: `ChunkSource` is welded to `ConcreteEinsumPlan` and
+`GroupedPlan` executes all its jobs. Retained metadata: a `PreparedJob` is `JobMeta` (7 × usize) +
+`u32` ≈ **64 B/job**, jobs = `pairs × |B|`; v0 keeps `left_rows + right_rows` = 16 B/pair. Built at
+plan time for every step, v1 holds `4·|B|×` v0's per-step metadata for the life of the plan.
+
+### 6.3 CUDA
+
+`cublasGemmBatchedEx` is in **crates.io** `cudarc 0.19.10` (`src/cublas/sys/mod.rs:4214`), not a
+vendored copy; tenferro's `vendor.rs` has only `cublas?gemmStridedBatched`. It takes `transa/transb`
+and `lda/ldb/ldc`, so it is **less** constrained than the CPU path: the CPU layout works unchanged
+with `CUBLAS_OP_N`, `lda = m`, `ldb = k`, `ldc = m`. One `(m,n,k)` per call; `batchCount` is `i32`.
+
+### 6.4 Gather-zero test
+
+Designed in the #2756 review comment (counter, workload, per-step scope, negative controls).
+
+### 6.5 Condition 4 — the one remaining **[open: measurement]**
+
+Gather bytes per pair are `m·k + k·n` elements (×|B|) against `m·k·n` multiply-adds (×|B|): the
+gather is `≈ 1/n + 1/m` of the flops. It matters only when `m, n` are small — the regime where one
+`GroupedPlan` job per `(p, b)` is also dispatch-bound. Measure before building: (a) plan-only on
+`n30m14`: per-step `(m, k, n, |B|, pairs)` histogram, `Pairs → Pairs` edges failing §6.1, and job
+counts; (b) a microbenchmark at the dominant geometries of v0 (`index_select` + batched einsum) vs
+one `GroupedPlan` over in-place offsets. Build v1 only if (b) wins at the geometries (a) shows.
