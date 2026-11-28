@@ -43,9 +43,10 @@ ENV_VARS = (
 )
 ISA_FLAG = re.compile(r"target[-_]?(?:cpu|feature)", re.IGNORECASE)
 CONFIG_FLAG = re.compile(
-    r"(?:-C|--codegen)[\"',\s=]*target-(?:cpu|feature)|\btarget-(?:cpu|feature)="
+    r"(?:-C|--codegen)[\"',\s=]*target[-_](?:cpu|feature)|\btarget[-_](?:cpu|feature)="
 )
-CFG_OPEN = re.compile(r"\bcfg(?:_attr)?\s*!?\s*\(")
+CFG_OPEN = re.compile(r"\bcfg(?:_attr)?\s*!?\s*(?P<open>[({\[])")
+CLOSERS = {"(": ")", "{": "}", "[": "]"}
 NO_STD = re.compile(r"#!\[[^\]]*\bno_std\b")
 TF_ATTR = re.compile(r"#\[\s*target_feature\s*\(\s*enable")
 FN_NAME = re.compile(r"\bfn\s+(\w+)")
@@ -87,9 +88,11 @@ def line_of(text, index):
 def cfg_target_feature_lines(masked):
     lines = []
     for match in CFG_OPEN.finditer(masked):
+        opener = match.group("open")
+        closer = CLOSERS[opener]
         depth, index = 1, match.end()
         while depth and index < len(masked):
-            depth += {"(": 1, ")": -1}.get(masked[index], 0)
+            depth += (masked[index] == opener) - (masked[index] == closer)
             index += 1
         if re.search(r"\btarget_feature\b", masked[match.end():index]):
             lines.append(line_of(masked, match.start()))
@@ -98,7 +101,8 @@ def cfg_target_feature_lines(masked):
 
 def check_env(env):
     errors = []
-    for name in ENV_VARS:
+    names = sorted(set(ENV_VARS) | {n for n in env if n.upper().endswith("RUSTFLAGS")})
+    for name in names:
         value = env.get(name, "")
         if ISA_FLAG.search(value):
             shown = value.replace("\x1f", " ")
@@ -204,6 +208,10 @@ def self_test():
     print("self-test (each forbidden pattern must be rejected):")
     expect("cfg! target_feature", {lib: 'fn f() -> bool { cfg!(target_feature = "avx512f") }'}, {}, True, text="lib.rs:1")
     expect("cfg attr target_feature (nested)", {lib: '#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]\nfn f() {}'}, {}, True)
+    expect("cfg! with braces", {lib: 'fn f() { cfg!{target_feature = "avx2"}; }'}, {}, True)
+    expect("cfg! with brackets", {lib: 'fn f() { cfg![target_feature = "avx2"]; }'}, {}, True)
+    expect("-C target_cpu underscore spelling", {".cargo/config.toml": 'rustflags = ["-C", "target_cpu=native"]\n'}, {}, True)
+    expect("per-target RUSTFLAGS env", {}, {"CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS": "-C target-cpu=native"}, True)
     expect("cfg_attr target_feature", {lib: '#[cfg_attr(target_feature = "avx2", inline)]\nfn f() {}'}, {}, True)
     expect("no_std file not allow-listed", {lib: '#![no_std]\n#[cfg(target_feature = "avx2")]\nfn f() {}'}, {}, True, text="NO_STD_ALLOWLIST")
     expect("-C target-cpu in .cargo/config.toml", {".cargo/config.toml": '[build]\nrustflags = ["-C", "target-cpu=native"]\n'}, {}, True, text="config.toml:2")
